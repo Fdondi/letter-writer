@@ -4,6 +4,8 @@ Cover letter customizator.
 
 ## Prerequisite 
 
+pip install -r requirements.txt
+
 Qdrant running in Docker; by default on port 6333 (configurable)
 
 ## Debug 
