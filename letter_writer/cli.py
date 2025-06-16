@@ -16,7 +16,15 @@ from .vector_store import (
 )
 from .document_processing import extract_letter_text
 from .retrieval import retrieve_similar_job_offers
-from .generation import company_research, generate_letter
+from .generation import (
+    company_research, 
+    generate_letter, 
+    accuracy_check, 
+    precision_check, 
+    company_fit_check, 
+    user_fit_check, 
+    rewrite_letter
+)
 
 app = typer.Typer(help="Cover letter customizator CLI.")
 
@@ -92,6 +100,7 @@ def process_job(
     openai_key: Optional[str] = typer.Option(env_default("OPENAI_API_KEY"), help="OpenAI API key."),
     qdrant_host: str = typer.Option(env_default("QDRANT_HOST", "localhost")),
     qdrant_port: int = typer.Option(int(env_default("QDRANT_PORT", "6333"))),
+    refine: bool = typer.Option(True, help="Whether to try to improve the letter through feedback."),
 ):
     """Writes a cover letter for the given job description."""
 
@@ -123,6 +132,23 @@ def process_job(
 
     # Step 2: Letter generation
     letter = generate_letter(cv_text, top_docs, company_report, job_text, openai_client, trace_dir)
+    (trace_dir / "first_draft.txt").write_text(letter, encoding="utf-8")
+
+    if refine:
+        # Step 3: Feedback
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            accuracy_future = executor.submit(accuracy_check, letter, cv_text, openai_client, trace_dir)
+            precision_future = executor.submit(precision_check, letter, company_report, job_text, openai_client, trace_dir)
+            company_fit_future = executor.submit(company_fit_check, letter, company_report, job_text, openai_client, trace_dir)
+            user_fit_future = executor.submit(user_fit_check, letter, top_docs, openai_client, trace_dir)
+        
+        accuracy_feedback = accuracy_future.result()
+        precision_feedback = precision_future.result()
+        company_fit_feedback = company_fit_future.result()
+        user_fit_feedback = user_fit_future.result()
+
+        # Step 4: Rewrite
+        letter = rewrite_letter(letter, accuracy_feedback, precision_feedback, company_fit_feedback, user_fit_feedback, openai_client, trace_dir)
 
     # Output
     if out is None:
