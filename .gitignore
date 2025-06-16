@@ -3,3 +3,4 @@ trace/
 letters/
 jobs/
 __pycache__/
+letter_writer/__pycache__/*
