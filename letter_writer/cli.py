@@ -57,10 +57,26 @@ def _ensure_collection(client: QdrantClient, vector_size: int = 1536):
         vectors_config=qdrant_models.VectorParams(size=vector_size, distance=qdrant_models.Distance.COSINE),
     )
 
+def _extract_letter_text(letter_path: Path, ignore_until: str, ignore_after: str) -> str:
+    letter_content = letter_path.read_text(encoding="utf-8")
+    if ignore_until:
+        start_idx = letter_content.find(ignore_until)
+        if start_idx != -1:
+            letter_content = letter_content[start_idx:]
+    if ignore_after:
+        end_idx = letter_content.find(ignore_after) 
+        if end_idx != -1:
+            letter_content = letter_content[:end_idx]
+    return letter_content.strip()
 
 @app.command()
 def refresh(
-    qdrant_source_folder: Path = typer.Option(Path(_env_default("QDRANT_SOURCE_FOLDER", "examples")), help="Folder holding files to build the Qdrant repo."),
+    jobs_source_folder: Path = typer.Option(Path(_env_default("JOBS_SOURCE_FOLDER", "examples")), help="Folder holding files to build the Qdrant repo."),
+    letters_source_folder: Path = typer.Option(Path(_env_default("LETTERS_SOURCE_FOLDER", "examples")), help="Folder holding files to build the Qdrant repo."),
+    jobs_source_suffix: str = typer.Option(_env_default("JOBS_SOURCE_SUFFIX", "txt")),
+    letters_source_suffix: str = typer.Option(_env_default("LETTERS_SOURCE_SUFFIX", "tex")),
+    letters_ignore_until: str = typer.Option(_env_default("LETTERS_IGNORE_UNTIL", None)),
+    letters_ignore_after: str = typer.Option(_env_default("LETTERS_IGNORE_AFTER", None)),
     qdrant_host: str = typer.Option(_env_default("QDRANT_HOST", "localhost")),
     qdrant_port: int = typer.Option(int(_env_default("QDRANT_PORT", "6333"))),
 ):
@@ -71,27 +87,25 @@ def refresh(
     client = _get_qdrant_client(qdrant_host, qdrant_port)
     _ensure_collection(client)
 
-    typer.echo(f"[INFO] Processing source folder: {qdrant_source_folder}")
+    typer.echo(f"[INFO] Processing jobs from: {jobs_source_folder} with suffix: {jobs_source_suffix}")
+    typer.echo(f"[INFO] Processing letters from: {letters_source_folder} with suffix: {letters_source_suffix}")
+    typer.echo(f"[INFO] Ignoring until: {letters_ignore_until} and after: {letters_ignore_after}")
 
     points = []
-    for path in qdrant_source_folder.glob("*.txt"):
-        # Job descriptions are in <company_name>.txt files
+    for path in jobs_source_folder.glob(f"*{jobs_source_suffix}"):
+        # Job descriptions are in <company_name><jobs_source_suffix> files
         company_name = path.stem
         job_text = path.read_text(encoding="utf-8")
         
-        # Look for corresponding letter in <company_name>.tex file
-        letter_path = path.parent / f"{company_name}.tex"
-        letter_text = ""
-        if letter_path.exists():
-            letter_content = letter_path.read_text(encoding="utf-8")
-            # Extract text between \makelettertitle and \closing
-            start_marker = "\\makelettertitle"
-            end_marker = "\\closing"
-            start_idx = letter_content.find(start_marker)
-            end_idx = letter_content.find(end_marker)
-            if start_idx != -1 and end_idx != -1:
-                letter_text = letter_content[start_idx + len(start_marker):end_idx].strip()
-        
+        # Look for corresponding letter in <company_name><letters_source_suffix> file
+        letter_path = letters_source_folder / f"{company_name}{letters_source_suffix}"
+        if not letter_path.exists():
+            typer.echo(f"[WARN] No letter found for {company_name}. Skipping.")
+            continue
+        typer.echo(f"[INFO] Processing{company_name}")
+
+        letter_text = _extract_letter_text(letter_path, letters_ignore_until, letters_ignore_after)
+    
         vector = _embed(job_text, openai_client)
         payload = {
             "job_text": job_text,
