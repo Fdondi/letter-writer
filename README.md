@@ -40,6 +40,8 @@ Commands can be specified in sequence one after the other.
 
 ###  For `refresh`
 
+-`--clear`: Empty the Qdrant repository before rebuilding it.
+
 - `--jobs_source_folder=<Path>`: folder holding the job offers to be used to build the Qdrant repo.
 - `--jobs_source_suffx=<str>`: suffix used to recognize the job offers in the folder.
 
