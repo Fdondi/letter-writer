@@ -111,6 +111,10 @@ def process_job(
         typer.echo("[ERROR] Qdrant collection not found. Run 'refresh' first.")
         raise typer.Exit(code=1)
 
+    if path.is_dir():
+        # take the newest file in the folder
+        path = max(path.glob("*.txt"), key=lambda x: x.stat().st_mtime)
+
     job_text = path.read_text(encoding="utf-8")
     cv_text = cv.read_text(encoding="utf-8")
     

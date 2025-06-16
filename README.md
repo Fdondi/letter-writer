@@ -29,7 +29,8 @@ Commands can be specified in sequence one after the other.
 
 - `refresh`: refreshes example repository (default)
 
-- `process_job <path>`: writes a letter. Parameter: path to the file containing the job to write a letter for.
+- `process_job <path>`: writes a letter. 
+   Parameter: path to the file containing the job to write a letter for, or to the folder containing the jobs. If a folder is given, the newest file will be used. 
 
 ## Options:
 
