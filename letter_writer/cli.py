@@ -112,8 +112,9 @@ def process_job(
         raise typer.Exit(code=1)
 
     if path.is_dir():
-        # take the newest file in the folder
+        # take the newest txt file in the folder
         path = max(path.glob("*.txt"), key=lambda x: x.stat().st_mtime)
+        typer.echo(f"[INFO] Using newest file in folder: {path}")
 
     job_text = path.read_text(encoding="utf-8")
     cv_text = cv.read_text(encoding="utf-8")
@@ -141,10 +142,10 @@ def process_job(
     if refine:
         # Step 3: Feedback
         with ThreadPoolExecutor(max_workers=4) as executor:
-            accuracy_future = executor.submit(accuracy_check, letter, cv_text, openai_client, trace_dir)
-            precision_future = executor.submit(precision_check, letter, company_report, job_text, openai_client, trace_dir)
-            company_fit_future = executor.submit(company_fit_check, letter, company_report, job_text, openai_client, trace_dir)
-            user_fit_future = executor.submit(user_fit_check, letter, top_docs, openai_client, trace_dir)
+            accuracy_future = executor.submit(accuracy_check, letter, cv_text, openai_client)
+            precision_future = executor.submit(precision_check, letter, company_report, job_text, openai_client)
+            company_fit_future = executor.submit(company_fit_check, letter, company_report, job_text, openai_client)
+            user_fit_future = executor.submit(user_fit_check, letter, top_docs, openai_client)
         
         accuracy_feedback = accuracy_future.result()
         precision_feedback = precision_future.result()
