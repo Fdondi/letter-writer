@@ -4,9 +4,20 @@ Cover letter customizator.
 
 ## Prerequisite 
 
+### Python environment
+
 pip install -r requirements.txt
 
-Qdrant running in Docker; by default on port 6333 (configurable)
+### Qdrant
+
+Qdrant accessible; tested running locally in Docker on port 6333 (configurable)
+
+### Source data
+
+Job offers and correspective letters need to be either in different folders, or have different suffixes (be it file extension or name).
+All the pairs which have the same name once the suffix is removed, are considered to be a valid data point.
+
+In case the text the lettter is within boilerplate (for example, a `.tex` source file), it's possible to instruct to ignore before and after a given keyword.
 
 ## Debug 
 
@@ -29,9 +40,14 @@ Commands can be specified in sequence one after the other.
 
 ###  For `refresh`
 
-- `--qdrant_source_folder=<Path>`: folder holding the files to use to build the Qdrant repo. Defaults to `examples`.
-                                   the original job descritions are in files names `<company_name>.txt`
-                                   the letters are in files named `<conpany_name>.tex`, with the text contained between `\makelettertitle`and `\closing`.
+- `--jobs_source_folder=<Path>`: folder holding the job offers to be used to build the Qdrant repo.
+- `--jobs_source_suffx=<str>`: suffix used to recognize the job offers in the folder.
+
+- `--letters_soure_folder=<Path>`: folder holding the letters to be used as the payload of the Qdrant repo.
+- `--letters_source_suffix=<str>`: suffix used to recognize the letters in the folder.
+
+- `--letters_ignore_until=<str>`: if present, letter text will be discarded as boilerplate until the first occurrence of the string. In a `.tex` letter template, this might be `\makelettertitle`. 
+- `--letters_ignore_after=<str>`: if present, letter text will be discarded as boilerplate after the first occurrence of the string. In a `.tex` letter template, this might be `\closing`. 
 
 ### For `process_job`
 
