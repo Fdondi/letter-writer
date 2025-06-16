@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -131,6 +132,20 @@ def refresh(
         typer.echo("[WARN] No documents found to upsert.")
 
 
+def _retrieve_similar_job_offers(job_text: str, openai_client: OpenAI, client: QdrantClient) -> List[dict]:
+    vector = _embed(job_text, openai_client)
+    search_result = client.search(
+        collection_name=COLLECTION_NAME,
+        query_vector=vector,
+        limit=7,
+    )
+
+    retrieved_docs = [r.payload for r in search_result]
+    (TRACE_DIR / "retrieved_docs.json").write_text(json.dumps(retrieved_docs, indent=2), encoding="utf-8")
+    top_docs = _rerank_documents(job_text, retrieved_docs, openai_client)
+    return top_docs
+
+
 @app.command()
 def process_job(
     path: Path = typer.Argument(..., help="Path to the file containing the job description."),
@@ -145,8 +160,8 @@ def process_job(
 
     openai_client = _get_openai_client(openai_key)
 
-    client = _get_qdrant_client(qdrant_host, qdrant_port)
-    if COLLECTION_NAME not in [c.name for c in client.get_collections().collections]:
+    qdrant_client = _get_qdrant_client(qdrant_host, qdrant_port)
+    if COLLECTION_NAME not in [c.name for c in qdrant_client.get_collections().collections]:
         typer.echo("[ERROR] Qdrant collection not found. Run 'refresh' first.")
         raise typer.Exit(code=1)
 
@@ -160,23 +175,16 @@ def process_job(
     TRACE_DIR = Path("trace", company_name)
     TRACE_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Step 1a: Retrieve similar job offers
-    vector = _embed(job_text, openai_client)
-    search_result = client.search(
-        collection_name=COLLECTION_NAME,
-        query_vector=vector,
-        limit=7,
-    )
-    retrieved_docs = [r.payload for r in search_result]
-    (TRACE_DIR / "retrieved_docs.json").write_text(json.dumps(retrieved_docs, indent=2), encoding="utf-8")
+    # step 1a dn 1b can be done in parallel, as they are API calls and don't depend on each other
+    # so we start them in different threads 
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        job_offers_future = executor.submit(_retrieve_similar_job_offers, job_text, openai_client, qdrant_client)
+        company_report_future = executor.submit(_company_research, company_name, job_text, openai_client)
 
-    # Step 1b: Company research
-    company_report = _company_research(company_name, job_text, openai_client)
+    top_docs = job_offers_future.result()
+    company_report = company_report_future.result()
 
-    # Step 2: Intelligent evaluation
-    top_docs = _rerank_documents(job_text, retrieved_docs, openai_client)
-
-    # Step 3: Letter generation
+    # Step 2: Letter generation
     letter = _generate_letter(cv_text, top_docs, company_report, job_text, openai_client)
 
     # Output
