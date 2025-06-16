@@ -67,16 +67,13 @@ Environment variables can be in turn set through an .env file, `load_dotenv()` w
 
 The pipeline uses existing examples to guide the model to write cover letters in the style of the existing ones. This happens in various stages:
 
-## 1a. RAG
+## 1a. Similar example retrieval
+
+### 1a.I RAG
 
 RAG with Qdrant is used to retrieve the top 7 most similar job offers for which a letter was already written. 
 
-## 1b. Rechearch
-
-The LLM is given the company_name only and asked to search the internet to write a short report on the company.
-Model to use: gpt-4o-search-preview
-
-## 2. Intellgent evaluation
+### 1a.II Intellgent evaluation
 
 The LLM is presented with the company report, the original job offer, and the retrieved documents; it then scores the documents on actual similarity to the original job offer.
 The top 3 advance.
@@ -84,7 +81,12 @@ The top 3 advance.
 Given the recent price drop, we can use: o4-mini.
 Because it's a resoning model, we should not need to try and trick the model into thinking about it by requesting a justification. We can just ask a Pydantic map lette_company_name -> score out of 10. 
 
-## 3.
+## 1b. Rechearch
+
+The LLM is given the company_name only and asked to search the internet to write a short report on the company.
+Model to use: gpt-4o-search-preview
+
+## 2. 
 
 The LLM is presented with:
 - The user's CV
