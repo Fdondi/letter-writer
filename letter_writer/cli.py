@@ -79,12 +79,15 @@ def refresh(
     letters_ignore_after: str = typer.Option(_env_default("LETTERS_IGNORE_AFTER", None)),
     qdrant_host: str = typer.Option(_env_default("QDRANT_HOST", "localhost")),
     qdrant_port: int = typer.Option(int(_env_default("QDRANT_PORT", "6333"))),
+    clear: bool = typer.Option(False, help="Empty the Qdrant repository before rebuilding it."),
 ):
     """Refreshes example repository used for retrieval augmented generation."""
 
     openai_client = _get_openai_client()
 
     client = _get_qdrant_client(qdrant_host, qdrant_port)
+    if clear:
+        client.delete_collection(collection_name=COLLECTION_NAME)
     _ensure_collection(client)
 
     typer.echo(f"[INFO] Processing jobs from: {jobs_source_folder} with suffix: {jobs_source_suffix}")
