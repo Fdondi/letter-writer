@@ -34,8 +34,10 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
     system = (
         "You are an expert cover letter writer. Using the user's CV, relevant examples of job descriptions "
         "and their corresponding cover letters, the company report, and the target job description, "
-        "produce a personalized cover letter in the same style as the examples. Keep it concise (max 1 page)."
-        "Never mention explicitly that something matches the job description, they should think that by themselves. \n\n"
+        "produce a personalized cover letter in the same style as the examples. Keep it concise (max 1 page).\n"
+        "Never mention explicitly that something matches the job description, they should think that by themselves. "
+        "Use ASCII whenever possible, though German characters like ä, ö, ü, ß, are allowed. "
+        "To the extent that it's reasonable, avoid symbols like & or em-dashes. Do not double-space.\n\n"
     )
     prompt = (
         "========== User CV:\n" + cv_text + "\n==========\n" +
