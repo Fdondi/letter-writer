@@ -129,7 +129,7 @@ def process_job(
     # step 1a and 1b can be done in parallel, as they are API calls and don't depend on each other
     # so we start them in different threads 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        job_offers_future = executor.submit(retrieve_similar_job_offers, job_text, openai_client, qdrant_client)
+        job_offers_future = executor.submit(retrieve_similar_job_offers, job_text, openai_client, qdrant_client, trace_dir)
         company_report_future = executor.submit(company_research, company_name, job_text, openai_client, trace_dir)
 
     top_docs = job_offers_future.result()

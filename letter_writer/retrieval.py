@@ -4,10 +4,10 @@ from pathlib import Path
 from qdrant_client import QdrantClient
 from openai import OpenAI
 
-from .config import COLLECTION_NAME, TRACE_DIR
+from .config import COLLECTION_NAME
 from .vector_store import embed
 
-def retrieve_similar_job_offers(job_text: str, openai_client: OpenAI, qdrant_client: QdrantClient) -> List[dict]:
+def retrieve_similar_job_offers(job_text: str, openai_client: OpenAI, qdrant_client: QdrantClient, trace_dir: Path) -> List[dict]:
     """Retrieve and rerank similar job offers based on the input job text."""
     vector = embed(job_text, openai_client)
     search_result = qdrant_client.search(
@@ -17,8 +17,12 @@ def retrieve_similar_job_offers(job_text: str, openai_client: OpenAI, qdrant_cli
     )
 
     retrieved_docs = [r.payload for r in search_result]
-    (TRACE_DIR / "retrieved_docs.json").write_text(json.dumps(retrieved_docs, indent=2), encoding="utf-8")
+    retrieved_docs_names = '\n'.join([r.payload["company_name"] for r in search_result])
     top_docs = rerank_documents(job_text, retrieved_docs, openai_client)
+    top_docs_names = '\n'.join([d["company_name"] for d in top_docs])
+    debug_str = f"Initially retrieved:\n{retrieved_docs_names}\n\nThen selected:\n{top_docs_names}\n\n"
+    print(debug_str)
+    (trace_dir / "retrieved_docs.txt").write_text(debug_str, encoding="utf-8")
     return top_docs
 
 def rerank_documents(job_text: str, docs: List[dict], client: OpenAI) -> List[dict]:
