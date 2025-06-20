@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
+import zlib  # Add this import
 
 import typer
 from qdrant_client.http import models as qdrant_models
@@ -79,7 +80,8 @@ def refresh(
         }
         points.append(
             qdrant_models.PointStruct(
-                id=abs(hash(path.stem)),  # deterministic unsigned id from path
+                # Use zlib.adler32 for a fast, deterministic numeric hash
+                id=zlib.adler32(company_name.encode()),
                 vector=vector,
                 payload=payload,
             )
