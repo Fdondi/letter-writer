@@ -104,7 +104,6 @@ def process_job(
 ):
     """Writes a cover letter for the given job description."""
 
-    openai_client = get_openai_client(openai_key)
     qdrant_client = get_qdrant_client(qdrant_host, qdrant_port)
     
     if not collection_exists(qdrant_client):
@@ -127,33 +126,33 @@ def process_job(
     trace_dir.mkdir(parents=True, exist_ok=True)
 
     # step 1a and 1b can be done in parallel, as they are API calls and don't depend on each other
-    # so we start them in different threads 
+    # so we start them in different threads, each with its own OpenAI client
     with ThreadPoolExecutor(max_workers=2) as executor:
-        job_offers_future = executor.submit(retrieve_similar_job_offers, job_text, openai_client, qdrant_client, trace_dir)
-        company_report_future = executor.submit(company_research, company_name, job_text, openai_client, trace_dir)
+        job_offers_future = executor.submit(retrieve_similar_job_offers, job_text, get_openai_client(openai_key), qdrant_client, trace_dir)
+        company_report_future = executor.submit(company_research, company_name, job_text, get_openai_client(openai_key), trace_dir)
 
     top_docs = job_offers_future.result()
     company_report = company_report_future.result()
 
-    # Step 2: Letter generation
-    letter = generate_letter(cv_text, top_docs, company_report, job_text, openai_client, trace_dir)
+    # Step 2: Letter generation with a fresh client
+    letter = generate_letter(cv_text, top_docs, company_report, job_text, get_openai_client(openai_key), trace_dir)
     (trace_dir / "first_draft.txt").write_text(letter, encoding="utf-8")
 
     if refine:
-        # Step 3: Feedback
+        # Step 3: Feedback with separate clients for each thread
         with ThreadPoolExecutor(max_workers=4) as executor:
-            accuracy_future = executor.submit(accuracy_check, letter, cv_text, openai_client)
-            precision_future = executor.submit(precision_check, letter, company_report, job_text, openai_client)
-            company_fit_future = executor.submit(company_fit_check, letter, company_report, job_text, openai_client)
-            user_fit_future = executor.submit(user_fit_check, letter, top_docs, openai_client)
+            accuracy_future = executor.submit(accuracy_check, letter, cv_text, get_openai_client(openai_key))
+            precision_future = executor.submit(precision_check, letter, company_report, job_text, get_openai_client(openai_key))
+            company_fit_future = executor.submit(company_fit_check, letter, company_report, job_text, get_openai_client(openai_key))
+            user_fit_future = executor.submit(user_fit_check, letter, top_docs, get_openai_client(openai_key))
         
         accuracy_feedback = accuracy_future.result()
         precision_feedback = precision_future.result()
         company_fit_feedback = company_fit_future.result()
         user_fit_feedback = user_fit_future.result()
 
-        # Step 4: Rewrite
-        letter = rewrite_letter(letter, accuracy_feedback, precision_feedback, company_fit_feedback, user_fit_feedback, openai_client, trace_dir)
+        # Step 4: Rewrite with a fresh client
+        letter = rewrite_letter(letter, accuracy_feedback, precision_feedback, company_fit_feedback, user_fit_feedback, get_openai_client(openai_key), trace_dir)
 
     # Output
     if out is None:
