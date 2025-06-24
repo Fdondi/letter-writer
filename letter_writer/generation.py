@@ -36,7 +36,12 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
         "and their corresponding cover letters, the company report, and the target job description, "
         "produce a personalized cover letter in the same style as the examples. Keep it concise (max 1 page).\n"
         "Never mention explicitly that something matches the job description, they should think that by themselves. "
-        "Whenever possible, use characters supported by LaTeX. "
+        "Avoid making just a list of 'at X I did Y'. You're telling a story, the stints at specific companies are just supporting evidence for the message. "
+        "Follow the structure: 1. You are great 2. I am great 3. We'll be even greater together 4. Call to action. "
+        "Of course, keep that structure implicit, and dont use paragraph titles.\n"
+        "Whenever possible, use characters supported by LaTeX. If in doubt, use the version of the character that would be typed by a keyboard.\n"
+        "Remember to use the language of THE TARGET JOB DESCRIPTION, even if some or all of the examples might be in a different language. "
+        "Use the examples at a higher level: look at style, structure, what is paid attention to, etc.\n"
         "To the extent that it's reasonable, avoid symbols like & or em-dashes. Do not double-space.\n\n"
     )
     prompt = (
