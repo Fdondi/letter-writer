@@ -21,6 +21,7 @@ from .generation import (
     company_research, 
     generate_letter, 
     accuracy_check,
+    human_check,
     instruction_check, 
     precision_check, 
     company_fit_check, 
@@ -32,12 +33,15 @@ app = typer.Typer(help="Cover letter customizator CLI.")
 
 @app.command()
 def refresh(
-    jobs_source_folder: Path = typer.Option(Path(env_default("JOBS_SOURCE_FOLDER", "examples")), help="Folder holding files to build the Qdrant repo."),
-    letters_source_folder: Path = typer.Option(Path(env_default("LETTERS_SOURCE_FOLDER", "examples")), help="Folder holding files to build the Qdrant repo."),
-    jobs_source_suffix: str = typer.Option(env_default("JOBS_SOURCE_SUFFIX", "txt")),
-    letters_source_suffix: str = typer.Option(env_default("LETTERS_SOURCE_SUFFIX", "tex")),
+    jobs_source_folder: Path = typer.Option(Path(env_default("JOBS_SOURCE_FOLDER", "examples")), help="Folder holding past job offers, used as key for the Qdrant repo."),
+    jobs_source_suffix: str = typer.Option(env_default("JOBS_SOURCE_SUFFIX", ".txt")),
+    letters_source_folder: Path = typer.Option(Path(env_default("LETTERS_SOURCE_FOLDER", "examples")), help="Folder holding past cover letters, used as value for the Qdrant repo."),
+    letters_source_suffix: str = typer.Option(env_default("LETTERS_SOURCE_SUFFIX", ".tex")),
     letters_ignore_until: str = typer.Option(env_default("LETTERS_IGNORE_UNTIL", None)),
     letters_ignore_after: str = typer.Option(env_default("LETTERS_IGNORE_AFTER", None)),
+    negative_letters_source_folder: Path = typer.Option(Path(env_default("NEGATIVE_LETTERS_SOURCE_FOLDER", "examples")), 
+                                                        help="Folder holding past cover letters that the AI produced, before being corrected by a human; used as value for the Qdrant repo."),
+    negative_letters_source_suffix: str = typer.Option(env_default("NEGATIVE_LETTERS_SOURCE_SUFFIX", ".txt")),
     qdrant_host: str = typer.Option(env_default("QDRANT_HOST", "localhost")),
     qdrant_port: int = typer.Option(int(env_default("QDRANT_PORT", "6333"))),
     clear: bool = typer.Option(False, help="Empty the Qdrant repository before rebuilding it."),
@@ -55,9 +59,11 @@ def refresh(
 
     typer.echo(f"[INFO] Processing jobs from: {jobs_source_folder} with suffix: {jobs_source_suffix}")
     typer.echo(f"[INFO] Processing letters from: {letters_source_folder} with suffix: {letters_source_suffix}")
-    typer.echo(f"[INFO] Ignoring until: {letters_ignore_until} and after: {letters_ignore_after}")
+    typer.echo(f"[INFO]    [Ignoring until: {letters_ignore_until} and after: {letters_ignore_after}]")
+    typer.echo(f"[INFO] Processing negative letters from: {negative_letters_source_folder} with suffix: {negative_letters_source_suffix}")
 
     points = []
+    n_negative_letters = 0
     for path in jobs_source_folder.glob(f"*{jobs_source_suffix}"):
         # Job descriptions are in <company_name><jobs_source_suffix> files
         company_name = path.stem
@@ -68,9 +74,17 @@ def refresh(
         if not letter_path.exists():
             typer.echo(f"[WARN] No letter found for {company_name}. Skipping.")
             continue
-        typer.echo(f"[INFO] Processing {company_name}")
 
         letter_text = extract_letter_text(letter_path, letters_ignore_until, letters_ignore_after)
+
+        negative_letter_path = negative_letters_source_folder / f"{company_name}{negative_letters_source_suffix}"
+        if negative_letter_path.exists():
+            negative_letter_text = extract_letter_text(negative_letter_path, letters_ignore_until, letters_ignore_after)
+            n_negative_letters += 1
+            typer.echo(f"[INFO] Processing {company_name}")
+        else:
+            negative_letter_text = None
+            typer.echo(f"[INFO] Processing {company_name} (without negative letter)")
     
         vector = embed(job_text, openai_client)
         payload = {
@@ -79,6 +93,9 @@ def refresh(
             "company_name": company_name,
             "path": str(path),
         }
+        if negative_letter_text is not None:
+            payload["negative_letter_text"] = negative_letter_text
+
         points.append(
             qdrant_models.PointStruct(
                 # Use zlib.adler32 for a fast, deterministic numeric hash
@@ -90,7 +107,7 @@ def refresh(
 
     if points:
         upsert_documents(client, points)
-        typer.echo(f"[INFO] Upserted {len(points)} documents to Qdrant.")
+        typer.echo(f"[INFO] Upserted {len(points)} documents to Qdrant. ({n_negative_letters} negative letters)")
     else:
         typer.echo("[WARN] No documents found to upsert.")
 
@@ -149,15 +166,17 @@ def process_job(
             precision_future = executor.submit(precision_check, letter, company_report, job_text, get_openai_client(openai_key))
             company_fit_future = executor.submit(company_fit_check, letter, company_report, job_text, get_openai_client(openai_key))
             user_fit_future = executor.submit(user_fit_check, letter, top_docs, get_openai_client(openai_key))
+            human_future = executor.submit(human_check, letter, top_docs, get_openai_client(openai_key))
         
         instruction_feedback = instruction_future.result()
         accuracy_feedback = accuracy_future.result()
         precision_feedback = precision_future.result()
         company_fit_feedback = company_fit_future.result()
         user_fit_feedback = user_fit_future.result()
+        human_feedback = human_future.result()
 
         # Step 4: Rewrite with a fresh client
-        letter = rewrite_letter(letter, instruction_feedback, accuracy_feedback, precision_feedback, company_fit_feedback, user_fit_feedback, get_openai_client(openai_key), trace_dir)
+        letter = rewrite_letter(letter, instruction_feedback, accuracy_feedback, precision_feedback, company_fit_feedback, user_fit_feedback, human_feedback, get_openai_client(openai_key), trace_dir)
 
     # Output
     if out is None:

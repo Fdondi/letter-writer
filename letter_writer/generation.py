@@ -65,16 +65,18 @@ def instruction_check(letter: str, client: OpenAI) -> str:
     """Check the letter for consistency with the instructions."""
     system = (
         "You are an expert in style and tone. Check the letter for consistency with the style instructions."
-        "Be very brief, a couple of sentences is enough. If at any point you see that there is no strong negative feedback, output NO COMMENT and end the answer. \n"
+        "Be very brief, a couple of sentences is enough. It is likely the instructions were already follwed. "
+        "If at any point you see that there is no strong negative feedback, output NO COMMENT and end the answer. \n"
     )
     prompt = (
         "========== Style Instructions:\n" + FURTHER_STYLE_INSTRUCTIONS + "\n==========\n\n" +
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Please review the cover letter for consistency with the style instructions."
+        "Please catch any strong inconsitency with the instructions, or output NO COMMENT"
     )
     messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
     feedback = chat(messages, client, model="gpt-4.1-mini")
     return feedback
+
 
 def accuracy_check(letter: str, cv_text: str, client: OpenAI) -> str:
     """Check the accuracy of the cover letter against the user's CV."""
@@ -168,6 +170,38 @@ def user_fit_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     feedback = chat(messages, client, model="gpt-4.1-mini")
     return feedback
 
+def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
+    """Check the letter for consistency with the instructions."""
+    rewritten_examples = [ex for ex in examples if "letter_text" in ex and "negative_letter_text" in ex]
+    
+    if not rewritten_examples:
+        print("none of {' '.join(ex['company_name'] for ex in examples)} have a negative letter")
+        return "NO COMMENT"
+
+    examples_formatted = "\n\n".join(
+        f"---- Example #{i+1} - {ex['company_name']} ----\n"
+        f"Initial cover Letter:\n{ex['negative_letter_text']}\n\n"
+        f"Revised cover Letter:\n{ex['letter_text']}\n\n"
+        for i, ex in enumerate(rewritten_examples)
+    )
+    system = (
+        "You are an expert in noticing the patterns behind edits. You will receive a list of examples of job descriptions and corresponding cover letters; "
+        "first the cover letter how it was initially written, then the cover letter how a reviewer rewrote it. "
+        "The reviewer might have copied parts of the initial letter, or rewrote it from scratch. Either way, pay attention to what was changed. "
+        "Once you noticed what changes tend to be made, flag if in the final, new letter anything looks like a feature than the reviewer would change in the earler examples.\n"
+        "Be very brief, a couple of sentences is enough. "
+        "If at any point you see that nothing in the final letter looks like something the reviewer would change, output NO COMMENT and end the answer. \n"
+    )
+    prompt = (  
+        "========== Reference Examples:\n" + examples_formatted + "\n==========\n" +
+        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
+        "Please review the cover letter for anything that looks like something the reviewer would change, based on the examples."
+    )
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+    feedback = chat(messages, client, model="gpt-4.1-mini")
+    return feedback
+
+
 def rewrite_letter(
     original_letter: str,
     instruction_feedback: str,
@@ -175,6 +209,7 @@ def rewrite_letter(
     precision_feedback: str,
     company_fit_feedback: str,
     user_fit_feedback: str,
+    human_feedback: str,
     client: OpenAI,
     trace_dir: Path
 ) -> str:
@@ -201,6 +236,9 @@ def rewrite_letter(
     if "NO COMMENT" not in user_fit_feedback:
         had_feedback = True
         prompt += "========== User Fit Feedback:\n" + user_fit_feedback + "\n==========\n"
+    if "NO COMMENT" not in human_feedback:
+        had_feedback = True
+        prompt += "========== Human Feedback:\n" + human_feedback + "\n==========\n"
     if not had_feedback:
         print("No feedback provided, returning original letter.")
         return original_letter
