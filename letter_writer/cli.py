@@ -20,7 +20,8 @@ from .retrieval import retrieve_similar_job_offers
 from .generation import (
     company_research, 
     generate_letter, 
-    accuracy_check, 
+    accuracy_check,
+    instruction_check, 
     precision_check, 
     company_fit_check, 
     user_fit_check, 
@@ -142,19 +143,21 @@ def process_job(
 
     if refine:
         # Step 3: Feedback with separate clients for each thread
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            instruction_future = executor.submit(instruction_check, letter, get_openai_client(openai_key))
             accuracy_future = executor.submit(accuracy_check, letter, cv_text, get_openai_client(openai_key))
             precision_future = executor.submit(precision_check, letter, company_report, job_text, get_openai_client(openai_key))
             company_fit_future = executor.submit(company_fit_check, letter, company_report, job_text, get_openai_client(openai_key))
             user_fit_future = executor.submit(user_fit_check, letter, top_docs, get_openai_client(openai_key))
         
+        instruction_feedback = instruction_future.result()
         accuracy_feedback = accuracy_future.result()
         precision_feedback = precision_future.result()
         company_fit_feedback = company_fit_future.result()
         user_fit_feedback = user_fit_future.result()
 
         # Step 4: Rewrite with a fresh client
-        letter = rewrite_letter(letter, accuracy_feedback, precision_feedback, company_fit_feedback, user_fit_feedback, get_openai_client(openai_key), trace_dir)
+        letter = rewrite_letter(letter, instruction_feedback, accuracy_feedback, precision_feedback, company_fit_feedback, user_fit_feedback, get_openai_client(openai_key), trace_dir)
 
     # Output
     if out is None:

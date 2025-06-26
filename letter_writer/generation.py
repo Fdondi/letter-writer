@@ -4,6 +4,17 @@ from openai import OpenAI
 
 from .config import TRACE_DIR
 
+FURTHER_STYLE_INSTRUCTIONS = (
+        "Never mention explicitly that something matches the job description, they should think that by themselves. "
+        "Avoid making just a list of 'at X I did Y'. You're telling a story, the stints at specific companies are just supporting evidence for the message. "
+        "Mentions of companies should mostly emerge naturally, not be the main structure (At X this, at Y that, etc).\n"
+        "Follow the structure: 1. You are great 2. I am great 3. We'll be even greater together 4. Call to action. "
+        "Of course, keep that structure implicit, and don't use paragraph titles.\n"
+        "Whenever possible, use characters supported by LaTeX. In particular, to the extent that it's reasonable, avoid symbols like & or em-dashes. Do not double-space. "
+        "If in doubt, use the version of the character that would be typed by a keyboard. For example ' and not ’, or 11th and not 11ᵗʰ.\n"
+    )
+
+
 def chat(messages: List[dict], client: OpenAI, model: str) -> str:
     """Make a chat completion request to OpenAI."""
     response = client.chat.completions.create(model=model, messages=messages)
@@ -26,7 +37,7 @@ def company_research(company_name: str, job_text: str, client: OpenAI, trace_dir
 def generate_letter(cv_text: str, examples: List[dict], company_report: str, job_text: str, client: OpenAI, trace_dir: Path) -> str:
     """Generate a personalized cover letter based on CV, examples, company report, and job description."""
     examples_formatted = "\n\n".join(
-        f"---- Example #{i+1} - {ex['company_name']} ----\n"
+        f"---- Example #{i+1} [estimated relevance: {ex['score']}/10] - {ex['company_name']} ----\n"
         f"Job Description:\n{ex['job_text']}\n\n"
         f"Cover Letter:\n{ex['letter_text']}\n\n"
         for i, ex in enumerate(examples) if ex['letter_text']
@@ -35,14 +46,10 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
         "You are an expert cover letter writer. Using the user's CV, relevant examples of job descriptions "
         "and their corresponding cover letters, the company report, and the target job description, "
         "produce a personalized cover letter in the same style as the examples. Keep it concise (max 1 page).\n"
-        "Never mention explicitly that something matches the job description, they should think that by themselves. "
-        "Avoid making just a list of 'at X I did Y'. You're telling a story, the stints at specific companies are just supporting evidence for the message. "
-        "Follow the structure: 1. You are great 2. I am great 3. We'll be even greater together 4. Call to action. "
-        "Of course, keep that structure implicit, and dont use paragraph titles.\n"
-        "Whenever possible, use characters supported by LaTeX. If in doubt, use the version of the character that would be typed by a keyboard.\n"
         "Remember to use the language of THE TARGET JOB DESCRIPTION, even if some or all of the examples might be in a different language. "
         "Use the examples at a higher level: look at style, structure, what is paid attention to, etc.\n"
-        "To the extent that it's reasonable, avoid symbols like & or em-dashes. Do not double-space.\n\n"
+        + FURTHER_STYLE_INSTRUCTIONS +
+        "\n\n"
     )
     prompt = (
         "========== User CV:\n" + cv_text + "\n==========\n" +
@@ -53,6 +60,21 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
     (trace_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
     messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
     return chat(messages, client, model="o3")
+
+def instruction_check(letter: str, client: OpenAI) -> str:
+    """Check the letter for consistency with the instructions."""
+    system = (
+        "You are an expert in style and tone. Check the letter for consistency with the style instructions."
+        "Be very brief, a couple of sentences is enough. If at any point you see that there is no strong negative feedback, output NO COMMENT and end the answer. \n"
+    )
+    prompt = (
+        "========== Style Instructions:\n" + FURTHER_STYLE_INSTRUCTIONS + "\n==========\n\n" +
+        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
+        "Please review the cover letter for consistency with the style instructions."
+    )
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+    feedback = chat(messages, client, model="gpt-4.1-mini")
+    return feedback
 
 def accuracy_check(letter: str, cv_text: str, client: OpenAI) -> str:
     """Check the accuracy of the cover letter against the user's CV."""
@@ -74,7 +96,7 @@ def accuracy_check(letter: str, cv_text: str, client: OpenAI) -> str:
         "Point out any claims that cannot be verified from the CV or are inconsistent with it."
     )
     messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    feedback = chat(messages, client, model="gpt-4o")
+    feedback = chat(messages, client, model="gpt-4.1-mini")
     return feedback
 
 def precision_check(letter: str, company_report: str, job_text: str, client: OpenAI) -> str:
@@ -148,6 +170,7 @@ def user_fit_check(letter: str, examples: List[dict], client: OpenAI) -> str:
 
 def rewrite_letter(
     original_letter: str,
+    instruction_feedback: str,
     accuracy_feedback: str,
     precision_feedback: str,
     company_fit_feedback: str,
@@ -163,6 +186,9 @@ def rewrite_letter(
     )
     had_feedback = False
     prompt = "========== Original Cover Letter:\n" + original_letter + "\n==========\n"
+    if "NO COMMENT" not in instruction_feedback:
+        had_feedback = True
+        prompt += "========== Instruction Feedback:\n" + instruction_feedback + "\n==========\n"
     if "NO COMMENT" not in accuracy_feedback:
         had_feedback = True
         prompt += "========== Accuracy Feedback:\n" + accuracy_feedback + "\n==========\n"
@@ -182,9 +208,13 @@ def rewrite_letter(
     prompt += (
         "Please rewrite the cover letter incorporating all the feedback. Output only the revised letter.\n"
         "ONLY address the feedback that was provided. Do not change any part of the letter except what is touched by feedback. \n"
+        "Feedback is meant to call attention to specific aspects, but can be short-sighted in context. "
+        "If you see that no feedback meaningfully needs to be addressed, output NO REVISIONS and end the answer.\n"
     )
     (trace_dir / "rewrite_prompt.txt").write_text(prompt, encoding="utf-8")
     messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
     revised_letter = chat(messages, client, model="o3")
-    (trace_dir / "final_letter.txt").write_text(revised_letter, encoding="utf-8")
+    if "NO REVISIONS" in revised_letter:
+        print("No revisions needed, returning original letter.")
+        return original_letter
     return revised_letter 
