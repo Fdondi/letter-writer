@@ -18,7 +18,8 @@ from .vector_store import (
 from .document_processing import extract_letter_text
 from .retrieval import retrieve_similar_job_offers
 from .generation import (
-    company_research, 
+    company_research,
+    fancy_letter, 
     generate_letter, 
     accuracy_check,
     human_check,
@@ -121,6 +122,7 @@ def process_job(
     qdrant_host: str = typer.Option(env_default("QDRANT_HOST", "localhost")),
     qdrant_port: int = typer.Option(int(env_default("QDRANT_PORT", "6333"))),
     refine: bool = typer.Option(True, help="Whether to try to improve the letter through feedback."),
+    fancy: bool = typer.Option(False, help="Whether to fancy up the letter."),
 ):
     """Writes a cover letter for the given job description."""
 
@@ -184,6 +186,13 @@ def process_job(
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(letter, encoding="utf-8")
     typer.echo(f"[INFO] Letter written to {out}")
+
+    if fancy:
+        fletter = fancy_letter(letter, get_openai_client(openai_key))
+        fancy_out = Path("fancy_letters", f"{company_name}.txt")
+        fancy_out.parent.mkdir(parents=True, exist_ok=True)
+        fancy_out.write_text(fletter, encoding="utf-8")
+        typer.echo(f"[INFO] Fancy letter written to {fancy_out}")
 
 if __name__ == "__main__":
     app() 

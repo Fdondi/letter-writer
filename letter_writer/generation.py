@@ -257,3 +257,20 @@ def rewrite_letter(
         print("No revisions needed, returning original letter.")
         return original_letter
     return revised_letter 
+
+def fancy_letter(letter: str, client: OpenAI) -> str:
+    """Fancy up the letter with a fancy style."""
+    system = (
+        "You are an expert in writing cover letters. You will receive a cover letter. "
+        "Keep as close to the original as possible, but spell the name of the company with the first letter of each paragraph. "
+        "The first paragraph should start with the company name itself. For example:\n"
+        "Apple -> 'Apple means excellence... Passion for me is... Pluses of employing me... Leading comes natural to me... Excited to contribute...' "
+    )
+    prompt = (
+        "========== Cover Letter:\n" + letter + "\n==========\n" +
+        "Please rewrite the cover letter in a more fancy style. "
+    )
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+    fancy_letter = chat(messages, client, model="o3")
+    return fancy_letter
+
