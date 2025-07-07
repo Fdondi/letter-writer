@@ -175,7 +175,7 @@ def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     rewritten_examples = [ex for ex in examples if "letter_text" in ex and "negative_letter_text" in ex]
     
     if not rewritten_examples:
-        print("none of {' '.join(ex['company_name'] for ex in examples)} have a negative letter")
+        print(f"none of {', '.join(ex['company_name'] for ex in examples)} have a negative letter, skipping")
         return "NO COMMENT"
 
     examples_formatted = "\n\n".join(
@@ -189,6 +189,7 @@ def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
         "first the cover letter how it was initially written, then the cover letter how a reviewer rewrote it. "
         "The reviewer might have copied parts of the initial letter, or rewrote it from scratch. Either way, pay attention to what was changed. "
         "Once you noticed what changes tend to be made, flag if in the final, new letter anything looks like a feature than the reviewer would change in the earler examples.\n"
+        "Note you should NOT flag elements just for not being in the positive examples, but only if they are present in the initial examples AND usually removed in the revised ones.\n"
         "Be very brief, a couple of sentences is enough. "
         "If at any point you see that nothing in the final letter looks like something the reviewer would change, output NO COMMENT and end the answer. \n"
     )
