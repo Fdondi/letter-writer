@@ -48,7 +48,14 @@ def rerank_documents(job_text: str, docs: dict, client: OpenAI, trace_dir: Path)
     system = (
         "You are an expert in scoring the similarity of job descriptions to a target job description. \n\n"
         "Given the original job description and a set of other job descriptions with their company names, "
-        "score each on how similar it is to the original on a scale of 1-10. \n\n"
+        "score each on how similar it is to the original on a scale of 1-10. \n"
+        "Reference: \n"
+        "- 10 = Nearly identical in both focus and tasks\n"
+        "- 8 = Shares most key tasks, but differs on one major aspect\n"
+        "- 6 = Partial overlap (e.g. Python and C++ vs Python and React)\n"
+        "- 4 = Some overlap, but signiticantly different jobs (Example: Frontend vs Backend programmer)\n"
+        "- 2 = Only the most basic tools and duties are shared (Example: Programmer vs Data Scientist) \n\n"
+        "If the job description is not similar to the original, score it 1. \n\n"
         f"Return an object matching the schema: {ScoreTable.model_json_schema()}.\n\n"
     )
     prompt = "Original Job Description:\n" + job_text + "\n\nOther Descriptions (JSON):\n" + mapping_json
