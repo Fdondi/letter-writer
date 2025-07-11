@@ -3,6 +3,9 @@ from typing import List
 from pathlib import Path
 from qdrant_client import QdrantClient
 from openai import OpenAI
+import typer
+
+from letter_writer.client import BaseClient, ModelSize
 
 from .config import COLLECTION_NAME
 from .vector_store import embed
@@ -20,8 +23,9 @@ class ScoreRow(BaseModel):
 class ScoreTable(BaseModel):
     scores: List[ScoreRow]
 
-def retrieve_similar_job_offers(job_text: str, openai_client: OpenAI, qdrant_client: QdrantClient, trace_dir: Path) -> List[dict]:
+def retrieve_similar_job_offers(job_text: str, client: BaseClient, qdrant_client: QdrantClient, trace_dir: Path) -> List[dict]:
     """Retrieve and rerank similar job offers based on the input job text."""
+    openai_client = OpenAI()
     vector = embed(job_text, openai_client)
     search_result = qdrant_client.search(
         collection_name=COLLECTION_NAME,
@@ -30,16 +34,15 @@ def retrieve_similar_job_offers(job_text: str, openai_client: OpenAI, qdrant_cli
     )
 
     retrieved_docs = {r.payload["company_name"]: r.payload for r in search_result}
-    top_docs = rerank_documents(job_text, retrieved_docs, openai_client, trace_dir)
+    top_docs = rerank_documents(job_text, retrieved_docs, client, trace_dir)
     
     return [{
         "score": score,
         **retrieved_docs[name],
     } for name, score in top_docs.items()]
 
-def rerank_documents(job_text: str, docs: dict, client: OpenAI, trace_dir: Path) -> dict:
+def rerank_documents(job_text: str, docs: dict, client: BaseClient, trace_dir: Path) -> dict:
     """Ask the model to score docs and return top 3 as dicts with company_name and score."""
-    from .generation import chat  # Import here to avoid circular imports
     
     # Prepare mapping of doc id -> company_name for scoring
     mapping = {i: {"company_name": name, "job_text": data["job_text"]} for i, (name, data) in enumerate(docs.items())}
@@ -56,14 +59,24 @@ def rerank_documents(job_text: str, docs: dict, client: OpenAI, trace_dir: Path)
         "- 4 = Some overlap, but signiticantly different jobs (Example: Frontend vs Backend programmer)\n"
         "- 2 = Only the most basic tools and duties are shared (Example: Programmer vs Data Scientist) \n\n"
         "If the job description is not similar to the original, score it 1. \n\n"
-        f"Return an object matching the schema: {ScoreTable.model_json_schema()}.\n\n"
+        f"Return a JSON object matching the schema: {ScoreTable.model_json_schema()}. "
+        "Return ONLY the JSON object, no wrappers.\n\n"
     )
     prompt = "Original Job Description:\n" + job_text + "\n\nOther Descriptions (JSON):\n" + mapping_json
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    scores_json = chat(messages, client, model="o4-mini")
+    scores_json = client.call(ModelSize.LARGE, system=system, user_messages=[prompt])
 
-    scores = ScoreTable.model_validate_json(scores_json)
-
+    # remove wrapping '''json if present
+    if scores_json.startswith("```json"):
+        scores_json = scores_json[len("```json"):]
+    if scores_json.endswith("```"):
+        scores_json = scores_json[:-len("```")]
+    
+    try:
+        scores = ScoreTable.model_validate_json(scores_json)
+    except ValidationError as e:
+        typer.echo(f"[ERROR] Failed to parse scores with error {e}. The scores are: {scores_json}")
+        raise e
+    
     score_table = pd.DataFrame([s.model_dump() for s in scores.scores])
     score_table.sort_values(by="score", ascending=False, inplace=True)
     score_table.to_json(trace_dir / "retrieved_docs.json", orient="records", indent=2)
