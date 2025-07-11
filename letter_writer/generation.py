@@ -3,6 +3,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from .config import TRACE_DIR
+from .client import BaseClient, ModelSize
 
 FURTHER_STYLE_INSTRUCTIONS = (
         "Never mention explicitly that something matches the job description, they should think that by themselves. "
@@ -15,12 +16,7 @@ FURTHER_STYLE_INSTRUCTIONS = (
     )
 
 
-def chat(messages: List[dict], client: OpenAI, model: str) -> str:
-    """Make a chat completion request to OpenAI."""
-    response = client.chat.completions.create(model=model, messages=messages)
-    return response.choices[0].message.content.strip()
-
-def company_research(company_name: str, job_text: str, client: OpenAI, trace_dir: Path) -> str:
+def company_research(company_name: str, job_text: str, client: BaseClient, trace_dir: Path) -> str:
     """Research company information using OpenAI."""
     system = "You are an expert in searching the internet for information about companies."
     prompt = (
@@ -29,12 +25,11 @@ def company_research(company_name: str, job_text: str, client: OpenAI, trace_dir
         "Focus on what makes the company appealing and unique. Keep it concise but informative. "
         "Do NOT include any links, only plain text."
     )
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    result = chat(messages, client, model="gpt-4o-search-preview")
+    result = client.call(ModelSize.LARGE, system, [prompt], search=True)
     (trace_dir / "company_research.txt").write_text(result, encoding="utf-8")
     return result
 
-def generate_letter(cv_text: str, examples: List[dict], company_report: str, job_text: str, client: OpenAI, trace_dir: Path) -> str:
+def generate_letter(cv_text: str, examples: List[dict], company_report: str, job_text: str, client: BaseClient, trace_dir: Path) -> str:
     """Generate a personalized cover letter based on CV, examples, company report, and job description."""
     examples_formatted = "\n\n".join(
         f"---- Example #{i+1} [estimated relevance: {ex['score']}/10] - {ex['company_name']} ----\n"
@@ -58,10 +53,9 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
         "========== Target Job Description:\n" + job_text + "\n=========="
     )
     (trace_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    return chat(messages, client, model="o3")
+    return client.call(ModelSize.XLARGE, system, [prompt])
 
-def instruction_check(letter: str, client: OpenAI) -> str:
+def instruction_check(letter: str, client: BaseClient) -> str:
     """Check the letter for consistency with the instructions."""
     system = (
         "You are an expert in style and tone. Check the letter for consistency with the style instructions."
@@ -73,12 +67,10 @@ def instruction_check(letter: str, client: OpenAI) -> str:
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
         "Please catch any strong inconsitency with the instructions, or output NO COMMENT"
     )
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    feedback = chat(messages, client, model="gpt-4.1-mini")
-    return feedback
+    return client.call(ModelSize.TINY, system, [prompt])
 
 
-def accuracy_check(letter: str, cv_text: str, client: OpenAI) -> str:
+def accuracy_check(letter: str, cv_text: str, client: BaseClient) -> str:
     """Check the accuracy of the cover letter against the user's CV."""
     system = (
         "You are an expert proofreader. Check the cover letter for factual accuracy against the user's CV. "
@@ -97,11 +89,9 @@ def accuracy_check(letter: str, cv_text: str, client: OpenAI) -> str:
         "Please review the cover letter for factual accuracy against the CV. "
         "Point out any claims that cannot be verified from the CV or are inconsistent with it."
     )
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    feedback = chat(messages, client, model="gpt-4.1-mini")
-    return feedback
+    return client.call(ModelSize.TINY, system, [prompt])
 
-def precision_check(letter: str, company_report: str, job_text: str, client: OpenAI) -> str:
+def precision_check(letter: str, company_report: str, job_text: str, client: BaseClient) -> str:
     """Check the precision and style of the cover letter against the company report and job description."""
     system = (
         "You are a senior HR manager at the company. Evaluate how well the cover letter addresses the needs of the company, as described in the company report and job description. "
@@ -122,9 +112,7 @@ def precision_check(letter: str, company_report: str, job_text: str, client: Ope
         "Please review the cover letter for consistency with the company report and job description. "
         "Provide specific feedback on how to better align with the company's needs."
     )
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    feedback = chat(messages, client, model="gpt-4.1-mini")
-    return feedback
+    return client.call(ModelSize.TINY, system, [prompt])
 
 def company_fit_check(letter: str, company_report: str, job_offer: str, client: OpenAI) -> str:
     """Check how well the cover letter aligns with the company's values, culture, tone, and needs."""
@@ -143,9 +131,7 @@ def company_fit_check(letter: str, company_report: str, job_offer: str, client: 
         "Please review the cover letter for alignment with the company's values, tone, and culture. "
         "Provide feedback on how to better demonstrate understanding of and fit with the company. "
     )
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    feedback = chat(messages, client, model="gpt-4.1-mini")
-    return feedback
+    return client.call(ModelSize.TINY, system, [prompt])
 
 def user_fit_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     """Check how well the cover letter showcases the user's unique value proposition."""
@@ -166,9 +152,7 @@ def user_fit_check(letter: str, examples: List[dict], client: OpenAI) -> str:
         "Please review the cover letter for effectiveness in adhering to the style and tone of the previous examples."
         "Provide feedback on how to improve the letter to better match the previous examples."
     )
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    feedback = chat(messages, client, model="gpt-4.1-mini")
-    return feedback
+    return client.call(ModelSize.TINY, system, [prompt])
 
 def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     """Check the letter for consistency with the instructions."""
@@ -198,9 +182,7 @@ def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
         "Please review the cover letter for anything that looks like something the reviewer would change, based on the examples."
     )
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    feedback = chat(messages, client, model="gpt-4.1-mini")
-    return feedback
+    return client.call(ModelSize.TINY, system, [prompt])
 
 
 def rewrite_letter(
@@ -251,8 +233,7 @@ def rewrite_letter(
         "If you see that no feedback meaningfully needs to be addressed, output NO REVISIONS and end the answer.\n"
     )
     (trace_dir / "rewrite_prompt.txt").write_text(prompt, encoding="utf-8")
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    revised_letter = chat(messages, client, model="o3")
+    revised_letter = client.call(ModelSize.XLARGE, system, [prompt])
     if "NO REVISIONS" in revised_letter:
         print("No revisions needed, returning original letter.")
         return original_letter
@@ -270,7 +251,5 @@ def fancy_letter(letter: str, client: OpenAI) -> str:
         "========== Cover Letter:\n" + letter + "\n==========\n" +
         "Please rewrite the cover letter in a more fancy style. "
     )
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    fancy_letter = chat(messages, client, model="o3")
-    return fancy_letter
+    return client.call(ModelSize.XLARGE, system, [prompt])
 

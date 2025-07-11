@@ -6,13 +6,6 @@ from openai import OpenAI
 
 from .config import COLLECTION_NAME, EMBED_MODEL
 
-def get_openai_client(api_key: Optional[str] = None) -> OpenAI:
-    """Get OpenAI client with API key validation."""
-    if not api_key:
-        typer.echo("[ERROR] OpenAI API key not provided. Use --openai_key or set OPENAI_API_KEY env variable.")
-        raise typer.Exit(code=1)
-    return OpenAI(api_key=api_key)
-
 def embed(text: str, client: OpenAI) -> List[float]:
     """Get embedding vector for text using OpenAI."""
     response = client.embeddings.create(model=EMBED_MODEL, input=text)

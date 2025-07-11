@@ -6,9 +6,10 @@ import zlib  # Add this import
 import typer
 from qdrant_client.http import models as qdrant_models
 
+from letter_writer.client import ModelVendor, get_client
+
 from .config import env_default
 from .vector_store import (
-    get_openai_client, 
     get_qdrant_client, 
     ensure_collection, 
     embed, 
@@ -118,7 +119,7 @@ def process_job(
     cv: Path = typer.Option(Path(env_default("CV_PATH", "cv.md")), help="Path to user's CV in text/markdown."),
     company_name: Optional[str] = typer.Option(env_default("COMPANY_NAME"), help="Company name. Defaults to job description filename stem."),
     out: Optional[Path] = typer.Option(None, help="Output path for the generated letter."),
-    openai_key: Optional[str] = typer.Option(env_default("OPENAI_API_KEY"), help="OpenAI API key."),
+    model_vendor: ModelVendor = typer.Option(ModelVendor.OPENAI, help="Model vendor."),
     qdrant_host: str = typer.Option(env_default("QDRANT_HOST", "localhost")),
     qdrant_port: int = typer.Option(int(env_default("QDRANT_PORT", "6333"))),
     refine: bool = typer.Option(True, help="Whether to try to improve the letter through feedback."),
@@ -150,25 +151,25 @@ def process_job(
     # step 1a and 1b can be done in parallel, as they are API calls and don't depend on each other
     # so we start them in different threads, each with its own OpenAI client
     with ThreadPoolExecutor(max_workers=2) as executor:
-        job_offers_future = executor.submit(retrieve_similar_job_offers, job_text, get_openai_client(openai_key), qdrant_client, trace_dir)
-        company_report_future = executor.submit(company_research, company_name, job_text, get_openai_client(openai_key), trace_dir)
+        job_offers_future = executor.submit(retrieve_similar_job_offers, job_text, get_client(model_vendor), qdrant_client, trace_dir)
+        company_report_future = executor.submit(company_research, company_name, job_text, get_client(model_vendor), trace_dir)
 
     top_docs = job_offers_future.result()
     company_report = company_report_future.result()
 
     # Step 2: Letter generation with a fresh client
-    letter = generate_letter(cv_text, top_docs, company_report, job_text, get_openai_client(openai_key), trace_dir)
+    letter = generate_letter(cv_text, top_docs, company_report, job_text, get_client(model_vendor), trace_dir)
     (trace_dir / "first_draft.txt").write_text(letter, encoding="utf-8")
 
     if refine:
         # Step 3: Feedback with separate clients for each thread
         with ThreadPoolExecutor(max_workers=5) as executor:
-            instruction_future = executor.submit(instruction_check, letter, get_openai_client(openai_key))
-            accuracy_future = executor.submit(accuracy_check, letter, cv_text, get_openai_client(openai_key))
-            precision_future = executor.submit(precision_check, letter, company_report, job_text, get_openai_client(openai_key))
-            company_fit_future = executor.submit(company_fit_check, letter, company_report, job_text, get_openai_client(openai_key))
-            user_fit_future = executor.submit(user_fit_check, letter, top_docs, get_openai_client(openai_key))
-            human_future = executor.submit(human_check, letter, top_docs, get_openai_client(openai_key))
+            instruction_future = executor.submit(instruction_check, letter, get_client(model_vendor))
+            accuracy_future = executor.submit(accuracy_check, letter, cv_text, get_client(model_vendor))
+            precision_future = executor.submit(precision_check, letter, company_report, job_text, get_client(model_vendor))
+            company_fit_future = executor.submit(company_fit_check, letter, company_report, job_text, get_client(model_vendor))
+            user_fit_future = executor.submit(user_fit_check, letter, top_docs, get_client(model_vendor))
+            human_future = executor.submit(human_check, letter, top_docs, get_client(model_vendor))
         
         instruction_feedback = instruction_future.result()
         accuracy_feedback = accuracy_future.result()
@@ -178,7 +179,7 @@ def process_job(
         human_feedback = human_future.result()
 
         # Step 4: Rewrite with a fresh client
-        letter = rewrite_letter(letter, instruction_feedback, accuracy_feedback, precision_feedback, company_fit_feedback, user_fit_feedback, human_feedback, get_openai_client(openai_key), trace_dir)
+        letter = rewrite_letter(letter, instruction_feedback, accuracy_feedback, precision_feedback, company_fit_feedback, user_fit_feedback, human_feedback, get_client(model_vendor), trace_dir)
 
     # Output
     if out is None:
@@ -188,7 +189,7 @@ def process_job(
     typer.echo(f"[INFO] Letter written to {out}")
 
     if fancy:
-        fletter = fancy_letter(letter, get_openai_client(openai_key))
+        fletter = fancy_letter(letter, get_client(model_vendor))
         fancy_out = Path("fancy_letters", f"{company_name}.txt")
         fancy_out.parent.mkdir(parents=True, exist_ok=True)
         fancy_out.write_text(fletter, encoding="utf-8")

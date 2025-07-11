@@ -8,6 +8,16 @@ Cover letter customizator.
 
 pip install -r requirements.txt
 
+### API Keys
+
+Set up the required API keys as environment variables (or in a `.env` file):
+
+- `OPENAI_API_KEY`: Required for OpenAI models
+- `ANTHROPIC_API_KEY`: Required for Claude/Anthropic models  
+- `GOOGLE_API_KEY`: Required for Gemini models
+- `MISTRAL_API_KEY`: Required for Mistral models (optional)
+- `XAI_API_KEY`: Required for Grok models (optional)
+
 ### Qdrant
 
 Qdrant accessible; tested running locally in Docker on port 6333 (configurable)
