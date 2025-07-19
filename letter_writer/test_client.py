@@ -155,6 +155,32 @@ def test_grok_client_tiny_with_search():
     assert len(response) > 0
     print(f"Grok tiny with search response: {response[:100]}...")
 
+def test_deepseek_client_tiny_no_search():
+    """Test DeepSeek client with tiny model without search"""
+    client = get_client(ModelVendor.DEEPSEEK)
+    response = client.call(
+        model_size=ModelSize.TINY,
+        system=SYSTEM_PROMPT,
+        user_messages=[USER_MESSAGE],
+        search=False
+    )
+    assert response is not None
+    assert len(response) > 0
+    print(f"DeepSeek tiny no search response: {response[:100]}...")
+
+def test_deepseek_client_tiny_with_search():
+    
+    client = get_client(ModelVendor.DEEPSEEK)
+    response = client.call(
+        model_size=ModelSize.TINY,
+        system=SYSTEM_PROMPT,
+        user_messages=["What are the latest news about AI?"],
+        search=True
+    )
+    assert response is not None
+    assert len(response) > 0
+    print(f"DeepSeek tiny with search response: {response[:100]}...")
+
 def test_client_factory():
     """Test that get_client returns the correct client type for each vendor"""
     openai_client = get_client(ModelVendor.OPENAI)
