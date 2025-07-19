@@ -23,9 +23,8 @@ class ScoreRow(BaseModel):
 class ScoreTable(BaseModel):
     scores: List[ScoreRow]
 
-def retrieve_similar_job_offers(job_text: str, client: BaseClient, qdrant_client: QdrantClient, trace_dir: Path) -> List[dict]:
+def retrieve_similar_job_offers(job_text: str, ai_client: BaseClient, qdrant_client: QdrantClient, openai_client: OpenAI, trace_dir: Path) -> List[dict]:
     """Retrieve and rerank similar job offers based on the input job text."""
-    openai_client = OpenAI()
     vector = embed(job_text, openai_client)
     search_result = qdrant_client.search(
         collection_name=COLLECTION_NAME,
@@ -34,14 +33,14 @@ def retrieve_similar_job_offers(job_text: str, client: BaseClient, qdrant_client
     )
 
     retrieved_docs = {r.payload["company_name"]: r.payload for r in search_result}
-    top_docs = rerank_documents(job_text, retrieved_docs, client, trace_dir)
+    top_docs = rerank_documents(job_text, retrieved_docs, ai_client, trace_dir)
     
     return [{
         "score": score,
         **retrieved_docs[name],
     } for name, score in top_docs.items()]
 
-def rerank_documents(job_text: str, docs: dict, client: BaseClient, trace_dir: Path) -> dict:
+def rerank_documents(job_text: str, docs: dict, ai_client: BaseClient, trace_dir: Path) -> dict:
     """Ask the model to score docs and return top 3 as dicts with company_name and score."""
     
     # Prepare mapping of doc id -> company_name for scoring
@@ -63,7 +62,7 @@ def rerank_documents(job_text: str, docs: dict, client: BaseClient, trace_dir: P
         "Return ONLY the JSON object, no wrappers.\n\n"
     )
     prompt = "Original Job Description:\n" + job_text + "\n\nOther Descriptions (JSON):\n" + mapping_json
-    scores_json = client.call(ModelSize.LARGE, system=system, user_messages=[prompt])
+    scores_json = ai_client.call(ModelSize.LARGE, system=system, user_messages=[prompt])
 
     # remove wrapping '''json if present
     if scores_json.startswith("```json"):
