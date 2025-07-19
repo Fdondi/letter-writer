@@ -66,6 +66,7 @@ def refresh(
     typer.echo(f"[INFO] Processing negative letters from: {negative_letters_source_folder} with suffix: {negative_letters_source_suffix}")
 
     points = []
+    n_with_negative_letters = 0
     n_negative_letters = 0
     for path in jobs_source_folder.glob(f"*{jobs_source_suffix}"):
         # Job descriptions are in <company_name><jobs_source_suffix> files
@@ -80,11 +81,14 @@ def refresh(
 
         letter_text = extract_letter_text(letter_path, letters_ignore_until, letters_ignore_after)
 
-        negative_letter_path = negative_letters_source_folder / f"{company_name}{negative_letters_source_suffix}"
-        if negative_letter_path.exists():
-            negative_letter_text = extract_letter_text(negative_letter_path, letters_ignore_until, letters_ignore_after)
-            n_negative_letters += 1
-            typer.echo(f"[INFO] Processing {company_name}")
+        # negative letters can be written by one or more AIs, so they might have .<model_vendor>.txt suffixes. Use glob to find any
+        negative_letter_paths = list(negative_letters_source_folder.glob(f"{company_name}*{negative_letters_source_suffix}"))
+        if negative_letter_paths:
+            negative_letter_text = "\n\n".join(f"--Letter {i+1} --\n{path.read_text(encoding='utf-8')}" for i, path in enumerate(negative_letter_paths))
+            n_with_negative_letters += 1
+            n_negative_letters += len(negative_letter_paths)
+            negative_debug = ", ".join(str(path.stem) for path in negative_letter_paths)
+            typer.echo(f"[INFO] Processing {company_name} with {len(negative_letter_paths)} negative letters ({negative_debug}) [{n_with_negative_letters} with negative letters in total]")
         else:
             negative_letter_text = None
             typer.echo(f"[INFO] Processing {company_name} (without negative letter)")
@@ -110,7 +114,7 @@ def refresh(
 
     if points:
         upsert_documents(client, points)
-        typer.echo(f"[INFO] Upserted {len(points)} documents to Qdrant. ({n_negative_letters} negative letters)")
+        typer.echo(f"[INFO] Upserted {len(points)} documents to Qdrant. ({n_with_negative_letters} with negative letters, in total {n_negative_letters} negative letters)")
     else:
         typer.echo("[WARN] No documents found to upsert.")
 
