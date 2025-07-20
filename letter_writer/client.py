@@ -7,6 +7,7 @@ from anthropic import Anthropic
 from google import genai
 from google.genai import types
 from mistralai import Mistral, Tool
+import xai_sdk
 
 class ModelVendor(Enum):
     OPENAI = "openai"
@@ -234,10 +235,7 @@ class GrokClient(BaseClient):
             raise RuntimeError("XAI_API_KEY environment variable is not set")
         
         # Use OpenAI client with xAI's endpoint
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url="https://api.x.ai/v1"
-        )
+        self.client = xai_sdk.Client(api_key=api_key)
         self.sizes = {
             ModelSize.TINY: "grok-3-mini",
             ModelSize.BASE: "grok-3-mini", 
@@ -246,21 +244,20 @@ class GrokClient(BaseClient):
             ModelSize.XLARGE: "grok-4-latest",
         }
 
-    def _format_messages(self, system: str, user_messages: List[str]) -> List[Dict]:
-        return [{"role": "system", "content": system}] + [{"role": "user", "content": message} for message in user_messages]
-
     def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
-        messages = self._format_messages(system, user_messages)
         model = self.sizes[model_size]
-        if search:
-            typer.echo(f"[WARNING] Search functionality not supported for Grok models, proceeding without search")
         typer.echo(f"[INFO] using Grok model {model}")
-        response = self.client.chat.completions.create(
+        chat = self.client.chat.create(
             model=model,
-            messages=messages,
-            max_tokens=2048,
+            search_parameters=xai_sdk.search.SearchParameters(mode="on" if search else "off"),
         )
-        return response.choices[0].message.content.strip()
+
+        chat.append(xai_sdk.chat.system(system))
+        for message in user_messages:
+            chat.append(xai_sdk.chat.user(message))
+
+        response = chat.sample()
+        return response.content.strip()
 
 class DeepSeekClient(BaseClient):
     def __init__(self):
