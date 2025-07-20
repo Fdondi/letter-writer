@@ -1,9 +1,10 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional
+from typing import List, Literal, Optional
 import zlib  # Add this import
 
 from openai import OpenAI
+from qdrant_client.models import Document
 import typer
 from qdrant_client.http import models as qdrant_models
 
@@ -18,7 +19,7 @@ from .vector_store import (
     collection_exists
 )
 from .document_processing import extract_letter_text
-from .retrieval import retrieve_similar_job_offers
+from .retrieval import retrieve_similar_job_offers, select_top_documents
 from .generation import (
     company_research,
     fancy_letter, 
@@ -124,7 +125,7 @@ def process_job(
     cv: Path = typer.Option(Path(env_default("CV_PATH", "cv.md")), help="Path to user's CV in text/markdown."),
     company_name: Optional[str] = typer.Option(env_default("COMPANY_NAME"), help="Company name. Defaults to job description filename stem."),
     out: Optional[Path] = typer.Option(None, help="Output path for the generated letter."),
-    model_vendor: ModelVendor = typer.Option(ModelVendor.OPENAI, help="Model vendor."),
+    model_vendor: Optional[ModelVendor] = typer.Option(None, help="Model vendor. Default: all"),
     qdrant_host: str = typer.Option(env_default("QDRANT_HOST", "localhost")),
     qdrant_port: int = typer.Option(int(env_default("QDRANT_PORT", "6333"))),
     refine: bool = typer.Option(True, help="Whether to try to improve the letter through feedback."),
@@ -150,7 +151,22 @@ def process_job(
     if company_name is None:
         company_name = Path(path).stem
 
-    file_name = f"{company_name}_{model_vendor.value}"
+    # call Qdrant here as it's model independent; no point in doing it for each model
+    openai_client = OpenAI()
+    qdrant_client = get_qdrant_client(qdrant_host, qdrant_port)
+    search_result = retrieve_similar_job_offers(job_text, qdrant_client, openai_client)
+
+    if model_vendor is None:
+        with ThreadPoolExecutor(max_workers=len(ModelVendor)) as executor:
+            futures = [executor.submit(process_job_impl, cv_text, job_text, company_name, out, model_vendor, search_result, refine, fancy) for model_vendor in ModelVendor]
+            for future in futures:
+                future.result()
+    else:
+        process_job_impl(cv_text, job_text, company_name, out, model_vendor, search_result, refine, fancy)
+
+def process_job_impl(cv_text: str, job_text: str, company_name: str, out: Optional[Path], model_vendor: ModelVendor, search_result: List[Document], refine: bool, fancy: bool):
+
+    file_name = f"{company_name}.{model_vendor.value}"
 
     trace_dir = Path("trace", file_name)
     trace_dir.mkdir(parents=True, exist_ok=True)
@@ -161,7 +177,7 @@ def process_job(
     # step 1a and 1b can be done in parallel, as they are API calls and don't depend on each other
     # so we start them in different threads, each with its own OpenAI client
     with ThreadPoolExecutor(max_workers=2) as executor:
-        job_offers_future = executor.submit(retrieve_similar_job_offers, job_text, ai_client, qdrant_client, openai_client, trace_dir)
+        job_offers_future = executor.submit(select_top_documents, search_result, job_text, ai_client, trace_dir)
         company_report_future = executor.submit(company_research, company_name, job_text, ai_client, trace_dir)
 
     top_docs = job_offers_future.result()
