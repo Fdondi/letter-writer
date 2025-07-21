@@ -6,7 +6,7 @@ from qdrant_client.models import Document
 from openai import OpenAI
 import typer
 
-from letter_writer.client import BaseClient, ModelSize
+from .clients.base import BaseClient, ModelSize
 
 from .config import COLLECTION_NAME
 from .vector_store import embed

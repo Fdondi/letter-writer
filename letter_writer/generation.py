@@ -3,7 +3,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from .config import TRACE_DIR
-from .client import BaseClient, ModelSize
+from .clients.base import BaseClient, ModelSize
 
 FURTHER_STYLE_INSTRUCTIONS = (
         "Never mention explicitly that something matches the job description, they should think that by themselves. "
