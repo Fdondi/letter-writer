@@ -1,25 +1,29 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import ModelSelector from "./components/ModelSelector";
 import LetterTabs from "./components/LetterTabs";
 
-const VENDORS = [
-  "openai",
-  "anthropic",
-  "gemini",
-  "mistral",
-  "grok",
-];
-
 export default function App() {
+  const [vendors, setVendors] = useState([]);
   const [jobText, setJobText] = useState("");
   const [companyName, setCompanyName] = useState("");
-  const [selectedVendors, setSelectedVendors] = useState(() => new Set(VENDORS));
+  const [selectedVendors, setSelectedVendors] = useState(new Set());
   const [letters, setLetters] = useState({}); // vendor -> text
   const [failedVendors, setFailedVendors] = useState({}); // vendor -> error message
   const [loading, setLoading] = useState(false);
   const [loadingVendors, setLoadingVendors] = useState(new Set()); // vendors currently loading
   const [error, setError] = useState(null);
   const [showInput, setShowInput] = useState(true);
+
+  // Fetch vendors on mount
+  useEffect(() => {
+    fetch("/api/vendors/")
+      .then((res) => res.json())
+      .then((data) => {
+        setVendors(data.vendors || []);
+        setSelectedVendors(new Set(data.vendors || []));
+      })
+      .catch((e) => setError(String(e)));
+  }, []);
 
   const toggleVendor = (vendor, checked) => {
     setSelectedVendors((prev) => {
@@ -30,7 +34,7 @@ export default function App() {
   };
 
   const selectAll = (checked) => {
-    setSelectedVendors(checked ? new Set(VENDORS) : new Set());
+    setSelectedVendors(checked ? new Set(vendors) : new Set());
   };
 
   const retryVendor = async (vendor) => {
@@ -117,7 +121,7 @@ export default function App() {
       {showInput ? (
         <>
           <ModelSelector
-            vendors={VENDORS}
+            vendors={vendors}
             selected={selectedVendors}
             onToggle={toggleVendor}
             onSelectAll={selectAll}
