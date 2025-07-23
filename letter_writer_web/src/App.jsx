@@ -170,8 +170,15 @@ export default function App() {
           ))}
         </div>
       )}
-      {(Object.keys(letters).length > 0 || Object.keys(failedVendors).length > 0) && (
-        <LetterTabs letters={letters} originalText={jobText} />
+      {(Object.keys(letters).length > 0 || loading) && (
+        <LetterTabs 
+          vendorsList={Array.from(selectedVendors)}
+          letters={letters}
+          originalText={jobText}
+          failedVendors={failedVendors}
+          loadingVendors={loadingVendors}
+          onRetry={retryVendor}
+        />
       )}
     </div>
   );
