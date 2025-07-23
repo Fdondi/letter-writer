@@ -19,6 +19,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [loadingVendors, setLoadingVendors] = useState(new Set()); // vendors currently loading
   const [error, setError] = useState(null);
+  const [showInput, setShowInput] = useState(true);
 
   const toggleVendor = (vendor, checked) => {
     setSelectedVendors((prev) => {
@@ -75,6 +76,7 @@ export default function App() {
     setLetters({});
     setFailedVendors({});
     setLoadingVendors(new Set(selectedVendors));
+    setShowInput(false);
     try {
       const requests = Array.from(selectedVendors).map(async (vendor) => {
         const res = await fetch("/api/process-job/", {
@@ -102,35 +104,50 @@ export default function App() {
     }
   };
 
+  const resetForm = () => {
+    setShowInput(true);
+    setLetters({});
+    setFailedVendors({});
+    setError(null);
+  };
+
   return (
     <div style={{ padding: 20 }}>
       <h1>Letter Writer</h1>
-      <ModelSelector
-        vendors={VENDORS}
-        selected={selectedVendors}
-        onToggle={toggleVendor}
-        onSelectAll={selectAll}
-      />
-      <input
-        type="text"
-        placeholder="Company name"
-        value={companyName}
-        onChange={(e) => setCompanyName(e.target.value)}
-        style={{ width: "100%", marginTop: 10, padding: 8 }}
-      />
-      <textarea
-        style={{ width: "100%", height: 150, marginTop: 10 }}
-        placeholder="Paste job description here"
-        value={jobText}
-        onChange={(e) => setJobText(e.target.value)}
-      />
-      <button
-        onClick={handleSubmit}
-        disabled={loading || !jobText || !companyName || selectedVendors.size === 0}
-        style={{ marginTop: 10 }}
-      >
-        {loading ? "Generating..." : "Generate Letters"}
-      </button>
+      {showInput ? (
+        <>
+          <ModelSelector
+            vendors={VENDORS}
+            selected={selectedVendors}
+            onToggle={toggleVendor}
+            onSelectAll={selectAll}
+          />
+          <input
+            type="text"
+            placeholder="Company name"
+            value={companyName}
+            onChange={(e) => setCompanyName(e.target.value)}
+            style={{ width: "100%", marginTop: 10, padding: 8 }}
+          />
+          <textarea
+            style={{ width: "100%", height: 150, marginTop: 10 }}
+            placeholder="Paste job description here"
+            value={jobText}
+            onChange={(e) => setJobText(e.target.value)}
+          />
+          <button
+            onClick={handleSubmit}
+            disabled={loading || !jobText || !companyName || selectedVendors.size === 0}
+            style={{ marginTop: 10 }}
+          >
+            {loading ? "Generating..." : "Generate Letters"}
+          </button>
+        </>
+      ) : (
+        <button onClick={resetForm} style={{ marginBottom: 10 }}>
+          ← Back to Input
+        </button>
+      )}
       {error && <p style={{ color: "red" }}>{error}</p>}
       {Object.keys(failedVendors).length > 0 && (
         <div style={{ marginTop: 10, padding: 10, background: "#fff3cd", border: "1px solid #ffeaa7" }}>
@@ -150,7 +167,7 @@ export default function App() {
         </div>
       )}
       {(Object.keys(letters).length > 0 || Object.keys(failedVendors).length > 0) && (
-        <LetterTabs letters={letters} />
+        <LetterTabs letters={letters} originalText={jobText} />
       )}
     </div>
   );
