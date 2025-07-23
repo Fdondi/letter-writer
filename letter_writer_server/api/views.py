@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from django.http import JsonResponse, HttpRequest
 from django.views.decorators.csrf import csrf_exempt
@@ -89,8 +89,8 @@ def process_job_view(request: HttpRequest):
         return JsonResponse({"detail": "Invalid JSON"}, status=400)
 
     param_types = {
-        "path": Path,
-        "cv": Path,
+        "job_text": str,
+        "cv_text": str,
         "company_name": str,
         "out": Path,
         "model_vendor": ModelVendor,
@@ -102,8 +102,8 @@ def process_job_view(request: HttpRequest):
 
     try:
         kwargs = _build_kwargs(data, param_types)
-        write_cover_letter(**kwargs, logger=print)
+        letters = write_cover_letter(**kwargs, logger=print)
     except Exception as exc:  # noqa: BLE001
         return JsonResponse({"detail": str(exc)}, status=500)
 
-    return JsonResponse({"status": "ok"}) 
+    return JsonResponse({"status": "ok", "letters": letters}) 
