@@ -106,4 +106,12 @@ def process_job_view(request: HttpRequest):
     except Exception as exc:  # noqa: BLE001
         return JsonResponse({"detail": str(exc)}, status=500)
 
-    return JsonResponse({"status": "ok", "letters": letters}) 
+    return JsonResponse({"status": "ok", "letters": letters})
+
+
+@csrf_exempt
+def vendors_view(request: HttpRequest):
+    if request.method != "GET":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+    vendors = [v.value for v in ModelVendor]
+    return JsonResponse({"vendors": vendors}) 
