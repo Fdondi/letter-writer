@@ -9,3 +9,4 @@ xai-sdk>=1.0.0
 pandas>=2
 pytest>=8.4.0
 pytest-xdist[psutil] >=3.8.0
+Django>=4.2
