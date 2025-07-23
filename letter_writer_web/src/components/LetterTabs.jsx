@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 
-export default function LetterTabs({ letters, originalText }) {
+export default function LetterTabs({ vendorsList, letters, originalText, failedVendors, loadingVendors, onRetry }) {
   const [collapsed, setCollapsed] = useState([]); // vendor names collapsed
   const [finalLetter, setFinalLetter] = useState("");
   const [originalLetter, setOriginalLetter] = useState(originalText || "");
@@ -11,8 +11,8 @@ export default function LetterTabs({ letters, originalText }) {
     );
   };
 
-  const visibleVendors = Object.keys(letters).filter((v) => !collapsed.includes(v));
-  const collapsedVendors = Object.keys(letters).filter((v) => collapsed.includes(v));
+  const visibleVendors = vendorsList.filter((v) => !collapsed.includes(v));
+  const collapsedVendors = vendorsList.filter((v) => collapsed.includes(v));
   const totalVisible = visibleVendors.length + 2; // +2 for final letter and original letter
   const columnWidth = totalVisible > 0 ? `${100 / totalVisible}%` : "100%";
 
@@ -54,6 +54,9 @@ export default function LetterTabs({ letters, originalText }) {
             key={v}
             title={v}
             text={letters[v]}
+            loading={loadingVendors.has(v)}
+            error={failedVendors[v]}
+            onRetry={() => onRetry && onRetry(v)}
             onCollapse={() => toggleCollapse(v)}
             width={columnWidth}
           />
@@ -76,7 +79,7 @@ export default function LetterTabs({ letters, originalText }) {
   );
 }
 
-function LetterCard({ title, text, onCollapse, editable = false, onChange, width }) {
+function LetterCard({ title, text, loading=false, error=null, onRetry, onCollapse, editable = false, onChange, width }) {
   return (
     <div
       style={{
@@ -115,7 +118,18 @@ function LetterCard({ title, text, onCollapse, editable = false, onChange, width
         )}
       </div>
       <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-        {editable ? (
+        {loading && !text && !error ? (
+          <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%"}}>
+            <div className="spinner" />
+          </div>
+        ) : error && !text ? (
+          <div style={{padding:8,color:"red",fontSize:12}}>
+            {error}
+            {onRetry && (
+              <button onClick={onRetry} style={{marginTop:5}}>Retry</button>
+            )}
+          </div>
+        ) : editable ? (
           <textarea
             value={text}
             onChange={(e) => onChange(e.target.value)}
@@ -152,3 +166,18 @@ function LetterCard({ title, text, onCollapse, editable = false, onChange, width
     </div>
   );
 } 
+
+// Simple spinner CSS added inline
+const style = document.createElement("style");
+style.innerHTML = `
+.spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid #ccc;
+  border-top-color: #333;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+`;
+document.head.appendChild(style); 
