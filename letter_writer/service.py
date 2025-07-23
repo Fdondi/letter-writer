@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+from tqdm import tqdm
+
 """Business-logic layer shared by CLI and Web API.
 Extracted from letter_writer.cli to avoid code duplication.
 """
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional
 import zlib
 
 from openai import OpenAI
 from qdrant_client.http import models as qdrant_models
+from qdrant_client.models import Document
 
 from .client import ModelVendor, get_client
 from .config import env_default
@@ -156,12 +159,12 @@ def _process_single_vendor(
     company_name: str,
     out: Optional[Path],
     model_vendor: ModelVendor,
-    search_result: List["Document"],
+    search_result: List[Document],
     refine: bool,
     fancy: bool,
     logger=print,
 ):
-    """Inner implementation for a single vendor (minimal copy from CLI)."""
+    """Generate the letter for one model vendor and return its text."""
     trace_dir = Path("trace", f"{company_name}.{model_vendor.value}")
     trace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -228,12 +231,44 @@ def _process_single_vendor(
         fancy_out.write_text(fletter, encoding="utf-8")
         logger(f"[INFO] Fancy letter written to {fancy_out}")
 
+    return letter  # Return generated letter text
+
+class FakeTDQM:
+    def __init__(self, total: int, unit: str, desc: str = "Processing", logger=print):
+        self.total = total
+        self.logger = logger
+        self.desc = desc
+        self.unit = unit
+        self.count = 0
+
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        pass
+
+    def update(self, x: int = 1):
+        self.count += x
+        self.logger(f"{self.desc} {self.count}/{self.total} {self.unit}")
+
+    def set_description(self, desc: str):
+        self.desc = desc
+
+def get_progress_tracker(total: int, logger=print):
+    try:
+        from tqdm import tqdm
+        return tqdm(total=total, unit="vendors")
+    except ImportError:
+        return FakeTDQM(total, unit="vendors", logger=logger)
 
 # Public API
 
 def write_cover_letter(
-    path: Path,
+    *,
+    path: Optional[Path] = None,
+    job_text: Optional[str] = None,
     cv: Path = Path(env_default("CV_PATH", "cv.md")),
+    cv_text: Optional[str] = None,
     company_name: Optional[str] = None,
     out: Optional[Path] = None,
     model_vendor: Optional[ModelVendor] = None,
@@ -242,36 +277,62 @@ def write_cover_letter(
     refine: bool = True,
     fancy: bool = False,
     logger=print,
-):
-    """Generate a cover letter for *path* and write it to *out*.
+) -> dict[str, str]:
+    """Generate cover letter(s) from text or file and return them.
 
-    Notes
-    -----
-    • If *model_vendor* is None, letters are generated for all vendors.
-    • *logger* defaults to ``print`` but can be ``typer.echo`` for CLI.
+    Parameters
+    ----------
+    path : Optional[Path]
+        Path to job description text file (fallback if *job_text* not given).
+    job_text : Optional[str]
+        Raw job description text. If given, *path* can be omitted.
+    cv : Path
+        Path to CV file (fallback if *cv_text* not given).
+    cv_text : Optional[str]
+        Raw CV text overriding the *cv* file.
+    company_name : str, optional
+        Company name; if omitted and *path* given, it is derived from path stem.
+    out : Path, optional
+        Base output path (folder+filename) for generated letter(s).
+    model_vendor : ModelVendor, optional
+        If omitted, generate letters for all vendors.
+
+    Returns
+    -------
+    dict
+        Mapping ``vendor_name -> letter_text``.
     """
 
     qdrant_client = get_qdrant_client(qdrant_host, qdrant_port)
     if not collection_exists(qdrant_client):
         raise RuntimeError("Qdrant collection not found. Run 'refresh' first.")
+    # Ensure we have job_text and cv_text
+    if job_text is None:
+        if path is None:
+            raise ValueError("Either job_text or path must be provided")
+        if path.is_dir():
+            path = max(path.glob("*.txt"), key=lambda p: p.stat().st_mtime)
+            logger(f"[INFO] Using newest file in folder: {path}")
+        job_text = path.read_text(encoding="utf-8")
 
-    # If directory, use newest .txt file
-    if path.is_dir():
-        path = max(path.glob("*.txt"), key=lambda p: p.stat().st_mtime)
-        logger(f"[INFO] Using newest file in folder: {path}")
+    if cv_text is None:
+        cv_text = cv.read_text(encoding="utf-8")
 
-    job_text = path.read_text(encoding="utf-8")
-    cv_text = cv.read_text(encoding="utf-8")
-
+    # Determine company name
     if company_name is None:
-        company_name = path.stem
+        if path is not None:
+            company_name = path.stem
+        else:
+            raise ValueError("Either company_name or path must be provided")
 
     openai_client = OpenAI()
     search_result = retrieve_similar_job_offers(job_text, qdrant_client, openai_client)
 
+    letters: dict[str, str] = {}
+
     if model_vendor is None:
         with ThreadPoolExecutor(max_workers=len(ModelVendor)) as executor:
-            futures = [
+            futures = {
                 executor.submit(
                     _process_single_vendor,
                     cv_text,
@@ -283,13 +344,21 @@ def write_cover_letter(
                     refine,
                     fancy,
                     logger,
-                )
+                ): mv
                 for mv in ModelVendor
-            ]
-            for fut in futures:
-                fut.result()
+            }
+            with get_progress_tracker(len(futures)) as pbar:
+                for future in as_completed(futures):
+                    key = futures[future].value
+                    pbar.set_description(f"Processing {key}")
+                    try:
+                        letters[key] = future.result()
+                    except Exception as e:
+                        logger.error(f"{key} failed: {e}")
+                    finally:
+                        pbar.update()
     else:
-        _process_single_vendor(
+        letters[model_vendor.value] = _process_single_vendor(
             cv_text,
             job_text,
             company_name,
@@ -299,4 +368,6 @@ def write_cover_letter(
             refine,
             fancy,
             logger,
-        ) 
+        )
+
+    return letters

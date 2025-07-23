@@ -1,40 +1,14 @@
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import List, Literal, Optional
-import zlib  # Add this import
+from typing import Optional
 
-from openai import OpenAI
-from qdrant_client.models import Document
 import typer
-from qdrant_client.http import models as qdrant_models
 
-from letter_writer.client import ModelVendor, get_client
+from letter_writer.client import ModelVendor
 
 # Import shared business logic
 from .service import refresh_repository, write_cover_letter
 
 from .config import env_default
-from .vector_store import (
-    get_qdrant_client, 
-    ensure_collection, 
-    embed, 
-    upsert_documents,
-    collection_exists
-)
-from .document_processing import extract_letter_text
-from .retrieval import retrieve_similar_job_offers, select_top_documents
-from .generation import (
-    company_research,
-    fancy_letter, 
-    generate_letter, 
-    accuracy_check,
-    human_check,
-    instruction_check, 
-    precision_check, 
-    company_fit_check, 
-    user_fit_check, 
-    rewrite_letter
-)
 
 app = typer.Typer(help="Cover letter customizator CLI.")
 
