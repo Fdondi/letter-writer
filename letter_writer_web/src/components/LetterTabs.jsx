@@ -1,8 +1,9 @@
 import React, { useState } from "react";
 
-export default function LetterTabs({ letters }) {
+export default function LetterTabs({ letters, originalText }) {
   const [collapsed, setCollapsed] = useState([]); // vendor names collapsed
   const [finalLetter, setFinalLetter] = useState("");
+  const [originalLetter, setOriginalLetter] = useState(originalText || "");
 
   const toggleCollapse = (vendor) => {
     setCollapsed((prev) =>
@@ -12,7 +13,8 @@ export default function LetterTabs({ letters }) {
 
   const visibleVendors = Object.keys(letters).filter((v) => !collapsed.includes(v));
   const collapsedVendors = Object.keys(letters).filter((v) => collapsed.includes(v));
-  const totalVisible = visibleVendors.length + 1; // +1 for final letter
+  const totalVisible = visibleVendors.length + 2; // +2 for final letter and original letter
+  const columnWidth = totalVisible > 0 ? `${100 / totalVisible}%` : "100%";
 
   return (
     <div style={{ 
@@ -27,7 +29,11 @@ export default function LetterTabs({ letters }) {
             if (e.target.value) toggleCollapse(e.target.value);
             e.target.value = "";
           }}
-          style={{ marginBottom: 10 }}
+          style={{ 
+            marginBottom: 10,
+            maxHeight: "100px",
+            overflowY: "auto"
+          }}
         >
           <option value="">Restore collapsed...</option>
           {collapsedVendors.map((v) => (
@@ -49,7 +55,7 @@ export default function LetterTabs({ letters }) {
             title={v}
             text={letters[v]}
             onCollapse={() => toggleCollapse(v)}
-            width={`${100 / totalVisible}%`}
+            width={columnWidth}
           />
         ))}
         <LetterCard
@@ -57,7 +63,13 @@ export default function LetterTabs({ letters }) {
           text={finalLetter}
           editable
           onChange={setFinalLetter}
-          width={`${100 / totalVisible}%`}
+          width={columnWidth}
+        />
+        <LetterCard
+          title="Original Letter"
+          text={originalLetter}
+          editable={false}
+          width={columnWidth}
         />
       </div>
     </div>
@@ -98,7 +110,7 @@ function LetterCard({ title, text, onCollapse, editable = false, onChange, width
             }}
             title="Hide letter"
           >
-            ⊗
+            👁️‍🗨️
           </button>
         )}
       </div>
