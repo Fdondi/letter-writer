@@ -1,9 +1,23 @@
 import React, { useState, useEffect } from "react";
 import ModelSelector from "./components/ModelSelector";
 import LetterTabs from "./components/LetterTabs";
+import { v4 as uuidv4 } from "uuid";
+import { splitIntoParagraphs } from "./utils/split";
+
+function generateColors(vendors) {
+  const step = 360 / vendors.length;
+  return vendors.reduce((acc, v, idx) => {
+    const hue = Math.round(idx * step);
+    acc[v] = `hsl(${hue}, 70%, 85%)`;
+    return acc;
+  }, {});
+}
 
 export default function App() {
   const [vendors, setVendors] = useState([]);
+  const [vendorColors, setVendorColors] = useState({});
+  const [vendorParagraphs, setVendorParagraphs] = useState({});
+  const [finalParagraphs, setFinalParagraphs] = useState([]);
   const [jobText, setJobText] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [selectedVendors, setSelectedVendors] = useState(new Set());
@@ -21,6 +35,7 @@ export default function App() {
       .then((data) => {
         setVendors(data.vendors || []);
         setSelectedVendors(new Set(data.vendors || []));
+        setVendorColors(generateColors(data.vendors || []));
       })
       .catch((e) => setError(String(e)));
   }, []);
@@ -82,30 +97,41 @@ export default function App() {
     setLoadingVendors(new Set(selectedVendors));
     setShowInput(false);
     try {
+      const collected = {};
       const requests = Array.from(selectedVendors).map(async (vendor) => {
         const res = await fetch("/api/process-job/", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ 
-            job_text: jobText, 
+          body: JSON.stringify({
+            job_text: jobText,
             company_name: companyName,
-            model_vendor: vendor 
+            model_vendor: vendor,
           }),
         });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        setLetters(prev => ({
-          ...prev,
-          [vendor]: data.letters[vendor] || Object.values(data.letters)[0]
-        }));
+        collected[vendor] = data.letters[vendor] || Object.values(data.letters)[0];
       });
       await Promise.allSettled(requests);
+
+      setLetters(collected);
+
+      // Build paragraphs
+      const paragraphsMap = {};
+      Object.entries(collected).forEach(([v, text]) => {
+        paragraphsMap[v] = splitIntoParagraphs(text, v);
+      });
+      setVendorParagraphs(paragraphsMap);
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
       setLoadingVendors(new Set());
     }
+  };
+
+  const onAddParagraph = (paraObj) => {
+    setFinalParagraphs((prev) => [...prev, { ...paraObj }]);
   };
 
   const resetForm = () => {
@@ -173,11 +199,15 @@ export default function App() {
       {(Object.keys(letters).length > 0 || loading) && (
         <LetterTabs 
           vendorsList={Array.from(selectedVendors)}
-          letters={letters}
+          vendorParagraphs={vendorParagraphs}
+          finalParagraphs={finalParagraphs}
+          setFinalParagraphs={setFinalParagraphs}
           originalText={jobText}
+          vendorColors={vendorColors}
           failedVendors={failedVendors}
           loadingVendors={loadingVendors}
           onRetry={retryVendor}
+          onAddParagraph={onAddParagraph}
         />
       )}
     </div>
