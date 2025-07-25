@@ -4,3 +4,4 @@ letters/
 jobs/
 __pycache__/
 letter_writer/__pycache__/*
+**/node_modules/
