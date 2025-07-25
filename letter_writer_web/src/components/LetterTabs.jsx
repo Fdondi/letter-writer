@@ -43,10 +43,35 @@ export default function LetterTabs({
     });
   };
 
-  const handleFragmentSplit = (paragraphIndex, fragments) => {
+  const handleFragmentSplit = (paragraphIndex, fragments, originalText, newText) => {
     setFinalParagraphs((prev) => {
       const copy = [...prev];
-      copy.splice(paragraphIndex, 1, ...fragments);
+      const originalParagraph = copy[paragraphIndex];
+      
+      // Create fragments for the parts that match original text
+      const processedFragments = [];
+      let remainingText = newText;
+      
+      fragments.forEach(fragment => {
+        if (originalText.includes(fragment.text.trim())) {
+          // This is original AI text - keep the vendor connection
+          processedFragments.push({
+            ...fragment,
+            vendor: originalParagraph.vendor,
+            sourceId: originalParagraph.sourceId || originalParagraph.id
+          });
+        } else {
+          // This is new user text - make it unconnected (white)
+          processedFragments.push({
+            ...fragment,
+            vendor: null, // No vendor means white background
+            sourceId: null,
+            isUserText: true
+          });
+        }
+      });
+      
+      copy.splice(paragraphIndex, 1, ...processedFragments);
       return copy;
     });
   };
@@ -55,7 +80,8 @@ export default function LetterTabs({
     const newParagraph = {
       ...paragraph,
       id: uuidv4(), // Give it a new ID for the final column
-      sourceId: paragraph.sourceId || paragraph.id // Track original source
+      sourceId: paragraph.sourceId || paragraph.id, // Track original source
+      vendor: paragraph.vendor || null // Ensure vendor is never undefined
     };
 
     setFinalParagraphs((prev) => {
@@ -68,11 +94,53 @@ export default function LetterTabs({
     });
   };
 
+  const addNewParagraph = (index) => {
+    const newParagraph = {
+      id: uuidv4(),
+      text: "",
+      vendor: null, // No vendor = white background
+      sourceId: null,
+      isUserText: true
+    };
+    
+    setFinalParagraphs((prev) => {
+      const copy = [...prev];
+      copy.splice(index, 0, newParagraph);
+      return copy;
+    });
+  };
+
+  const deleteParagraph = (index) => {
+    setFinalParagraphs((prev) => {
+      const copy = [...prev];
+      copy.splice(index, 1);
+      return copy;
+    });
+  };
+
   const updateParagraphText = (index, newText) => {
     setFinalParagraphs((prev) => {
       const copy = [...prev];
       copy[index] = { ...copy[index], text: newText };
       return copy;
+    });
+  };
+
+  const copyFinalText = () => {
+    const fullText = finalParagraphs.map(p => p.text).join('\n\n');
+    navigator.clipboard.writeText(fullText).then(() => {
+      // Simple visual feedback
+      const button = document.getElementById('copy-final-text-btn');
+      const originalText = button.textContent;
+      button.textContent = '✓ Copied!';
+      button.style.background = '#10b981';
+      setTimeout(() => {
+        button.textContent = originalText;
+        button.style.background = '#3b82f6';
+      }, 2000);
+    }).catch(err => {
+      console.error('Failed to copy text:', err);
+      alert('Failed to copy text to clipboard');
     });
   };
 
@@ -120,6 +188,35 @@ export default function LetterTabs({
     })
   });
 
+  const PlusButton = ({ onClick, style = {} }) => (
+    <div
+      onClick={onClick}
+      style={{
+        padding: "4px 8px",
+        margin: "2px 0",
+        textAlign: "center",
+        cursor: "pointer",
+        color: "#666",
+        border: "1px dashed #ccc",
+        borderRadius: 4,
+        background: "#f9f9f9",
+        fontSize: "12px",
+        transition: "all 0.2s ease",
+        ...style
+      }}
+      onMouseEnter={(e) => {
+        e.target.style.background = "#e0e0e0";
+        e.target.style.borderColor = "#999";
+      }}
+      onMouseLeave={(e) => {
+        e.target.style.background = "#f9f9f9";
+        e.target.style.borderColor = "#ccc";
+      }}
+    >
+      + Add paragraph
+    </div>
+  );
+
   const FinalColumn = () => (
     <div 
       ref={(node) => {
@@ -132,24 +229,55 @@ export default function LetterTabs({
         background: isOver ? "#f0f8ff" : "transparent",
         border: isOver ? "2px dashed #007acc" : "2px solid transparent",
         borderRadius: 4,
-        transition: "all 0.2s ease"
+        transition: "all 0.2s ease",
+        position: "relative"
       }}
     >
-      <h4 style={{ 
-        margin: 0, 
-        background: "#e0e0e0", 
-        padding: "8px 12px",
+      <div style={{
+        position: "sticky",
+        top: 0,
+        zIndex: 10,
+        background: "#e0e0e0",
         borderRadius: "4px 4px 0 0"
       }}>
-        Final Letter
-        {finalParagraphs.length > 0 && (
-          <span style={{ fontSize: "12px", fontWeight: "normal", marginLeft: "8px" }}>
-            ({finalParagraphs.length} paragraphs)
+        <h4 style={{ 
+          margin: 0, 
+          padding: "8px 12px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center"
+        }}>
+          <span>
+            Final Letter
+            {finalParagraphs.length > 0 && (
+              <span style={{ fontSize: "12px", fontWeight: "normal", marginLeft: "8px" }}>
+                ({finalParagraphs.length} paragraphs)
+              </span>
+            )}
           </span>
-        )}
-      </h4>
+          <button
+            id="copy-final-text-btn"
+            onClick={copyFinalText}
+            disabled={finalParagraphs.length === 0}
+            style={{
+              padding: "4px 8px",
+              fontSize: "12px",
+              background: finalParagraphs.length === 0 ? "#ccc" : "#3b82f6",
+              color: "white",
+              border: "none",
+              borderRadius: 4,
+              cursor: finalParagraphs.length === 0 ? "not-allowed" : "pointer",
+              transition: "background 0.2s ease"
+            }}
+          >
+            📋 Copy All
+          </button>
+        </h4>
+      </div>
       
       <div style={{ padding: "8px" }}>
+        <PlusButton onClick={() => addNewParagraph(0)} />
+        
         {finalParagraphs.length === 0 ? (
           <div style={{
             padding: "20px",
@@ -158,24 +286,37 @@ export default function LetterTabs({
             fontStyle: "italic",
             border: "2px dashed #ddd",
             borderRadius: 4,
-            background: "#f9f9f9"
+            background: "#f9f9f9",
+            margin: "4px 0"
           }}>
             Drag paragraphs here to build your final letter
           </div>
         ) : (
-          finalParagraphs.map((p, idx) => (
-            <div key={p.id} data-paragraph-index={idx}>
-              <Paragraph
-                paragraph={p}
-                index={idx}
-                moveParagraph={moveFinalParagraph}
-                color={vendorColors[p.vendor] || "#eee"}
-                editable
-                onTextChange={(txt) => updateParagraphText(idx, txt)}
-                onFragmentSplit={handleFragmentSplit}
-              />
-            </div>
-          ))
+          finalParagraphs.map((p, idx) => {
+            // Ensure we have a safe vendor value
+            const paragraphVendor = p.vendor;
+            const paragraphColor = paragraphVendor ? (vendorColors[paragraphVendor] || "#eee") : "#ffffff";
+            
+            return (
+              <div key={p.id}>
+                <div data-paragraph-index={idx}>
+                  <Paragraph
+                    paragraph={p}
+                    index={idx}
+                    moveParagraph={moveFinalParagraph}
+                    color={paragraphColor}
+                    editable
+                    onTextChange={(txt) => updateParagraphText(idx, txt)}
+                    onFragmentSplit={(index, fragments) => 
+                      handleFragmentSplit(index, fragments, p.text, fragments.map(f => f.text).join('\n\n'))
+                    }
+                    onDelete={() => deleteParagraph(idx)}
+                  />
+                </div>
+                <PlusButton onClick={() => addNewParagraph(idx + 1)} />
+              </div>
+            );
+          })
         )}
       </div>
     </div>
@@ -217,13 +358,16 @@ export default function LetterTabs({
           minHeight: 0
         }}>
           {visibleVendors.map((v) => (
-            <div key={v} style={{ width: columnWidth, overflowY: "auto" }}>
+            <div key={v} style={{ width: columnWidth, overflowY: "auto", position: "relative" }}>
               <h4 style={{ 
                 textTransform: "capitalize", 
                 margin: 0, 
                 background: vendorColors?.[v] || "#f0f0f0",
                 padding: "8px 12px",
-                borderRadius: "4px 4px 0 0"
+                borderRadius: "4px 4px 0 0",
+                position: "sticky",
+                top: 0,
+                zIndex: 10
               }}>
                 {v}
                 {loadingVendors.has(v) && (
