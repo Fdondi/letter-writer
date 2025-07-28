@@ -36,6 +36,10 @@ export default function LetterTabs({
 
   const moveFinalParagraph = (from, to) => {
     setFinalParagraphs((prev) => {
+      if (from < 0 || from >= prev.length || to < 0 || to > prev.length) {
+        console.warn('Invalid move indices:', { from, to, arrayLength: prev.length });
+        return prev; // Return unchanged if indices are invalid
+      }
       const copy = [...prev];
       const [moved] = copy.splice(from, 1);
       copy.splice(to, 0, moved);
@@ -293,12 +297,15 @@ export default function LetterTabs({
           </div>
         ) : (
           finalParagraphs.map((p, idx) => {
+            // Safety check: skip any undefined or invalid paragraphs
+            if (!p || typeof p !== 'object') return null;
+            
             // Ensure we have a safe vendor value
             const paragraphVendor = p.vendor;
             const paragraphColor = paragraphVendor ? (vendorColors[paragraphVendor] || "#eee") : "#ffffff";
             
             return (
-              <div key={p.id}>
+              <div key={p.id || `paragraph-${idx}`}>
                 <div data-paragraph-index={idx}>
                   <Paragraph
                     paragraph={p}

@@ -71,9 +71,18 @@ export default function App() {
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
+      const letterText = data.letters[vendor] || Object.values(data.letters)[0];
+      
+      // Update letters immediately
       setLetters(prev => ({
         ...prev,
-        [vendor]: data.letters[vendor] || Object.values(data.letters)[0]
+        [vendor]: letterText
+      }));
+      
+      // Update paragraphs immediately
+      setVendorParagraphs(prev => ({
+        ...prev,
+        [vendor]: splitIntoParagraphs(letterText, vendor)
       }));
     } catch (e) {
       setFailedVendors(prev => ({
@@ -94,39 +103,71 @@ export default function App() {
     setError(null);
     setLetters({});
     setFailedVendors({});
+    setVendorParagraphs({});
     setLoadingVendors(new Set(selectedVendors));
     setShowInput(false);
+    
     try {
-      const collected = {};
-      const requests = Array.from(selectedVendors).map(async (vendor) => {
-        const res = await fetch("/api/process-job/", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            job_text: jobText,
-            company_name: companyName,
-            model_vendor: vendor,
-          }),
-        });
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
-        collected[vendor] = data.letters[vendor] || Object.values(data.letters)[0];
+      // Process each vendor independently
+      const vendorPromises = Array.from(selectedVendors).map(async (vendor) => {
+        try {
+          const res = await fetch("/api/process-job/", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              job_text: jobText,
+              company_name: companyName,
+              model_vendor: vendor,
+            }),
+          });
+          
+          if (!res.ok) throw new Error(await res.text());
+          
+          const data = await res.json();
+          const letterText = data.letters[vendor] || Object.values(data.letters)[0];
+          
+          // Update letters immediately as each vendor completes
+          setLetters(prev => ({
+            ...prev,
+            [vendor]: letterText
+          }));
+          
+          // Update paragraphs immediately as each vendor completes
+          setVendorParagraphs(prev => ({
+            ...prev,
+            [vendor]: splitIntoParagraphs(letterText, vendor)
+          }));
+          
+          // Remove from loading set
+          setLoadingVendors(prev => {
+            const next = new Set(prev);
+            next.delete(vendor);
+            return next;
+          });
+          
+        } catch (e) {
+          // Handle individual vendor failure
+          setFailedVendors(prev => ({
+            ...prev,
+            [vendor]: String(e)
+          }));
+          
+          // Remove from loading set
+          setLoadingVendors(prev => {
+            const next = new Set(prev);
+            next.delete(vendor);
+            return next;
+          });
+        }
       });
-      await Promise.allSettled(requests);
-
-      setLetters(collected);
-
-      // Build paragraphs
-      const paragraphsMap = {};
-      Object.entries(collected).forEach(([v, text]) => {
-        paragraphsMap[v] = splitIntoParagraphs(text, v);
-      });
-      setVendorParagraphs(paragraphsMap);
+      
+      // Wait for all vendors to complete (or fail)
+      await Promise.allSettled(vendorPromises);
+      
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
-      setLoadingVendors(new Set());
     }
   };
 
@@ -137,6 +178,7 @@ export default function App() {
   const resetForm = () => {
     setShowInput(true);
     setLetters({});
+    setVendorParagraphs({});
     setFailedVendors({});
     setError(null);
   };
@@ -196,7 +238,7 @@ export default function App() {
           ))}
         </div>
       )}
-      {(Object.keys(letters).length > 0 || loading) && (
+      {(selectedVendors.size > 0 && !showInput) && (
         <LetterTabs 
           vendorsList={Array.from(selectedVendors)}
           vendorParagraphs={vendorParagraphs}

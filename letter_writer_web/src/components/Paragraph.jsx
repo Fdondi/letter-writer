@@ -38,12 +38,13 @@ export default function Paragraph({
   const { hoverId, setHoverId } = React.useContext(HoverContext);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(paragraph.text);
+  const [isCopyMode, setIsCopyMode] = useState(false);
 
   // Drop zone for reordering within final column
   const [, drop] = useDrop(() => ({
     accept: ItemTypes.PARAGRAPH,
     hover(item, monitor) {
-      if (!moveParagraph) return;
+      if (!moveParagraph || isCopyMode) return;
       if (item.index === index) return;
       
       const hoverBoundingRect = ref.current?.getBoundingClientRect();
@@ -58,7 +59,7 @@ export default function Paragraph({
       moveParagraph(item.index, index);
       item.index = index;
     },
-  }), [index, moveParagraph]);
+  }), [index, moveParagraph, isCopyMode]);
 
   // Drag functionality
   const [{ isDragging }, drag] = useDrag({
@@ -70,6 +71,7 @@ export default function Paragraph({
       },
       index
     }),
+    canDrag: !isCopyMode && !isEditing,
     collect: (monitor) => ({ isDragging: monitor.isDragging() }),
   });
 
@@ -112,9 +114,26 @@ export default function Paragraph({
     }
   };
 
+  const handleDoubleClick = (e) => {
+    if (!editable) {
+      e.stopPropagation();
+      setIsCopyMode(true);
+    }
+  };
+
+  const handleMouseLeave = () => {
+    if (isCopyMode) {
+      setIsCopyMode(false);
+    }
+  };
+
   const handleMouseDown = (e) => {
     // If clicking on text content and paragraph is editable, prevent drag
     if (editable && textRef.current && textRef.current.contains(e.target)) {
+      e.stopPropagation();
+    }
+    // If in copy mode, prevent drag
+    if (isCopyMode) {
       e.stopPropagation();
     }
   };
@@ -142,16 +161,32 @@ export default function Paragraph({
           background: isHighlighted ? userActiveBg : userIdleBg,
           padding: 8,
           borderRadius: 4,
-          cursor: "move",
+          cursor: isCopyMode ? "text" : "move",
           marginBottom: 4,
-          border: "1px solid #ddd",
+          border: isCopyMode ? "2px solid #007acc" : "1px solid #ddd",
           position: "relative",
           transition: "all 0.2s ease"
         }}
         onMouseEnter={() => setHoverId(sourceId)}
-        onMouseLeave={() => setHoverId(null)}
+        onMouseLeave={handleMouseLeave}
         onMouseDown={handleMouseDown}
+        onDoubleClick={handleDoubleClick}
       >
+        {isCopyMode && (
+          <div style={{
+            position: "absolute",
+            top: -8,
+            left: 4,
+            fontSize: "10px",
+            background: "#007acc",
+            color: "white",
+            padding: "1px 4px",
+            borderRadius: 2
+          }}>
+            copy mode
+          </div>
+        )}
+        
         <div style={{
           position: "absolute",
           top: -8,
@@ -237,8 +272,8 @@ export default function Paragraph({
             ref={textRef}
             style={{ 
               whiteSpace: "pre-wrap", 
-              userSelect: editable ? "text" : "none",
-              cursor: editable ? "text" : "move"
+              userSelect: isCopyMode ? "text" : "none",
+              cursor: isCopyMode ? "text" : "move"
             }}
           >
             {paragraph.text}
@@ -260,16 +295,32 @@ export default function Paragraph({
         background: isHighlighted ? activeBg : idleBg,
         padding: 8,
         borderRadius: 4,
-        cursor: "move",
+        cursor: isCopyMode ? "text" : "move",
         marginBottom: 4,
-        border: paragraph.isFragment ? "1px dashed #999" : "1px solid transparent",
+        border: isCopyMode ? "2px solid #007acc" : (paragraph.isFragment ? "1px dashed #999" : "1px solid transparent"),
         position: "relative",
         transition: "all 0.2s ease"
       }}
       onMouseEnter={() => setHoverId(sourceId)}
-      onMouseLeave={() => setHoverId(null)}
+      onMouseLeave={handleMouseLeave}
       onMouseDown={handleMouseDown}
+      onDoubleClick={handleDoubleClick}
     >
+      {isCopyMode && (
+        <div style={{
+          position: "absolute",
+          top: -8,
+          left: 4,
+          fontSize: "10px",
+          background: "#007acc",
+          color: "white",
+          padding: "1px 4px",
+          borderRadius: 2
+        }}>
+          copy mode
+        </div>
+      )}
+      
       {paragraph.isFragment && (
         <div style={{
           position: "absolute",
@@ -356,8 +407,8 @@ export default function Paragraph({
           ref={textRef}
           style={{ 
             whiteSpace: "pre-wrap", 
-            userSelect: editable ? "text" : "none",
-            cursor: editable ? "text" : "move"
+            userSelect: isCopyMode ? "text" : "none",
+            cursor: isCopyMode ? "text" : "move"
           }}
         >
           {paragraph.text}
