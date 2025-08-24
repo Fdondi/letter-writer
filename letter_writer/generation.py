@@ -86,8 +86,9 @@ def accuracy_check(letter: str, cv_text: str, client: BaseClient) -> str:
         "1. Is what is written in the letter coherent with itself?\n"
         "Examples of incoherhence:  'I am highly expert in Go, I used it once' (using once is not enough to claim experitise), or 'I used Python libraries such as Boost' (Boost is a C++ library)\n"
         "2. Is what is written coherent with the user's CV? Is every claimed expertise supported?"
-        "Also pay attention to claims not strinctly about tools, they also need to be supported in some way.\n"
+        "Also pay attention to claims not strictly about tools, they also need to be supported in some way.\n"
         "Example: 'Crypto made me a programmer' [it's a claim, it needs to be supported by the CV]\n"
+        "Be especially wary of claims of a 'common thread' or 'throughout my carreer' if it's not supported by the CV.\n"
         "Be very brief, a couple of sentences is enough. If at any point you see that there is no strong negative feedback, output NO COMMENT and end the answer. \n"
     )
     prompt = (
