@@ -7,6 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from letter_writer.service import refresh_repository, write_cover_letter
 from letter_writer.client import ModelVendor
+from letter_writer.generation import get_style_instructions
 
 
 # Utility helpers
@@ -114,4 +115,37 @@ def vendors_view(request: HttpRequest):
     if request.method != "GET":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
     vendors = [v.value for v in ModelVendor]
-    return JsonResponse({"vendors": vendors}) 
+    return JsonResponse({"vendors": vendors})
+
+
+@csrf_exempt
+def style_instructions_view(request: HttpRequest):
+    if request.method == "GET":
+        # Return current style instructions
+        try:
+            instructions = get_style_instructions()
+            return JsonResponse({"instructions": instructions})
+        except Exception as exc:
+            return JsonResponse({"detail": str(exc)}, status=500)
+    
+    elif request.method == "POST":
+        # Update style instructions
+        try:
+            data = json.loads(request.body or "{}")
+            instructions = data.get("instructions", "")
+            
+            if not instructions:
+                return JsonResponse({"detail": "Instructions cannot be empty"}, status=400)
+            
+            # Write to the style instructions file
+            style_file = Path(__file__).parent.parent.parent / "letter_writer" / "style_instructions.txt"
+            style_file.write_text(instructions, encoding="utf-8")
+            
+            return JsonResponse({"status": "ok", "instructions": instructions})
+        except json.JSONDecodeError:
+            return JsonResponse({"detail": "Invalid JSON"}, status=400)
+        except Exception as exc:
+            return JsonResponse({"detail": str(exc)}, status=500)
+    
+    else:
+        return JsonResponse({"detail": "Method not allowed"}, status=405) 

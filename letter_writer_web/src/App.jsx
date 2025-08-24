@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import ModelSelector from "./components/ModelSelector";
 import LetterTabs from "./components/LetterTabs";
+import StyleInstructionsBlade from "./components/StyleInstructionsBlade";
 import { v4 as uuidv4 } from "uuid";
 import { splitIntoParagraphs } from "./utils/split";
 
@@ -27,6 +28,7 @@ export default function App() {
   const [loadingVendors, setLoadingVendors] = useState(new Set()); // vendors currently loading
   const [error, setError] = useState(null);
   const [showInput, setShowInput] = useState(true);
+  const [showStyleBlade, setShowStyleBlade] = useState(false);
 
   // Fetch vendors on mount
   useEffect(() => {
@@ -185,7 +187,23 @@ export default function App() {
 
   return (
     <div style={{ padding: 20 }}>
-      <h1>Letter Writer</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <h1 style={{ margin: 0 }}>Letter Writer</h1>
+        <button
+          onClick={() => setShowStyleBlade(true)}
+          style={{
+            padding: '8px 16px',
+            border: '1px solid #ddd',
+            borderRadius: '4px',
+            backgroundColor: 'white',
+            color: '#666',
+            cursor: 'pointer',
+            fontSize: '14px'
+          }}
+        >
+          ⚙️ Style Settings
+        </button>
+      </div>
       {showInput ? (
         <>
           <ModelSelector
@@ -252,6 +270,11 @@ export default function App() {
           onAddParagraph={onAddParagraph}
         />
       )}
+      
+      <StyleInstructionsBlade
+        isOpen={showStyleBlade}
+        onClose={() => setShowStyleBlade(false)}
+      />
     </div>
   );
 } 

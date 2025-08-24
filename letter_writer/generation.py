@@ -5,15 +5,22 @@ from openai import OpenAI
 from .config import TRACE_DIR
 from .clients.base import BaseClient, ModelSize
 
-FURTHER_STYLE_INSTRUCTIONS = (
-        "Never mention explicitly that something matches the job description, they should think that by themselves. "
-        "Avoid making just a list of 'at X I did Y'. You're telling a story, the stints at specific companies are just supporting evidence for the message. "
-        "Mentions of companies should mostly emerge naturally, not be the main structure (At X this, at Y that, etc).\n"
-        "Follow the structure: 1. You are great 2. I am great 3. We'll be even greater together 4. Call to action. "
-        "Of course, keep that structure implicit, and don't use paragraph titles.\n"
-        "Whenever possible, use characters supported by LaTeX. In particular, to the extent that it's reasonable, avoid symbols like & or em-dashes. Do not double-space. "
-        "If in doubt, use the version of the character that would be typed by a keyboard. For example ' and not ’, or 11th and not 11ᵗʰ.\n"
-    )
+def get_style_instructions() -> str:
+    """Load style instructions from file."""
+    style_file = Path(__file__).parent / "style_instructions.txt"
+    try:
+        return style_file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # Fallback to default if file doesn't exist
+        return (
+            "Never mention explicitly that something matches the job description, they should think that by themselves. "
+            "Avoid making just a list of 'at X I did Y'. You're telling a story, the stints at specific companies are just supporting evidence for the message. "
+            "Mentions of companies should mostly emerge naturally, not be the main structure (At X this, at Y that, etc).\n"
+            "Follow the structure: 1. You are great 2. I am great 3. We'll be even greater together 4. Call to action. "
+            "Of course, keep that structure implicit, and don't use paragraph titles.\n"
+            "Whenever possible, use characters supported by LaTeX. In particular, to the extent that it's reasonable, avoid symbols like & or em-dashes. Do not double-space. "
+            "If in doubt, use the version of the character that would be typed by a keyboard. For example ' and not ', or 11th and not 11ᵗʰ.\n"
+        )
 
 
 def company_research(company_name: str, job_text: str, client: BaseClient, trace_dir: Path) -> str:
@@ -43,7 +50,7 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
         "produce a personalized cover letter in the same style as the examples. Keep it concise (max 1 page).\n"
         "Remember to use the language of THE TARGET JOB DESCRIPTION, even if some or all of the examples might be in a different language. "
         "Use the examples at a higher level: look at style, structure, what is paid attention to, etc.\n"
-        + FURTHER_STYLE_INSTRUCTIONS +
+        + get_style_instructions() +
         "\n\n"
     )
     prompt = (
@@ -63,7 +70,7 @@ def instruction_check(letter: str, client: BaseClient) -> str:
         "If at any point you see that there is no strong negative feedback, output NO COMMENT and end the answer. \n"
     )
     prompt = (
-        "========== Style Instructions:\n" + FURTHER_STYLE_INSTRUCTIONS + "\n==========\n\n" +
+        "========== Style Instructions:\n" + get_style_instructions() + "\n==========\n\n" +
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
         "Please catch any strong inconsitency with the instructions, or output NO COMMENT"
     )
