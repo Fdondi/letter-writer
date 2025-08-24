@@ -35,66 +35,181 @@ export default function LetterTabs({
   const columnWidth = totalVisible > 0 ? `${100 / totalVisible}%` : "100%";
 
   const moveFinalParagraph = (from, to) => {
+    console.log('🔄 moveFinalParagraph called:', { from, to, currentLength: finalParagraphs.length });
+    
     setFinalParagraphs((prev) => {
-      if (from < 0 || from >= prev.length || to < 0 || to > prev.length) {
-        console.warn('Invalid move indices:', { from, to, arrayLength: prev.length });
+      console.log('🔄 moveFinalParagraph executing with prev.length:', prev.length);
+      
+      // More comprehensive bounds checking
+      if (
+        typeof from !== 'number' || 
+        typeof to !== 'number' || 
+        from < 0 || 
+        from >= prev.length || 
+        to < 0 || 
+        to > prev.length ||
+        from === to ||
+        !Array.isArray(prev) ||
+        prev.length === 0
+      ) {
+        console.warn('❌ Invalid move indices:', { 
+          from, 
+          to, 
+          arrayLength: prev.length, 
+          fromType: typeof from,
+          toType: typeof to,
+          isArray: Array.isArray(prev),
+          reason: from === to ? 'from === to' : 
+                  from < 0 ? 'from < 0' :
+                  from >= prev.length ? 'from >= array length' :
+                  to < 0 ? 'to < 0' :
+                  to > prev.length ? 'to > array length' :
+                  prev.length === 0 ? 'empty array' : 'unknown'
+        });
         return prev; // Return unchanged if indices are invalid
       }
-      const copy = [...prev];
-      const [moved] = copy.splice(from, 1);
-      copy.splice(to, 0, moved);
-      return copy;
+      
+      try {
+        const copy = [...prev];
+        console.log('📋 Before move - array:', copy.map((p, i) => ({ index: i, id: p.id, text: p.text?.substring(0, 20) })));
+        
+        const [moved] = copy.splice(from, 1);
+        
+        // Double-check that we have a valid item to move
+        if (!moved) {
+          console.warn('❌ No item found at index:', from);
+          return prev;
+        }
+        
+        console.log('📦 Moving item:', { from, to, movedId: moved.id, movedText: moved.text?.substring(0, 20) });
+        
+        copy.splice(to, 0, moved);
+        
+        console.log('✅ After move - array:', copy.map((p, i) => ({ index: i, id: p.id, text: p.text?.substring(0, 20) })));
+        
+        return copy;
+      } catch (error) {
+        console.error('❌ Error moving paragraph:', error, { from, to, arrayLength: prev.length });
+        return prev;
+      }
     });
   };
 
   const handleFragmentSplit = (paragraphIndex, fragments, originalText, newText) => {
     setFinalParagraphs((prev) => {
-      const copy = [...prev];
-      const originalParagraph = copy[paragraphIndex];
-      
-      // Create fragments for the parts that match original text
-      const processedFragments = [];
-      let remainingText = newText;
-      
-      fragments.forEach(fragment => {
-        if (originalText.includes(fragment.text.trim())) {
-          // This is original AI text - keep the vendor connection
-          processedFragments.push({
-            ...fragment,
-            vendor: originalParagraph.vendor,
-            sourceId: originalParagraph.sourceId || originalParagraph.id
-          });
-        } else {
-          // This is new user text - make it unconnected (white)
-          processedFragments.push({
-            ...fragment,
-            vendor: null, // No vendor means white background
-            sourceId: null,
-            isUserText: true
-          });
+      try {
+        if (paragraphIndex < 0 || paragraphIndex >= prev.length) {
+          console.warn('Invalid fragment split index:', { paragraphIndex, arrayLength: prev.length });
+          return prev;
         }
-      });
-      
-      copy.splice(paragraphIndex, 1, ...processedFragments);
-      return copy;
+
+        if (!Array.isArray(fragments) || fragments.length === 0) {
+          console.warn('Invalid fragments for split:', fragments);
+          return prev;
+        }
+
+        const copy = [...prev];
+        const originalParagraph = copy[paragraphIndex];
+        
+        if (!originalParagraph) {
+          console.warn('No paragraph found at index for split:', paragraphIndex);
+          return prev;
+        }
+        
+        // Create fragments for the parts that match original text
+        const processedFragments = [];
+        
+        fragments.forEach(fragment => {
+          if (!fragment || typeof fragment !== 'object') {
+            console.warn('Invalid fragment:', fragment);
+            return;
+          }
+
+          if (originalText && originalText.includes(fragment.text?.trim())) {
+            // This is original AI text - keep the vendor connection
+            processedFragments.push({
+              ...fragment,
+              vendor: originalParagraph.vendor,
+              sourceId: originalParagraph.sourceId || originalParagraph.id
+            });
+          } else {
+            // This is new user text - make it unconnected (white)
+            processedFragments.push({
+              ...fragment,
+              vendor: null, // No vendor means white background
+              sourceId: null,
+              isUserText: true
+            });
+          }
+        });
+        
+        if (processedFragments.length > 0) {
+          copy.splice(paragraphIndex, 1, ...processedFragments);
+        } else {
+          console.warn('No valid fragments to replace with');
+          return prev;
+        }
+        
+        return copy;
+      } catch (error) {
+        console.error('Error handling fragment split:', error, { paragraphIndex, arrayLength: prev.length });
+        return prev;
+      }
     });
   };
 
   const addParagraphAtPosition = (paragraph, targetIndex = null) => {
+    console.log('➕ addParagraphAtPosition called:', { 
+      paragraphId: paragraph?.id, 
+      targetIndex, 
+      currentLength: finalParagraphs.length 
+    });
+    
+    if (!paragraph || typeof paragraph !== 'object') {
+      console.warn('❌ Invalid paragraph to add:', paragraph);
+      return;
+    }
+
     const newParagraph = {
       ...paragraph,
       id: uuidv4(), // Give it a new ID for the final column
       sourceId: paragraph.sourceId || paragraph.id, // Track original source
       vendor: paragraph.vendor || null // Ensure vendor is never undefined
     };
+    
+    console.log('📝 Created new paragraph:', { 
+      newId: newParagraph.id, 
+      sourceId: newParagraph.sourceId, 
+      vendor: newParagraph.vendor,
+      text: newParagraph.text?.substring(0, 20)
+    });
 
     setFinalParagraphs((prev) => {
-      if (targetIndex !== null) {
-        const copy = [...prev];
-        copy.splice(targetIndex, 0, newParagraph);
-        return copy;
+      console.log('➕ addParagraphAtPosition executing with prev.length:', prev.length);
+      
+      try {
+        if (targetIndex !== null) {
+          // Ensure targetIndex is within valid bounds
+          const safeIndex = Math.max(0, Math.min(targetIndex, prev.length));
+          console.log('🎯 Adding at position:', { targetIndex, safeIndex, prevLength: prev.length });
+          
+          const copy = [...prev];
+          copy.splice(safeIndex, 0, newParagraph);
+          
+          console.log('✅ After add - array:', copy.map((p, i) => ({ index: i, id: p.id, text: p.text?.substring(0, 20) })));
+          
+          return copy;
+        }
+        
+        console.log('📎 Adding to end of array');
+        const result = [...prev, newParagraph];
+        console.log('✅ After append - array:', result.map((p, i) => ({ index: i, id: p.id, text: p.text?.substring(0, 20) })));
+        
+        return result;
+      } catch (error) {
+        console.error('❌ Error adding paragraph:', error, { targetIndex, arrayLength: prev.length });
+        return prev;
       }
-      return [...prev, newParagraph];
     });
   };
 
@@ -108,25 +223,50 @@ export default function LetterTabs({
     };
     
     setFinalParagraphs((prev) => {
-      const copy = [...prev];
-      copy.splice(index, 0, newParagraph);
-      return copy;
+      try {
+        // Ensure index is within valid bounds
+        const safeIndex = Math.max(0, Math.min(index, prev.length));
+        const copy = [...prev];
+        copy.splice(safeIndex, 0, newParagraph);
+        return copy;
+      } catch (error) {
+        console.error('Error adding new paragraph:', error, { index, arrayLength: prev.length });
+        return prev;
+      }
     });
   };
 
   const deleteParagraph = (index) => {
     setFinalParagraphs((prev) => {
-      const copy = [...prev];
-      copy.splice(index, 1);
-      return copy;
+      try {
+        if (index < 0 || index >= prev.length) {
+          console.warn('Invalid delete index:', { index, arrayLength: prev.length });
+          return prev;
+        }
+        const copy = [...prev];
+        copy.splice(index, 1);
+        return copy;
+      } catch (error) {
+        console.error('Error deleting paragraph:', error, { index, arrayLength: prev.length });
+        return prev;
+      }
     });
   };
 
   const updateParagraphText = (index, newText) => {
     setFinalParagraphs((prev) => {
-      const copy = [...prev];
-      copy[index] = { ...copy[index], text: newText };
-      return copy;
+      try {
+        if (index < 0 || index >= prev.length) {
+          console.warn('Invalid update index:', { index, arrayLength: prev.length });
+          return prev;
+        }
+        const copy = [...prev];
+        copy[index] = { ...copy[index], text: newText };
+        return copy;
+      } catch (error) {
+        console.error('Error updating paragraph text:', error, { index, arrayLength: prev.length });
+        return prev;
+      }
     });
   };
 
@@ -148,44 +288,50 @@ export default function LetterTabs({
     });
   };
 
-  // Drop zone for the final column
-  const [{ isOver }, drop] = useDrop({
+  // Drop zone for the scrollable content area
+  const [{ isOver: isContentOver }, contentDrop] = useDrop({
     accept: ItemTypes.PARAGRAPH,
     drop(item, monitor) {
       if (monitor.didDrop()) return;
       
-      // Calculate drop position based on mouse position
+      // Calculate drop position based on mouse position within scrollable area
       const finalColumnRect = finalColumnRef.current?.getBoundingClientRect();
       const clientOffset = monitor.getClientOffset();
       
       if (finalColumnRect && clientOffset) {
         const relativeY = clientOffset.y - finalColumnRect.top;
-        const headerHeight = 40; // Approximate height of the header
-        const adjustedY = relativeY - headerHeight;
         
-        if (adjustedY > 0) {
-          // Find the best insertion point
-          const paragraphElements = finalColumnRef.current.querySelectorAll('[data-paragraph-index]');
-          let targetIndex = finalParagraphs.length;
+        // Find the best insertion point among existing paragraphs
+        const paragraphElements = finalColumnRef.current.querySelectorAll('[data-paragraph-index]');
+        let targetIndex = finalParagraphs.length;
+        
+        for (let i = 0; i < paragraphElements.length; i++) {
+          const rect = paragraphElements[i].getBoundingClientRect();
+          const elementY = rect.top - finalColumnRect.top;
+          const elementMiddle = elementY + (rect.height / 2);
           
-          for (let i = 0; i < paragraphElements.length; i++) {
-            const rect = paragraphElements[i].getBoundingClientRect();
-            const elementY = rect.top - finalColumnRect.top - headerHeight;
-            const elementMiddle = elementY + (rect.height / 2);
-            
-            if (adjustedY < elementMiddle) {
-              targetIndex = i;
-              break;
-            }
+          if (relativeY < elementMiddle) {
+            targetIndex = i;
+            break;
           }
-          
-          addParagraphAtPosition(item.paragraph, targetIndex);
-        } else {
-          addParagraphAtPosition(item.paragraph, 0);
         }
+        
+        addParagraphAtPosition(item.paragraph, targetIndex);
       } else {
         addParagraphAtPosition(item.paragraph);
       }
+    },
+    collect: (monitor) => ({
+      isOver: monitor.isOver({ shallow: true })
+    })
+  });
+
+  // Drop zone for the bottom area (always adds to end)
+  const [{ isOver: isBottomOver }, bottomDrop] = useDrop({
+    accept: ItemTypes.PARAGRAPH,
+    drop(item, monitor) {
+      if (monitor.didDrop()) return;
+      addParagraphAtPosition(item.paragraph, finalParagraphs.length);
     },
     collect: (monitor) => ({
       isOver: monitor.isOver({ shallow: true })
@@ -223,24 +369,16 @@ export default function LetterTabs({
 
   const FinalColumn = () => (
     <div 
-      ref={(node) => {
-        finalColumnRef.current = node;
-        drop(node);
-      }}
       style={{ 
         width: columnWidth, 
-        overflowY: "auto",
-        background: isOver ? "#f0f8ff" : "transparent",
-        border: isOver ? "2px dashed #007acc" : "2px solid transparent",
         borderRadius: 4,
-        transition: "all 0.2s ease",
-        position: "relative"
+        position: "relative",
+        display: "flex",
+        flexDirection: "column",
+        height: "100%" // Take full height of parent
       }}
     >
       <div style={{
-        position: "sticky",
-        top: 0,
-        zIndex: 10,
         background: "#e0e0e0",
         borderRadius: "4px 4px 0 0"
       }}>
@@ -279,7 +417,23 @@ export default function LetterTabs({
         </h4>
       </div>
       
-      <div style={{ padding: "8px" }}>
+      {/* Scrollable content area */}
+      <div 
+        ref={(node) => {
+          finalColumnRef.current = node;
+          contentDrop(node);
+        }}
+        style={{ 
+          flex: 1,
+          overflowY: "auto",
+          padding: "8px",
+          minHeight: 0, // Allow flex item to shrink
+          background: isContentOver ? "#f0f8ff" : "transparent",
+          border: isContentOver ? "2px dashed #007acc" : "2px solid transparent",
+          borderRadius: "4px",
+          transition: "all 0.2s ease"
+        }}
+      >
         <PlusButton onClick={() => addNewParagraph(0)} />
         
         {finalParagraphs.length === 0 ? (
@@ -298,7 +452,10 @@ export default function LetterTabs({
         ) : (
           finalParagraphs.map((p, idx) => {
             // Safety check: skip any undefined or invalid paragraphs
-            if (!p || typeof p !== 'object') return null;
+            if (!p || typeof p !== 'object') {
+              console.warn('Invalid paragraph at index:', idx, p);
+              return null;
+            }
             
             // Ensure we have a safe vendor value
             const paragraphVendor = p.vendor;
@@ -314,17 +471,59 @@ export default function LetterTabs({
                     color={paragraphColor}
                     editable
                     onTextChange={(txt) => updateParagraphText(idx, txt)}
-                    onFragmentSplit={(index, fragments) => 
-                      handleFragmentSplit(index, fragments, p.text, fragments.map(f => f.text).join('\n\n'))
-                    }
+                    onFragmentSplit={(index, fragments) => {
+                      try {
+                        const fragmentText = Array.isArray(fragments) 
+                          ? fragments.filter(f => f && f.text).map(f => f.text).join('\n\n') 
+                          : '';
+                        handleFragmentSplit(index, fragments, p.text, fragmentText);
+                      } catch (error) {
+                        console.error('Error in fragment split callback:', error);
+                      }
+                    }}
                     onDelete={() => deleteParagraph(idx)}
                   />
                 </div>
                 <PlusButton onClick={() => addNewParagraph(idx + 1)} />
               </div>
             );
-          })
+          }).filter(Boolean) // Remove any null entries
         )}
+      </div>
+      
+      {/* Fixed bottom drop zone - always visible */}
+      <div 
+        ref={bottomDrop}
+        style={{
+          minHeight: "50px",
+          padding: "12px",
+          textAlign: "center",
+          color: isBottomOver ? "#007acc" : "#999",
+          border: isBottomOver ? "2px dashed #007acc" : "2px dashed #ddd",
+          borderRadius: "0 0 4px 4px",
+          background: isBottomOver ? "#e8f4f8" : "#f9f9f9",
+          fontSize: "12px",
+          transition: "all 0.2s ease",
+          flexShrink: 0, // Don't allow this to shrink
+          cursor: "pointer"
+        }}
+        onMouseEnter={(e) => {
+          if (!isBottomOver) {
+            e.target.style.background = "#e8f4f8";
+            e.target.style.borderColor = "#007acc";
+            e.target.style.color = "#007acc";
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!isBottomOver) {
+            e.target.style.background = "#f9f9f9";
+            e.target.style.borderColor = "#ddd";
+            e.target.style.color = "#999";
+          }
+        }}
+        onClick={() => addParagraphAtPosition({ text: "", vendor: null }, finalParagraphs.length)}
+      >
+        Drop here to add to bottom
       </div>
     </div>
   );

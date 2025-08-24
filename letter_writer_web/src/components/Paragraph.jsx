@@ -44,8 +44,14 @@ export default function Paragraph({
   const [, drop] = useDrop(() => ({
     accept: ItemTypes.PARAGRAPH,
     hover(item, monitor) {
-      if (!moveParagraph || isCopyMode) return;
+      // Only allow reordering if we have a real moveParagraph function 
+      // (not the empty function from vendor columns)
+      if (!moveParagraph || moveParagraph.toString() === "() => {}" || isCopyMode) return;
       if (item.index === index) return;
+      
+      // Only reorder if the item has a sourceId matching our final column context
+      // This prevents vendor column paragraphs from interfering with final column reordering
+      if (!item.isFromFinalColumn) return;
       
       const hoverBoundingRect = ref.current?.getBoundingClientRect();
       const hoverMiddleY = (hoverBoundingRect.bottom - hoverBoundingRect.top) / 2;
@@ -69,7 +75,9 @@ export default function Paragraph({
         ...paragraph,
         sourceId: paragraph.sourceId || paragraph.id
       },
-      index
+      index,
+      // Mark whether this item is from the final column (has real moveParagraph function)
+      isFromFinalColumn: moveParagraph && moveParagraph.toString() !== "() => {}"
     }),
     canDrag: !isCopyMode && !isEditing,
     collect: (monitor) => ({ isDragging: monitor.isDragging() }),
