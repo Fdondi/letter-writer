@@ -9,7 +9,7 @@ import { HoverProvider } from '../../contexts/HoverContext';
  * components that use drag and drop and hover context
  */
 export const renderWithProviders = (ui, options = {}) => {
-  const backend = TestBackend();
+  const backend = TestBackend;
   
   const AllProviders = ({ children }) => {
     return (
@@ -185,3 +185,19 @@ export const createMockStateSetter = () => {
   return mockFn;
 };
 
+// Jest requires at least one test in a test file
+describe('Test Utilities', () => {
+  test('createMockParagraph creates a paragraph with default values', () => {
+    const paragraph = createMockParagraph();
+    expect(paragraph).toHaveProperty('id');
+    expect(paragraph).toHaveProperty('text');
+    expect(paragraph).toHaveProperty('vendor');
+    expect(paragraph).toHaveProperty('sourceId');
+  });
+
+  test('createMockParagraph accepts overrides', () => {
+    const paragraph = createMockParagraph({ text: 'Custom text', vendor: 'custom' });
+    expect(paragraph.text).toBe('Custom text');
+    expect(paragraph.vendor).toBe('custom');
+  });
+});

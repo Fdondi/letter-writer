@@ -1,13 +1,20 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DndProvider } from 'react-dnd';
 import { TestBackend } from 'react-dnd-test-backend';
-import { wrapInTestContext } from 'react-dnd-test-utils';
 import LetterTabs from '../LetterTabs';
+import { HoverProvider } from '../../contexts/HoverContext';
 
-// Create a test wrapper that provides DnD context
-const TestLetterTabs = wrapInTestContext(LetterTabs);
+// Test wrapper with DnD provider
+const TestWrapper = ({ children, ...props }) => (
+  <DndProvider backend={TestBackend}>
+    <HoverProvider>
+      <LetterTabs {...props} />
+      {children}
+    </HoverProvider>
+  </DndProvider>
+);
 
 // Mock data for tests
 const mockVendorsList = ['openai', 'anthropic', 'gemini'];
@@ -53,7 +60,7 @@ describe('LetterTabs Component', () => {
 
   describe('Rendering', () => {
     test('renders all vendor columns', () => {
-      render(<TestLetterTabs {...defaultProps} />);
+      render(<TestWrapper {...defaultProps} />);
       
       expect(screen.getByText('openai')).toBeInTheDocument();
       expect(screen.getByText('anthropic')).toBeInTheDocument();
@@ -61,21 +68,21 @@ describe('LetterTabs Component', () => {
     });
 
     test('renders final letter column', () => {
-      render(<TestLetterTabs {...defaultProps} />);
+      render(<TestWrapper {...defaultProps} />);
       
       expect(screen.getByText('Final Letter')).toBeInTheDocument();
       expect(screen.getByText('Drag paragraphs here to build your final letter')).toBeInTheDocument();
     });
 
     test('renders original letter column', () => {
-      render(<TestLetterTabs {...defaultProps} />);
+      render(<TestWrapper {...defaultProps} />);
       
       expect(screen.getByText('Original Letter')).toBeInTheDocument();
       expect(screen.getByText('Original letter text here...')).toBeInTheDocument();
     });
 
     test('renders bottom drop zone', () => {
-      render(<TestLetterTabs {...defaultProps} />);
+      render(<TestWrapper {...defaultProps} />);
       
       expect(screen.getByText('Drop here to add to bottom')).toBeInTheDocument();
     });
@@ -85,7 +92,7 @@ describe('LetterTabs Component', () => {
         { id: 'f1', text: 'Final paragraph 1', vendor: 'openai' }
       ];
       
-      render(<TestLetterTabs {...defaultProps} finalParagraphs={finalParagraphs} />);
+      render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
       
       expect(screen.getByText('(1 paragraphs)')).toBeInTheDocument();
     });
@@ -94,10 +101,13 @@ describe('LetterTabs Component', () => {
   describe('Paragraph Management', () => {
     test('adds new paragraph when plus button is clicked', async () => {
       const user = userEvent.setup();
-      render(<TestLetterTabs {...defaultProps} setFinalParagraphs={mockSetFinalParagraphs} />);
+      render(<TestWrapper {...defaultProps} setFinalParagraphs={mockSetFinalParagraphs} />);
       
       const addButton = screen.getAllByText('+ Add paragraph')[0];
-      await user.click(addButton);
+      
+      await act(async () => {
+        await user.click(addButton);
+      });
       
       expect(mockSetFinalParagraphs).toHaveBeenCalled();
     });
@@ -108,13 +118,16 @@ describe('LetterTabs Component', () => {
       ];
       const user = userEvent.setup();
       
-      render(<TestLetterTabs {...defaultProps} 
+      render(<TestWrapper {...defaultProps} 
         finalParagraphs={finalParagraphs} 
         setFinalParagraphs={mockSetFinalParagraphs} 
       />);
       
       const deleteButton = screen.getByTitle('Delete paragraph');
-      await user.click(deleteButton);
+      
+      await act(async () => {
+        await user.click(deleteButton);
+      });
       
       expect(mockSetFinalParagraphs).toHaveBeenCalled();
     });
@@ -125,22 +138,30 @@ describe('LetterTabs Component', () => {
       ];
       const user = userEvent.setup();
       
-      render(<TestLetterTabs {...defaultProps} 
+      render(<TestWrapper {...defaultProps} 
         finalParagraphs={finalParagraphs} 
         setFinalParagraphs={mockSetFinalParagraphs} 
       />);
       
       // Click to edit
       const editableDiv = screen.getByText('Final paragraph 1');
-      await user.click(editableDiv);
+      
+      await act(async () => {
+        await user.click(editableDiv);
+      });
       
       // Find textarea and update text
       const textarea = screen.getByDisplayValue('Final paragraph 1');
-      await user.clear(textarea);
-      await user.type(textarea, 'Updated text');
+      
+      await act(async () => {
+        await user.clear(textarea);
+        await user.type(textarea, 'Updated text');
+      });
       
       // Blur to save
-      fireEvent.blur(textarea);
+      await act(async () => {
+        fireEvent.blur(textarea);
+      });
       
       expect(mockSetFinalParagraphs).toHaveBeenCalled();
     });
@@ -148,7 +169,7 @@ describe('LetterTabs Component', () => {
 
   describe('Copy Functionality', () => {
     test('copy button is disabled when no paragraphs', () => {
-      render(<TestLetterTabs {...defaultProps} />);
+      render(<TestWrapper {...defaultProps} />);
       
       const copyButton = screen.getByText('📋 Copy All');
       expect(copyButton).toBeDisabled();
@@ -159,7 +180,7 @@ describe('LetterTabs Component', () => {
         { id: 'f1', text: 'Final paragraph 1', vendor: 'openai' }
       ];
       
-      render(<TestLetterTabs {...defaultProps} finalParagraphs={finalParagraphs} />);
+      render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
       
       const copyButton = screen.getByText('📋 Copy All');
       expect(copyButton).not.toBeDisabled();
@@ -171,13 +192,25 @@ describe('LetterTabs Component', () => {
         { id: 'f2', text: 'Paragraph 2', vendor: 'anthropic' }
       ];
       const user = userEvent.setup();
-      
-      render(<TestLetterTabs {...defaultProps} finalParagraphs={finalParagraphs} />);
-      
+
+      // Mock clipboard API
+      const mockWriteText = jest.fn().mockResolvedValue();
+      Object.defineProperty(navigator, 'clipboard', {
+        value: {
+          writeText: mockWriteText,
+        },
+        writable: true,
+      });
+
+      render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
+
       const copyButton = screen.getByText('📋 Copy All');
-      await user.click(copyButton);
       
-      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Paragraph 1\\n\\nParagraph 2');
+      await act(async () => {
+        await user.click(copyButton);
+      });
+
+      expect(mockWriteText).toHaveBeenCalledWith('Paragraph 1\n\nParagraph 2');
     });
   });
 
@@ -192,7 +225,7 @@ describe('LetterTabs Component', () => {
       
       // Should not throw an error
       expect(() => {
-        render(<TestLetterTabs {...defaultProps} finalParagraphs={finalParagraphs} />);
+        render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
       }).not.toThrow();
       
       expect(screen.getByText('Valid paragraph')).toBeInTheDocument();
@@ -202,7 +235,7 @@ describe('LetterTabs Component', () => {
     test('shows loading state for vendors', () => {
       const loadingVendors = new Set(['openai']);
       
-      render(<TestLetterTabs {...defaultProps} loadingVendors={loadingVendors} />);
+      render(<TestWrapper {...defaultProps} loadingVendors={loadingVendors} />);
       
       expect(screen.getByText('Loading...')).toBeInTheDocument();
     });
@@ -210,7 +243,7 @@ describe('LetterTabs Component', () => {
     test('shows error state for failed vendors', () => {
       const failedVendors = { openai: 'Connection failed' };
       
-      render(<TestLetterTabs {...defaultProps} failedVendors={failedVendors} />);
+      render(<TestWrapper {...defaultProps} failedVendors={failedVendors} />);
       
       expect(screen.getByText('Connection failed')).toBeInTheDocument();
       expect(screen.getByText('Retry')).toBeInTheDocument();
@@ -221,10 +254,13 @@ describe('LetterTabs Component', () => {
       const onRetry = jest.fn();
       const user = userEvent.setup();
       
-      render(<TestLetterTabs {...defaultProps} failedVendors={failedVendors} onRetry={onRetry} />);
+      render(<TestWrapper {...defaultProps} failedVendors={failedVendors} onRetry={onRetry} />);
       
       const retryButton = screen.getByText('Retry');
-      await user.click(retryButton);
+      
+      await act(async () => {
+        await user.click(retryButton);
+      });
       
       expect(onRetry).toHaveBeenCalledWith('openai');
     });
@@ -236,7 +272,7 @@ describe('LetterTabs Component', () => {
         { id: 'f1', text: 'Paragraph 1', vendor: 'openai' }
       ];
       
-      render(<TestLetterTabs {...defaultProps} 
+      render(<TestWrapper {...defaultProps} 
         finalParagraphs={finalParagraphs} 
         setFinalParagraphs={mockSetFinalParagraphs} 
       />);
@@ -251,21 +287,21 @@ describe('LetterTabs Component', () => {
       const finalParagraphs = [];
       
       expect(() => {
-        render(<TestLetterTabs {...defaultProps} finalParagraphs={finalParagraphs} />);
+        render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
       }).not.toThrow();
     });
   });
 
   describe('Column Management', () => {
     test('shows collapsed vendors dropdown when vendors are collapsed', () => {
-      render(<TestLetterTabs {...defaultProps} />);
+      render(<TestWrapper {...defaultProps} />);
       
       // Initially no dropdown should be visible
       expect(screen.queryByText('Restore collapsed...')).not.toBeInTheDocument();
     });
 
     test('calculates column width correctly', () => {
-      render(<TestLetterTabs {...defaultProps} />);
+      render(<TestWrapper {...defaultProps} />);
       
       // With 3 vendors + final + original = 5 columns total
       // Each should be 20% width (100% / 5)
@@ -282,7 +318,7 @@ describe('LetterTabs Component', () => {
         vendor: 'openai'
       }));
       
-      render(<TestLetterTabs {...defaultProps} finalParagraphs={finalParagraphs} />);
+      render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
       
       // Bottom drop zone should still be visible even with many paragraphs
       expect(screen.getByText('Drop here to add to bottom')).toBeInTheDocument();
@@ -291,10 +327,13 @@ describe('LetterTabs Component', () => {
     test('bottom drop zone can be clicked to add paragraph', async () => {
       const user = userEvent.setup();
       
-      render(<TestLetterTabs {...defaultProps} setFinalParagraphs={mockSetFinalParagraphs} />);
+      render(<TestWrapper {...defaultProps} setFinalParagraphs={mockSetFinalParagraphs} />);
       
       const dropZone = screen.getByText('Drop here to add to bottom');
-      await user.click(dropZone);
+      
+      await act(async () => {
+        await user.click(dropZone);
+      });
       
       expect(mockSetFinalParagraphs).toHaveBeenCalled();
     });
