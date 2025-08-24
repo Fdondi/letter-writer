@@ -87,6 +87,7 @@ def refresh_repository(
     points: List[qdrant_models.PointStruct] = []
     n_with_negative_letters = 0
     n_negative_letters = 0
+    skipped = []
 
     for path in jobs_source_folder.glob(f"*{jobs_source_suffix}"):
         company_name = path.stem
@@ -95,6 +96,7 @@ def refresh_repository(
         letter_path = letters_source_folder / f"{company_name}{letters_source_suffix}"
         if not letter_path.exists():
             logger(f"[WARN] No letter found for {company_name}. Skipping.")
+            skipped.append(company_name)
             continue
 
         letter_text = extract_letter_text(
@@ -142,7 +144,7 @@ def refresh_repository(
     if points:
         upsert_documents(client, points)
         logger(
-            f"[INFO] Upserted {len(points)} documents to Qdrant. ({n_with_negative_letters} with negative letters, in total {n_negative_letters} negative letters)"
+            f"[INFO] Upserted {len(points)} documents to Qdrant. ({n_with_negative_letters} with negative letters, in total {n_negative_letters} negative letters). Skipped {len(skipped)} companies: {', '.join(skipped)}"
         )
     else:
         logger("[WARN] No documents found to upsert.")
