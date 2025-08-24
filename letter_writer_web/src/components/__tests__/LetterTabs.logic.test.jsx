@@ -14,7 +14,7 @@ import { HoverProvider } from '../../contexts/HoverContext';
 
 // Wrapper WITH DnD provider (required for LetterTabs component)
 const TestWrapper = ({ children, ...props }) => (
-  <DndProvider backend={TestBackend()}>
+  <DndProvider backend={TestBackend}>
     <HoverProvider>
       <LetterTabs {...props} />
       {children}
@@ -223,6 +223,297 @@ describe('LetterTabs Core Logic Tests', () => {
 
       // The paragraph should maintain its source relationship
       // This is important for highlighting and other features
+    });
+  });
+
+  describe('Copy Functionality Tests', () => {
+    test('copyFinalText preserves exact paragraph order', () => {
+      const finalParagraphs = [
+        { id: 'final-1', text: 'First paragraph text', vendor: 'openai' },
+        { id: 'final-2', text: 'Second paragraph text', vendor: 'anthropic' },
+        { id: 'final-3', text: 'Third paragraph text', vendor: 'openai' },
+        { id: 'final-4', text: 'Fourth paragraph text', vendor: 'gemini' }
+      ];
+
+      // Mock clipboard API
+      const mockWriteText = jest.fn().mockResolvedValue();
+      Object.assign(navigator, {
+        clipboard: {
+          writeText: mockWriteText,
+        },
+      });
+
+      render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
+
+      // Find and click the copy button
+      const copyButton = screen.getByText('📋 Copy All');
+      expect(copyButton).toBeInTheDocument();
+
+      act(() => {
+        copyButton.click();
+      });
+
+      // Verify the text was copied in the correct order
+      expect(mockWriteText).toHaveBeenCalledWith(
+        'First paragraph text\n\nSecond paragraph text\n\nThird paragraph text\n\nFourth paragraph text'
+      );
+    });
+
+    test('copyFinalText handles single paragraph correctly', () => {
+      const finalParagraphs = [
+        { id: 'final-1', text: 'Only paragraph text', vendor: 'openai' }
+      ];
+
+      const mockWriteText = jest.fn().mockResolvedValue();
+      Object.assign(navigator, {
+        clipboard: {
+          writeText: mockWriteText,
+        },
+      });
+
+      render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
+
+      const copyButton = screen.getByText('📋 Copy All');
+      
+      act(() => {
+        copyButton.click();
+      });
+
+      expect(mockWriteText).toHaveBeenCalledWith('Only paragraph text');
+    });
+
+    test('copyFinalText includes all paragraphs without missing any', () => {
+      const finalParagraphs = [
+        { id: 'final-1', text: 'Paragraph A', vendor: 'openai' },
+        { id: 'final-2', text: 'Paragraph B', vendor: 'anthropic' },
+        { id: 'final-3', text: 'Paragraph C', vendor: 'gemini' },
+        { id: 'final-4', text: 'Paragraph D', vendor: 'openai' },
+        { id: 'final-5', text: 'Paragraph E', vendor: 'mistral' }
+      ];
+
+      const mockWriteText = jest.fn().mockResolvedValue();
+      Object.assign(navigator, {
+        clipboard: {
+          writeText: mockWriteText,
+        },
+      });
+
+      render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
+
+      const copyButton = screen.getByText('📋 Copy All');
+      
+      act(() => {
+        copyButton.click();
+      });
+
+      const expectedText = 'Paragraph A\n\nParagraph B\n\nParagraph C\n\nParagraph D\n\nParagraph E';
+      expect(mockWriteText).toHaveBeenCalledWith(expectedText);
+
+      // Verify that each paragraph text appears exactly once
+      const copiedText = mockWriteText.mock.calls[0][0];
+      expect(copiedText.split('Paragraph A')).toHaveLength(2); // Should appear exactly once
+      expect(copiedText.split('Paragraph B')).toHaveLength(2);
+      expect(copiedText.split('Paragraph C')).toHaveLength(2);
+      expect(copiedText.split('Paragraph D')).toHaveLength(2);
+      expect(copiedText.split('Paragraph E')).toHaveLength(2);
+    });
+
+    test('copyFinalText does not duplicate paragraphs', () => {
+      const finalParagraphs = [
+        { id: 'final-1', text: 'Unique paragraph 1', vendor: 'openai' },
+        { id: 'final-2', text: 'Unique paragraph 2', vendor: 'openai' },
+        { id: 'final-3', text: 'Unique paragraph 3', vendor: 'anthropic' }
+      ];
+
+      const mockWriteText = jest.fn().mockResolvedValue();
+      Object.assign(navigator, {
+        clipboard: {
+          writeText: mockWriteText,
+        },
+      });
+
+      render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
+
+      const copyButton = screen.getByText('📋 Copy All');
+      
+      act(() => {
+        copyButton.click();
+      });
+
+      const copiedText = mockWriteText.mock.calls[0][0];
+      
+      // Check that each unique text appears exactly once
+      expect(copiedText.match(/Unique paragraph 1/g)).toHaveLength(1);
+      expect(copiedText.match(/Unique paragraph 2/g)).toHaveLength(1);
+      expect(copiedText.match(/Unique paragraph 3/g)).toHaveLength(1);
+      
+      // Verify exact content and order
+      expect(copiedText).toBe('Unique paragraph 1\n\nUnique paragraph 2\n\nUnique paragraph 3');
+    });
+
+    test('copyFinalText handles empty paragraphs correctly', () => {
+      const finalParagraphs = [
+        { id: 'final-1', text: 'First paragraph', vendor: 'openai' },
+        { id: 'final-2', text: '', vendor: 'anthropic' }, // Empty paragraph
+        { id: 'final-3', text: 'Third paragraph', vendor: 'gemini' }
+      ];
+
+      const mockWriteText = jest.fn().mockResolvedValue();
+      Object.assign(navigator, {
+        clipboard: {
+          writeText: mockWriteText,
+        },
+      });
+
+      render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
+
+      const copyButton = screen.getByText('📋 Copy All');
+      
+      act(() => {
+        copyButton.click();
+      });
+
+      // Empty paragraphs should still be included in the structure
+      expect(mockWriteText).toHaveBeenCalledWith('First paragraph\n\n\n\nThird paragraph');
+    });
+
+    test('copyFinalText handles whitespace-only paragraphs correctly', () => {
+      const finalParagraphs = [
+        { id: 'final-1', text: 'First paragraph', vendor: 'openai' },
+        { id: 'final-2', text: '   \n  \t  ', vendor: 'anthropic' }, // Whitespace only
+        { id: 'final-3', text: 'Third paragraph', vendor: 'gemini' }
+      ];
+
+      const mockWriteText = jest.fn().mockResolvedValue();
+      Object.assign(navigator, {
+        clipboard: {
+          writeText: mockWriteText,
+        },
+      });
+
+      render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
+
+      const copyButton = screen.getByText('📋 Copy All');
+      
+      act(() => {
+        copyButton.click();
+      });
+
+      // Whitespace paragraphs should be preserved as-is
+      expect(mockWriteText).toHaveBeenCalledWith('First paragraph\n\n   \n  \t  \n\nThird paragraph');
+    });
+
+    test('copyFinalText handles special characters in paragraph text', () => {
+      const finalParagraphs = [
+        { id: 'final-1', text: 'Paragraph with "quotes" and \'apostrophes\'', vendor: 'openai' },
+        { id: 'final-2', text: 'Paragraph with\nnewlines\nand\ttabs', vendor: 'anthropic' },
+        { id: 'final-3', text: 'Paragraph with émojis 🚀 and ünicöde', vendor: 'gemini' }
+      ];
+
+      const mockWriteText = jest.fn().mockResolvedValue();
+      Object.assign(navigator, {
+        clipboard: {
+          writeText: mockWriteText,
+        },
+      });
+
+      render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
+
+      const copyButton = screen.getByText('📋 Copy All');
+      
+      act(() => {
+        copyButton.click();
+      });
+
+      const expectedText = 'Paragraph with "quotes" and \'apostrophes\'\n\nParagraph with\nnewlines\nand\ttabs\n\nParagraph with émojis 🚀 and ünicöde';
+      expect(mockWriteText).toHaveBeenCalledWith(expectedText);
+    });
+
+    test('copy button is disabled when no paragraphs exist', () => {
+      const finalParagraphs = [];
+
+      render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
+
+      const copyButton = screen.getByText('📋 Copy All');
+      expect(copyButton).toBeDisabled();
+    });
+
+    test('copyFinalText handles clipboard API failure gracefully', async () => {
+      const finalParagraphs = [
+        { id: 'final-1', text: 'Test paragraph', vendor: 'openai' }
+      ];
+
+      const mockWriteText = jest.fn().mockRejectedValue(new Error('Clipboard access denied'));
+      Object.assign(navigator, {
+        clipboard: {
+          writeText: mockWriteText,
+        },
+      });
+
+      // Mock alert to avoid actual alert dialog
+      const mockAlert = jest.fn();
+      window.alert = mockAlert;
+
+      // Temporarily suppress the expected console.error for this test
+      const originalConsoleError = console.error;
+      console.error = jest.fn();
+
+      render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
+
+      const copyButton = screen.getByText('📋 Copy All');
+      
+      await act(async () => {
+        copyButton.click();
+        // Wait for the promise rejection to be handled
+        await new Promise(resolve => setTimeout(resolve, 0));
+      });
+
+      // Should attempt to copy
+      expect(mockWriteText).toHaveBeenCalledWith('Test paragraph');
+      
+      // Should show error to user
+      expect(mockAlert).toHaveBeenCalledWith('Failed to copy text to clipboard');
+      
+      // Should log the error
+      expect(console.error).toHaveBeenCalledWith('Failed to copy text:', expect.any(Error));
+      
+      // Restore console.error
+      console.error = originalConsoleError;
+    });
+
+    test('copyFinalText preserves exact order after drag and drop operations', () => {
+      // This test verifies that after paragraphs are moved around, 
+      // the copy function still respects the current display order
+      const initialParagraphs = [
+        { id: 'final-1', text: 'Original first', vendor: 'openai' },
+        { id: 'final-2', text: 'Original second', vendor: 'anthropic' },
+        { id: 'final-3', text: 'Original third', vendor: 'gemini' }
+      ];
+
+      const mockWriteText = jest.fn().mockResolvedValue();
+      Object.assign(navigator, {
+        clipboard: {
+          writeText: mockWriteText,
+        },
+      });
+
+      // Simulate that paragraphs have been reordered (would happen through drag/drop)
+      const reorderedParagraphs = [
+        { id: 'final-3', text: 'Original third', vendor: 'gemini' },   // Now first
+        { id: 'final-1', text: 'Original first', vendor: 'openai' },  // Now second  
+        { id: 'final-2', text: 'Original second', vendor: 'anthropic' } // Now third
+      ];
+
+      render(<TestWrapper {...defaultProps} finalParagraphs={reorderedParagraphs} />);
+
+      const copyButton = screen.getByText('📋 Copy All');
+      
+      act(() => {
+        copyButton.click();
+      });
+
+      // Should copy in the NEW order, not the original order
+      expect(mockWriteText).toHaveBeenCalledWith('Original third\n\nOriginal first\n\nOriginal second');
     });
   });
 
