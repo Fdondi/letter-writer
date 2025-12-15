@@ -7,11 +7,11 @@ class OpenAIClient(BaseClient):
     def __init__(self):
         self.client = OpenAI()
         self.sizes = {
-            ModelSize.TINY: "gpt-4.1-mini",
-            ModelSize.BASE: "gpt-4.1",
-            ModelSize.MEDIUM: "gpt-4.1",
-            ModelSize.LARGE: "o4-mini"  ,
-            ModelSize.XLARGE: "o3",
+            ModelSize.TINY: "gpt-5-nano",
+            ModelSize.BASE: "gpt-5-mini",
+            ModelSize.MEDIUM: "gpt-5",
+            ModelSize.LARGE: "gpt-5.2",
+            ModelSize.XLARGE: "gpt-5.2",
         }
 
     def _format_messages(self, system: str, user_messages: List[str]) -> List[Dict]:

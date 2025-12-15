@@ -8,11 +8,11 @@ class GeminiClient(BaseClient):
     def __init__(self):
         self.client = genai.Client()
         self.sizes = {
-            ModelSize.TINY: "gemini-2.5-flash-lite-preview-06-17",
+            ModelSize.TINY: "gemini-2.5-flash-lite",
             ModelSize.BASE: "gemini-2.5-flash",
             ModelSize.MEDIUM: "gemini-2.5-flash",
             ModelSize.LARGE: "gemini-2.5-pro",
-            ModelSize.XLARGE: "gemini-2.5-pro",
+            ModelSize.XLARGE: "gemini-3-pro-preview",
         }
 
     def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:

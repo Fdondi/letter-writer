@@ -20,8 +20,8 @@ class MistralClient(BaseClient):
 
         # Map logical sizes to actual model names – tweak as needed.
         self.sizes = {
-            ModelSize.TINY: "mistral-small-latest",
-            ModelSize.BASE: "mistral-medium-latest",
+            ModelSize.TINY: "open-mixtral-8x7b",
+            ModelSize.BASE: "open-mixtral-8x7b",
             ModelSize.MEDIUM: "mistral-medium-latest",
             ModelSize.LARGE: "mistral-large-latest",
             ModelSize.XLARGE: "mistral-large-latest",
