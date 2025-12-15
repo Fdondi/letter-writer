@@ -2,7 +2,7 @@ import json
 from typing import List
 from pathlib import Path
 from qdrant_client import QdrantClient
-from qdrant_client.models import Document
+from qdrant_client.models import ScoredPoint
 from openai import OpenAI
 import typer
 
@@ -24,16 +24,19 @@ class ScoreRow(BaseModel):
 class ScoreTable(BaseModel):
     scores: List[ScoreRow]
 
-def retrieve_similar_job_offers(job_text: str, qdrant_client: QdrantClient, openai_client: OpenAI) -> List[Document]:
+def retrieve_similar_job_offers(job_text: str, qdrant_client: QdrantClient, openai_client: OpenAI) -> List[ScoredPoint]:
     """Retrieve and rerank similar job offers based on the input job text."""
     vector = embed(job_text, openai_client)
-    return qdrant_client.search(
+    # qdrant-client 1.16 uses query_points (search/search_points are not available here)
+    response = qdrant_client.query_points(
         collection_name=COLLECTION_NAME,
-        query_vector=vector,
+        query=vector,
         limit=7,
+        with_payload=True,
     )
+    return list(response.points or [])
 
-def select_top_documents(search_result: List[Document], job_text: str, ai_client: BaseClient, trace_dir: Path) -> List[dict]:
+def select_top_documents(search_result: List[ScoredPoint], job_text: str, ai_client: BaseClient, trace_dir: Path) -> List[dict]:
 
     retrieved_docs = {r.payload["company_name"]: r.payload for r in search_result}
     top_docs = rerank_documents(job_text, retrieved_docs, ai_client, trace_dir)
