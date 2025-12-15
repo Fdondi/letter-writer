@@ -13,7 +13,7 @@ import zlib
 
 from openai import OpenAI
 from qdrant_client.http import models as qdrant_models
-from qdrant_client.models import Document
+from qdrant_client.models import ScoredPoint
 
 from .client import ModelVendor, get_client
 from .config import env_default
@@ -93,21 +93,51 @@ def refresh_repository(
         company_name = path.stem
         job_text = path.read_text(encoding="utf-8")
 
+        # Try exact match first, then try with wildcard for vendor-suffixed files
         letter_path = letters_source_folder / f"{company_name}{letters_source_suffix}"
         if not letter_path.exists():
-            logger(f"[WARN] No letter found for {company_name}. Skipping.")
-            skipped.append(company_name)
-            continue
+            # Look for vendor-suffixed files like company_name.vendor.txt
+            matching_letters = list(letters_source_folder.glob(f"{company_name}.*{letters_source_suffix}"))
+            if matching_letters:
+                # Prefer files without vendor suffix (exact match), otherwise use first match
+                exact_match = next((p for p in matching_letters if p.stem == company_name), None)
+                letter_path = exact_match if exact_match else matching_letters[0]
+                logger(f"[INFO] Using letter file: {letter_path.name} for {company_name}")
+            else:
+                logger(f"[WARN] No letter found for {company_name}. Skipping.")
+                skipped.append(company_name)
+                continue
 
         letter_text = extract_letter_text(
             letter_path, letters_ignore_until, letters_ignore_after
         )
 
+        # Look for negative letters - these are typically the vendor-suffixed files
+        # that were AI-generated before human correction
         negative_letter_paths = list(
             negative_letters_source_folder.glob(
                 f"{company_name}*{negative_letters_source_suffix}"
             )
         )
+        # If no negative letters found in the negative folder, check the letters folder
+        # for vendor-suffixed files (these are often the "negative" examples)
+        # Exclude the file we're using as the positive letter
+        if not negative_letter_paths:
+            if negative_letters_source_folder != letters_source_folder:
+                negative_letter_paths = list(
+                    letters_source_folder.glob(
+                        f"{company_name}.*{negative_letters_source_suffix}"
+                    )
+                )
+            else:
+                # If negative folder is same as letters folder, find all vendor-suffixed files
+                # and exclude the one we're using as positive
+                all_vendor_files = list(
+                    letters_source_folder.glob(
+                        f"{company_name}.*{negative_letters_source_suffix}"
+                    )
+                )
+                negative_letter_paths = [p for p in all_vendor_files if p != letter_path]
         if negative_letter_paths:
             negative_letter_text = "\n\n".join(
                 f"--Letter {i+1} --\n{p.read_text(encoding='utf-8')}"
@@ -161,7 +191,7 @@ def _process_single_vendor(
     company_name: str,
     out: Optional[Path],
     model_vendor: ModelVendor,
-    search_result: List[Document],
+    search_result: List[ScoredPoint],
     refine: bool,
     fancy: bool,
     logger=print,

@@ -18,6 +18,38 @@ Set up the required API keys as environment variables (or in a `.env` file):
 - `MISTRAL_API_KEY`: Required for Mistral models (optional)
 - `XAI_API_KEY`: Required for Grok models (optional)
 
+### CV File
+
+The application needs access to your CV file. Configure it by setting `CV_PATH` in your `.env` file.
+
+**For Docker users**: 
+
+The `docker-compose.yml` file automatically overrides `CV_PATH` to use the Docker-appropriate path (`cv-external/Experience.md`), so you don't need to change your `.env` file. The CV directory is mounted at `/app/cv-external` in the container.
+
+If your CV is in a different location, update the volume mount and `CV_PATH` environment variable in `docker-compose.yml`.
+
+**For local users**: You can use either a relative or absolute path:
+
+```
+CV_PATH=cv.md
+```
+
+Or:
+```
+CV_PATH=C:/path/to/your/cv.md
+```
+
+**Important**: 
+- **In Docker**: The path must be relative to the project root (the entire project is mounted at `/app`). If your CV is outside the project directory, you need to either:
+  1. Copy it into the project directory, or
+  2. Mount the external directory in `docker-compose.yml` and use a path relative to that mount point
+- Make sure the file exists at the specified path
+- Use forward slashes `/` in paths (works on both Windows and Linux)
+
+The default is `cv.md` in the project root if `CV_PATH` is not set.
+
+**Note**: The web interface currently uses the CV file from `CV_PATH`. To use a different CV, update the `.env` file and restart the backend.
+
 ### Qdrant
 
 Qdrant accessible; tested running locally in Docker on port 6333 (configurable)
@@ -28,6 +60,144 @@ Job offers and correspective letters need to be either in different folders, or 
 All the pairs which have the same name once the suffix is removed, are considered to be a valid data point.
 
 In case the text the lettter is within boilerplate (for example, a `.tex` source file), it's possible to instruct to ignore before and after a given keyword.
+
+## Running the Application
+
+The application consists of a Django backend, a React frontend, and Qdrant vector database. You can run them either locally or using Docker.
+
+### Option 1: Using Docker (Recommended)
+
+The easiest way to run the entire application stack is using Docker Compose:
+
+```bash
+docker-compose up
+```
+
+This will start:
+- **Qdrant** vector database on port `6333` (uses your existing data volume)
+- **Django backend** on port `8000`
+- **React frontend** on port `5173`
+
+**Note**: The docker-compose configuration uses your existing Qdrant data volume (`letter-writer_qdrant_storage`). If you've already initialized Qdrant with your data, it will be available immediately. If you need to stop your existing Qdrant container first, you can do so - docker-compose will start a new one using the same data.
+
+To run in detached mode (background):
+
+```bash
+docker-compose up -d
+```
+
+To stop all services:
+
+```bash
+docker-compose down
+```
+
+To rebuild containers after code changes:
+
+```bash
+docker-compose up --build
+```
+
+**Troubleshooting**: If backend or frontend don't start automatically:
+- Check logs: `docker-compose logs backend` or `docker-compose logs frontend`
+- The backend waits for Qdrant to be healthy before starting (this can take 30-60 seconds)
+- If services are stopped, they will auto-restart due to `restart: unless-stopped` policy
+- To start all services: `docker-compose up -d` (runs in background)
+
+**Note**: Make sure your `.env` file is in the project root with all required API keys (see Prerequisites section).
+
+#### Initializing Qdrant Collection
+
+**Important**: The docker-compose setup uses the Qdrant data volume `letter-writer_qdrant_storage`. If you've already initialized Qdrant with your data in this volume, it will be available immediately.
+
+**If you get "Qdrant collection not found" error**: This means the collection is empty and needs to be initialized. Run the refresh command below to populate it with your job offers and letters. This is a one-time setup (or whenever you add new examples).
+
+**To check if your collection exists**, you can query Qdrant:
+```bash
+curl http://localhost:6333/collections
+```
+
+If the `job_offers` collection is not listed, you need to run refresh.
+
+**Option A: Using the API (Recommended)**
+
+Make a POST request to the refresh endpoint. Paths are relative to the project root (mounted at `/app` in the container). The Qdrant connection will use the default service name:
+
+```bash
+curl -X POST http://localhost:8000/api/refresh/ -H "Content-Type: application/json" -d "{\"jobs_source_folder\": \"jobs\", \"jobs_source_suffix\": \".txt\", \"letters_source_folder\": \"letters\", \"letters_source_suffix\": \".txt\"}"
+```
+
+**Option B: Using the CLI inside Docker**
+
+Execute the refresh command inside the backend container. Paths are relative to `/app`. The Qdrant connection will use the service name `qdrant`:
+
+```bash
+docker-compose exec backend python -m letter_writer refresh --jobs-source-folder jobs --jobs-source-suffix .txt --letters-source-folder letters --letters-source-suffix .txt --qdrant-host qdrant --qdrant-port 6333
+```
+
+**Note**: The docker-compose setup uses your existing Qdrant data volume, so your initialized collection will be available. If you need to customize the Qdrant connection, you can set `QDRANT_HOST` and `QDRANT_PORT` in your `.env` file.
+
+**Note**: Adjust the folder paths and suffixes according to your actual data structure. The default expects `examples/` folder with `.txt` jobs and `.tex` letters, but you can customize these paths.
+
+### Option 2: Running Locally
+
+#### Prerequisites
+
+- Python 3.11+ installed
+- Node.js 20+ installed
+- Qdrant running (see Qdrant section below)
+
+#### Backend (Django)
+
+From the project root directory, run:
+
+```bash
+python letter_writer_server/manage.py runserver
+```
+
+The backend will start on `http://localhost:8000` by default.
+
+#### Frontend (React/Vite)
+
+First, install Node.js dependencies (if not already done):
+
+```bash
+cd letter_writer_web
+npm install
+```
+
+Then start the development server:
+
+```bash
+npm run dev
+```
+
+The frontend will start on `http://localhost:5173` by default. The Vite dev server is configured to proxy API requests from `/api` to the Django backend at `http://localhost:8000`.
+
+#### Qdrant (Local)
+
+If not using Docker, you can run Qdrant locally:
+
+```bash
+docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
+```
+
+#### Initializing Qdrant Collection (Local)
+
+After starting Qdrant, populate it with your data using the CLI:
+
+```bash
+python -m letter_writer refresh --jobs-source-folder jobs --jobs-source-suffix .txt --letters-source-folder letters --letters-source-suffix .txt
+```
+
+Or use the API endpoint at `http://localhost:8000/api/refresh/` with a POST request (see Docker section above for the JSON format).
+
+### Accessing the Application
+
+Once all services are running, open your browser and navigate to:
+- Frontend: `http://localhost:5173`
+- Backend API: `http://localhost:8000/api/`
+- Qdrant Dashboard: `http://localhost:6333/dashboard` (if using Docker)
 
 ## Debug 
 
@@ -46,27 +216,27 @@ Commands can be specified in sequence one after the other.
 
 ### Common
 
-- `--qdrant_host=<uri>`: URI Qdrant server is running at. Defaults to localhost.
-- `--qdrant_port=<num>`: Port Qdrant server is running at. Defaults to 6333.
+- `--qdrant-host=<uri>`: URI Qdrant server is running at. Defaults to localhost.
+- `--qdrant-port=<num>`: Port Qdrant server is running at. Defaults to 6333.
 
 ###  For `refresh`
 
 -`--clear`: Empty the Qdrant repository before rebuilding it.
 
-- `--jobs_source_folder=<Path>`: folder holding the job offers to be used to build the Qdrant repo.
-- `--jobs_source_suffx=<str>`: suffix used to recognize the job offers in the folder.
+- `--jobs-source-folder=<Path>`: folder holding the job offers to be used to build the Qdrant repo.
+- `--jobs-source-suffix=<str>`: suffix used to recognize the job offers in the folder.
 
-- `--letters_soure_folder=<Path>`: folder holding the letters to be used as the payload of the Qdrant repo.
-- `--letters_source_suffix=<str>`: suffix used to recognize the letters in the folder.
+- `--letters-source-folder=<Path>`: folder holding the letters to be used as the payload of the Qdrant repo.
+- `--letters-source-suffix=<str>`: suffix used to recognize the letters in the folder.
 
-- `--letters_ignore_until=<str>`: if present, letter text will be discarded as boilerplate until the first occurrence of the string. In a `.tex` letter template, this might be `\makelettertitle`. 
-- `--letters_ignore_after=<str>`: if present, letter text will be discarded as boilerplate after the first occurrence of the string. In a `.tex` letter template, this might be `\closing`. 
+- `--letters-ignore-until=<str>`: if present, letter text will be discarded as boilerplate until the first occurrence of the string. In a `.tex` letter template, this might be `\makelettertitle`. 
+- `--letters-ignore-after=<str>`: if present, letter text will be discarded as boilerplate after the first occurrence of the string. In a `.tex` letter template, this might be `\closing`. 
 
 ### For `process_job`
 
 - `--cv=<path>`: path to the user's CV in text form; markdown recommended. Default: `cv.md`.
-- `--openai_key=<key>`: OpenAI API key
-- `--company_name=<str>`: company to write the letter for. If not provided, defaults to the stem of the job description filename
+- `--openai-key=<key>`: OpenAI API key
+- `--company-name=<str>`: company to write the letter for. If not provided, defaults to the stem of the job description filename
 - `--refine=<bool>`: Whether to try to improve the letter through feedback. 
 - `--out=<path>`: Path to write the letter to. Defaults to `letters/<company_name>.txt`.
 
