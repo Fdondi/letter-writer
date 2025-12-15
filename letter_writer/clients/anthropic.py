@@ -7,11 +7,11 @@ class ClaudeClient(BaseClient):
     def __init__(self):
         self.client = Anthropic()
         self.sizes = {
-            ModelSize.TINY: "claude-3-5-haiku-latest",
-            ModelSize.BASE: "claude-sonnet-4-0",
-            ModelSize.MEDIUM: "claude-sonnet-4-0",
-            ModelSize.LARGE: "claude-sonnet-4-0",
-            ModelSize.XLARGE: "claude-opus-4-0",
+            ModelSize.TINY: "claude-haiku-4-5",
+            ModelSize.BASE: "claude-haiku-4-5",
+            ModelSize.MEDIUM: "claude-sonnet-4-5",
+            ModelSize.LARGE: "claude-sonnet-4-5",
+            ModelSize.XLARGE: "claude-opus-4-5",
         }
 
     def _format_messages(self, user_messages: List[str]) -> List[Dict]:

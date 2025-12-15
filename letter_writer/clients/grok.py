@@ -14,9 +14,9 @@ class GrokClient(BaseClient):
         # Use OpenAI client with xAI's endpoint
         self.client = xai_sdk.Client(api_key=api_key)
         self.sizes = {
-            ModelSize.TINY: "grok-3-mini",
-            ModelSize.BASE: "grok-3-mini", 
-            ModelSize.MEDIUM: "grok-3-mini",
+            ModelSize.TINY: "grok-4-1-fast-non-reasoning",
+            ModelSize.BASE: "grok-4-1-fast-reasoning", 
+            ModelSize.MEDIUM: "grok-4-1-fast-reasoning",
             ModelSize.LARGE: "grok-4-latest",
             ModelSize.XLARGE: "grok-4-latest",
         }
