@@ -1,6 +1,9 @@
 import json
+import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
+import urllib.error
+import urllib.request
 
 from django.http import JsonResponse, HttpRequest
 from django.views.decorators.csrf import csrf_exempt
@@ -42,6 +45,43 @@ def _build_kwargs(data: Dict[str, Any], param_types: Dict[str, Any]) -> Dict[str
         else:
             kwargs[key] = typ(val)
     return kwargs
+
+
+def _translate_with_google(texts: List[str], target_language: str, source_language: str | None = None) -> List[str]:
+    """Translate a list of texts using Google Translate API."""
+    api_key = os.environ.get("GOOGLE_TRANSLATE_API_KEY")
+    if not api_key:
+        raise RuntimeError("Missing GOOGLE_TRANSLATE_API_KEY environment variable")
+
+    if not texts:
+        return []
+
+    endpoint = f"https://translation.googleapis.com/language/translate/v2?key={api_key}"
+    payload: Dict[str, Any] = {
+        "q": texts,
+        "target": target_language,
+    }
+    if source_language:
+        payload["source"] = source_language
+
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            response_data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:  # noqa: PERF203
+        error_body = exc.read().decode("utf-8") if exc.fp else str(exc)
+        raise RuntimeError(f"Google Translate API error: {error_body}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Failed to reach Google Translate API: {exc}") from exc
+
+    translations = response_data.get("data", {}).get("translations", [])
+    return [item.get("translatedText", "") for item in translations]
 
 
 # No additional business logic here; shared service functions are imported instead.
@@ -148,4 +188,33 @@ def style_instructions_view(request: HttpRequest):
             return JsonResponse({"detail": str(exc)}, status=500)
     
     else:
-        return JsonResponse({"detail": "Method not allowed"}, status=405) 
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+
+
+@csrf_exempt
+def translate_view(request: HttpRequest):
+    """Translate text between English and German."""
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Invalid JSON"}, status=400)
+
+    texts = data.get("texts") or ([] if data.get("text") is None else [data["text"]])
+    target_language = (data.get("target_language") or "de").lower()
+    source_language = data.get("source_language")
+
+    if not texts or not isinstance(texts, list):
+        return JsonResponse({"detail": "Field 'texts' (array) or 'text' (string) is required"}, status=400)
+
+    if not target_language:
+        return JsonResponse({"detail": "target_language is required"}, status=400)
+
+    try:
+        translations = _translate_with_google(texts, target_language, source_language)
+    except Exception as exc:  # noqa: BLE001
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+    return JsonResponse({"translations": translations})

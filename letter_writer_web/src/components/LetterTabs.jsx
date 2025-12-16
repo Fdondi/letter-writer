@@ -21,6 +21,13 @@ export default function LetterTabs({
   const [finalLetter, setFinalLetter] = useState("");
   const [originalLetter, setOriginalLetter] = useState(originalText || "");
   const finalColumnRef = useRef(null);
+  const [languageInput, setLanguageInput] = useState("");
+  const [languageOptions, setLanguageOptions] = useState([
+    { code: "en", label: "EN", enabled: true },
+    { code: "de", label: "DE", enabled: true },
+    { code: "it", label: "IT", enabled: false },
+    { code: "fr", label: "FR", enabled: false },
+  ]);
 
   const toggleCollapse = (vendor) => {
     setCollapsed((prev) =>
@@ -367,6 +374,33 @@ export default function LetterTabs({
     </div>
   );
 
+  const toggleLanguage = (code) => {
+    setLanguageOptions((prev) =>
+      prev.map((lang) =>
+        lang.code === code ? { ...lang, enabled: !lang.enabled } : lang
+      )
+    );
+  };
+
+  const addLanguageFromSearch = () => {
+    const code = languageInput.trim().toLowerCase();
+    if (!code) return;
+
+    setLanguageOptions((prev) => {
+      const exists = prev.some((lang) => lang.code === code);
+      if (exists) {
+        return prev.map((lang) =>
+          lang.code === code ? { ...lang, enabled: true } : lang
+        );
+      }
+      const label = code.toUpperCase();
+      return [...prev, { code, label, enabled: true }];
+    });
+    setLanguageInput("");
+  };
+
+  const enabledLanguages = languageOptions.filter((l) => l.enabled);
+
   const FinalColumn = () => (
     <div 
       style={{ 
@@ -482,6 +516,7 @@ export default function LetterTabs({
                       }
                     }}
                     onDelete={() => deleteParagraph(idx)}
+                    languages={enabledLanguages}
                   />
                 </div>
                 <PlusButton onClick={() => addNewParagraph(idx + 1)} />
@@ -536,6 +571,43 @@ export default function LetterTabs({
         display: "flex",
         flexDirection: "column"
       }}>
+        <div style={{ marginBottom: 10, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          <span style={{ fontWeight: 600, fontSize: 13 }}>Languages:</span>
+          {languageOptions.slice(0, 4).map((lang) => (
+            <label key={lang.code} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+              <input
+                type="checkbox"
+                checked={lang.enabled}
+                onChange={() => toggleLanguage(lang.code)}
+                style={{ cursor: "pointer" }}
+              />
+              {lang.label}
+            </label>
+          ))}
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              type="text"
+              value={languageInput}
+              onChange={(e) => setLanguageInput(e.target.value)}
+              placeholder="Add language code (e.g., es)"
+              style={{ fontSize: 12, padding: "4px 6px", width: 150 }}
+            />
+            <button
+              onClick={addLanguageFromSearch}
+              style={{
+                padding: "4px 8px",
+                fontSize: 12,
+                background: "#3b82f6",
+                color: "white",
+                border: "none",
+                borderRadius: 4,
+                cursor: "pointer"
+              }}
+            >
+              Add
+            </button>
+          </div>
+        </div>
         {collapsedVendors.length > 0 && (
           <select
             onChange={(e) => {
@@ -627,7 +699,8 @@ export default function LetterTabs({
                       index={i} 
                       moveParagraph={() => {}} 
                       color={vendorColors?.[v]} 
-                      editable={false}
+                    editable={false}
+                    languages={enabledLanguages}
                     />
                   ))
                 )}
@@ -641,7 +714,8 @@ export default function LetterTabs({
             title="Original Letter" 
             text={originalLetter} 
             editable={false} 
-            width={columnWidth} 
+            width={columnWidth}
+            languages={enabledLanguages}
           />
         </div>
       </div>
