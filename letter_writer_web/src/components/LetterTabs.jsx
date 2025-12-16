@@ -21,13 +21,14 @@ export default function LetterTabs({
   const [finalLetter, setFinalLetter] = useState("");
   const [originalLetter, setOriginalLetter] = useState(originalText || "");
   const finalColumnRef = useRef(null);
-  const [languageInput, setLanguageInput] = useState("");
-  const [languageOptions, setLanguageOptions] = useState([
-    { code: "en", label: "EN", enabled: true },
-    { code: "de", label: "DE", enabled: true },
-    { code: "it", label: "IT", enabled: false },
-    { code: "fr", label: "FR", enabled: false },
-  ]);
+    const [languageInput, setLanguageInput] = useState("");
+    const [languageOptions, setLanguageOptions] = useState([
+      { code: "en", label: "EN", enabled: true },
+      { code: "de", label: "DE", enabled: true },
+      { code: "it", label: "IT", enabled: false },
+      { code: "fr", label: "FR", enabled: false },
+    ]);
+    const [languageLogic, setLanguageLogic] = useState("OR"); // "OR" or "AND"
 
   const toggleCollapse = (vendor) => {
     setCollapsed((prev) =>
@@ -573,24 +574,71 @@ export default function LetterTabs({
       }}>
         <div style={{ marginBottom: 10, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
           <span style={{ fontWeight: 600, fontSize: 13 }}>Languages:</span>
-          {languageOptions.slice(0, 4).map((lang) => (
-            <label key={lang.code} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
-              <input
-                type="checkbox"
-                checked={lang.enabled}
-                onChange={() => toggleLanguage(lang.code)}
-                style={{ cursor: "pointer" }}
-              />
-              {lang.label}
-            </label>
-          ))}
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button
+            onClick={() => setLanguageLogic((prev) => (prev === "OR" ? "AND" : "OR"))}
+            style={{
+              padding: "4px 8px",
+              fontSize: 12,
+              background: "#e0e0e0",
+              color: "#333",
+              border: "none",
+              borderRadius: 4,
+              cursor: "pointer",
+              marginRight: 8,
+            }}
+          >
+            {languageLogic}
+          </button>
+          <div style={{ display: "flex", alignItems: "center", border: "1px solid #ccc", borderRadius: 4, padding: "2px 6px", flexWrap: "wrap", gap: 4 }}>
+            {languageOptions
+              .filter((l) => l.enabled)
+              .map((lang) => (
+                <div
+                  key={lang.code}
+                  style={{
+                    background: "#e0e0e0",
+                    padding: "2px 6px",
+                    borderRadius: 3,
+                    fontSize: 12,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
+                  {lang.label}
+                  <button
+                    onClick={() => toggleLanguage(lang.code)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "#666",
+                      cursor: "pointer",
+                      padding: 0,
+                      fontSize: 12,
+                    }}
+                  >
+                    X
+                  </button>
+                </div>
+              ))}
             <input
               type="text"
               value={languageInput}
               onChange={(e) => setLanguageInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  addLanguageFromSearch();
+                }
+              }}
               placeholder="Add language code (e.g., es)"
-              style={{ fontSize: 12, padding: "4px 6px", width: 150 }}
+              style={{
+                fontSize: 12,
+                padding: "4px 0px",
+                border: "none",
+                outline: "none",
+                minWidth: 120,
+                flexGrow: 1,
+              }}
             />
             <button
               onClick={addLanguageFromSearch}
@@ -601,7 +649,7 @@ export default function LetterTabs({
                 color: "white",
                 border: "none",
                 borderRadius: 4,
-                cursor: "pointer"
+                cursor: "pointer",
               }}
             >
               Add
