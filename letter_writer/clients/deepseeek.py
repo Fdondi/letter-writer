@@ -7,6 +7,7 @@ import typer
 
 class DeepSeekClient(BaseClient):
     def __init__(self):
+        super().__init__()
         self.client = OpenAI(
             api_key=os.getenv("DEEPSEEK_API_KEY"),
             base_url="https://api.deepseek.com"
@@ -33,4 +34,13 @@ class DeepSeekClient(BaseClient):
             messages=messages, 
             stream=False,
         )
+        
+        if response.usage:
+            self.track_cost(
+                model,
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
+                search_queries=0 # No search support
+            )
+
         return response.choices[0].message.content.strip()

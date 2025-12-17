@@ -5,6 +5,7 @@ import typer
 
 class OpenAIClient(BaseClient):
     def __init__(self):
+        super().__init__()
         self.client = OpenAI()
         self.sizes = {
             ModelSize.TINY: "gpt-5-nano",
@@ -29,4 +30,13 @@ class OpenAIClient(BaseClient):
             model=model,
             messages=messages, 
         )
+        
+        if response.usage:
+            self.track_cost(
+                model,
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
+                search_queries=1 if search else 0
+            )
+            
         return response.choices[0].message.content.strip()
