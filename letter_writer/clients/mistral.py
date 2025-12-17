@@ -11,6 +11,7 @@ class MistralClient(BaseClient):
     """
 
     def __init__(self):
+        super().__init__()
         api_key = os.getenv("MISTRAL_API_KEY")
         if not api_key:
             raise RuntimeError("MISTRAL_API_KEY environment variable is not set")
@@ -87,6 +88,15 @@ class MistralClient(BaseClient):
 
         # Handle response - if there are tool calls, we need to process them
         choice = response.choices[0]
+        
+        if response.usage:
+            self.track_cost(
+                model,
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
+                search_queries=1 if search else 0
+            )
+
         if hasattr(choice.message, 'tool_calls') and choice.message.tool_calls:
             # For now, just return a message indicating web search was attempted
             # In a full implementation, you would execute the search and continue the conversation

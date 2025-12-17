@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from "uuid";
 export default function LetterTabs({ 
   vendorsList, 
   vendorParagraphs, 
+  vendorCosts,
   finalParagraphs, 
   setFinalParagraphs, 
   originalText, 
@@ -693,9 +694,19 @@ export default function LetterTabs({
                 borderRadius: "4px 4px 0 0",
                 position: "sticky",
                 top: 0,
-                zIndex: 10
+                zIndex: 10,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center"
               }}>
-                {v}
+                <span>
+                  {v}
+                  {vendorCosts && vendorCosts[v] !== undefined && (
+                    <span style={{ fontSize: "0.8em", marginLeft: "8px", fontWeight: "normal", color: "#555" }}>
+                      (${vendorCosts[v].toFixed(4)})
+                    </span>
+                  )}
+                </span>
                 {loadingVendors.has(v) && (
                   <span style={{ marginLeft: "8px", fontSize: "12px" }}>Loading...</span>
                 )}

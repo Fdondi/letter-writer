@@ -7,6 +7,7 @@ import xai_sdk
 
 class GrokClient(BaseClient):
     def __init__(self):
+        super().__init__()
         api_key = os.getenv("XAI_API_KEY")
         if not api_key:
             raise RuntimeError("XAI_API_KEY environment variable is not set")
@@ -34,4 +35,12 @@ class GrokClient(BaseClient):
             chat.append(xai_sdk.chat.user(message))
 
         response = chat.sample()
+        
+        # Attempt to track cost if usage info is available (structure uncertain)
+        if hasattr(response, 'usage') and response.usage:
+            # Assuming standard structure
+            input_tokens = getattr(response.usage, 'prompt_tokens', 0)
+            output_tokens = getattr(response.usage, 'completion_tokens', 0)
+            self.track_cost(model, input_tokens, output_tokens, search_queries=1 if search else 0)
+            
         return response.content.strip()
