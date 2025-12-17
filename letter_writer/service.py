@@ -195,8 +195,8 @@ def _process_single_vendor(
     refine: bool,
     fancy: bool,
     logger=print,
-):
-    """Generate the letter for one model vendor and return its text."""
+) -> dict:
+    """Generate the letter for one model vendor and return its text and cost."""
     trace_dir = Path("trace", f"{company_name}.{model_vendor.value}")
     trace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -257,13 +257,18 @@ def _process_single_vendor(
     logger(f"[INFO] Letter written to {out}")
 
     if fancy:
-        fletter = fancy_letter(letter, get_client(model_vendor))
+        fancy_client = get_client(model_vendor)
+        fletter = fancy_letter(letter, fancy_client)
         fancy_out = Path("fancy_letters", f"{company_name}.{model_vendor.value}.txt")
         fancy_out.parent.mkdir(parents=True, exist_ok=True)
         fancy_out.write_text(fletter, encoding="utf-8")
         logger(f"[INFO] Fancy letter written to {fancy_out}")
+        
+        # Add fancy generation cost if tracked
+        if hasattr(fancy_client, 'total_cost'):
+             ai_client.total_cost += fancy_client.total_cost
 
-    return letter  # Return generated letter text
+    return {"text": letter, "cost": getattr(ai_client, 'total_cost', 0.0)}  # Return generated letter text and cost
 
 class FakeTDQM:
     def __init__(self, total: int, unit: str, desc: str = "Processing", logger=print):
@@ -309,7 +314,7 @@ def write_cover_letter(
     refine: bool = True,
     fancy: bool = False,
     logger=print,
-) -> dict[str, str]:
+) -> dict[str, dict]:
     """Generate cover letter(s) from text or file and return them.
 
     Parameters
@@ -332,7 +337,7 @@ def write_cover_letter(
     Returns
     -------
     dict
-        Mapping ``vendor_name -> letter_text``.
+        Mapping ``vendor_name -> {"text": letter_text, "cost": cost_float}``.
     """
 
     qdrant_client = get_qdrant_client(qdrant_host, qdrant_port)
@@ -360,7 +365,7 @@ def write_cover_letter(
     openai_client = OpenAI()
     search_result = retrieve_similar_job_offers(job_text, qdrant_client, openai_client)
 
-    letters: dict[str, str] = {}
+    letters: dict[str, dict] = {}
 
     if model_vendor is None:
         with ThreadPoolExecutor(max_workers=len(ModelVendor)) as executor:

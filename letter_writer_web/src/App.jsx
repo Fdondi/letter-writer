@@ -23,6 +23,7 @@ export default function App() {
   const [companyName, setCompanyName] = useState("");
   const [selectedVendors, setSelectedVendors] = useState(new Set());
   const [letters, setLetters] = useState({}); // vendor -> text
+  const [vendorCosts, setVendorCosts] = useState({}); // vendor -> cost
   const [failedVendors, setFailedVendors] = useState({}); // vendor -> error message
   const [loading, setLoading] = useState(false);
   const [loadingVendors, setLoadingVendors] = useState(new Set()); // vendors currently loading
@@ -73,12 +74,20 @@ export default function App() {
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      const letterText = data.letters[vendor] || Object.values(data.letters)[0];
+      const letterData = data.letters[vendor] || Object.values(data.letters)[0];
+      const letterText = typeof letterData === 'object' ? letterData.text : letterData;
+      const cost = typeof letterData === 'object' ? letterData.cost : 0.0;
       
       // Update letters immediately
       setLetters(prev => ({
         ...prev,
         [vendor]: letterText
+      }));
+
+      // Update costs
+      setVendorCosts(prev => ({
+        ...prev,
+        [vendor]: cost
       }));
       
       // Update paragraphs immediately
@@ -104,6 +113,7 @@ export default function App() {
     setLoading(true);
     setError(null);
     setLetters({});
+    setVendorCosts({});
     setFailedVendors({});
     setVendorParagraphs({});
     setLoadingVendors(new Set(selectedVendors));
@@ -126,12 +136,20 @@ export default function App() {
           if (!res.ok) throw new Error(await res.text());
           
           const data = await res.json();
-          const letterText = data.letters[vendor] || Object.values(data.letters)[0];
+          const letterData = data.letters[vendor] || Object.values(data.letters)[0];
+          const letterText = typeof letterData === 'object' ? letterData.text : letterData;
+          const cost = typeof letterData === 'object' ? letterData.cost : 0.0;
           
           // Update letters immediately as each vendor completes
           setLetters(prev => ({
             ...prev,
             [vendor]: letterText
+          }));
+
+          // Update costs
+          setVendorCosts(prev => ({
+            ...prev,
+            [vendor]: cost
           }));
           
           // Update paragraphs immediately as each vendor completes
@@ -260,6 +278,7 @@ export default function App() {
         <LetterTabs 
           vendorsList={Array.from(selectedVendors)}
           vendorParagraphs={vendorParagraphs}
+          vendorCosts={vendorCosts}
           finalParagraphs={finalParagraphs}
           setFinalParagraphs={setFinalParagraphs}
           originalText={jobText}

@@ -5,6 +5,7 @@ import typer
 
 class ClaudeClient(BaseClient):
     def __init__(self):
+        super().__init__()
         self.client = Anthropic()
         self.sizes = {
             ModelSize.TINY: "claude-haiku-4-5",
@@ -29,6 +30,14 @@ class ClaudeClient(BaseClient):
             tools=tools,
             max_tokens=2048,
         )
+        
+        if response.usage:
+            self.track_cost(
+                model,
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+                search_queries=1 if search else 0
+            )
         
         # Handle different response content types
         if not response.content:
