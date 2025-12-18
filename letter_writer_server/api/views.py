@@ -11,6 +11,13 @@ from django.views.decorators.csrf import csrf_exempt
 from letter_writer.service import refresh_repository, write_cover_letter
 from letter_writer.client import ModelVendor
 from letter_writer.generation import get_style_instructions
+from letter_writer.phased_service import (
+    advance_to_draft,
+    advance_to_refinement,
+    start_background_phase,
+)
+from letter_writer.config import env_default
+import traceback
 
 
 # Utility helpers
@@ -148,6 +155,177 @@ def process_job_view(request: HttpRequest):
         return JsonResponse({"detail": str(exc)}, status=500)
 
     return JsonResponse({"status": "ok", "letters": letters})
+
+
+@csrf_exempt
+def start_phased_job_view(request: HttpRequest):
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Invalid JSON"}, status=400)
+
+    job_text = data.get("job_text")
+    company_name = data.get("company_name")
+    vendor_values = data.get("vendors") or []
+    if not job_text or not company_name:
+        return JsonResponse({"detail": "job_text and company_name are required"}, status=400)
+    if not vendor_values:
+        return JsonResponse({"detail": "vendors array is required"}, status=400)
+
+    try:
+        vendors = [ModelVendor(v) for v in vendor_values]
+    except ValueError as exc:
+        return JsonResponse({"detail": str(exc)}, status=400)
+
+    cv_text = data.get("cv_text")
+    if cv_text is None:
+        cv_path = Path(env_default("CV_PATH", "cv.md"))
+        if cv_path.exists():
+            cv_text = cv_path.read_text(encoding="utf-8")
+        else:
+            cv_text = ""
+
+    qdrant_host = data.get("qdrant_host") or env_default("QDRANT_HOST", "localhost")
+    qdrant_port = int(data.get("qdrant_port") or env_default("QDRANT_PORT", "6333"))
+
+    try:
+        session = start_background_phase(
+            job_text=job_text,
+            cv_text=cv_text,
+            company_name=company_name,
+            vendors=vendors,
+            qdrant_host=qdrant_host,
+            qdrant_port=qdrant_port,
+        )
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+    vendors_payload = {
+        key: {
+            "background_summary": state.background_summary,
+            "main_points": state.main_points,
+            "company_report": state.company_report,
+            "top_docs": state.top_docs,
+            "cost": state.cost,
+        }
+        for key, state in session.vendors.items()
+    }
+    return JsonResponse(
+        {
+            "status": "ok",
+            "phase": "background",
+            "session_id": session.session_id,
+            "vendors": vendors_payload,
+        }
+    )
+
+
+@csrf_exempt
+def draft_phase_view(request: HttpRequest):
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Invalid JSON"}, status=400)
+
+    session_id = data.get("session_id")
+    vendor_val = data.get("vendor")
+    if not session_id or not vendor_val:
+        return JsonResponse({"detail": "session_id and vendor are required"}, status=400)
+    try:
+        vendor = ModelVendor(vendor_val)
+    except ValueError as exc:
+        return JsonResponse({"detail": str(exc)}, status=400)
+
+    try:
+        state = advance_to_draft(
+            session_id=session_id,
+            vendor=vendor,
+            company_report_override=data.get("company_report"),
+            background_summary_override=data.get("background_summary"),
+            top_docs_override=data.get("top_docs"),
+            job_text_override=data.get("job_text"),
+            cv_text_override=data.get("cv_text"),
+        )
+    except ValueError as exc:
+        return JsonResponse({"detail": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+    return JsonResponse(
+        {
+            "status": "ok",
+            "phase": "draft",
+            "vendor": vendor.value,
+            "draft_letter": state.draft_letter,
+            "company_report": state.company_report,
+            "background_summary": state.background_summary,
+            "top_docs": state.top_docs,
+            "main_points": state.main_points,
+            "cost": state.cost,
+        }
+    )
+
+
+@csrf_exempt
+def refinement_phase_view(request: HttpRequest):
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Invalid JSON"}, status=400)
+
+    session_id = data.get("session_id")
+    vendor_val = data.get("vendor")
+    if not session_id or not vendor_val:
+        return JsonResponse({"detail": "session_id and vendor are required"}, status=400)
+    try:
+        vendor = ModelVendor(vendor_val)
+    except ValueError as exc:
+        return JsonResponse({"detail": str(exc)}, status=400)
+
+    fancy = _safe_bool(data.get("fancy", False))
+
+    try:
+        state = advance_to_refinement(
+            session_id=session_id,
+            vendor=vendor,
+            draft_override=data.get("draft_letter"),
+            company_report_override=data.get("company_report"),
+            top_docs_override=data.get("top_docs"),
+            job_text_override=data.get("job_text"),
+            cv_text_override=data.get("cv_text"),
+            fancy=fancy,
+        )
+    except ValueError as exc:
+        return JsonResponse({"detail": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+    return JsonResponse(
+        {
+            "status": "ok",
+            "phase": "refine",
+            "vendor": vendor.value,
+            "final_letter": state.final_letter,
+            "draft_letter": state.draft_letter,
+            "feedback": state.feedback,
+            "company_report": state.company_report,
+            "top_docs": state.top_docs,
+            "main_points": state.main_points,
+            "cost": state.cost,
+        }
+    )
 
 
 @csrf_exempt
