@@ -3,6 +3,7 @@ import { useDrag, useDrop } from "react-dnd";
 import { HoverContext } from "../contexts/HoverContext";
 import { v4 as uuidv4 } from "uuid";
 import { translateText } from "../utils/translate";
+import { ItemTypes } from "../constants";
 
 const LANGUAGE_BUTTONS = [
   { code: "de", label: "DE", color: "#3b82f6" },
@@ -10,10 +11,6 @@ const LANGUAGE_BUTTONS = [
   { code: "it", label: "IT", color: "#f97316" },
   { code: "fr", label: "FR", color: "#8b5cf6" },
 ];
-
-export const ItemTypes = {
-  PARAGRAPH: "paragraph",
-};
 
 function splitTextIntoFragments(text, originalParagraph) {
   if (!text) return [];
@@ -206,7 +203,7 @@ export default function Paragraph({
 
   const TranslationBar = (
     <div style={{ display: "flex", justifyContent: "flex-start", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
-      {isTranslating && <span style={{ fontSize: "10px", color: "#666" }}>Translating…</span>}
+      {isTranslating && <span style={{ fontSize: "10px", color: "var(--secondary-text-color)" }}>Translating…</span>}
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -216,8 +213,8 @@ export default function Paragraph({
         style={{
           padding: "2px 8px",
           fontSize: "11px",
-          background: viewLanguage === "source" ? "#10b981" : "#e5e7eb",
-          color: viewLanguage === "source" ? "white" : "#111827",
+          background: viewLanguage === "source" ? "#10b981" : "var(--button-bg)",
+          color: viewLanguage === "source" ? "white" : "var(--button-text)",
           border: "2px solid #10b981",
           borderRadius: 4,
           cursor: isTranslating ? "not-allowed" : "pointer",
@@ -261,13 +258,14 @@ export default function Paragraph({
     </div>
   );
 
-  const idleBg = color?.replace(/hsl\(([^)]+)\)/, "hsla($1,0.3)") || "#f0f0f0";
-  const activeBg = color || "#e0e0e0";
+  const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const idleBg = color?.replace(/hsl\(([^)]+)\)/, isDarkMode ? "hsla($1,0.5)" : "hsla($1,0.3)") || "var(--panel-bg)";
+  const activeBg = color || "var(--header-bg)";
   
   // Handle white background for user text
   if (paragraph.isUserText || !paragraph.vendor) {
-    const userIdleBg = "#ffffff";
-    const userActiveBg = "#f0f0f0";
+    const userIdleBg = "var(--input-bg)";
+    const userActiveBg = "var(--header-bg)";
     const sourceId = paragraph.sourceId || paragraph.id;
     const isHighlighted = hoverId === paragraph.id || hoverId === sourceId;
 
@@ -281,12 +279,13 @@ export default function Paragraph({
           borderRadius: 4,
           cursor: isCopyMode ? "text" : "move",
           marginBottom: 4,
-          border: isCopyMode ? "2px solid #007acc" : "1px solid #ddd",
+          border: isCopyMode ? "2px solid #007acc" : "1px solid var(--border-color)",
           position: "relative",
         transition: "all 0.2s ease",
         transform: viewLanguage !== "source" ? "rotateY(6deg)" : "rotateY(0deg)",
           transformStyle: "preserve-3d",
-          perspective: "1000px"
+          perspective: "1000px",
+          color: 'var(--text-color)'
         }}
         onMouseEnter={() => setHoverId(sourceId)}
         onMouseLeave={handleMouseLeave}
@@ -313,18 +312,18 @@ export default function Paragraph({
           top: -8,
           right: 4,
           fontSize: "10px",
-          background: "#fff",
+          background: "var(--card-bg)",
           padding: "1px 4px",
           borderRadius: 2,
-          color: "#666",
-          border: "1px solid #ddd"
+          color: "var(--secondary-text-color)",
+          border: "1px solid var(--border-color)"
         }}>
           user text
         </div>
         
         {TranslationBar}
         {translationError && (
-          <div style={{ color: "red", fontSize: "11px", marginBottom: 4 }}>
+          <div style={{ color: "var(--error-text)", fontSize: "11px", marginBottom: 4 }}>
             {translationError}
           </div>
         )}
@@ -368,12 +367,14 @@ export default function Paragraph({
                 width: "100%",
                 minHeight: "120px", // Larger minimum height
                 resize: "vertical",
-                border: "1px solid #ddd",
+                border: "1px solid var(--border-color)",
                 borderRadius: 2,
                 padding: 8,
                 fontFamily: "inherit",
                 fontSize: "inherit",
-                outline: "2px solid #007acc"
+                outline: "2px solid #007acc",
+                backgroundColor: 'var(--input-bg)',
+                color: 'var(--text-color)'
               }}
               autoFocus
             />
@@ -425,12 +426,13 @@ export default function Paragraph({
         borderRadius: 4,
         cursor: isCopyMode ? "text" : "move",
         marginBottom: 4,
-        border: isCopyMode ? "2px solid #007acc" : (paragraph.isFragment ? "1px dashed #999" : "1px solid transparent"),
+        border: isCopyMode ? "2px solid #007acc" : (paragraph.isFragment ? "1px dashed var(--secondary-text-color)" : "1px solid transparent"),
         position: "relative",
         transition: "all 0.2s ease",
         transform: viewLanguage !== "source" ? "rotateY(6deg)" : "rotateY(0deg)",
         transformStyle: "preserve-3d",
-        perspective: "1000px"
+        perspective: "1000px",
+        color: isDarkMode ? 'white' : 'black' // High contrast for vendor colored backgrounds
       }}
       onMouseEnter={() => setHoverId(sourceId)}
       onMouseLeave={handleMouseLeave}
@@ -458,10 +460,10 @@ export default function Paragraph({
           top: -8,
           right: 4,
           fontSize: "10px",
-          background: color || "#ddd",
+          background: color || "var(--border-color)",
           padding: "1px 4px",
           borderRadius: 2,
-          color: "#666"
+          color: "var(--secondary-text-color)"
         }}>
           fragment
         </div>
@@ -469,7 +471,7 @@ export default function Paragraph({
       
       {TranslationBar}
       {translationError && (
-        <div style={{ color: "red", fontSize: "11px", marginBottom: 4 }}>
+        <div style={{ color: "var(--error-text)", fontSize: "11px", marginBottom: 4 }}>
           {translationError}
         </div>
       )}
@@ -513,12 +515,14 @@ export default function Paragraph({
               width: "100%",
               minHeight: "120px", // Larger minimum height
               resize: "vertical",
-              border: "1px solid #ddd",
+              border: "1px solid var(--border-color)",
               borderRadius: 2,
               padding: 8,
               fontFamily: "inherit",
               fontSize: "inherit",
-              outline: "2px solid #007acc"
+              outline: "2px solid #007acc",
+              backgroundColor: 'var(--input-bg)',
+              color: 'var(--text-color)'
             }}
             autoFocus
           />

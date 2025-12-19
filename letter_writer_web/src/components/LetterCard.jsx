@@ -58,17 +58,18 @@ export default function LetterCard({ title, text, loading = false, error = null,
     <div
       style={{
         width,
-        border: "1px solid #ccc",
+        border: "1px solid var(--border-color)",
         borderRadius: 4,
         padding: 10,
         position: "relative",
-        background: "#fafafa",
+        background: "var(--card-bg)",
         display: "flex",
         flexDirection: "column",
         minHeight: 0, // Allow content to shrink
         perspective: "1000px",
         transition: "transform 0.3s ease",
         transform: viewLanguage !== "source" ? "rotateY(8deg)" : "rotateY(0deg)",
+        color: 'var(--text-color)'
       }}
     >
       <div style={{ 
@@ -85,8 +86,8 @@ export default function LetterCard({ title, text, loading = false, error = null,
             style={{
               padding: "4px 8px",
               fontSize: "12px",
-              background: viewLanguage === "source" ? "#10b981" : "#e5e7eb",
-              color: viewLanguage === "source" ? "white" : "#111827",
+              background: viewLanguage === "source" ? "#10b981" : "var(--button-bg)",
+              color: viewLanguage === "source" ? "white" : "var(--button-text)",
               border: "2px solid #10b981",
               borderRadius: 4,
               cursor: loading || !!error ? "not-allowed" : "pointer",
@@ -132,7 +133,8 @@ export default function LetterCard({ title, text, loading = false, error = null,
                 border: "none",
                 cursor: "pointer",
                 fontSize: "16px",
-                padding: "2px 6px"
+                padding: "2px 6px",
+                color: 'var(--text-color)'
               }}
               title="Hide letter"
             >
@@ -142,7 +144,7 @@ export default function LetterCard({ title, text, loading = false, error = null,
         </div>
       </div>
       {translationError && (
-        <div style={{ color: "red", fontSize: "12px", marginBottom: 6 }}>
+        <div style={{ color: "var(--error-text)", fontSize: "12px", marginBottom: 6 }}>
           {translationError}
         </div>
       )}
@@ -152,10 +154,10 @@ export default function LetterCard({ title, text, loading = false, error = null,
             <div className="spinner" />
           </div>
         ) : error && !text ? (
-          <div style={{padding:8,color:"red",fontSize:12}}>
+          <div style={{padding:8,color:"var(--error-text)",fontSize:12}}>
             {error}
             {onRetry && (
-              <button onClick={onRetry} style={{marginTop:5}}>Retry</button>
+              <button onClick={onRetry} style={{marginTop:5, background: 'var(--button-bg)', color: 'var(--button-text)', border: '1px solid var(--border-color)', padding: '2px 8px', cursor: 'pointer'}}>Retry</button>
             )}
           </div>
         ) : editable ? (
@@ -166,11 +168,13 @@ export default function LetterCard({ title, text, loading = false, error = null,
               width: "100%", 
               height: "100%", 
               resize: "none",
-              border: "1px solid #ddd",
+              border: "1px solid var(--border-color)",
               borderRadius: 2,
               padding: 8,
               fontFamily: "monospace",
-              fontSize: "12px"
+              fontSize: "12px",
+              backgroundColor: 'var(--input-bg)',
+              color: 'var(--text-color)'
             }}
           />
         ) : (
@@ -183,9 +187,10 @@ export default function LetterCard({ title, text, loading = false, error = null,
               fontFamily: "monospace",
               fontSize: "12px",
               padding: 8,
-              background: "white",
-              border: "1px solid #ddd",
-              borderRadius: 2
+              background: "var(--pre-bg)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 2,
+              color: 'var(--text-color)'
             }}
           >
             {displayedText}
