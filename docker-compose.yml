@@ -33,8 +33,8 @@ services:
       - ./trace:/app/trace
       - ./jobs:/app/jobs
       # Mount CV directory if it's outside the project directory
-      # Adjust the Windows path to match your CV location:
-      - C:/Users/franc/Documents/GitHub/cv-latex:/app/cv-external
+      # Adjust the path to match your CV location:
+      - ${CV_LOCAL_PATH:-./cv-external}:/app/cv-external
     environment:
       - DJANGO_DEBUG=true
       - DJANGO_ALLOWED_HOSTS=*
@@ -70,7 +70,6 @@ services:
     command: npm run dev -- --host 0.0.0.0
 
 volumes:
-  # Use existing volume from your previously initialized Qdrant container
+  # Managed volume for Qdrant storage
   letter-writer_qdrant_storage:
-    external: true
 
