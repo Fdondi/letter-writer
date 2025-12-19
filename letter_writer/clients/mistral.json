@@ -1,4 +1,5 @@
 {
+<<<<<<< HEAD
   "defaults": { "search": 30.0 },
   "models": {
     "open-mixtral-8x7b": { "input": 0.70, "output": 0.70 },
@@ -6,3 +7,24 @@
     "mistral-large-latest": { "input": 0.50, "output": 1.50 }
   }
 }
+=======
+  "defaults": {
+    "search": 30.0
+  },
+  "models": {
+    "open-mixtral-8x7b": {
+      "input": 0.70,
+      "output": 0.70
+    },
+    "mistral-medium-latest": {
+      "input": 0.40,
+      "output": 2.00
+    },
+    "mistral-large-latest": {
+      "input": 0.50,
+      "output": 1.50
+    }
+  }
+}
+
+>>>>>>> 0f0dd6a (add prices)
