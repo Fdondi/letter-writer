@@ -87,23 +87,24 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
       right: 0,
       width: '50%',
       height: '100vh',
-      backgroundColor: 'white',
+      backgroundColor: 'var(--bg-color)',
       boxShadow: '-4px 0 8px rgba(0,0,0,0.1)',
       zIndex: 1000,
       display: 'flex',
       flexDirection: 'column',
-      borderLeft: '1px solid #ddd'
+      borderLeft: '1px solid var(--border-color)',
+      color: 'var(--text-color)'
     }}>
       {/* Header */}
       <div style={{
         padding: '20px',
-        borderBottom: '1px solid #eee',
-        backgroundColor: '#f8f9fa',
+        borderBottom: '1px solid var(--border-color)',
+        backgroundColor: 'var(--header-bg)',
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center'
       }}>
-        <h2 style={{ margin: 0, fontSize: '1.5em', color: '#333' }}>
+        <h2 style={{ margin: 0, fontSize: '1.5em', color: 'var(--text-color)' }}>
           Style Instructions
         </h2>
         <button
@@ -113,7 +114,7 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
             border: 'none',
             fontSize: '1.5em',
             cursor: 'pointer',
-            color: '#666',
+            color: 'var(--secondary-text-color)',
             padding: '5px'
           }}
         >
@@ -124,19 +125,19 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
       {/* Content */}
       <div style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column' }}>
         {loading && (
-          <div style={{ textAlign: 'center', padding: '20px' }}>
+          <div style={{ textAlign: 'center', padding: '20px', color: 'var(--secondary-text-color)' }}>
             Loading style instructions...
           </div>
         )}
 
         {error && (
           <div style={{
-            backgroundColor: '#fee',
-            border: '1px solid #fcc',
+            backgroundColor: 'var(--error-bg)',
+            border: '1px solid var(--error-border)',
             borderRadius: '4px',
             padding: '10px',
             marginBottom: '15px',
-            color: '#c33'
+            color: 'var(--error-text)'
           }}>
             Error: {error}
           </div>
@@ -144,12 +145,12 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
 
         {saveSuccess && (
           <div style={{
-            backgroundColor: '#efe',
-            border: '1px solid #cfc',
+            backgroundColor: 'var(--success-bg, #efe)',
+            border: '1px solid var(--success-border, #cfc)',
             borderRadius: '4px',
             padding: '10px',
             marginBottom: '15px',
-            color: '#3c3'
+            color: 'var(--success-text, #3c3)'
           }}>
             Style instructions saved successfully!
           </div>
@@ -158,7 +159,7 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
         {!loading && (
           <>
             <div style={{ marginBottom: '15px' }}>
-              <p style={{ margin: '0 0 10px 0', color: '#666' }}>
+              <p style={{ margin: '0 0 10px 0', color: 'var(--secondary-text-color)' }}>
                 These instructions will be used when generating cover letters. 
                 Modify them to customize the writing style and approach.
               </p>
@@ -171,13 +172,15 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
                 flex: 1,
                 width: '100%',
                 padding: '15px',
-                border: '1px solid #ddd',
+                border: '1px solid var(--border-color)',
                 borderRadius: '4px',
                 fontSize: '14px',
                 fontFamily: 'monospace',
                 lineHeight: '1.5',
                 resize: 'none',
-                outline: 'none'
+                outline: 'none',
+                backgroundColor: 'var(--input-bg)',
+                color: 'var(--text-color)'
               }}
               placeholder="Enter style instructions..."
             />
@@ -194,10 +197,10 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
                   onClick={resetToOriginal}
                   style={{
                     padding: '10px 20px',
-                    border: '1px solid #ddd',
+                    border: '1px solid var(--border-color)',
                     borderRadius: '4px',
-                    backgroundColor: 'white',
-                    color: '#666',
+                    backgroundColor: 'var(--button-bg)',
+                    color: 'var(--button-text)',
                     cursor: 'pointer'
                   }}
                 >
@@ -212,7 +215,7 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
                   padding: '10px 20px',
                   border: 'none',
                   borderRadius: '4px',
-                  backgroundColor: hasChanges && instructions.trim() ? '#007bff' : '#ccc',
+                  backgroundColor: hasChanges && instructions.trim() ? '#007bff' : 'var(--header-bg)',
                   color: 'white',
                   cursor: hasChanges && instructions.trim() ? 'pointer' : 'not-allowed',
                   fontWeight: 'bold'
@@ -226,7 +229,7 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
               <div style={{
                 marginTop: '10px',
                 fontSize: '12px',
-                color: '#666',
+                color: 'var(--secondary-text-color)',
                 fontStyle: 'italic'
               }}>
                 * Changes will apply to future letter generations

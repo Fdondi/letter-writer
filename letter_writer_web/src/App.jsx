@@ -7,9 +7,12 @@ import { splitIntoParagraphs } from "./utils/split";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
+  const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   return vendors.reduce((acc, v, idx) => {
     const hue = Math.round(idx * step);
-    acc[v] = `hsl(${hue}, 70%, 85%)`;
+    acc[v] = isDarkMode 
+      ? `hsl(${hue}, 40%, 30%)` 
+      : `hsl(${hue}, 70%, 85%)`;
     return acc;
   }, {});
 }
@@ -37,14 +40,25 @@ export default function App() {
   const [phaseEdits, setPhaseEdits] = useState({});
   const [phaseErrors, setPhaseErrors] = useState({});
 
+  // Update colors when system theme changes
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = () => {
+      setVendorColors(generateColors(vendors));
+    };
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, [vendors]);
+
   // Fetch vendors on mount
   useEffect(() => {
     fetch("/api/vendors/")
       .then((res) => res.json())
       .then((data) => {
-        setVendors(data.vendors || []);
-        setSelectedVendors(new Set(data.vendors || []));
-        setVendorColors(generateColors(data.vendors || []));
+        const vendorList = data.vendors || [];
+        setVendors(vendorList);
+        setSelectedVendors(new Set(vendorList));
+        setVendorColors(generateColors(vendorList));
       })
       .catch((e) => setError(String(e)));
   }, []);
@@ -60,6 +74,10 @@ export default function App() {
   const selectAll = (checked) => {
     setSelectedVendors(checked ? new Set(vendors) : new Set());
   };
+
+const retryVendor = (vendor) => {
+  console.warn("Retry vendor not implemented for phased flow yet:", vendor);
+};
 
   const updatePhaseEdit = (vendor, phase, field, value) => {
     setPhaseEdits((prev) => ({
@@ -350,17 +368,17 @@ export default function App() {
   const vendorsList = Array.from(selectedVendors);
 
   return (
-    <div style={{ padding: 20 }}>
+    <div style={{ padding: 20, backgroundColor: 'var(--bg-color)', color: 'var(--text-color)', minHeight: '100vh' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <h1 style={{ margin: 0 }}>Letter Writer</h1>
+        <h1 style={{ margin: 0, color: 'var(--text-color)' }}>Letter Writer</h1>
         <button
           onClick={() => setShowStyleBlade(true)}
           style={{
             padding: '8px 16px',
-            border: '1px solid #ddd',
+            border: '1px solid var(--border-color)',
             borderRadius: '4px',
-            backgroundColor: 'white',
-            color: '#666',
+            backgroundColor: 'var(--button-bg)',
+            color: 'var(--button-text)',
             cursor: 'pointer',
             fontSize: '14px'
           }}
@@ -368,7 +386,7 @@ export default function App() {
           ⚙️ Style Settings
         </button>
       </div>
-      {uiStage === "input" && (
+      {uiStage === "input" ? (
         <>
           <ModelSelector
             vendors={vendors}
@@ -381,10 +399,27 @@ export default function App() {
             placeholder="Company name"
             value={companyName}
             onChange={(e) => setCompanyName(e.target.value)}
-            style={{ width: "100%", marginTop: 10, padding: 8 }}
+            style={{ 
+              width: "100%", 
+              marginTop: 10, 
+              padding: 8,
+              backgroundColor: 'var(--input-bg)',
+              color: 'var(--text-color)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '4px'
+            }}
           />
           <textarea
-            style={{ width: "100%", height: 150, marginTop: 10 }}
+            style={{ 
+              width: "100%", 
+              height: 150, 
+              marginTop: 10,
+              backgroundColor: 'var(--input-bg)',
+              color: 'var(--text-color)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '4px',
+              padding: 8
+            }}
             placeholder="Paste job description here"
             value={jobText}
             onChange={(e) => setJobText(e.target.value)}
@@ -392,20 +427,36 @@ export default function App() {
           <button
             onClick={handleSubmit}
             disabled={loading || !jobText || !companyName || selectedVendors.size === 0}
-            style={{ marginTop: 10 }}
+            style={{ 
+              marginTop: 10,
+              padding: '10px 20px',
+              backgroundColor: loading || !jobText || !companyName || selectedVendors.size === 0 ? 'var(--header-bg)' : '#3b82f6',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: loading || !jobText || !companyName || selectedVendors.size === 0 ? 'not-allowed' : 'pointer'
+            }}
           >
             {loading ? "Starting..." : "Start phased flow"}
           </button>
         </>
-      )}
-
-      {uiStage !== "input" && (
-        <button onClick={resetForm} style={{ marginBottom: 10 }}>
+      ) : (
+        <button 
+          onClick={resetForm} 
+          style={{ 
+            marginBottom: 10,
+            padding: '8px 16px',
+            backgroundColor: 'var(--button-bg)',
+            color: 'var(--button-text)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '4px',
+            cursor: 'pointer'
+          }}
+        >
           ← Back to Input
         </button>
       )}
-
-      {error && <p style={{ color: "red" }}>{error}</p>}
+      {error && <p style={{ color: "var(--error-text)" }}>{error}</p>}
 
       {uiStage === "phases" && (
         <PhaseFlow
@@ -422,6 +473,39 @@ export default function App() {
           onApproveAllDraft={approveAllDrafts}
           onApproveAllRefine={approveAllRefinements}
         />
+      )}
+
+      {Object.keys(failedVendors).length > 0 && (
+        <div style={{ 
+          marginTop: 10, 
+          padding: 10, 
+          background: "var(--warning-bg)", 
+          border: "1px solid var(--warning-border)",
+          color: "var(--text-color)",
+          borderRadius: '4px'
+        }}>
+          <h3 style={{ marginTop: 0 }}>Failed Vendors:</h3>
+          {Object.entries(failedVendors).map(([vendor, errorMsg]) => (
+            <div key={vendor} style={{ marginBottom: 10 }}>
+              <strong style={{ color: 'var(--text-color)' }}>{vendor}:</strong> {errorMsg}
+              <button
+                onClick={() => retryVendor(vendor)}
+                disabled={loadingVendors.has(vendor)}
+                style={{ 
+                  marginLeft: 10,
+                  padding: '4px 8px',
+                  backgroundColor: 'var(--button-bg)',
+                  color: 'var(--button-text)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '4px',
+                  cursor: 'pointer'
+                }}
+              >
+                {loadingVendors.has(vendor) ? "Retrying..." : "Retry"}
+              </button>
+            </div>
+          ))}
+        </div>
       )}
 
       {uiStage === "assembly" && vendorsList.length > 0 && (

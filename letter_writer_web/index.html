@@ -5,9 +5,57 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Letter Writer</title>
     <style>
+      :root {
+        --bg-color: #ffffff;
+        --text-color: #000000;
+        --secondary-text-color: #666666;
+        --border-color: #dddddd;
+        --input-bg: #ffffff;
+        --button-bg: #efefef;
+        --button-text: #000000;
+        --card-bg: #fafafa;
+        --pre-bg: #ffffff;
+        --header-bg: #e0e0e0;
+        --panel-bg: #f9f9f9;
+        --error-bg: #fff5f5;
+        --error-border: #fed7d7;
+        --error-text: red;
+        --warning-bg: #fff3cd;
+        --warning-border: #ffeaa7;
+        --success-bg: #efe;
+        --success-border: #cfc;
+        --success-text: #3c3;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg-color: #1e1e1e;
+          --text-color: #e0e0e0;
+          --secondary-text-color: #aaaaaa;
+          --border-color: #444444;
+          --input-bg: #2d2d2d;
+          --button-bg: #3d3d3d;
+          --button-text: #ffffff;
+          --card-bg: #2d2d2d;
+          --pre-bg: #1e1e1e;
+          --header-bg: #333333;
+          --panel-bg: #252525;
+          --error-bg: #442a2a;
+          --error-border: #633131;
+          --error-text: #ff8080;
+          --warning-bg: #443e2a;
+          --warning-border: #635a31;
+          --success-bg: #1e3a1e;
+          --success-border: #2a5a2a;
+          --success-text: #80ff80;
+        }
+      }
+
       body {
         margin: 0;
         font-family: system-ui, sans-serif;
+        background-color: var(--bg-color);
+        color: var(--text-color);
       }
     </style>
   </head>

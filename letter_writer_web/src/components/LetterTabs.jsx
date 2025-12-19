@@ -1,5 +1,6 @@
 import React, { useState, useRef } from "react";
-import Paragraph, { ItemTypes } from "./Paragraph";
+import Paragraph from "./Paragraph";
+import { ItemTypes } from "../constants";
 import LetterCard from "./LetterCard";
 import { useDrop } from "react-dnd";
 import { HoverProvider } from "../contexts/HoverContext";
@@ -355,21 +356,21 @@ export default function LetterTabs({
         margin: "2px 0",
         textAlign: "center",
         cursor: "pointer",
-        color: "#666",
-        border: "1px dashed #ccc",
+        color: "var(--secondary-text-color)",
+        border: "1px dashed var(--border-color)",
         borderRadius: 4,
-        background: "#f9f9f9",
+        background: "var(--panel-bg)",
         fontSize: "12px",
         transition: "all 0.2s ease",
         ...style
       }}
       onMouseEnter={(e) => {
-        e.target.style.background = "#e0e0e0";
-        e.target.style.borderColor = "#999";
+        e.target.style.background = "var(--header-bg)";
+        e.target.style.borderColor = "var(--secondary-text-color)";
       }}
       onMouseLeave={(e) => {
-        e.target.style.background = "#f9f9f9";
-        e.target.style.borderColor = "#ccc";
+        e.target.style.background = "var(--panel-bg)";
+        e.target.style.borderColor = "var(--border-color)";
       }}
     >
       + Add paragraph
@@ -411,11 +412,13 @@ export default function LetterTabs({
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        height: "100%" // Take full height of parent
+        height: "100%", // Take full height of parent
+        backgroundColor: 'var(--card-bg)',
+        border: '1px solid var(--border-color)'
       }}
     >
       <div style={{
-        background: "#e0e0e0",
+        background: "var(--header-bg)",
         borderRadius: "4px 4px 0 0"
       }}>
         <h4 style={{ 
@@ -423,12 +426,13 @@ export default function LetterTabs({
           padding: "8px 12px",
           display: "flex",
           justifyContent: "space-between",
-          alignItems: "center"
+          alignItems: "center",
+          color: 'var(--text-color)'
         }}>
           <span>
             Final Letter
             {finalParagraphs.length > 0 && (
-              <span style={{ fontSize: "12px", fontWeight: "normal", marginLeft: "8px" }}>
+              <span style={{ fontSize: "12px", fontWeight: "normal", marginLeft: "8px", color: 'var(--secondary-text-color)' }}>
                 ({finalParagraphs.length} paragraphs)
               </span>
             )}
@@ -440,7 +444,7 @@ export default function LetterTabs({
             style={{
               padding: "4px 8px",
               fontSize: "12px",
-              background: finalParagraphs.length === 0 ? "#ccc" : "#3b82f6",
+              background: finalParagraphs.length === 0 ? "var(--border-color)" : "#3b82f6",
               color: "white",
               border: "none",
               borderRadius: 4,
@@ -464,7 +468,7 @@ export default function LetterTabs({
           overflowY: "auto",
           padding: "8px",
           minHeight: 0, // Allow flex item to shrink
-          background: isContentOver ? "#f0f8ff" : "transparent",
+          background: isContentOver ? "var(--header-bg)" : "transparent",
           border: isContentOver ? "2px dashed #007acc" : "2px solid transparent",
           borderRadius: "4px",
           transition: "all 0.2s ease"
@@ -476,11 +480,11 @@ export default function LetterTabs({
           <div style={{
             padding: "20px",
             textAlign: "center",
-            color: "#666",
+            color: "var(--secondary-text-color)",
             fontStyle: "italic",
-            border: "2px dashed #ddd",
+            border: "2px dashed var(--border-color)",
             borderRadius: 4,
-            background: "#f9f9f9",
+            background: "var(--panel-bg)",
             margin: "4px 0"
           }}>
             Drag paragraphs here to build your final letter
@@ -495,7 +499,7 @@ export default function LetterTabs({
             
             // Ensure we have a safe vendor value
             const paragraphVendor = p.vendor;
-            const paragraphColor = paragraphVendor ? (vendorColors[paragraphVendor] || "#eee") : "#ffffff";
+            const paragraphColor = paragraphVendor ? (vendorColors[paragraphVendor] || "var(--header-bg)") : "var(--bg-color)";
             
             return (
               <div key={p.id || `paragraph-${idx}`}>
@@ -535,10 +539,10 @@ export default function LetterTabs({
           minHeight: "50px",
           padding: "12px",
           textAlign: "center",
-          color: isBottomOver ? "#007acc" : "#999",
-          border: isBottomOver ? "2px dashed #007acc" : "2px dashed #ddd",
+          color: isBottomOver ? "#007acc" : "var(--secondary-text-color)",
+          border: isBottomOver ? "2px dashed #007acc" : "2px dashed var(--border-color)",
           borderRadius: "0 0 4px 4px",
-          background: isBottomOver ? "#e8f4f8" : "#f9f9f9",
+          background: isBottomOver ? "var(--header-bg)" : "var(--panel-bg)",
           fontSize: "12px",
           transition: "all 0.2s ease",
           flexShrink: 0, // Don't allow this to shrink
@@ -546,16 +550,16 @@ export default function LetterTabs({
         }}
         onMouseEnter={(e) => {
           if (!isBottomOver) {
-            e.target.style.background = "#e8f4f8";
+            e.target.style.background = "var(--header-bg)";
             e.target.style.borderColor = "#007acc";
             e.target.style.color = "#007acc";
           }
         }}
         onMouseLeave={(e) => {
           if (!isBottomOver) {
-            e.target.style.background = "#f9f9f9";
-            e.target.style.borderColor = "#ddd";
-            e.target.style.color = "#999";
+            e.target.style.background = "var(--panel-bg)";
+            e.target.style.borderColor = "var(--border-color)";
+            e.target.style.color = "var(--secondary-text-color)";
           }
         }}
         onClick={() => addParagraphAtPosition({ text: "", vendor: null }, finalParagraphs.length)}
@@ -571,7 +575,8 @@ export default function LetterTabs({
         height: "calc(100vh - 200px)", 
         marginTop: 20,
         display: "flex",
-        flexDirection: "column"
+        flexDirection: "column",
+        color: 'var(--text-color)'
       }}>
         <div style={{ marginBottom: 10, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
           <span style={{ fontWeight: 600, fontSize: 13 }}>Languages:</span>
@@ -580,9 +585,9 @@ export default function LetterTabs({
             style={{
               padding: "4px 8px",
               fontSize: 12,
-              background: "#e0e0e0",
-              color: "#333",
-              border: "none",
+              background: "var(--header-bg)",
+              color: "var(--text-color)",
+              border: "1px solid var(--border-color)",
               borderRadius: 4,
               cursor: "pointer",
               marginRight: 8,
@@ -590,14 +595,14 @@ export default function LetterTabs({
           >
             {languageLogic}
           </button>
-          <div style={{ display: "flex", alignItems: "center", border: "1px solid #ccc", borderRadius: 4, padding: "2px 6px", flexWrap: "wrap", gap: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", border: "1px solid var(--border-color)", borderRadius: 4, padding: "2px 6px", flexWrap: "wrap", gap: 4, background: 'var(--input-bg)' }}>
             {languageOptions
               .filter((l) => l.enabled)
               .map((lang) => (
                 <div
                   key={lang.code}
                   style={{
-                    background: "#e0e0e0",
+                    background: "var(--header-bg)",
                     padding: "2px 6px",
                     borderRadius: 3,
                     fontSize: 12,
@@ -612,7 +617,7 @@ export default function LetterTabs({
                     style={{
                       background: "none",
                       border: "none",
-                      color: "#666",
+                      color: "var(--secondary-text-color)",
                       cursor: "pointer",
                       padding: 0,
                       fontSize: 12,
@@ -639,6 +644,8 @@ export default function LetterTabs({
                 outline: "none",
                 minWidth: 120,
                 flexGrow: 1,
+                background: 'transparent',
+                color: 'var(--text-color)'
               }}
             />
             <button
@@ -666,7 +673,11 @@ export default function LetterTabs({
             style={{ 
               marginBottom: 10,
               maxHeight: "100px",
-              overflowY: "auto"
+              overflowY: "auto",
+              background: 'var(--input-bg)',
+              color: 'var(--text-color)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '4px'
             }}
           >
             <option value="">Restore collapsed...</option>
@@ -685,11 +696,11 @@ export default function LetterTabs({
           minHeight: 0
         }}>
           {visibleVendors.map((v) => (
-            <div key={v} style={{ width: columnWidth, overflowY: "auto", position: "relative" }}>
+            <div key={v} style={{ width: columnWidth, overflowY: "auto", position: "relative", background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
               <h4 style={{ 
                 textTransform: "capitalize", 
                 margin: 0, 
-                background: vendorColors?.[v] || "#f0f0f0",
+                background: vendorColors?.[v] || "var(--header-bg)",
                 padding: "8px 12px",
                 borderRadius: "4px 4px 0 0",
                 position: "sticky",
@@ -697,12 +708,13 @@ export default function LetterTabs({
                 zIndex: 10,
                 display: "flex",
                 justifyContent: "space-between",
-                alignItems: "center"
+                alignItems: "center",
+                color: 'var(--text-color)'
               }}>
                 <span>
                   {v}
                   {vendorCosts && vendorCosts[v] !== undefined && (
-                    <span style={{ fontSize: "0.8em", marginLeft: "8px", fontWeight: "normal", color: "#555" }}>
+                    <span style={{ fontSize: "0.8em", marginLeft: "8px", fontWeight: "normal", color: "var(--secondary-text-color)" }}>
                       (${vendorCosts[v].toFixed(4)})
                     </span>
                   )}
@@ -711,7 +723,7 @@ export default function LetterTabs({
                   <span style={{ marginLeft: "8px", fontSize: "12px" }}>Loading...</span>
                 )}
                 {failedVendors[v] && (
-                  <span style={{ marginLeft: "8px", fontSize: "12px", color: "red" }}>Failed</span>
+                  <span style={{ marginLeft: "8px", fontSize: "12px", color: "var(--error-text)" }}>Failed</span>
                 )}
               </h4>
               
@@ -728,10 +740,10 @@ export default function LetterTabs({
                 ) : failedVendors[v] ? (
                   <div style={{
                     padding: "16px",
-                    color: "red",
+                    color: "var(--error-text)",
                     fontSize: "12px",
-                    background: "#fff5f5",
-                    border: "1px solid #fed7d7",
+                    background: "var(--error-bg)",
+                    border: "1px solid var(--error-border)",
                     borderRadius: 4
                   }}>
                     <div style={{ marginBottom: "8px" }}>{failedVendors[v]}</div>
@@ -740,7 +752,7 @@ export default function LetterTabs({
                       style={{
                         padding: "4px 8px",
                         fontSize: "12px",
-                        background: "#e53e3e",
+                        background: "var(--error-text)",
                         color: "white",
                         border: "none",
                         borderRadius: 2,
