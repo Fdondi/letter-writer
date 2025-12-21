@@ -6,7 +6,8 @@ WORKDIR /app
 COPY letter_writer_web/package*.json ./
 
 # Install dependencies
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
 
 # Copy application code
 COPY letter_writer_web/ ./
