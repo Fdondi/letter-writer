@@ -107,14 +107,17 @@ class GeminiClient(BaseClient):
         model_name = self.get_model_for_size(model_size)
         typer.echo(f"[INFO] using Gemini model {model_name}" + (" with search" if search else ""))
 
-        response = self.client.models.generate_content(
-            model=model_name,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                tools=tools,
-            ),
-            contents=user_messages,
-        )
+        try:
+            response = self.client.models.generate_content(
+                model=model_name,
+                config=types.GenerateContentConfig(
+                    system_instruction=system,
+                    tools=tools,
+                ),
+                contents=user_messages,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Gemini generate_content failed: {exc}") from exc
 
         # Track cost if usage metadata is available
         usage = getattr(response, "usage_metadata", None)
