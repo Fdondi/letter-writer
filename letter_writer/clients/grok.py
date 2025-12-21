@@ -14,16 +14,9 @@ class GrokClient(BaseClient):
         
         # Use OpenAI client with xAI's endpoint
         self.client = xai_sdk.Client(api_key=api_key)
-        self.sizes = {
-            ModelSize.TINY: "grok-4-1-fast-non-reasoning",
-            ModelSize.BASE: "grok-4-1-fast-reasoning", 
-            ModelSize.MEDIUM: "grok-4-1-fast-reasoning",
-            ModelSize.LARGE: "grok-4-latest",
-            ModelSize.XLARGE: "grok-4-latest",
-        }
 
     def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
-        model = self.sizes[model_size]
+        model = self.get_model_for_size(model_size)
         typer.echo(f"[INFO] using Grok model {model}")
         chat = self.client.chat.create(
             model=model,

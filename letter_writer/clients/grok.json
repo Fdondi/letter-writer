@@ -11,6 +11,13 @@
   "defaults": {
     "search": 10.0
   },
+  "sizes": {
+    "tiny": "grok-4-1-fast-non-reasoning",
+    "base": "grok-4-1-fast-reasoning",
+    "medium": "grok-4-1-fast-reasoning",
+    "large": "grok-4-latest",
+    "xlarge": "grok-4-latest"
+  },
   "models": {
     "grok-4-1-fast-non-reasoning": {
       "input": 0.20,

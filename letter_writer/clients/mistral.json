@@ -11,6 +11,13 @@
   "defaults": {
     "search": 30.0
   },
+  "sizes": {
+    "tiny": "open-mixtral-8x7b",
+    "base": "open-mixtral-8x7b",
+    "medium": "mistral-medium-latest",
+    "large": "mistral-large-latest",
+    "xlarge": "mistral-large-latest"
+  },
   "models": {
     "open-mixtral-8x7b": {
       "input": 0.70,

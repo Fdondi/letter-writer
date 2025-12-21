@@ -19,15 +19,6 @@ class MistralClient(BaseClient):
         # Official SDK – see https://docs.mistral.ai/getting-started/clients/
         self.client = Mistral(api_key=api_key)
 
-        # Map logical sizes to actual model names – tweak as needed.
-        self.sizes = {
-            ModelSize.TINY: "open-mixtral-8x7b",
-            ModelSize.BASE: "open-mixtral-8x7b",
-            ModelSize.MEDIUM: "mistral-medium-latest",
-            ModelSize.LARGE: "mistral-large-latest",
-            ModelSize.XLARGE: "mistral-large-latest",
-        }
-
     def _format_messages(self, system: str, user_messages: List[str]) -> List[Dict]:
         """Return messages in the schema expected by the SDK."""
         return (
@@ -42,7 +33,7 @@ class MistralClient(BaseClient):
         user_messages: List[str],
         search: bool = False,
     ) -> str:
-        model = self.sizes[model_size]
+        model = self.get_model_for_size(model_size)
         messages = self._format_messages(system, user_messages)
 
         # Configure tools if search is requested
