@@ -2,7 +2,12 @@ import React, { useState, useEffect } from "react";
 import ModelSelector from "./components/ModelSelector";
 import LetterTabs from "./components/LetterTabs";
 import StyleInstructionsBlade from "./components/StyleInstructionsBlade";
+<<<<<<< HEAD
 import PhaseFlow from "./components/PhaseFlow";
+=======
+import DocumentsPage from "./components/DocumentsPage";
+import { v4 as uuidv4 } from "uuid";
+>>>>>>> 75db2a4 (move documents to mongodb and add a page to view them)
 import { splitIntoParagraphs } from "./utils/split";
 
 function generateColors(vendors) {
@@ -24,6 +29,7 @@ export default function App() {
   const [finalParagraphs, setFinalParagraphs] = useState([]);
   const [jobText, setJobText] = useState("");
   const [companyName, setCompanyName] = useState("");
+  const [documentId, setDocumentId] = useState(null);
   const [selectedVendors, setSelectedVendors] = useState(new Set());
   const [letters, setLetters] = useState({}); // vendor -> text
   const [vendorCosts, setVendorCosts] = useState({}); // vendor -> cost
@@ -33,12 +39,17 @@ export default function App() {
   const [error, setError] = useState(null);
   const [showInput, setShowInput] = useState(true);
   const [showStyleBlade, setShowStyleBlade] = useState(false);
+<<<<<<< HEAD
   const [uiStage, setUiStage] = useState("input"); // input | phases | assembly
   const [phaseSessionId, setPhaseSessionId] = useState(null);
   const [phaseSessions, setPhaseSessions] = useState({}); // vendor -> session_id
   const [phaseState, setPhaseState] = useState({});
   const [phaseEdits, setPhaseEdits] = useState({});
   const [phaseErrors, setPhaseErrors] = useState({});
+=======
+  const [savingFinal, setSavingFinal] = useState(false);
+  const [activeTab, setActiveTab] = useState("compose"); // "compose" | "documents"
+>>>>>>> 75db2a4 (move documents to mongodb and add a page to view them)
 
   // Update colors when system theme changes
   useEffect(() => {
@@ -75,9 +86,64 @@ export default function App() {
     setSelectedVendors(checked ? new Set(vendors) : new Set());
   };
 
+<<<<<<< HEAD
 const retryVendor = (vendor) => {
   console.warn("Retry vendor not implemented for phased flow yet:", vendor);
 };
+=======
+  const persistFinalLetter = async (finalText) => {
+    if (!documentId || !finalText) return;
+    try {
+      setSavingFinal(true);
+      const res = await fetch(`/api/documents/${documentId}/`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          letter_text: finalText,
+          company_name: companyName,
+          job_text: jobText,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+    } catch (e) {
+      setError(`Failed to save letter: ${e.message || e}`);
+    } finally {
+      setSavingFinal(false);
+    }
+  };
+
+  const retryVendor = async (vendor) => {
+    setLoadingVendors(prev => new Set(prev).add(vendor));
+    setFailedVendors(prev => {
+      const next = { ...prev };
+      delete next[vendor];
+      return next;
+    });
+    try {
+      const res = await fetch("/api/process-job/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          job_text: jobText, 
+          company_name: companyName,
+          model_vendor: vendor 
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      if (!documentId && data.document?.id) {
+        setDocumentId(data.document.id);
+      }
+      const letterData = data.letters[vendor] || Object.values(data.letters)[0];
+      const letterText = typeof letterData === 'object' ? letterData.text : letterData;
+      const cost = typeof letterData === 'object' ? letterData.cost : 0.0;
+      
+      // Update letters immediately
+      setLetters(prev => ({
+        ...prev,
+        [vendor]: letterText
+      }));
+>>>>>>> 75db2a4 (move documents to mongodb and add a page to view them)
 
   const updatePhaseEdit = (vendor, phase, field, value) => {
     setPhaseEdits((prev) => ({
@@ -99,10 +165,17 @@ const retryVendor = (vendor) => {
     setVendorCosts({});
     setFailedVendors({});
     setVendorParagraphs({});
+<<<<<<< HEAD
     setFinalParagraphs([]);
     setLoadingVendors(new Set());
     const vendorList = Array.from(selectedVendors);
 
+=======
+    setLoadingVendors(new Set(selectedVendors));
+    setShowInput(false);
+    setDocumentId(null);
+    
+>>>>>>> 75db2a4 (move documents to mongodb and add a page to view them)
     try {
       const results = await Promise.all(
         vendorList.map(async (vendor) => {
@@ -120,9 +193,24 @@ const retryVendor = (vendor) => {
             throw new Error(detail || `Failed to start phased flow for ${vendor}`);
           }
           const data = await res.json();
+<<<<<<< HEAD
           return { vendor, data };
         })
       );
+=======
+          if (!documentId && data.document?.id) {
+            setDocumentId(data.document.id);
+          }
+          const letterData = data.letters[vendor] || Object.values(data.letters)[0];
+          const letterText = typeof letterData === 'object' ? letterData.text : letterData;
+          const cost = typeof letterData === 'object' ? letterData.cost : 0.0;
+          
+          // Update letters immediately as each vendor completes
+          setLetters(prev => ({
+            ...prev,
+            [vendor]: letterText
+          }));
+>>>>>>> 75db2a4 (move documents to mongodb and add a page to view them)
 
       const nextState = {};
       const nextEdits = {};
@@ -361,6 +449,7 @@ const retryVendor = (vendor) => {
     setVendorParagraphs({});
     setFailedVendors({});
     setError(null);
+<<<<<<< HEAD
     setLoadingVendors(new Set());
     setFinalParagraphs([]);
   };
@@ -387,6 +476,14 @@ const retryVendor = (vendor) => {
         </button>
       </div>
       {uiStage === "input" ? (
+=======
+    setDocumentId(null);
+  };
+
+  const renderCompose = () => (
+    <>
+      {showInput ? (
+>>>>>>> 75db2a4 (move documents to mongodb and add a page to view them)
         <>
           <ModelSelector
             vendors={vendors}
@@ -521,8 +618,69 @@ const retryVendor = (vendor) => {
           loadingVendors={loadingVendors}
           onRetry={() => {}}
           onAddParagraph={onAddParagraph}
+          onCopyFinal={persistFinalLetter}
+          savingFinal={savingFinal}
         />
       )}
+
+      <StyleInstructionsBlade
+        isOpen={showStyleBlade}
+        onClose={() => setShowStyleBlade(false)}
+      />
+    </>
+  );
+
+  return (
+    <div style={{ padding: 20, backgroundColor: 'var(--bg-color)', color: 'var(--text-color)', minHeight: '100vh' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <h1 style={{ margin: 0, color: 'var(--text-color)' }}>Letter Writer</h1>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={() => setActiveTab("compose")}
+            style={{
+              padding: '8px 12px',
+              border: '1px solid var(--border-color)',
+              borderRadius: '4px',
+              backgroundColor: activeTab === "compose" ? '#3b82f6' : 'var(--button-bg)',
+              color: activeTab === "compose" ? 'white' : 'var(--button-text)',
+              cursor: 'pointer',
+              fontSize: '14px'
+            }}
+          >
+            Compose
+          </button>
+          <button
+            onClick={() => setActiveTab("documents")}
+            style={{
+              padding: '8px 12px',
+              border: '1px solid var(--border-color)',
+              borderRadius: '4px',
+              backgroundColor: activeTab === "documents" ? '#3b82f6' : 'var(--button-bg)',
+              color: activeTab === "documents" ? 'white' : 'var(--button-text)',
+              cursor: 'pointer',
+              fontSize: '14px'
+            }}
+          >
+            Documents
+          </button>
+          <button
+            onClick={() => setShowStyleBlade(true)}
+            style={{
+              padding: '8px 12px',
+              border: '1px solid var(--border-color)',
+              borderRadius: '4px',
+              backgroundColor: 'var(--button-bg)',
+              color: 'var(--button-text)',
+              cursor: 'pointer',
+              fontSize: '14px'
+            }}
+          >
+            ⚙️ Style
+          </button>
+        </div>
+      </div>
+
+      {activeTab === "compose" ? renderCompose() : <DocumentsPage />}
 
       <StyleInstructionsBlade
         isOpen={showStyleBlade}

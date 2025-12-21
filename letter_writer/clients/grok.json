@@ -1,15 +1,6 @@
 {
-<<<<<<< HEAD
-  "defaults": { "search": 5.00 },
-  "models": {
-    "grok-4-1-fast-non-reasoning": { "input": 0.20, "output": 0.50 },
-    "grok-4-1-fast-reasoning": { "input": 0.20, "output": 0.50 },
-    "grok-4-latest": { "input": 3.00, "output": 15.00 }
-  }
-}
-=======
   "defaults": {
-    "search": 10.0
+    "search": 5.0
   },
   "sizes": {
     "tiny": "grok-4-1-fast-non-reasoning",
@@ -34,4 +25,3 @@
   }
 }
 
->>>>>>> 0f0dd6a (add prices)

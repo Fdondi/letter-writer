@@ -17,7 +17,9 @@ export default function LetterTabs({
   loadingVendors, 
   onRetry, 
   vendorColors, 
-  onAddParagraph 
+  onAddParagraph,
+  onCopyFinal,
+  savingFinal = false,
 }) {
   const [collapsed, setCollapsed] = useState([]);
   const [finalLetter, setFinalLetter] = useState("");
@@ -280,22 +282,25 @@ export default function LetterTabs({
     });
   };
 
-  const copyFinalText = () => {
+  const copyFinalText = async () => {
     const fullText = finalParagraphs.map(p => p.text).join('\n\n');
-    navigator.clipboard.writeText(fullText).then(() => {
-      // Simple visual feedback
+    try {
+      await navigator.clipboard.writeText(fullText);
+      if (onCopyFinal) {
+        onCopyFinal(fullText);
+      }
       const button = document.getElementById('copy-final-text-btn');
       const originalText = button.textContent;
-      button.textContent = '✓ Copied!';
+      button.textContent = '✓ Copied & Saved';
       button.style.background = '#10b981';
       setTimeout(() => {
         button.textContent = originalText;
         button.style.background = '#3b82f6';
       }, 2000);
-    }).catch(err => {
+    } catch (err) {
       console.error('Failed to copy text:', err);
       alert('Failed to copy text to clipboard');
-    });
+    }
   };
 
   // Drop zone for the scrollable content area
@@ -440,19 +445,19 @@ export default function LetterTabs({
           <button
             id="copy-final-text-btn"
             onClick={copyFinalText}
-            disabled={finalParagraphs.length === 0}
+            disabled={finalParagraphs.length === 0 || savingFinal}
             style={{
               padding: "4px 8px",
               fontSize: "12px",
-              background: finalParagraphs.length === 0 ? "var(--border-color)" : "#3b82f6",
+              background: finalParagraphs.length === 0 || savingFinal ? "var(--border-color)" : "#3b82f6",
               color: "white",
               border: "none",
               borderRadius: 4,
-              cursor: finalParagraphs.length === 0 ? "not-allowed" : "pointer",
+              cursor: finalParagraphs.length === 0 || savingFinal ? "not-allowed" : "pointer",
               transition: "background 0.2s ease"
             }}
           >
-            📋 Copy All
+            {savingFinal ? "Saving..." : "📋 Copy & Save"}
           </button>
         </h4>
       </div>

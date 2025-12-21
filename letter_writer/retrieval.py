@@ -1,5 +1,5 @@
 import json
-from typing import List
+from typing import List, Dict
 from pathlib import Path
 from qdrant_client import QdrantClient
 from qdrant_client.models import ScoredPoint
@@ -14,7 +14,8 @@ from .vector_store import embed
 import pandas as pd
 
 from pydantic import BaseModel, ValidationError
-from typing import List
+
+from .mongo_store import documents_by_ids, get_db
 
 class ScoreRow(BaseModel):
     company_name: str
@@ -36,15 +37,52 @@ def retrieve_similar_job_offers(job_text: str, qdrant_client: QdrantClient, open
     )
     return list(response.points or [])
 
-def select_top_documents(search_result: List[ScoredPoint], job_text: str, ai_client: BaseClient, trace_dir: Path) -> List[dict]:
+def _hydrate_documents(search_result: List[ScoredPoint]) -> List[dict]:
+    """Fetch documents from Mongo if payload only contains ids. Fallback to legacy payloads."""
+    mongo_docs: List[dict] = []
+    legacy_docs: List[dict] = []
 
-    retrieved_docs = {r.payload["company_name"]: r.payload for r in search_result}
+    doc_ids = []
+    for point in search_result:
+        payload = point.payload or {}
+        if payload.get("document_id"):
+            doc_ids.append(str(payload["document_id"]))
+        elif payload.get("company_name") and payload.get("letter_text"):
+            # Legacy payload already contains needed fields
+            legacy_docs.append(payload)
+
+    if doc_ids:
+        db = get_db()
+        mongo_docs = documents_by_ids(db, doc_ids)
+
+    return legacy_docs + mongo_docs
+
+
+def select_top_documents(
+    search_result: List[ScoredPoint],
+    job_text: str,
+    ai_client: BaseClient,
+    trace_dir: Path,
+) -> List[dict]:
+    documents = _hydrate_documents(search_result)
+    if not documents:
+        return []
+
+    retrieved_docs: Dict[str, dict] = {}
+    for doc in documents:
+        company = doc.get("company_name")
+        if company:
+            retrieved_docs[company] = doc
+
     top_docs = rerank_documents(job_text, retrieved_docs, ai_client, trace_dir)
-    
-    return [{
-        "score": score,
-        **retrieved_docs[name],
-    } for name, score in top_docs.items()]
+
+    return [
+        {
+            "score": score,
+            **retrieved_docs[name],
+        }
+        for name, score in top_docs.items()
+    ]
 
 def rerank_documents(job_text: str, docs: dict, ai_client: BaseClient, trace_dir: Path) -> dict:
     """Ask the model to score docs and return top 3 as dicts with company_name and score."""

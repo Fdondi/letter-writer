@@ -1,12 +1,4 @@
 {
-<<<<<<< HEAD
-  "defaults": { "search": 0.0 },
-  "models": {
-    "deepseek-chat": { "input": 0.28, "output": 0.42 },
-    "deepseek-reasoner": { "input": 0.28, "output": 0.42 }
-  }
-}
-=======
   "defaults": {
     "search": 0.0
   },
@@ -29,4 +21,3 @@
   }
 }
 
->>>>>>> 0f0dd6a (add prices)
