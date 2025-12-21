@@ -16,7 +16,22 @@ from letter_writer.phased_service import (
     advance_to_refinement,
     start_background_phase,
 )
+from letter_writer.mongo_store import (
+    append_negatives,
+    get_db,
+    get_document,
+    list_documents,
+    upsert_document,
+)
+from letter_writer.vector_store import (
+    embed,
+    ensure_collection,
+    get_qdrant_client,
+    upsert_documents,
+)
 from letter_writer.config import env_default
+from qdrant_client.http import models as qdrant_models
+from openai import OpenAI
 import traceback
 
 
@@ -154,7 +169,45 @@ def process_job_view(request: HttpRequest):
     except Exception as exc:  # noqa: BLE001
         return JsonResponse({"detail": str(exc)}, status=500)
 
-    return JsonResponse({"status": "ok", "letters": letters})
+    # Persist generation: store job_text and AI letters; keep first letter as primary.
+    try:
+        db = get_db()
+        job_text = data.get("job_text")
+        company_name = data.get("company_name")
+        ai_letters = [
+            {"vendor": vendor, "text": payload.get("text", ""), "cost": payload.get("cost")}
+            for vendor, payload in letters.items()
+        ]
+        primary_letter = next((l["text"] for l in ai_letters if l.get("text")), "")
+        document = upsert_document(
+            db,
+            {
+                "company_name": company_name,
+                "job_text": job_text,
+                "ai_letters": ai_letters,
+                "letter_text": primary_letter,
+            },
+            allow_update=False,
+        )
+
+        # Upsert job embedding to Qdrant
+        qdrant_host = env_default("QDRANT_HOST", "localhost")
+        qdrant_port = int(env_default("QDRANT_PORT", "6333"))
+        qdrant_client = get_qdrant_client(qdrant_host, qdrant_port)
+        ensure_collection(qdrant_client)
+        openai_client = OpenAI()
+        vector = embed(job_text, openai_client) if job_text else None
+        if vector:
+            point = qdrant_models.PointStruct(
+                id=document["id"],
+                vector=vector,
+                payload={"document_id": document["id"], "company_name": company_name},
+            )
+            upsert_documents(qdrant_client, [point])
+    except Exception as exc:  # noqa: BLE001
+        return JsonResponse({"detail": f"letters generated but failed to save: {exc}"}, status=500)
+
+    return JsonResponse({"status": "ok", "letters": letters, "document": document})
 
 
 @csrf_exempt
@@ -396,3 +449,140 @@ def translate_view(request: HttpRequest):
         return JsonResponse({"detail": str(exc)}, status=500)
 
     return JsonResponse({"translations": translations})
+
+
+# ---------------------------------------------------------------------------
+# Documents (Mongo + Qdrant)
+# ---------------------------------------------------------------------------
+
+
+def _json_error(detail: str, status: int = 400):
+    return JsonResponse({"detail": detail}, status=status)
+
+
+def _require_json_body(request: HttpRequest) -> Dict[str, Any] | None:
+    try:
+        return json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return None
+
+
+@csrf_exempt
+def documents_view(request: HttpRequest):
+    db = get_db()
+
+    if request.method == "GET":
+        params = request.GET
+        docs = list_documents(
+            db,
+            company_name=params.get("company_name"),
+            role=params.get("role"),
+            status=params.get("status"),
+            vendor=params.get("vendor"),
+            model=params.get("model"),
+            tags=params.getlist("tags") if hasattr(params, "getlist") else None,
+            limit=int(params.get("limit", 50)),
+            skip=int(params.get("skip", 0)),
+        )
+        return JsonResponse({"documents": docs})
+
+    if request.method != "POST":
+        return _json_error("Method not allowed", status=405)
+
+    data = _require_json_body(request)
+    if data is None:
+        return _json_error("Invalid JSON")
+
+    company_name = data.get("company_name")
+    job_text = data.get("job_text")
+    if not company_name or not job_text:
+        return _json_error("company_name and job_text are required")
+
+    # Persist document
+    document = upsert_document(db, data, allow_update=False)
+
+    # Upsert to Qdrant using document id and minimal payload
+    qdrant_host = env_default("QDRANT_HOST", "localhost")
+    qdrant_port = int(env_default("QDRANT_PORT", "6333"))
+    qdrant_client = get_qdrant_client(qdrant_host, qdrant_port)
+    ensure_collection(qdrant_client)
+
+    openai_client = OpenAI()
+    vector = embed(job_text, openai_client)
+    point = qdrant_models.PointStruct(
+        id=document["id"],
+        vector=vector,
+        payload={"document_id": document["id"], "company_name": company_name},
+    )
+    upsert_documents(qdrant_client, [point])
+
+    return JsonResponse({"document": document}, status=201)
+
+
+@csrf_exempt
+def document_detail_view(request: HttpRequest, document_id: str):
+    db = get_db()
+    existing = get_document(db, document_id)
+    if request.method == "GET":
+        if not existing:
+            return _json_error("Not found", status=404)
+        return JsonResponse({"document": existing})
+
+    if request.method != "PUT":
+        return _json_error("Method not allowed", status=405)
+
+    data = _require_json_body(request)
+    if data is None:
+        return _json_error("Invalid JSON")
+
+    if existing is None:
+        return _json_error("Not found", status=404)
+
+    data["id"] = document_id
+    updated = upsert_document(db, data, allow_update=True)
+    return JsonResponse({"document": updated})
+
+
+@csrf_exempt
+def document_negatives_view(request: HttpRequest, document_id: str):
+    if request.method != "POST":
+        return _json_error("Method not allowed", status=405)
+
+    data = _require_json_body(request)
+    if data is None:
+        return _json_error("Invalid JSON")
+    negatives = data.get("negatives") or []
+
+    db = get_db()
+    updated = append_negatives(db, document_id, negatives)
+    if updated is None:
+        return _json_error("Not found", status=404)
+    return JsonResponse({"document": updated})
+
+
+@csrf_exempt
+def document_reembed_view(request: HttpRequest, document_id: str):
+    if request.method != "POST":
+        return _json_error("Method not allowed", status=405)
+
+    db = get_db()
+    doc = get_document(db, document_id)
+    if not doc:
+        return _json_error("Not found", status=404)
+    if not doc.get("job_text"):
+        return _json_error("Document is missing job_text", status=400)
+
+    qdrant_host = env_default("QDRANT_HOST", "localhost")
+    qdrant_port = int(env_default("QDRANT_PORT", "6333"))
+    qdrant_client = get_qdrant_client(qdrant_host, qdrant_port)
+    ensure_collection(qdrant_client)
+
+    openai_client = OpenAI()
+    vector = embed(doc["job_text"], openai_client)
+    point = qdrant_models.PointStruct(
+        id=document_id,
+        vector=vector,
+        payload={"document_id": document_id, "company_name": doc.get("company_name")},
+    )
+    upsert_documents(qdrant_client, [point])
+    return JsonResponse({"status": "ok"})

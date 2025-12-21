@@ -19,6 +19,15 @@ services:
     #   timeout: 10s
     #   retries: 3
 
+  mongo:
+    image: mongo:7
+    container_name: letter-writer-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - letter-writer_mongo_data:/data/db
+
   backend:
     build:
       context: .
@@ -41,6 +50,9 @@ services:
       # Connect to Qdrant service in docker-compose network
       - QDRANT_HOST=${QDRANT_HOST:-qdrant}
       - QDRANT_PORT=${QDRANT_PORT:-6333}
+      # Mongo connection
+      - MONGO_URI=${MONGO_URI:-mongodb://mongo:27017}
+      - MONGO_DB=${MONGO_DB:-letter_writer}
       # Override CV_PATH for Docker - uses path relative to /app (project root)
       # This overrides the CV_PATH from .env file, so local .env can keep Windows paths
       # The CV directory is mounted at /app/cv-external
@@ -49,6 +61,8 @@ services:
       - .env
     depends_on:
       qdrant:
+        condition: service_started
+      mongo:
         condition: service_started
     command: python letter_writer_server/manage.py runserver 0.0.0.0:8000
 
@@ -72,4 +86,5 @@ services:
 volumes:
   # Managed volume for Qdrant storage
   letter-writer_qdrant_storage:
+  letter-writer_mongo_data:
 
