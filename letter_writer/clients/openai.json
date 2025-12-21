@@ -14,6 +14,13 @@
   "defaults": {
     "search": 10.0
   },
+  "sizes": {
+    "tiny": "gpt-5-nano",
+    "base": "gpt-5-mini",
+    "medium": "gpt-5.1",
+    "large": "gpt-5.2",
+    "xlarge": "gpt-5.2"
+  },
   "models": {
     "gpt-5-nano": {
       "input": 0.05,

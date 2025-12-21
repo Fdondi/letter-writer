@@ -9,6 +9,13 @@
   "defaults": {
     "search": 10.00
   },
+  "sizes": {
+    "tiny": "claude-haiku-4-5",
+    "base": "claude-haiku-4-5",
+    "medium": "claude-sonnet-4-5",
+    "large": "claude-sonnet-4-5",
+    "xlarge": "claude-opus-4-5"
+  },
   "models": {
     "claude-haiku-4-5": {
       "input": 1.00,

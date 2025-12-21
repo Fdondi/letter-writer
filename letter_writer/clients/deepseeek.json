@@ -10,6 +10,13 @@
   "defaults": {
     "search": 0.0
   },
+  "sizes": {
+    "tiny": "deepseek-chat",
+    "base": "deepseek-chat",
+    "medium": "deepseek-reasoner",
+    "large": "deepseek-reasoner",
+    "xlarge": "deepseek-reasoner"
+  },
   "models": {
     "deepseek-chat": {
       "input": 0.28,

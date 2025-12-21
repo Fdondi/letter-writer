@@ -7,20 +7,13 @@ class ClaudeClient(BaseClient):
     def __init__(self):
         super().__init__()
         self.client = Anthropic()
-        self.sizes = {
-            ModelSize.TINY: "claude-haiku-4-5",
-            ModelSize.BASE: "claude-haiku-4-5",
-            ModelSize.MEDIUM: "claude-sonnet-4-5",
-            ModelSize.LARGE: "claude-sonnet-4-5",
-            ModelSize.XLARGE: "claude-opus-4-5",
-        }
 
     def _format_messages(self, user_messages: List[str]) -> List[Dict]:
         return [{"role": "user", "content": [{"type": "text", "text": message}]} for message in user_messages]
 
     def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
         messages = self._format_messages(user_messages)
-        model = self.sizes[model_size]
+        model = self.get_model_for_size(model_size)
         typer.echo(f"[INFO] using Anthropic model {model}" + (" with search" if search else ""))
         tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}] if search else []
         response = self.client.messages.create(

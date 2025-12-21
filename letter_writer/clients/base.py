@@ -26,23 +26,45 @@ class BaseClient:
     def __init__(self):
         self.total_cost = 0.0
         self._costs_cache: dict | None = None
+        self._last_mtime: float = 0.0
 
     def _load_cost_config(self) -> dict:
-        """Load `*.json` config that sits next to the concrete client module."""
-        if self._costs_cache is not None:
-            return self._costs_cache
-
+        """Load `*.json` config and hot-reload if the file changed on disk."""
         try:
             module_path = sys.modules[self.__module__].__file__
+            if not module_path:
+                return {}
             config_path = Path(module_path).with_suffix(".json")
-            if config_path.exists():
-                self._costs_cache = json.loads(config_path.read_text(encoding="utf-8"))
-            else:
-                self._costs_cache = {}
+            if not config_path.exists():
+                return {}
+
+            mtime = config_path.stat().st_mtime
+            if self._costs_cache is not None and mtime <= self._last_mtime:
+                return self._costs_cache
+
+            # File is new or changed, reload it
+            self._costs_cache = json.loads(config_path.read_text(encoding="utf-8"))
+            self._last_mtime = mtime
+            # print(f"[INFO] Reloaded config for {self.__class__.__name__}")
         except Exception as e:
             print(f"[WARN] Failed to load cost config for {self.__class__.__name__}: {e}")
-            self._costs_cache = {}
+            if self._costs_cache is None:
+                self._costs_cache = {}
         return self._costs_cache
+
+    @property
+    def config(self) -> dict:
+        """Access the current (hot-reloaded) configuration."""
+        return self._load_cost_config()
+
+    def get_model_for_size(self, model_size: ModelSize) -> str:
+        """Resolve model name from size using hot-reloaded config."""
+        sizes = self.config.get("sizes", {})
+        model_name = sizes.get(model_size.value)
+        if not model_name:
+            # Fallback to hardcoded or raise if missing
+            raise ValueError(f"Model size '{model_size.value}' not defined in {self.__class__.__name__} config")
+        return model_name
 
     def get_model_cost(self, model_name: str) -> dict:
         """Retrieve cost dict for a model from the client's JSON config.

@@ -22,13 +22,6 @@ class GeminiClient(BaseClient):
                 "Gemini client requires the 'google-genai' package. Install it to use Gemini models."
             )
         self.client = genai.Client()
-        self.sizes = {
-            ModelSize.TINY: "gemini-2.5-flash-lite",
-            ModelSize.BASE: "gemini-2.5-flash",
-            ModelSize.MEDIUM: "gemini-2.5-flash",
-            ModelSize.LARGE: "gemini-2.5-pro",
-            ModelSize.XLARGE: "gemini-3-pro-preview",
-        }
 
     def _get_gemini_pricing(self, model_name: str) -> dict:
         """
@@ -111,7 +104,7 @@ class GeminiClient(BaseClient):
         else:
             tools = []
 
-        model_name = self.sizes[model_size]
+        model_name = self.get_model_for_size(model_size)
         typer.echo(f"[INFO] using Gemini model {model_name}" + (" with search" if search else ""))
 
         response = self.client.models.generate_content(
