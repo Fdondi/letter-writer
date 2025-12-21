@@ -5,3 +5,5 @@ jobs/
 __pycache__/
 letter_writer/__pycache__/*
 **/node_modules/
+cv-external/
+qdrant_test.py
