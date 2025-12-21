@@ -6,6 +6,7 @@ from typing import Iterable, List, Optional
 from uuid import uuid4
 
 from pymongo import ASCENDING, MongoClient
+from pymongo.errors import DuplicateKeyError
 
 from .config import env_default
 
@@ -36,12 +37,13 @@ def _slugify(text: str) -> str:
     return slug or str(uuid4())
 
 
-def build_slug(company_name: str, role: Optional[str], date_applied: Optional[str]) -> str:
+def build_slug(company_name: str, role: Optional[str], timestamp: Optional[datetime]) -> str:
+    """Build a slug: company_role_YYYYMMDD-HHMM (UTC)."""
+    ts = timestamp or datetime.utcnow()
     parts = [company_name]
     if role:
         parts.append(role)
-    if date_applied:
-        parts.append(date_applied)
+    parts.append(ts.strftime("%Y%m%d-%H%M"))
     return _slugify("-".join(parts))
 
 
@@ -62,7 +64,8 @@ def upsert_document(db, data: dict, *, allow_update: bool = True) -> dict:
     doc_id = data.get("id") or data.get("document_id") or data.get("_id") or str(uuid4())
     company_name = data.get("company_name") or data.get("company")
     role = data.get("role")
-    slug = data.get("slug") or (build_slug(company_name, role, data.get("date_applied")) if company_name else None)
+    ts_for_slug = data.get("timestamp") or data.get("created_at") or now
+    slug = data.get("slug") or (build_slug(company_name, role, ts_for_slug) if company_name else None)
 
     base = {
         "_id": doc_id,
@@ -96,8 +99,18 @@ def upsert_document(db, data: dict, *, allow_update: bool = True) -> dict:
         db.documents.update_one({"_id": doc_id}, {"$set": base})
         stored = db.documents.find_one({"_id": doc_id})
     else:
-        db.documents.insert_one(base)
-        stored = base
+        # Try insert; on duplicate slug, append a short suffix and retry.
+        attempts = 0
+        while True:
+            try:
+                db.documents.insert_one(base)
+                stored = base
+                break
+            except DuplicateKeyError:
+                attempts += 1
+                base["slug"] = f"{base.get('slug')}-{uuid4().hex[:6]}"
+                if attempts > 3:
+                    raise
 
     return serialize_document(stored)
 
