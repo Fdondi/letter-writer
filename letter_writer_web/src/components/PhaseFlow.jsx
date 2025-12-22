@@ -32,6 +32,9 @@ function EditableField({ label, value, minHeight = 120, placeholder, onSave }) {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder={placeholder}
+            // allow long URLs to wrap
+            wrap="soft"
+            spellCheck={true}
           />
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
@@ -160,6 +163,8 @@ function EditableFeedback({
             borderRadius: 4,
             background: "#fff",
             whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            overflowWrap: "anywhere",
             fontSize: 13,
           }}
         >
@@ -169,6 +174,20 @@ function EditableFeedback({
     </div>
   );
 }
+
+const cardStyle = {
+  border: "1px solid #e5e7eb",
+  borderRadius: 8,
+  padding: 12,
+  background: "#fafafa",
+  minHeight: 180,
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  flex: "0 0 340px",
+  maxWidth: 340,
+  height: "100%",
+};
 
 function VendorCard({
   vendor,
@@ -215,18 +234,7 @@ function VendorCard({
   const pendingLabel = isPendingRefine ? "Running next phase..." : null;
 
   return (
-    <div
-      style={{
-        border: "1px solid #e5e7eb",
-        borderRadius: 8,
-        padding: 12,
-        background: "#fafafa",
-        minHeight: 180,
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-      }}
-    >
+    <div style={cardStyle}>
       <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 8 }}>
         <h4 style={{ margin: 0, flex: 1, textTransform: "capitalize" }}>{vendor}</h4>
         {isDone && (
@@ -592,6 +600,7 @@ export default function PhaseFlow({
             gap: 12,
             marginTop: 8,
             overflowX: "auto",
+            alignItems: "stretch",
           }}
         >
           {vendorsList.map((vendor) => (
@@ -654,6 +663,7 @@ export default function PhaseFlow({
             gap: 12,
             marginTop: 8,
             overflowX: "auto",
+            alignItems: "stretch",
           }}
         >
             {vendorsList.map((vendor) => (
