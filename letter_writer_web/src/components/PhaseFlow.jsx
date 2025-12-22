@@ -1,34 +1,176 @@
 import React, { useState, useEffect } from "react";
 
-const stageLabels = {
-  background: "Background search",
-  refine: "Letter generation & checks",
-};
+function EditableField({ label, value, minHeight = 120, placeholder, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || "");
 
-const StageBadge = ({ label }) => (
-  <span
-    style={{
-      display: "inline-block",
-      padding: "2px 8px",
-      borderRadius: 999,
-      background: "#eef2ff",
-      color: "#3730a3",
-      fontSize: 11,
-      marginLeft: 8,
-    }}
-  >
-    {label}
-  </span>
-);
+  useEffect(() => {
+    if (!editing) {
+      setDraft(value || "");
+    }
+  }, [value, editing]);
 
-function TextArea({ value, onChange, minHeight = 120, placeholder }) {
   return (
-    <textarea
-      style={{ width: "100%", minHeight, padding: 8, marginTop: 6 }}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder}
-    />
+    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <label style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>{label}</label>
+        {!editing && (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            style={{ fontSize: 12, padding: "4px 8px" }}
+          >
+            ✎ Edit
+          </button>
+        )}
+      </div>
+
+      {editing ? (
+        <>
+          <textarea
+            style={{ width: "100%", minHeight, padding: 8 }}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={placeholder}
+          />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => {
+                onSave(draft);
+                setEditing(false);
+              }}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(value || "");
+                setEditing(false);
+              }}
+            >
+              Discard
+            </button>
+          </div>
+        </>
+      ) : (
+        <div
+          style={{
+            width: "100%",
+            minHeight,
+            padding: 8,
+            border: "1px solid #e5e7eb",
+            borderRadius: 4,
+            background: "#f9fafb",
+            whiteSpace: "pre-wrap",
+            fontSize: 13,
+          }}
+        >
+          {value || placeholder || ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EditableFeedback({
+  label,
+  value,
+  placeholder,
+  onSave,
+  approved,
+  onApprove,
+  hasContent,
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || "");
+
+  useEffect(() => {
+    if (!editing) {
+      setDraft(value || "");
+    }
+  }, [value, editing]);
+
+  const statusColor = hasContent ? "#2563eb" : "#9ca3af"; // comment presence
+  const approveColor = approved ? "#16a34a" : "#9ca3af";
+
+  return (
+    <div style={{ marginTop: 8, padding: 10, border: "1px solid #e5e7eb", borderRadius: 6, background: "#f9fafb" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1 }}>
+          <span style={{ fontWeight: 600 }}>{label}</span>
+          <span title={hasContent ? "Has comments" : "No comments"} style={{ width: 10, height: 10, borderRadius: "50%", background: statusColor, display: "inline-block" }} />
+          <span title={approved ? "User approved" : "Not approved"} style={{ width: 10, height: 10, borderRadius: "50%", background: approveColor, display: "inline-block" }} />
+        </div>
+        {!editing && (
+          <button type="button" onClick={() => setEditing(true)} style={{ fontSize: 12, padding: "4px 8px" }}>
+            ✎ Edit
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onApprove}
+          style={{
+            fontSize: 12,
+            padding: "4px 8px",
+            border: "1px solid #16a34a",
+            background: approved ? "#dcfce7" : "#fff",
+            color: "#166534",
+            cursor: approved ? "default" : "pointer",
+          }}
+          disabled={approved}
+        >
+          {approved ? "Approved" : "Approve"}
+        </button>
+      </div>
+
+      {editing ? (
+        <>
+          <textarea
+            style={{ width: "100%", minHeight: 120, padding: 8 }}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={placeholder}
+          />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+            <button
+              type="button"
+              onClick={() => {
+                onSave(draft);
+                setEditing(false);
+              }}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(value || "");
+                setEditing(false);
+              }}
+            >
+              Discard
+            </button>
+          </div>
+        </>
+      ) : (
+        <div
+          style={{
+            width: "100%",
+            minHeight: 80,
+            padding: 8,
+            border: "1px solid #e5e7eb",
+            borderRadius: 4,
+            background: "#fff",
+            whiteSpace: "pre-wrap",
+            fontSize: 13,
+          }}
+        >
+          {value || placeholder || ""}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -37,6 +179,7 @@ function VendorCard({
   state,
   edits,
   onEditChange,
+  onSaveFeedbackOverride,
   loading,
   error,
   onApprove,
@@ -53,8 +196,18 @@ function VendorCard({
   const refineData = state?.refine?.data || {};
   const feedback = refineData.feedback || {};
   const feedbackKeys = Object.keys(feedback || {});
+  const feedbackOverrides = edits?.refine?.feedback_overrides || {};
+  const activeFeedbackKey = selectedFeedbackTab || feedbackKeys[0] || null;
 
   const isDone = state?.background?.approved && state?.refine?.approved;
+  const backgroundApproved = !!state?.background?.approved;
+  const refineApproved = !!state?.refine?.approved;
+
+  const backgroundDirty =
+    (edits?.background?.background_summary ?? "").trim() !== (backgroundData.background_summary ?? "").trim() ||
+    (edits?.background?.company_report ?? "").trim() !== (backgroundData.company_report ?? "").trim();
+  const refineDirty =
+    (edits?.refine?.final_letter ?? "").trim() !== (refineData.final_letter ?? "").trim();
 
   let stage = "done";
   if (!state?.background?.approved) stage = "background";
@@ -64,7 +217,6 @@ function VendorCard({
 
   const isPendingRefine = stage === "pending-refine";
   const pendingLabel = isPendingRefine ? "Running next phase..." : null;
-  const badgeLabel = stageLabels[stage] || "Complete";
 
   return (
     <div
@@ -74,11 +226,13 @@ function VendorCard({
         padding: 12,
         background: "#fafafa",
         minHeight: 180,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 8 }}>
         <h4 style={{ margin: 0, flex: 1, textTransform: "capitalize" }}>{vendor}</h4>
-        <StageBadge label={badgeLabel} />
         {isDone && (
           <button onClick={onToggleCollapsed} style={{ fontSize: 12, padding: "4px 8px" }}>
             {collapsed ? "Expand" : "Collapse"}
@@ -94,35 +248,25 @@ function VendorCard({
 
       {error && <div style={{ color: "red", marginBottom: 8, fontSize: 13 }}>{error}</div>}
 
-      {isDone && collapsed && (
-        <div style={{ color: "#059669", fontWeight: 600 }}>
-          Ready for assembly. Expand to edit & rerun a phase.
-        </div>
-      )}
-
       {(phaseToRender === "background" || (isDone && !collapsed && !forcePhase)) && (
         <>
           <div style={{ fontSize: 13, color: "#374151" }}>
             Review the background search. Edit if needed, then approve to generate the letter.
           </div>
-          <div style={{ marginTop: 8 }}>
-            <label style={{ fontWeight: 600, fontSize: 13 }}>Summary</label>
-            <TextArea
-              value={edits?.background_summary ?? backgroundData.background_summary ?? ""}
-              onChange={(val) => onEditChange(vendor, "background", "background_summary", val)}
-              minHeight={80}
-              placeholder="Background summary"
-            />
-          </div>
-          <div style={{ marginTop: 8 }}>
-            <label style={{ fontWeight: 600, fontSize: 13 }}>Company report</label>
-            <TextArea
-              value={edits?.company_report ?? backgroundData.company_report ?? ""}
-              onChange={(val) => onEditChange(vendor, "background", "company_report", val)}
-              minHeight={140}
-              placeholder="Company research"
-            />
-          </div>
+          <EditableField
+            label="Summary"
+            value={edits?.background?.background_summary ?? backgroundData.background_summary ?? ""}
+            minHeight={80}
+            placeholder="Background summary"
+            onSave={(val) => onEditChange(vendor, "background", "background_summary", val)}
+          />
+          <EditableField
+            label="Company report"
+            value={edits?.background?.company_report ?? backgroundData.company_report ?? ""}
+            minHeight={140}
+            placeholder="Company research"
+            onSave={(val) => onEditChange(vendor, "background", "company_report", val)}
+          />
           {backgroundData.main_points?.length > 0 && (
             <div style={{ marginTop: 8 }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>Main points</div>
@@ -135,12 +279,33 @@ function VendorCard({
               </ul>
             </div>
           )}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-            <button onClick={() => onApprove("background", vendor)}>
-              {isDone ? "Save background → rebuild letter" : "Approve background → generate letter"}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: "auto" }}>
+            <button
+              onClick={() => onApprove("background", vendor)}
+              disabled={
+                loading ||
+                (backgroundApproved && !backgroundDirty)
+              }
+              style={{
+                opacity: loading || (backgroundApproved && !backgroundDirty) ? 0.6 : 1,
+                cursor: loading || (backgroundApproved && !backgroundDirty) ? "not-allowed" : "pointer",
+              }}
+            >
+              {loading
+                ? "Processing..."
+                : backgroundApproved
+                  ? backgroundDirty
+                    ? "Save and restart from here"
+                    : "Edit to restart from here"
+                  : "Approve background → generate letter"}
             </button>
             {isDone && (
-              <button onClick={() => onRerunFromBackground(vendor)}>Rebuild letter from edited background</button>
+              <button
+                onClick={() => onRerunFromBackground(vendor)}
+                style={{ opacity: 0.8 }}
+              >
+                Rebuild letter from edited background
+              </button>
             )}
           </div>
         </>
@@ -149,75 +314,139 @@ function VendorCard({
       {(phaseToRender === "refine" || (isDone && !collapsed && !forcePhase)) && (
         <>
           <div style={{ fontSize: 13, color: "#374151" }}>
-            Final letter ready. Edit if desired, then approve to move to assembly.
+            {!backgroundApproved
+              ? "Background approval required before refining this vendor."
+              : refineApproved
+                ? "Final letter is approved. Edit to rerun refinement if needed."
+                : "Edit if desired, then approve to move to assembly."}
           </div>
-          <TextArea
-            value={edits?.final_letter ?? refineData.final_letter ?? ""}
-            onChange={(val) => onEditChange(vendor, "refine", "final_letter", val)}
+          <EditableField
+            label="Final letter"
+            value={edits?.refine?.final_letter ?? refineData.final_letter ?? ""}
             minHeight={220}
             placeholder="Final letter"
+            onSave={(val) => onEditChange(vendor, "refine", "final_letter", val)}
           />
           {feedbackKeys.length > 0 && (
             <div style={{ marginTop: 8 }}>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {feedbackKeys.map((key) => (
-                  <button
-                    key={`${vendor}-tab-${key}`}
-                    onClick={() => onSelectFeedbackTab(key)}
-                    style={{
-                      padding: "4px 8px",
-                      fontSize: 12,
-                      borderRadius: 4,
-                      border: selectedFeedbackTab === key ? "1px solid #2563eb" : "1px solid #ccc",
-                      background: selectedFeedbackTab === key ? "#e0e7ff" : "#f9fafb",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {key}
-                    {feedbackApprovals[key] ? " ✓" : ""}
-                  </button>
-                ))}
-              </div>
-              {selectedFeedbackTab && feedback[selectedFeedbackTab] && (
-                <div
-                  style={{
-                    marginTop: 8,
-                    padding: 10,
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 6,
-                    background: "#f9fafb",
+                {feedbackKeys.map((key) => {
+                  const overriddenVal = feedbackOverrides[key];
+                  const baseVal = feedback[key] || "";
+                  const displayVal = overriddenVal !== undefined ? overriddenVal : baseVal;
+                  const trimmedUpper = (displayVal || "").trim().toUpperCase();
+                  const isNoComment = trimmedUpper === "" || trimmedUpper === "NO COMMENT";
+                  const hasContent = !isNoComment;
+                  const approved = feedbackApprovals[key];
+                  const isModified = overriddenVal !== undefined && overriddenVal !== baseVal;
+
+                  // Machine block: 🤖 | status
+                  const machineStatus = hasContent ? "📜" : "✅";
+
+                  // Human block: 🧑 | status (stacked with thick divider between machine and human)
+                  let humanStatus = "❔";
+                  if (approved) {
+                    humanStatus = isNoComment ? "✅" : "👍";
+                  } else if (isModified) {
+                    humanStatus = isNoComment ? "✅" : "✏️";
+                  } else if (!hasContent && !approved) {
+                    humanStatus = "❔";
+                  }
+
+                  const isSelected = activeFeedbackKey === key;
+                  return (
+                    <button
+                      key={`${vendor}-tab-${key}`}
+                      onClick={() => onSelectFeedbackTab(key)}
+                      style={{
+                        padding: "4px 8px",
+                        fontSize: 12,
+                        borderRadius: 4,
+                        border: isSelected ? "1px solid #2563eb" : "1px solid #ccc",
+                        background: isSelected ? "#e0e7ff" : "#f9fafb",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {key}
+                      <div style={{ display: "inline-flex", alignItems: "center", gap: 0, marginLeft: 4 }}>
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: 2, padding: "0 4px" }}>
+                          🤖 {machineStatus}
+                        </div>
+                        <div style={{ width: 2, background: "#d1d5db", height: 14, margin: "0 4px" }} />
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: 2, padding: "0 4px" }}>
+                          🧑 {humanStatus}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allKeys = feedbackKeys;
+                    allKeys.forEach((k) => onApproveFeedback(k));
                   }}
+                  style={{ padding: "4px 8px", fontSize: 12 }}
                 >
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>{selectedFeedbackTab}</div>
-                  <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{feedback[selectedFeedbackTab]}</div>
-                  <button
-                    onClick={() => onApproveFeedback(selectedFeedbackTab)}
-                    style={{ marginTop: 8 }}
-                    disabled={feedbackApprovals[selectedFeedbackTab]}
-                  >
-                    {feedbackApprovals[selectedFeedbackTab] ? "Approved" : "Approve this feedback"}
-                  </button>
-                </div>
+                  Approve all comments
+                </button>
+              </div>
+              {activeFeedbackKey && (feedback[activeFeedbackKey] !== undefined || feedbackOverrides[activeFeedbackKey] !== undefined) && (
+                <EditableFeedback
+                  label={activeFeedbackKey}
+                  value={feedbackOverrides[activeFeedbackKey] ?? feedback[activeFeedbackKey] ?? ""}
+                  placeholder="Feedback"
+                  approved={feedbackApprovals[activeFeedbackKey]}
+                  hasContent={(feedback[activeFeedbackKey] || "").trim().length > 0}
+                  onApprove={() => onApproveFeedback(activeFeedbackKey)}
+                  onSave={(val) => onSaveFeedbackOverride(activeFeedbackKey, val)}
+                />
               )}
             </div>
           )}
-          <button
-            onClick={() => onApprove("refine", vendor)}
-            style={{ marginTop: 10 }}
-            disabled={
-              feedbackKeys.length > 0 &&
-              feedbackKeys.some((k) => feedbackApprovals[k] === false || feedbackApprovals[k] === undefined)
-            }
-          >
-            {isDone ? "Update final letter" : "Approve refined letter"}
-          </button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: "auto" }}>
+            <button
+              onClick={() => onApprove("refine", vendor)}
+              style={{ marginTop: 10,
+                opacity:
+                  loading ||
+                  !backgroundApproved ||
+                  (refineApproved && !refineDirty) ||
+                  (feedbackKeys.length > 0 &&
+                    feedbackKeys.some((k) => feedbackApprovals[k] === false || feedbackApprovals[k] === undefined))
+                    ? 0.6
+                    : 1,
+                cursor:
+                  loading ||
+                  !backgroundApproved ||
+                  (refineApproved && !refineDirty) ||
+                  (feedbackKeys.length > 0 &&
+                    feedbackKeys.some((k) => feedbackApprovals[k] === false || feedbackApprovals[k] === undefined))
+                    ? "not-allowed"
+                    : "pointer",
+              }}
+              disabled={
+                loading ||
+                !backgroundApproved ||
+                (refineApproved && !refineDirty) ||
+                (feedbackKeys.length > 0 &&
+                  feedbackKeys.some((k) => feedbackApprovals[k] === false || feedbackApprovals[k] === undefined))
+              }
+            >
+              {loading
+                ? "Processing..."
+                : refineApproved
+                  ? refineDirty
+                    ? "Save and restart from here"
+                    : "Edit to restart from here"
+                  : "Approve refined letter"}
+            </button>
+          </div>
         </>
-      )}
-
-      {stage === "done" && !collapsed && (
-        <div style={{ color: "#059669", fontWeight: 600, marginTop: 8 }}>
-          Ready for assembly. Edit above to rerun a phase if needed.
-        </div>
       )}
     </div>
   );
@@ -243,27 +472,23 @@ export default function PhaseFlow({
   });
 
   useEffect(() => {
-    // initialize tabs and approvals when refine data arrives
+    // initialize tabs and approvals when refine data arrives; reset per session
     const nextSelected = {};
     const nextApprovals = {};
     vendorsList.forEach((vendor) => {
       const feedback = phaseState[vendor]?.refine?.data?.feedback || {};
       const keys = Object.keys(feedback || {});
       if (keys.length > 0) {
-        nextSelected[vendor] = nextSelected[vendor] || keys[0];
-        nextApprovals[vendor] = nextApprovals[vendor] || {};
+        nextSelected[vendor] = keys[0];
+        nextApprovals[vendor] = {};
         keys.forEach((k) => {
-          const text = feedback[k] || "";
-          // Auto-approve if no actionable comment
-          const auto = text.trim().toUpperCase().includes("NO COMMENT");
-          if (nextApprovals[vendor][k] === undefined) {
-            nextApprovals[vendor][k] = auto;
-          }
+          // Start all as unreviewed (❔)
+          nextApprovals[vendor][k] = false;
         });
       }
     });
-    if (Object.keys(nextSelected).length) setSelectedFeedbackTab((prev) => ({ ...prev, ...nextSelected }));
-    if (Object.keys(nextApprovals).length) setFeedbackApprovals((prev) => ({ ...prev, ...nextApprovals }));
+    setSelectedFeedbackTab(nextSelected);
+    setFeedbackApprovals(nextApprovals);
   }, [vendorsList, phaseState]);
 
   useEffect(() => {
@@ -327,6 +552,13 @@ export default function PhaseFlow({
     }));
   };
 
+  const saveFeedbackOverride = (vendor, key, val) => {
+    if (!vendor || !key) return;
+    const current = phaseEdits[vendor]?.refine?.feedback_overrides || {};
+    const next = { ...current, [key]: val };
+    onEditChange(vendor, "refine", "feedback_overrides", next);
+  };
+
   const pendingBackground = vendorsList.filter((v) => !(phaseState[v]?.background?.approved));
   const pendingRefine = vendorsList.filter(
     (v) => phaseState[v]?.background?.approved && !phaseState[v]?.refine?.approved && phaseState[v]?.refine?.data
@@ -343,7 +575,6 @@ export default function PhaseFlow({
             }}
         >
           <h3 style={{ margin: 0 }}>Background</h3>
-          <StageBadge label={backgroundDone ? "Complete" : "In progress"} />
           {pendingBackground.length > 1 && (
             <button
               type="button"
@@ -381,6 +612,7 @@ export default function PhaseFlow({
               onSelectFeedbackTab={(tab) => setSelectedFeedbackTab((prev) => ({ ...prev, [vendor]: tab }))}
               feedbackApprovals={feedbackApprovals[vendor] || {}}
               onApproveFeedback={(key) => approveFeedback(vendor, key)}
+              onSaveFeedbackOverride={(key, val) => saveFeedbackOverride(vendor, key, val)}
               collapsed={!!collapsedCards[vendor]}
               onToggleCollapsed={() =>
                 setCollapsedCards((prev) => ({
@@ -405,7 +637,6 @@ export default function PhaseFlow({
             }}
           >
             <h3 style={{ margin: 0 }}>Refine</h3>
-            <StageBadge label={refineDone ? "Complete" : "In progress"} />
             {pendingRefine.length > 1 && (
               <button
                 type="button"
@@ -443,6 +674,7 @@ export default function PhaseFlow({
                 onSelectFeedbackTab={(tab) => setSelectedFeedbackTab((prev) => ({ ...prev, [vendor]: tab }))}
                 feedbackApprovals={feedbackApprovals[vendor] || {}}
                 onApproveFeedback={(key) => approveFeedback(vendor, key)}
+              onSaveFeedbackOverride={(key, val) => saveFeedbackOverride(vendor, key, val)}
                 collapsed={!!collapsedCards[vendor]}
                 onToggleCollapsed={() =>
                   setCollapsedCards((prev) => ({
