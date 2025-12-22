@@ -234,9 +234,6 @@ def advance_to_refinement(
     if state is None:
         raise ValueError(f"Vendor {vendor.value} not in session")
 
-    if not (draft_override or state.draft_letter):
-        raise ValueError("Missing draft letter for refinement")
-
     trace_dir = Path("trace", f"{session.company_name}.{vendor.value}.refine")
     trace_dir.mkdir(parents=True, exist_ok=True)
     ai_client = get_client(vendor)
@@ -246,6 +243,13 @@ def advance_to_refinement(
     job_text = job_text_override or session.job_text
     cv_text = cv_text_override or session.cv_text
     draft_letter = draft_override or state.draft_letter or ""
+    if not draft_letter:
+        try:
+            print(f"[PHASE] draft+refine -> {vendor.value} :: generate_letter (XLARGE)")
+            draft_letter = generate_letter(cv_text, top_docs, company_report, job_text, ai_client, trace_dir)
+        except Exception:
+            traceback.print_exc()
+            raise ValueError("Missing draft letter for refinement")
 
     state.company_report = company_report
     state.top_docs = top_docs

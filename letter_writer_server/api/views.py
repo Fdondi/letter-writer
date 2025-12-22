@@ -278,56 +278,6 @@ def start_phased_job_view(request: HttpRequest):
 
 
 @csrf_exempt
-def draft_phase_view(request: HttpRequest):
-    if request.method != "POST":
-        return JsonResponse({"detail": "Method not allowed"}, status=405)
-
-    try:
-        data = json.loads(request.body or "{}")
-    except json.JSONDecodeError:
-        return JsonResponse({"detail": "Invalid JSON"}, status=400)
-
-    session_id = data.get("session_id")
-    vendor_val = data.get("vendor")
-    if not session_id or not vendor_val:
-        return JsonResponse({"detail": "session_id and vendor are required"}, status=400)
-    try:
-        vendor = ModelVendor(vendor_val)
-    except ValueError as exc:
-        return JsonResponse({"detail": str(exc)}, status=400)
-
-    try:
-        state = advance_to_draft(
-            session_id=session_id,
-            vendor=vendor,
-            company_report_override=data.get("company_report"),
-            background_summary_override=data.get("background_summary"),
-            top_docs_override=data.get("top_docs"),
-            job_text_override=data.get("job_text"),
-            cv_text_override=data.get("cv_text"),
-        )
-    except ValueError as exc:
-        return JsonResponse({"detail": str(exc)}, status=400)
-    except Exception as exc:  # noqa: BLE001
-        traceback.print_exc()
-        return JsonResponse({"detail": str(exc)}, status=500)
-
-    return JsonResponse(
-        {
-            "status": "ok",
-            "phase": "draft",
-            "vendor": vendor.value,
-            "draft_letter": state.draft_letter,
-            "company_report": state.company_report,
-            "background_summary": state.background_summary,
-            "top_docs": state.top_docs,
-            "main_points": state.main_points,
-            "cost": state.cost,
-        }
-    )
-
-
-@csrf_exempt
 def refinement_phase_view(request: HttpRequest):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
