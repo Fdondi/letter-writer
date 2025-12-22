@@ -226,7 +226,6 @@ export default function App() {
         nextSessions[vendor] = data.session_id;
         nextState[vendor] = {
           background: { data: vendorData, approved: false },
-          draft: { data: null, approved: false },
           refine: { data: null, approved: false },
           cost: vendorData.cost || 0,
         };
@@ -235,8 +234,7 @@ export default function App() {
             company_report: vendorData.company_report || "",
             background_summary: vendorData.background_summary || "",
           },
-          draft: { draft_letter: "" },
-          refine: { final_letter: "" },
+          refine: { final_letter: "", draft_letter: "" },
         };
       });
 
@@ -256,192 +254,169 @@ export default function App() {
     }
   };
 
-  const advanceFromBackground = async (vendor) => {
-    setPhaseErrors((prev) => ({ ...prev, [vendor]: null }));
-    setLoadingVendors((prev) => new Set(prev).add(vendor));
-    const edits = phaseEdits[vendor]?.background || {};
-    const sessionId = phaseSessions[vendor] || phaseSessionId;
+  const approvePhase = async (phase, vendor) => {
+    if (phase === "background") {
+      setPhaseErrors((prev) => ({ ...prev, [vendor]: null }));
+      setLoadingVendors((prev) => new Set(prev).add(vendor));
+      const edits = phaseEdits[vendor]?.background || {};
+      const sessionId = phaseSessions[vendor] || phaseSessionId;
 
-    try {
-      const res = await fetch("/api/phases/draft/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: sessionId,
-          vendor,
-          company_report: edits.company_report,
-          background_summary: edits.background_summary,
-        }),
-      });
-      if (!res.ok) {
-        const detail = await res.text();
-        throw new Error(detail || "Failed to build draft");
-      }
-      const data = await res.json();
+      try {
+        const res = await fetch("/api/phases/refine/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: sessionId,
+            vendor,
+            company_report: edits.company_report,
+            background_summary: edits.background_summary,
+            top_docs: phaseState[vendor]?.background?.data?.top_docs || [],
+          job_text: jobText,
+            cv_text: null,
+          }),
+        });
+        if (!res.ok) {
+          const detail = await res.text();
+          throw new Error(detail || "Failed to build letter");
+        }
+        const data = await res.json();
 
-      setPhaseState((prev) => ({
-        ...prev,
-        [vendor]: {
-          ...(prev[vendor] || {}),
-          background: { ...(prev[vendor]?.background || {}), approved: true },
-          draft: { data, approved: false },
-          refine: prev[vendor]?.refine || { data: null, approved: false },
-          cost: data.cost ?? prev[vendor]?.cost ?? 0,
-        },
-      }));
-
-      setPhaseEdits((prev) => ({
-        ...prev,
-        [vendor]: {
-          ...(prev[vendor] || {}),
-          background: {
-            ...(prev[vendor]?.background || {}),
-            company_report: data.company_report ?? edits.company_report ?? "",
-            background_summary: data.background_summary ?? edits.background_summary ?? "",
+        setPhaseState((prev) => ({
+          ...prev,
+          [vendor]: {
+            ...(prev[vendor] || {}),
+            background: { ...(prev[vendor]?.background || {}), approved: true },
+            refine: { data, approved: false },
+            cost: data.cost ?? prev[vendor]?.cost ?? 0,
           },
-          draft: { draft_letter: data.draft_letter || "" },
-          refine: prev[vendor]?.refine || { final_letter: "" },
-        },
-      }));
-    } catch (e) {
-      console.error("Draft phase error", e);
-      setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
-    } finally {
-      setLoadingVendors((prev) => {
-        const next = new Set(prev);
-        next.delete(vendor);
-        return next;
-      });
-    }
-  };
+        }));
 
-  const advanceFromDraft = async (vendor) => {
-    setPhaseErrors((prev) => ({ ...prev, [vendor]: null }));
-    setLoadingVendors((prev) => new Set(prev).add(vendor));
-    const draftText =
-      phaseEdits[vendor]?.draft?.draft_letter ||
-      phaseState[vendor]?.draft?.data?.draft_letter ||
-      "";
-    const sessionId = phaseSessions[vendor] || phaseSessionId;
-
-    try {
-      const res = await fetch("/api/phases/refine/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: sessionId,
-          vendor,
-          draft_letter: draftText,
-        }),
-      });
-      if (!res.ok) {
-        const detail = await res.text();
-        throw new Error(detail || "Failed to refine");
-      }
-      const data = await res.json();
-
-      setPhaseState((prev) => ({
-        ...prev,
-        [vendor]: {
-          ...(prev[vendor] || {}),
-          draft: { ...(prev[vendor]?.draft || {}), approved: true },
-          refine: { data, approved: false },
-          cost: data.cost ?? prev[vendor]?.cost ?? 0,
-        },
-      }));
-
-      setPhaseEdits((prev) => ({
-        ...prev,
-        [vendor]: {
-          ...(prev[vendor] || {}),
-          draft: {
-            draft_letter: draftText,
-          },
-          refine: { final_letter: data.final_letter || "" },
-        },
-      }));
-    } catch (e) {
-      console.error("Refine phase error", e);
-      setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
-    } finally {
-      setLoadingVendors((prev) => {
-        const next = new Set(prev);
-        next.delete(vendor);
-        return next;
-      });
-    }
-  };
-
-  const approveRefinement = (vendor) => {
-    const finalText =
-      (phaseEdits[vendor]?.refine?.final_letter ??
-        phaseState[vendor]?.refine?.data?.final_letter ??
-        "").trim();
-
-    setPhaseState((prev) => {
-      const next = {
-        ...prev,
-        [vendor]: {
-          ...(prev[vendor] || {}),
-          refine: {
-            data: {
-              ...(prev[vendor]?.refine?.data || {}),
-              final_letter: finalText,
+        setPhaseEdits((prev) => ({
+          ...prev,
+          [vendor]: {
+            ...(prev[vendor] || {}),
+            background: {
+              ...(prev[vendor]?.background || {}),
+              company_report: data.company_report ?? edits.company_report ?? "",
+              background_summary: data.background_summary ?? edits.background_summary ?? "",
             },
-            approved: true,
+            refine: {
+              final_letter: data.final_letter || "",
+              draft_letter: data.draft_letter || "",
+            },
           },
-        },
-      };
+        }));
+      } catch (e) {
+        console.error("Letter generation error", e);
+        setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
+      } finally {
+        setLoadingVendors((prev) => {
+          const next = new Set(prev);
+          next.delete(vendor);
+          return next;
+        });
+      }
+    } else if (phase === "refine") {
+      const finalText =
+        (phaseEdits[vendor]?.refine?.final_letter ??
+          phaseState[vendor]?.refine?.data?.final_letter ??
+          "").trim();
 
-      const done = Array.from(selectedVendors).every(
-        (v) => next[v]?.refine?.approved || v === vendor
+      setPhaseState((prev) => {
+        const next = {
+          ...prev,
+          [vendor]: {
+            ...(prev[vendor] || {}),
+            refine: {
+              data: {
+                ...(prev[vendor]?.refine?.data || {}),
+                final_letter: finalText,
+              },
+              approved: true,
+            },
+          },
+        };
+
+        const done = Array.from(selectedVendors).every(
+          (v) => next[v]?.refine?.approved || v === vendor
+        );
+        if (done) {
+          setUiStage("assembly");
+          setShowInput(false);
+        }
+
+        return next;
+      });
+
+      setLetters((prev) => ({
+        ...prev,
+        [vendor]: finalText,
+      }));
+      setVendorParagraphs((prev) => ({
+        ...prev,
+        [vendor]: splitIntoParagraphs(finalText, vendor),
+      }));
+      setVendorCosts((prev) => ({
+        ...prev,
+        [vendor]: phaseState[vendor]?.cost || 0,
+      }));
+    }
+  };
+
+  const approveAllPhase = async (phase) => {
+    if (phase === "background") {
+      const pending = Array.from(selectedVendors).filter(
+        (v) => !(phaseState[v]?.background?.approved)
       );
-      if (done) {
-        setUiStage("assembly");
-        setShowInput(false);
-      }
-
-      return next;
-    });
-
-    setLetters((prev) => ({
-      ...prev,
-      [vendor]: finalText,
-    }));
-    setVendorParagraphs((prev) => ({
-      ...prev,
-      [vendor]: splitIntoParagraphs(finalText, vendor),
-    }));
-    setVendorCosts((prev) => ({
-      ...prev,
-      [vendor]: phaseState[vendor]?.cost || 0,
-    }));
-  };
-
-  const approveAllBackground = async () => {
-    const pending = Array.from(selectedVendors).filter(
-      (v) => !(phaseState[v]?.background?.approved)
-    );
-    await Promise.all(pending.map((v) => advanceFromBackground(v)));
-  };
-
-  const approveAllDrafts = async () => {
-    const pending = Array.from(selectedVendors).filter(
-      (v) => phaseState[v]?.background?.approved && !phaseState[v]?.draft?.approved
-    );
-    await Promise.all(pending.map((v) => advanceFromDraft(v)));
-  };
-
-  const approveAllRefinements = () => {
-    Array.from(selectedVendors).forEach((v) => {
-      if (!phaseState[v]?.refine?.approved && phaseState[v]?.refine?.data) {
-        approveRefinement(v);
-      }
-    });
+      await Promise.all(pending.map((v) => approvePhase("background", v)));
+    } else if (phase === "refine") {
+      Array.from(selectedVendors).forEach((v) => {
+        if (!phaseState[v]?.refine?.approved && phaseState[v]?.refine?.data) {
+          approvePhase("refine", v);
+        }
+      });
+    }
   };
 
   const onAddParagraph = (paraObj) => {
     setFinalParagraphs((prev) => [...prev, { ...paraObj }]);
+  };
+
+  const clearVendorAssembly = (vendor) => {
+    setVendorParagraphs((prev) => {
+      const next = { ...prev };
+      delete next[vendor];
+      return next;
+    });
+    setVendorCosts((prev) => {
+      const next = { ...prev };
+      delete next[vendor];
+      return next;
+    });
+    setLetters((prev) => {
+      const next = { ...prev };
+      delete next[vendor];
+      return next;
+    });
+  };
+
+  const rerunFromBackground = async (vendor) => {
+    clearVendorAssembly(vendor);
+    setPhaseState((prev) => ({
+      ...prev,
+      [vendor]: {
+        ...(prev[vendor] || {}),
+        refine: { data: null, approved: false },
+      },
+    }));
+    setPhaseEdits((prev) => ({
+      ...prev,
+      [vendor]: {
+        ...(prev[vendor] || {}),
+        refine: { final_letter: "" },
+      },
+    }));
+    await approvePhase("background", vendor);
   };
 
   const resetForm = () => {
@@ -463,6 +438,7 @@ export default function App() {
   };
 
   const vendorsList = Array.from(selectedVendors);
+  const hasAssembly = vendorsList.some((v) => phaseState[v]?.refine?.approved);
 
   const renderCompose = () => (
     <>
@@ -544,7 +520,7 @@ export default function App() {
       )}
       {error && <p style={{ color: "var(--error-text)" }}>{error}</p>}
 
-      {uiStage === "phases" && (
+      {!showInput && (
         <PhaseFlow
           vendorsList={vendorsList}
           phaseState={phaseState}
@@ -552,12 +528,9 @@ export default function App() {
           loadingVendors={loadingVendors}
           errors={phaseErrors}
           onEditChange={updatePhaseEdit}
-          onApproveBackground={advanceFromBackground}
-          onApproveDraft={advanceFromDraft}
-          onApproveRefine={approveRefinement}
-          onApproveAllBackground={approveAllBackground}
-          onApproveAllDraft={approveAllDrafts}
-          onApproveAllRefine={approveAllRefinements}
+          onApprove={approvePhase}
+          onApproveAll={approveAllPhase}
+          onRerunFromBackground={rerunFromBackground}
         />
       )}
 
@@ -597,7 +570,7 @@ export default function App() {
         </div>
       )}
 
-      {uiStage === "assembly" && vendorsList.length > 0 && (
+      {hasAssembly && vendorsList.length > 0 && (
         <LetterTabs
           vendorsList={vendorsList}
           vendorParagraphs={vendorParagraphs}
