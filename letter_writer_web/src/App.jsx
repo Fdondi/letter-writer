@@ -2,22 +2,17 @@ import React, { useState, useEffect } from "react";
 import ModelSelector from "./components/ModelSelector";
 import LetterTabs from "./components/LetterTabs";
 import StyleInstructionsBlade from "./components/StyleInstructionsBlade";
-<<<<<<< HEAD
 import PhaseFlow from "./components/PhaseFlow";
-=======
 import DocumentsPage from "./components/DocumentsPage";
-import { v4 as uuidv4 } from "uuid";
->>>>>>> 75db2a4 (move documents to mongodb and add a page to view them)
 import { splitIntoParagraphs } from "./utils/split";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
-  const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const isDarkMode =
+    window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
   return vendors.reduce((acc, v, idx) => {
     const hue = Math.round(idx * step);
-    acc[v] = isDarkMode 
-      ? `hsl(${hue}, 40%, 30%)` 
-      : `hsl(${hue}, 70%, 85%)`;
+    acc[v] = isDarkMode ? `hsl(${hue}, 40%, 30%)` : `hsl(${hue}, 70%, 85%)`;
     return acc;
   }, {});
 }
@@ -39,26 +34,23 @@ export default function App() {
   const [error, setError] = useState(null);
   const [showInput, setShowInput] = useState(true);
   const [showStyleBlade, setShowStyleBlade] = useState(false);
-<<<<<<< HEAD
   const [uiStage, setUiStage] = useState("input"); // input | phases | assembly
   const [phaseSessionId, setPhaseSessionId] = useState(null);
   const [phaseSessions, setPhaseSessions] = useState({}); // vendor -> session_id
   const [phaseState, setPhaseState] = useState({});
   const [phaseEdits, setPhaseEdits] = useState({});
   const [phaseErrors, setPhaseErrors] = useState({});
-=======
   const [savingFinal, setSavingFinal] = useState(false);
   const [activeTab, setActiveTab] = useState("compose"); // "compose" | "documents"
->>>>>>> 75db2a4 (move documents to mongodb and add a page to view them)
 
   // Update colors when system theme changes
   useEffect(() => {
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = () => {
       setVendorColors(generateColors(vendors));
     };
-    mediaQuery.addEventListener('change', handleChange);
-    return () => mediaQuery.removeEventListener('change', handleChange);
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
   }, [vendors]);
 
   // Fetch vendors on mount
@@ -86,11 +78,6 @@ export default function App() {
     setSelectedVendors(checked ? new Set(vendors) : new Set());
   };
 
-<<<<<<< HEAD
-const retryVendor = (vendor) => {
-  console.warn("Retry vendor not implemented for phased flow yet:", vendor);
-};
-=======
   const persistFinalLetter = async (finalText) => {
     if (!documentId || !finalText) return;
     try {
@@ -113,37 +100,72 @@ const retryVendor = (vendor) => {
   };
 
   const retryVendor = async (vendor) => {
-    setLoadingVendors(prev => new Set(prev).add(vendor));
-    setFailedVendors(prev => {
+    setLoadingVendors((prev) => new Set(prev).add(vendor));
+    setFailedVendors((prev) => {
       const next = { ...prev };
       delete next[vendor];
       return next;
     });
+
     try {
-      const res = await fetch("/api/process-job/", {
+      const res = await fetch("/api/phases/start/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          job_text: jobText, 
+        body: JSON.stringify({
+          job_text: jobText,
           company_name: companyName,
-          model_vendor: vendor 
+          vendors: [vendor],
         }),
       });
-      if (!res.ok) throw new Error(await res.text());
+
+      if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(detail || `Failed to restart flow for ${vendor}`);
+      }
+
       const data = await res.json();
       if (!documentId && data.document?.id) {
         setDocumentId(data.document.id);
       }
-      const letterData = data.letters[vendor] || Object.values(data.letters)[0];
-      const letterText = typeof letterData === 'object' ? letterData.text : letterData;
-      const cost = typeof letterData === 'object' ? letterData.cost : 0.0;
-      
-      // Update letters immediately
-      setLetters(prev => ({
+
+      const vendorData = data.vendors?.[vendor] || {};
+
+      setPhaseSessions((prev) => ({ ...prev, [vendor]: data.session_id }));
+      setPhaseState((prev) => ({
         ...prev,
-        [vendor]: letterText
+        [vendor]: {
+          background: { data: vendorData, approved: false },
+          draft: { data: null, approved: false },
+          refine: { data: null, approved: false },
+          cost: vendorData.cost || 0,
+        },
       }));
->>>>>>> 75db2a4 (move documents to mongodb and add a page to view them)
+      setPhaseEdits((prev) => ({
+        ...prev,
+        [vendor]: {
+          background: {
+            company_report: vendorData.company_report || "",
+            background_summary: vendorData.background_summary || "",
+          },
+          draft: { draft_letter: "" },
+          refine: { final_letter: "" },
+        },
+      }));
+      setPhaseErrors((prev) => ({ ...prev, [vendor]: null }));
+      setUiStage("phases");
+      setShowInput(false);
+    } catch (e) {
+      console.error("Retry vendor error", e);
+      setFailedVendors((prev) => ({ ...prev, [vendor]: String(e) }));
+      setError(String(e));
+    } finally {
+      setLoadingVendors((prev) => {
+        const next = new Set(prev);
+        next.delete(vendor);
+        return next;
+      });
+    }
+  };
 
   const updatePhaseEdit = (vendor, phase, field, value) => {
     setPhaseEdits((prev) => ({
@@ -165,17 +187,12 @@ const retryVendor = (vendor) => {
     setVendorCosts({});
     setFailedVendors({});
     setVendorParagraphs({});
-<<<<<<< HEAD
     setFinalParagraphs([]);
     setLoadingVendors(new Set());
+    setDocumentId(null);
     const vendorList = Array.from(selectedVendors);
 
-=======
-    setLoadingVendors(new Set(selectedVendors));
-    setShowInput(false);
-    setDocumentId(null);
-    
->>>>>>> 75db2a4 (move documents to mongodb and add a page to view them)
+    setLoadingVendors(new Set(vendorList));
     try {
       const results = await Promise.all(
         vendorList.map(async (vendor) => {
@@ -193,24 +210,12 @@ const retryVendor = (vendor) => {
             throw new Error(detail || `Failed to start phased flow for ${vendor}`);
           }
           const data = await res.json();
-<<<<<<< HEAD
-          return { vendor, data };
-        })
-      );
-=======
           if (!documentId && data.document?.id) {
             setDocumentId(data.document.id);
           }
-          const letterData = data.letters[vendor] || Object.values(data.letters)[0];
-          const letterText = typeof letterData === 'object' ? letterData.text : letterData;
-          const cost = typeof letterData === 'object' ? letterData.cost : 0.0;
-          
-          // Update letters immediately as each vendor completes
-          setLetters(prev => ({
-            ...prev,
-            [vendor]: letterText
-          }));
->>>>>>> 75db2a4 (move documents to mongodb and add a page to view them)
+          return { vendor, data };
+        })
+      );
 
       const nextState = {};
       const nextEdits = {};
@@ -247,6 +252,7 @@ const retryVendor = (vendor) => {
       setError(String(e));
     } finally {
       setLoading(false);
+      setLoadingVendors(new Set());
     }
   };
 
@@ -449,41 +455,18 @@ const retryVendor = (vendor) => {
     setVendorParagraphs({});
     setFailedVendors({});
     setError(null);
-<<<<<<< HEAD
     setLoadingVendors(new Set());
     setFinalParagraphs([]);
+    setDocumentId(null);
+    setSavingFinal(false);
+    setActiveTab("compose");
   };
 
   const vendorsList = Array.from(selectedVendors);
 
-  return (
-    <div style={{ padding: 20, backgroundColor: 'var(--bg-color)', color: 'var(--text-color)', minHeight: '100vh' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <h1 style={{ margin: 0, color: 'var(--text-color)' }}>Letter Writer</h1>
-        <button
-          onClick={() => setShowStyleBlade(true)}
-          style={{
-            padding: '8px 16px',
-            border: '1px solid var(--border-color)',
-            borderRadius: '4px',
-            backgroundColor: 'var(--button-bg)',
-            color: 'var(--button-text)',
-            cursor: 'pointer',
-            fontSize: '14px'
-          }}
-        >
-          ⚙️ Style Settings
-        </button>
-      </div>
-      {uiStage === "input" ? (
-=======
-    setDocumentId(null);
-  };
-
   const renderCompose = () => (
     <>
       {showInput ? (
->>>>>>> 75db2a4 (move documents to mongodb and add a page to view them)
         <>
           <ModelSelector
             vendors={vendors}
@@ -496,26 +479,26 @@ const retryVendor = (vendor) => {
             placeholder="Company name"
             value={companyName}
             onChange={(e) => setCompanyName(e.target.value)}
-            style={{ 
-              width: "100%", 
-              marginTop: 10, 
+            style={{
+              width: "100%",
+              marginTop: 10,
               padding: 8,
-              backgroundColor: 'var(--input-bg)',
-              color: 'var(--text-color)',
-              border: '1px solid var(--border-color)',
-              borderRadius: '4px'
+              backgroundColor: "var(--input-bg)",
+              color: "var(--text-color)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "4px",
             }}
           />
           <textarea
-            style={{ 
-              width: "100%", 
-              height: 150, 
+            style={{
+              width: "100%",
+              height: 150,
               marginTop: 10,
-              backgroundColor: 'var(--input-bg)',
-              color: 'var(--text-color)',
-              border: '1px solid var(--border-color)',
-              borderRadius: '4px',
-              padding: 8
+              backgroundColor: "var(--input-bg)",
+              color: "var(--text-color)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "4px",
+              padding: 8,
             }}
             placeholder="Paste job description here"
             value={jobText}
@@ -524,30 +507,36 @@ const retryVendor = (vendor) => {
           <button
             onClick={handleSubmit}
             disabled={loading || !jobText || !companyName || selectedVendors.size === 0}
-            style={{ 
+            style={{
               marginTop: 10,
-              padding: '10px 20px',
-              backgroundColor: loading || !jobText || !companyName || selectedVendors.size === 0 ? 'var(--header-bg)' : '#3b82f6',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: loading || !jobText || !companyName || selectedVendors.size === 0 ? 'not-allowed' : 'pointer'
+              padding: "10px 20px",
+              backgroundColor:
+                loading || !jobText || !companyName || selectedVendors.size === 0
+                  ? "var(--header-bg)"
+                  : "#3b82f6",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor:
+                loading || !jobText || !companyName || selectedVendors.size === 0
+                  ? "not-allowed"
+                  : "pointer",
             }}
           >
             {loading ? "Starting..." : "Start phased flow"}
           </button>
         </>
       ) : (
-        <button 
-          onClick={resetForm} 
-          style={{ 
+        <button
+          onClick={resetForm}
+          style={{
             marginBottom: 10,
-            padding: '8px 16px',
-            backgroundColor: 'var(--button-bg)',
-            color: 'var(--button-text)',
-            border: '1px solid var(--border-color)',
-            borderRadius: '4px',
-            cursor: 'pointer'
+            padding: "8px 16px",
+            backgroundColor: "var(--button-bg)",
+            color: "var(--button-text)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "4px",
+            cursor: "pointer",
           }}
         >
           ← Back to Input
@@ -573,29 +562,32 @@ const retryVendor = (vendor) => {
       )}
 
       {Object.keys(failedVendors).length > 0 && (
-        <div style={{ 
-          marginTop: 10, 
-          padding: 10, 
-          background: "var(--warning-bg)", 
-          border: "1px solid var(--warning-border)",
-          color: "var(--text-color)",
-          borderRadius: '4px'
-        }}>
+        <div
+          style={{
+            marginTop: 10,
+            padding: 10,
+            background: "var(--warning-bg)",
+            border: "1px solid var(--warning-border)",
+            color: "var(--text-color)",
+            borderRadius: "4px",
+          }}
+        >
           <h3 style={{ marginTop: 0 }}>Failed Vendors:</h3>
           {Object.entries(failedVendors).map(([vendor, errorMsg]) => (
             <div key={vendor} style={{ marginBottom: 10 }}>
-              <strong style={{ color: 'var(--text-color)' }}>{vendor}:</strong> {errorMsg}
+              <strong style={{ color: "var(--text-color)" }}>{vendor}:</strong>{" "}
+              {errorMsg}
               <button
                 onClick={() => retryVendor(vendor)}
                 disabled={loadingVendors.has(vendor)}
-                style={{ 
+                style={{
                   marginLeft: 10,
-                  padding: '4px 8px',
-                  backgroundColor: 'var(--button-bg)',
-                  color: 'var(--button-text)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: '4px',
-                  cursor: 'pointer'
+                  padding: "4px 8px",
+                  backgroundColor: "var(--button-bg)",
+                  color: "var(--button-text)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                  cursor: "pointer",
                 }}
               >
                 {loadingVendors.has(vendor) ? "Retrying..." : "Retry"}
@@ -606,7 +598,7 @@ const retryVendor = (vendor) => {
       )}
 
       {uiStage === "assembly" && vendorsList.length > 0 && (
-        <LetterTabs 
+        <LetterTabs
           vendorsList={vendorsList}
           vendorParagraphs={vendorParagraphs}
           vendorCosts={vendorCosts}
@@ -616,35 +608,44 @@ const retryVendor = (vendor) => {
           vendorColors={vendorColors}
           failedVendors={failedVendors}
           loadingVendors={loadingVendors}
-          onRetry={() => {}}
+          onRetry={retryVendor}
           onAddParagraph={onAddParagraph}
           onCopyFinal={persistFinalLetter}
           savingFinal={savingFinal}
         />
       )}
-
-      <StyleInstructionsBlade
-        isOpen={showStyleBlade}
-        onClose={() => setShowStyleBlade(false)}
-      />
     </>
   );
 
   return (
-    <div style={{ padding: 20, backgroundColor: 'var(--bg-color)', color: 'var(--text-color)', minHeight: '100vh' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h1 style={{ margin: 0, color: 'var(--text-color)' }}>Letter Writer</h1>
-        <div style={{ display: 'flex', gap: 8 }}>
+    <div
+      style={{
+        padding: 20,
+        backgroundColor: "var(--bg-color)",
+        color: "var(--text-color)",
+        minHeight: "100vh",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 12,
+        }}
+      >
+        <h1 style={{ margin: 0, color: "var(--text-color)" }}>Letter Writer</h1>
+        <div style={{ display: "flex", gap: 8 }}>
           <button
             onClick={() => setActiveTab("compose")}
             style={{
-              padding: '8px 12px',
-              border: '1px solid var(--border-color)',
-              borderRadius: '4px',
-              backgroundColor: activeTab === "compose" ? '#3b82f6' : 'var(--button-bg)',
-              color: activeTab === "compose" ? 'white' : 'var(--button-text)',
-              cursor: 'pointer',
-              fontSize: '14px'
+              padding: "8px 12px",
+              border: "1px solid var(--border-color)",
+              borderRadius: "4px",
+              backgroundColor: activeTab === "compose" ? "#3b82f6" : "var(--button-bg)",
+              color: activeTab === "compose" ? "white" : "var(--button-text)",
+              cursor: "pointer",
+              fontSize: "14px",
             }}
           >
             Compose
@@ -652,13 +653,14 @@ const retryVendor = (vendor) => {
           <button
             onClick={() => setActiveTab("documents")}
             style={{
-              padding: '8px 12px',
-              border: '1px solid var(--border-color)',
-              borderRadius: '4px',
-              backgroundColor: activeTab === "documents" ? '#3b82f6' : 'var(--button-bg)',
-              color: activeTab === "documents" ? 'white' : 'var(--button-text)',
-              cursor: 'pointer',
-              fontSize: '14px'
+              padding: "8px 12px",
+              border: "1px solid var(--border-color)",
+              borderRadius: "4px",
+              backgroundColor:
+                activeTab === "documents" ? "#3b82f6" : "var(--button-bg)",
+              color: activeTab === "documents" ? "white" : "var(--button-text)",
+              cursor: "pointer",
+              fontSize: "14px",
             }}
           >
             Documents
@@ -666,13 +668,13 @@ const retryVendor = (vendor) => {
           <button
             onClick={() => setShowStyleBlade(true)}
             style={{
-              padding: '8px 12px',
-              border: '1px solid var(--border-color)',
-              borderRadius: '4px',
-              backgroundColor: 'var(--button-bg)',
-              color: 'var(--button-text)',
-              cursor: 'pointer',
-              fontSize: '14px'
+              padding: "8px 12px",
+              border: "1px solid var(--border-color)",
+              borderRadius: "4px",
+              backgroundColor: "var(--button-bg)",
+              color: "var(--button-text)",
+              cursor: "pointer",
+              fontSize: "14px",
             }}
           >
             ⚙️ Style
@@ -688,4 +690,5 @@ const retryVendor = (vendor) => {
       />
     </div>
   );
-} 
+}
+
