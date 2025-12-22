@@ -98,11 +98,7 @@ function EditableFeedback({
   return (
     <div style={{ marginTop: 8, padding: 10, border: "1px solid #e5e7eb", borderRadius: 6, background: "#f9fafb" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1 }}>
-          <span style={{ fontWeight: 600 }}>{label}</span>
-          <span title={hasContent ? "Has comments" : "No comments"} style={{ width: 10, height: 10, borderRadius: "50%", background: statusColor, display: "inline-block" }} />
-          <span title={approved ? "User approved" : "Not approved"} style={{ width: 10, height: 10, borderRadius: "50%", background: approveColor, display: "inline-block" }} />
-        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, fontWeight: 600 }}>{label}</div>
         {!editing && (
           <button type="button" onClick={() => setEditing(true)} style={{ fontSize: 12, padding: "4px 8px" }}>
             ✎ Edit
