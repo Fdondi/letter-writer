@@ -42,6 +42,7 @@ export default function App() {
   const [phaseErrors, setPhaseErrors] = useState({});
   const [savingFinal, setSavingFinal] = useState(false);
   const [activeTab, setActiveTab] = useState("compose"); // "compose" | "documents"
+  const [assemblyVisible, setAssemblyVisible] = useState(true); // when in assembly stage, show assembly or phases
 
   // Update colors when system theme changes
   useEffect(() => {
@@ -262,22 +263,20 @@ export default function App() {
       const sessionId = phaseSessions[vendor] || phaseSessionId;
 
       try {
-        const res = await fetch("/api/phases/refine/", {
+        const res = await fetch("/api/phases/draft/", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             session_id: sessionId,
             vendor,
+            // background is user-editable; always send current edits to override cached
             company_report: edits.company_report,
             background_summary: edits.background_summary,
-            top_docs: phaseState[vendor]?.background?.data?.top_docs || [],
-          job_text: jobText,
-            cv_text: null,
           }),
         });
         if (!res.ok) {
           const detail = await res.text();
-          throw new Error(detail || "Failed to build letter");
+          throw new Error(detail || "Failed to generate draft");
         }
         const data = await res.json();
 
@@ -301,13 +300,15 @@ export default function App() {
               background_summary: data.background_summary ?? edits.background_summary ?? "",
             },
             refine: {
-              final_letter: data.final_letter || "",
+              // Initialize editable draft in the refine stage; final letter will be produced later
               draft_letter: data.draft_letter || "",
+              final_letter: data.draft_letter || "",
+              feedback_overrides: {},
             },
           },
         }));
       } catch (e) {
-        console.error("Letter generation error", e);
+        console.error("Draft generation error", e);
         setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
       } finally {
         setLoadingVendors((prev) => {
@@ -317,49 +318,94 @@ export default function App() {
         });
       }
     } else if (phase === "refine") {
-      const finalText =
+      const editedFinal =
         (phaseEdits[vendor]?.refine?.final_letter ??
           phaseState[vendor]?.refine?.data?.final_letter ??
           "").trim();
+      setPhaseErrors((prev) => ({ ...prev, [vendor]: null }));
+      setLoadingVendors((prev) => new Set(prev).add(vendor));
+      const sessionId = phaseSessions[vendor] || phaseSessionId;
+      const bg = phaseState[vendor]?.background?.data || {};
+      const bgEdits = phaseEdits[vendor]?.background || {};
+      const backgroundDirty =
+        (bgEdits.company_report ?? "") !== (bg.company_report ?? "") ||
+        (bgEdits.background_summary ?? "") !== (bg.background_summary ?? "");
+      const feedbackOverrides = phaseEdits[vendor]?.refine?.feedback_overrides || {};
+      const hasFeedbackOverrides = Object.keys(feedbackOverrides).length > 0;
 
-      setPhaseState((prev) => {
-        const next = {
+      try {
+        const payload = {
+          session_id: sessionId,
+          vendor,
+          draft_letter: editedFinal || phaseState[vendor]?.refine?.data?.draft_letter || "",
+        };
+        // Only send background overrides if the user changed them
+        if (backgroundDirty) {
+          payload.company_report = bgEdits.company_report ?? "";
+          payload.background_summary = bgEdits.background_summary ?? "";
+        }
+        if (hasFeedbackOverrides) {
+          payload.feedback_override = feedbackOverrides;
+        }
+
+        const res = await fetch("/api/phases/refine/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const detail = await res.text();
+          throw new Error(detail || "Failed to refine letter");
+        }
+        const data = await res.json();
+
+        setPhaseState((prev) => ({
+          ...prev,
+          [vendor]: {
+            ...(prev[vendor] || {}),
+            refine: { data, approved: true },
+            cost: data.cost ?? prev[vendor]?.cost ?? 0,
+          },
+        }));
+        setPhaseEdits((prev) => ({
           ...prev,
           [vendor]: {
             ...(prev[vendor] || {}),
             refine: {
-              data: {
-                ...(prev[vendor]?.refine?.data || {}),
-                final_letter: finalText,
-              },
-              approved: true,
+              final_letter: data.final_letter || editedFinal,
+              draft_letter: data.draft_letter || "",
             },
           },
-        };
+        }));
+        const finalText = data.final_letter || editedFinal;
+        setLetters((prev) => ({ ...prev, [vendor]: finalText }));
+        setVendorParagraphs((prev) => ({
+          ...prev,
+          [vendor]: splitIntoParagraphs(finalText, vendor),
+        }));
+        setVendorCosts((prev) => ({
+          ...prev,
+          [vendor]: data.cost ?? prev[vendor]?.cost ?? 0,
+        }));
 
         const done = Array.from(selectedVendors).every(
-          (v) => next[v]?.refine?.approved || v === vendor
+          (v) => v === vendor ? true : phaseState[v]?.refine?.approved
         );
         if (done) {
           setUiStage("assembly");
           setShowInput(false);
+          setAssemblyVisible(true);
         }
-
-        return next;
-      });
-
-      setLetters((prev) => ({
-        ...prev,
-        [vendor]: finalText,
-      }));
-      setVendorParagraphs((prev) => ({
-        ...prev,
-        [vendor]: splitIntoParagraphs(finalText, vendor),
-      }));
-      setVendorCosts((prev) => ({
-        ...prev,
-        [vendor]: phaseState[vendor]?.cost || 0,
-      }));
+      } catch (e) {
+        console.error("Refine approve error", e);
+        setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
+      } finally {
+        setLoadingVendors((prev) => {
+          const next = new Set(prev);
+          next.delete(vendor);
+          return next;
+        });
+      }
     }
   };
 
@@ -435,6 +481,7 @@ export default function App() {
     setDocumentId(null);
     setSavingFinal(false);
     setActiveTab("compose");
+    setAssemblyVisible(true);
   };
 
   const vendorsList = Array.from(selectedVendors);
@@ -520,7 +567,7 @@ export default function App() {
       )}
       {error && <p style={{ color: "var(--error-text)" }}>{error}</p>}
 
-      {!showInput && (
+      {!showInput && uiStage !== "assembly" && (
         <PhaseFlow
           vendorsList={vendorsList}
           phaseState={phaseState}
@@ -532,6 +579,92 @@ export default function App() {
           onApproveAll={approveAllPhase}
           onRerunFromBackground={rerunFromBackground}
         />
+      )}
+
+      {!showInput && uiStage === "assembly" && (
+        <>
+          <div style={{ marginBottom: 6, display: "flex", justifyContent: "flex-end" }}>
+            {assemblyVisible ? (
+              <button
+                onClick={() => setAssemblyVisible(false)}
+                style={{
+                  padding: "6px 10px",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                  backgroundColor: "var(--button-bg)",
+                  color: "var(--button-text)",
+                  cursor: "pointer",
+                }}
+              >
+                ↑ Show phases
+              </button>
+            ) : null}
+          </div>
+
+          {assemblyVisible ? (
+            <>
+              <LetterTabs
+                vendorsList={vendorsList}
+                vendorParagraphs={vendorParagraphs}
+                vendorCosts={vendorCosts}
+                finalParagraphs={finalParagraphs}
+                setFinalParagraphs={setFinalParagraphs}
+                originalText={jobText}
+                vendorColors={vendorColors}
+                failedVendors={failedVendors}
+                loadingVendors={loadingVendors}
+                onRetry={retryVendor}
+                onAddParagraph={onAddParagraph}
+                onCopyFinal={persistFinalLetter}
+                savingFinal={savingFinal}
+              />
+              <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => setAssemblyVisible(false)}
+                  style={{
+                    padding: "6px 10px",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                    backgroundColor: "var(--button-bg)",
+                    color: "var(--button-text)",
+                    cursor: "pointer",
+                  }}
+                >
+                  ↑ Show phases
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <PhaseFlow
+                vendorsList={vendorsList}
+                phaseState={phaseState}
+                phaseEdits={phaseEdits}
+                loadingVendors={loadingVendors}
+                errors={phaseErrors}
+                onEditChange={updatePhaseEdit}
+                onApprove={approvePhase}
+                onApproveAll={approveAllPhase}
+                onRerunFromBackground={rerunFromBackground}
+              />
+              <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => setAssemblyVisible(true)}
+                  style={{
+                    padding: "6px 10px",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                    backgroundColor: "var(--button-bg)",
+                    color: "var(--button-text)",
+                    cursor: "pointer",
+                  }}
+                >
+                  ↓ Back to assembly
+                </button>
+              </div>
+            </>
+          )}
+        </>
       )}
 
       {Object.keys(failedVendors).length > 0 && (
@@ -570,7 +703,7 @@ export default function App() {
         </div>
       )}
 
-      {hasAssembly && vendorsList.length > 0 && (
+      {hasAssembly && vendorsList.length > 0 && uiStage !== "assembly" && (
         <LetterTabs
           vendorsList={vendorsList}
           vendorParagraphs={vendorParagraphs}

@@ -206,11 +206,34 @@ def advance_to_draft(
         draft_letter = generate_letter(
             cv_text, top_docs, company_report, job_text, ai_client, trace_dir
         )
+        # Run checks on the draft so the user can review/override feedback before refinement
+        print(f"[PHASE] draft -> {vendor.value} :: running checks (TINY)")
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            instruction_future = executor.submit(instruction_check, draft_letter, ai_client)
+            accuracy_future = executor.submit(accuracy_check, draft_letter, cv_text, ai_client)
+            precision_future = executor.submit(
+                precision_check, draft_letter, company_report, job_text, ai_client
+            )
+            company_fit_future = executor.submit(
+                company_fit_check, draft_letter, company_report, job_text, ai_client
+            )
+            user_fit_future = executor.submit(user_fit_check, draft_letter, top_docs, ai_client)
+            human_future = executor.submit(human_check, draft_letter, top_docs, ai_client)
+
+        feedback = {
+            "instruction": instruction_future.result(),
+            "accuracy": accuracy_future.result(),
+            "precision": precision_future.result(),
+            "company_fit": company_fit_future.result(),
+            "user_fit": user_fit_future.result(),
+            "human": human_future.result(),
+        }
     except Exception:
         traceback.print_exc()
         raise
 
     state.draft_letter = draft_letter
+    state.feedback = feedback
     _update_cost(state, ai_client)
     return state
 
@@ -220,6 +243,7 @@ def advance_to_refinement(
     session_id: str,
     vendor: ModelVendor,
     draft_override: Optional[str] = None,
+    feedback_override: Optional[Dict[str, str]] = None,
     company_report_override: Optional[str] = None,
     top_docs_override: Optional[List[dict]] = None,
     job_text_override: Optional[str] = None,
@@ -245,47 +269,28 @@ def advance_to_refinement(
     draft_letter = draft_override or state.draft_letter or ""
     if not draft_letter:
         try:
-            print(f"[PHASE] draft+refine -> {vendor.value} :: generate_letter (XLARGE)")
-            draft_letter = generate_letter(cv_text, top_docs, company_report, job_text, ai_client, trace_dir)
+            raise ValueError("Missing draft letter for refinement")
         except Exception:
             traceback.print_exc()
             raise ValueError("Missing draft letter for refinement")
 
     state.company_report = company_report
     state.top_docs = top_docs
+    if feedback_override is not None:
+        # Merge/replace cached feedback with user-provided overrides
+        state.feedback = feedback_override
 
     try:
-        print(f"[PHASE] refine -> {vendor.value} :: running checks (TINY)")
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            instruction_future = executor.submit(instruction_check, draft_letter, ai_client)
-            accuracy_future = executor.submit(accuracy_check, draft_letter, cv_text, ai_client)
-            precision_future = executor.submit(
-                precision_check, draft_letter, company_report, job_text, ai_client
-            )
-            company_fit_future = executor.submit(
-                company_fit_check, draft_letter, company_report, job_text, ai_client
-            )
-            user_fit_future = executor.submit(user_fit_check, draft_letter, top_docs, ai_client)
-            human_future = executor.submit(human_check, draft_letter, top_docs, ai_client)
-
-        feedback = {
-            "instruction": instruction_future.result(),
-            "accuracy": accuracy_future.result(),
-            "precision": precision_future.result(),
-            "company_fit": company_fit_future.result(),
-            "user_fit": user_fit_future.result(),
-            "human": human_future.result(),
-        }
-
+        feedback = state.feedback or {}
         print(f"[PHASE] refine -> {vendor.value} :: rewrite_letter (XLARGE)")
         refined = rewrite_letter(
             draft_letter,
-            feedback["instruction"],
-            feedback["accuracy"],
-            feedback["precision"],
-            feedback["company_fit"],
-            feedback["user_fit"],
-            feedback["human"],
+            feedback.get("instruction", ""),
+            feedback.get("accuracy", ""),
+            feedback.get("precision", ""),
+            feedback.get("company_fit", ""),
+            feedback.get("user_fit", ""),
+            feedback.get("human", ""),
             ai_client,
             trace_dir,
         )
