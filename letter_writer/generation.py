@@ -5,6 +5,53 @@ from openai import OpenAI
 from .config import TRACE_DIR
 from .clients.base import BaseClient, ModelSize
 
+REQUIRED_SUFFIXES = ("NO COMMENT", "PLEASE FIX")
+
+
+def _has_required_suffix(text: str) -> bool:
+    """Check whether text ends with one of the required review markers."""
+    normalized = (text or "").strip().upper()
+    return any(normalized.endswith(marker) for marker in REQUIRED_SUFFIXES)
+
+
+def _call_with_required_suffix(
+    client: BaseClient,
+    model_size: ModelSize,
+    system: str,
+    prompt: str,
+    *,
+    search: bool = False,
+    max_retries: int = 2,
+) -> str:
+    """Call an LLM and enforce that the reply ends with NO COMMENT or PLEASE FIX."""
+    suffix_instruction = (
+        " ALWAYS end your response with exactly one of these phrases: "
+        "'NO COMMENT' (no issues) or 'PLEASE FIX' (issues found). "
+        "Do not add anything after that final phrase."
+    )
+    enforced_system = system + suffix_instruction
+
+    last_response = ""
+    for attempt in range(1, max_retries + 1):
+        response = client.call(model_size, enforced_system, [prompt], search=search)
+        last_response = response.strip()
+        if _has_required_suffix(last_response):
+            return last_response
+        print(
+            f"[WARN] Missing required suffix in review response "
+            f"(attempt {attempt}/{max_retries}); retrying..."
+        )
+
+    # As a final safety net, append PLEASE FIX to avoid false approval.
+    print(f"[WARN] Missing required suffix in review response "
+            f"(attempt {attempt}/{max_retries}); appending PLEASE FIX")
+    return f"{last_response}\nPLEASE FIX"
+
+
+def _is_no_comment(feedback: str) -> bool:
+    """Return True only if feedback explicitly ends with NO COMMENT."""
+    return (feedback or "").strip().upper().endswith("NO COMMENT")
+
 def get_style_instructions() -> str:
     """Load style instructions from file."""
     style_file = Path(__file__).parent / "style_instructions.txt"
@@ -74,7 +121,7 @@ def instruction_check(letter: str, client: BaseClient) -> str:
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
         "Please catch any strong inconsitency with the instructions, or output NO COMMENT"
     )
-    return client.call(ModelSize.TINY, system, [prompt])
+    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 
 def accuracy_check(letter: str, cv_text: str, client: BaseClient) -> str:
@@ -97,7 +144,7 @@ def accuracy_check(letter: str, cv_text: str, client: BaseClient) -> str:
         "Please review the cover letter for factual accuracy against the CV. "
         "Point out any claims that cannot be verified from the CV or are inconsistent with it."
     )
-    return client.call(ModelSize.TINY, system, [prompt])
+    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 def precision_check(letter: str, company_report: str, job_text: str, client: BaseClient) -> str:
     """Check the precision and style of the cover letter against the company report and job description."""
@@ -120,7 +167,7 @@ def precision_check(letter: str, company_report: str, job_text: str, client: Bas
         "Please review the cover letter for consistency with the company report and job description. "
         "Provide specific feedback on how to better align with the company's needs."
     )
-    return client.call(ModelSize.TINY, system, [prompt])
+    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 def company_fit_check(letter: str, company_report: str, job_offer: str, client: OpenAI) -> str:
     """Check how well the cover letter aligns with the company's values, culture, tone, and needs."""
@@ -139,7 +186,7 @@ def company_fit_check(letter: str, company_report: str, job_offer: str, client: 
         "Please review the cover letter for alignment with the company's values, tone, and culture. "
         "Provide feedback on how to better demonstrate understanding of and fit with the company. "
     )
-    return client.call(ModelSize.TINY, system, [prompt])
+    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 def user_fit_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     """Check how well the cover letter showcases the user's unique value proposition."""
@@ -160,7 +207,7 @@ def user_fit_check(letter: str, examples: List[dict], client: OpenAI) -> str:
         "Please review the cover letter for effectiveness in adhering to the style and tone of the previous examples."
         "Provide feedback on how to improve the letter to better match the previous examples."
     )
-    return client.call(ModelSize.TINY, system, [prompt])
+    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     """Check the letter for consistency with the instructions."""
@@ -190,7 +237,7 @@ def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
         "Please review the cover letter for anything that looks like something the reviewer would change, based on the examples."
     )
-    return client.call(ModelSize.TINY, system, [prompt])
+    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 
 def rewrite_letter(
@@ -212,22 +259,22 @@ def rewrite_letter(
     )
     had_feedback = False
     prompt = "========== Original Cover Letter:\n" + original_letter + "\n==========\n"
-    if "NO COMMENT" not in instruction_feedback:
+    if not _is_no_comment(instruction_feedback):
         had_feedback = True
         prompt += "========== Instruction Feedback:\n" + instruction_feedback + "\n==========\n"
-    if "NO COMMENT" not in accuracy_feedback:
+    if not _is_no_comment(accuracy_feedback):
         had_feedback = True
         prompt += "========== Accuracy Feedback:\n" + accuracy_feedback + "\n==========\n"
-    if "NO COMMENT" not in precision_feedback:
+    if not _is_no_comment(precision_feedback):
         had_feedback = True
         prompt += "========== Precision Feedback:\n" + precision_feedback + "\n==========\n"
-    if "NO COMMENT" not in company_fit_feedback:
+    if not _is_no_comment(company_fit_feedback):
         had_feedback = True
         prompt += "========== Company Fit Feedback:\n" + company_fit_feedback + "\n==========\n"
-    if "NO COMMENT" not in user_fit_feedback:
+    if not _is_no_comment(user_fit_feedback):
         had_feedback = True
         prompt += "========== User Fit Feedback:\n" + user_fit_feedback + "\n==========\n"
-    if "NO COMMENT" not in human_feedback:
+    if not _is_no_comment(human_feedback):
         had_feedback = True
         prompt += "========== Human Feedback:\n" + human_feedback + "\n==========\n"
     if not had_feedback:
