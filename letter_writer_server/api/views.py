@@ -261,8 +261,6 @@ def start_phased_job_view(request: HttpRequest):
 
     vendors_payload = {
         key: {
-            "background_summary": state.background_summary,
-            "main_points": state.main_points,
             "company_report": state.company_report,
             "top_docs": state.top_docs,
             "cost": state.cost,
@@ -327,7 +325,6 @@ def refinement_phase_view(request: HttpRequest):
             "draft_letter": state.draft_letter,
             "feedback": state.feedback,
             "company_report": state.company_report,
-            "main_points": state.main_points,
             "cost": state.cost,
         }
     )
@@ -357,7 +354,6 @@ def draft_phase_view(request: HttpRequest):
             session_id=session_id,
             vendor=vendor,
             company_report_override=data.get("company_report"),
-            background_summary_override=data.get("background_summary"),
             top_docs_override=data.get("top_docs"),
             job_text_override=data.get("job_text"),
             cv_text_override=data.get("cv_text"),
@@ -376,7 +372,6 @@ def draft_phase_view(request: HttpRequest):
             "draft_letter": state.draft_letter,
             "feedback": state.feedback,
             "company_report": state.company_report,
-            "main_points": state.main_points,
             "cost": state.cost,
         }
     )

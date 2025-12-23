@@ -159,7 +159,6 @@ export default function App() {
         [vendor]: {
           background: {
             company_report: vendorData.company_report || "",
-            background_summary: vendorData.background_summary || "",
           },
           draft: { draft_letter: "" },
           refine: { final_letter: "" },
@@ -248,7 +247,6 @@ export default function App() {
         nextEdits[vendor] = {
           background: {
             company_report: vendorData.company_report || "",
-            background_summary: vendorData.background_summary || "",
           },
           refine: { final_letter: "", draft_letter: "" },
         };
@@ -286,7 +284,6 @@ export default function App() {
             vendor,
             // background is user-editable; always send current edits to override cached
             company_report: edits.company_report,
-            background_summary: edits.background_summary,
           }),
         });
         if (!res.ok) {
@@ -312,7 +309,6 @@ export default function App() {
             background: {
               ...(prev[vendor]?.background || {}),
               company_report: data.company_report ?? edits.company_report ?? "",
-              background_summary: data.background_summary ?? edits.background_summary ?? "",
             },
             refine: {
               // Initialize editable draft in the refine stage; final letter will be produced later
@@ -343,8 +339,7 @@ export default function App() {
       const bg = phaseState[vendor]?.background?.data || {};
       const bgEdits = phaseEdits[vendor]?.background || {};
       const backgroundDirty =
-        (bgEdits.company_report ?? "") !== (bg.company_report ?? "") ||
-        (bgEdits.background_summary ?? "") !== (bg.background_summary ?? "");
+        (bgEdits.company_report ?? "") !== (bg.company_report ?? "");
       const feedbackOverrides = phaseEdits[vendor]?.refine?.feedback_overrides || {};
       const hasFeedbackOverrides = Object.keys(feedbackOverrides).length > 0;
 
@@ -357,7 +352,6 @@ export default function App() {
         // Only send background overrides if the user changed them
         if (backgroundDirty) {
           payload.company_report = bgEdits.company_report ?? "";
-          payload.background_summary = bgEdits.background_summary ?? "";
         }
         if (hasFeedbackOverrides) {
           payload.feedback_override = feedbackOverrides;
