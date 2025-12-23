@@ -349,7 +349,7 @@ function VendorCard({
                     const baseVal = feedback[key] || "";
                     const displayVal = overriddenVal !== undefined ? overriddenVal : baseVal;
                     const trimmedUpper = (displayVal || "").trim().toUpperCase();
-                    const isNoComment = trimmedUpper === "" || trimmedUpper === "NO COMMENT";
+                    const isNoComment = trimmedUpper === "" || trimmedUpper.endsWith("NO COMMENT");
                     const hasContent = !isNoComment;
                     const approved = feedbackApprovals[key];
                     const isModified = overriddenVal !== undefined && overriddenVal !== baseVal;
