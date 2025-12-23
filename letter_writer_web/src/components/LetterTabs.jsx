@@ -583,7 +583,20 @@ export default function LetterTabs({
         flexDirection: "column",
         color: 'var(--text-color)'
       }}>
-        <div style={{ marginBottom: 10, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+      <div style={{
+        marginBottom: 10,
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 8,
+        alignItems: "center",
+        position: "absolute",
+        right: 0,
+        top: -46,
+        background: "var(--bg-color)",
+        padding: "6px 8px",
+        borderRadius: 8,
+        boxShadow: "0 2px 6px rgba(0,0,0,0.05)",
+      }}>
           <span style={{ fontWeight: 600, fontSize: 13 }}>Languages:</span>
           <button
             onClick={() => setLanguageLogic((prev) => (prev === "OR" ? "AND" : "OR"))}

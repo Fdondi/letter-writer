@@ -85,6 +85,7 @@ function EditableFeedback({
   approved,
   onApprove,
   hasContent,
+  isModified,
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value || "");
@@ -107,21 +108,36 @@ function EditableFeedback({
             ✎ Edit
           </button>
         )}
-        <button
-          type="button"
-          onClick={onApprove}
-          style={{
-            fontSize: 12,
-            padding: "4px 8px",
-            border: "1px solid #16a34a",
-            background: approved ? "#dcfce7" : "#fff",
-            color: "#166534",
-            cursor: approved ? "default" : "pointer",
-          }}
-          disabled={approved}
-        >
-          {approved ? "Approved" : "Approve"}
-        </button>
+        {isModified ? (
+          <span
+            style={{
+              fontSize: 12,
+              padding: "4px 8px",
+              border: "1px solid #fca5a5",
+              background: "#fff1f2",
+              color: "#b91c1c",
+              borderRadius: 4,
+            }}
+          >
+            Edited
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={onApprove}
+            style={{
+              fontSize: 12,
+              padding: "4px 8px",
+              border: "1px solid #16a34a",
+              background: approved ? "#dcfce7" : "#fff",
+              color: "#166534",
+              cursor: approved ? "default" : "pointer",
+            }}
+            disabled={approved}
+          >
+            {approved ? "Approved" : "Approve"}
+          </button>
+        )}
       </div>
 
       {editing ? (
@@ -408,6 +424,10 @@ function VendorCard({
                   hasContent={(feedback[activeFeedbackKey] || "").trim().length > 0}
                   onApprove={() => onApproveFeedback(activeFeedbackKey)}
                   onSave={(val) => onSaveFeedbackOverride(activeFeedbackKey, val)}
+                  isModified={
+                    feedbackOverrides[activeFeedbackKey] !== undefined &&
+                    feedbackOverrides[activeFeedbackKey] !== feedback[activeFeedbackKey]
+                  }
                 />
               )}
             </div>
@@ -642,7 +662,7 @@ export default function PhaseFlow({
             }}
           >
             <h3 style={{ margin: 0 }}>Refine</h3>
-            {pendingRefine.length > 1 && (
+              {pendingRefine.length > 1 && (
               <button
                 type="button"
                 onClick={(e) => {
@@ -652,7 +672,7 @@ export default function PhaseFlow({
                 }}
                 style={{ fontSize: 12, padding: "4px 8px" }}
               >
-                Approve all refined letters
+                  Approve all comments & write final letters
               </button>
             )}
           </summary>

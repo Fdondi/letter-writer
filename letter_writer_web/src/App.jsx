@@ -359,14 +359,19 @@ export default function App() {
         }
         const data = await res.json();
 
-        setPhaseState((prev) => ({
-          ...prev,
-          [vendor]: {
-            ...(prev[vendor] || {}),
-            refine: { data, approved: true },
-            cost: data.cost ?? prev[vendor]?.cost ?? 0,
-          },
-        }));
+        let allDone = false;
+        setPhaseState((prev) => {
+          const next = {
+            ...prev,
+            [vendor]: {
+              ...(prev[vendor] || {}),
+              refine: { data, approved: true },
+              cost: data.cost ?? prev[vendor]?.cost ?? 0,
+            },
+          };
+          allDone = Array.from(selectedVendors).every((v) => next[v]?.refine?.approved);
+          return next;
+        });
         setPhaseEdits((prev) => ({
           ...prev,
           [vendor]: {
@@ -388,10 +393,7 @@ export default function App() {
           [vendor]: data.cost ?? prev[vendor]?.cost ?? 0,
         }));
 
-        const done = Array.from(selectedVendors).every(
-          (v) => v === vendor ? true : phaseState[v]?.refine?.approved
-        );
-        if (done) {
+        if (allDone) {
           setUiStage("assembly");
           setShowInput(false);
           setAssemblyVisible(true);
@@ -485,6 +487,7 @@ export default function App() {
   };
 
   const vendorsList = Array.from(selectedVendors);
+  const toggleX = "40%"; // horizontal placement for phases/assembly toggles
   const hasAssembly = vendorsList.some((v) => phaseState[v]?.refine?.approved);
 
   const renderCompose = () => (
@@ -550,20 +553,53 @@ export default function App() {
           </button>
         </>
       ) : (
-        <button
-          onClick={resetForm}
+        <div
           style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
             marginBottom: 10,
-            padding: "8px 16px",
-            backgroundColor: "var(--button-bg)",
-            color: "var(--button-text)",
-            border: "1px solid var(--border-color)",
-            borderRadius: "4px",
-            cursor: "pointer",
+            position: "relative",
           }}
         >
-          ← Back to Input
-        </button>
+          <button
+            onClick={resetForm}
+            style={{
+              padding: "8px 16px",
+              backgroundColor: "var(--button-bg)",
+              color: "var(--button-text)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "4px",
+              cursor: "pointer",
+            }}
+          >
+            ← Back to Input
+          </button>
+          {uiStage === "assembly" && assemblyVisible && (
+            <div
+              style={{
+                position: "absolute",
+                left: toggleX,
+                transform: "translateX(-50%)",
+              }}
+            >
+              <button
+                onClick={() => setAssemblyVisible(false)}
+                style={{
+                  padding: "10px 14px",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "999px",
+                  backgroundColor: "var(--button-bg)",
+                  color: "var(--button-text)",
+                  cursor: "pointer",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
+                }}
+              >
+                ↑ Show phases
+              </button>
+            </div>
+          )}
+        </div>
       )}
       {error && <p style={{ color: "var(--error-text)" }}>{error}</p>}
 
@@ -583,26 +619,8 @@ export default function App() {
 
       {!showInput && uiStage === "assembly" && (
         <>
-          <div style={{ marginBottom: 6, display: "flex", justifyContent: "flex-end" }}>
-            {assemblyVisible ? (
-              <button
-                onClick={() => setAssemblyVisible(false)}
-                style={{
-                  padding: "6px 10px",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "4px",
-                  backgroundColor: "var(--button-bg)",
-                  color: "var(--button-text)",
-                  cursor: "pointer",
-                }}
-              >
-                ↑ Show phases
-              </button>
-            ) : null}
-          </div>
-
           {assemblyVisible ? (
-            <>
+            <div style={{ position: "relative", paddingTop: 4 }}>
               <LetterTabs
                 vendorsList={vendorsList}
                 vendorParagraphs={vendorParagraphs}
@@ -618,22 +636,7 @@ export default function App() {
                 onCopyFinal={persistFinalLetter}
                 savingFinal={savingFinal}
               />
-              <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
-                <button
-                  onClick={() => setAssemblyVisible(false)}
-                  style={{
-                    padding: "6px 10px",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "4px",
-                    backgroundColor: "var(--button-bg)",
-                    color: "var(--button-text)",
-                    cursor: "pointer",
-                  }}
-                >
-                  ↑ Show phases
-                </button>
-              </div>
-            </>
+            </div>
           ) : (
             <>
               <PhaseFlow
@@ -647,21 +650,6 @@ export default function App() {
                 onApproveAll={approveAllPhase}
                 onRerunFromBackground={rerunFromBackground}
               />
-              <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
-                <button
-                  onClick={() => setAssemblyVisible(true)}
-                  style={{
-                    padding: "6px 10px",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "4px",
-                    backgroundColor: "var(--button-bg)",
-                    color: "var(--button-text)",
-                    cursor: "pointer",
-                  }}
-                >
-                  ↓ Back to assembly
-                </button>
-              </div>
             </>
           )}
         </>
@@ -703,23 +691,7 @@ export default function App() {
         </div>
       )}
 
-      {hasAssembly && vendorsList.length > 0 && uiStage !== "assembly" && (
-        <LetterTabs
-          vendorsList={vendorsList}
-          vendorParagraphs={vendorParagraphs}
-          vendorCosts={vendorCosts}
-          finalParagraphs={finalParagraphs}
-          setFinalParagraphs={setFinalParagraphs}
-          originalText={jobText}
-          vendorColors={vendorColors}
-          failedVendors={failedVendors}
-          loadingVendors={loadingVendors}
-          onRetry={retryVendor}
-          onAddParagraph={onAddParagraph}
-          onCopyFinal={persistFinalLetter}
-          savingFinal={savingFinal}
-        />
-      )}
+      {/* Assembly content is shown only in uiStage === "assembly" above */}
     </>
   );
 
@@ -789,6 +761,69 @@ export default function App() {
       </div>
 
       {activeTab === "compose" ? renderCompose() : <DocumentsPage />}
+
+      {/* Floating toggle to assembly while still in phases (after first refinement ready) */}
+      {!showInput && uiStage !== "assembly" && hasAssembly && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 16,
+            left: toggleX,
+            zIndex: 20,
+            pointerEvents: "none",
+            transform: "translateX(-50%)",
+          }}
+        >
+          <button
+            onClick={() => {
+              setUiStage("assembly");
+              setAssemblyVisible(true);
+            }}
+            style={{
+              padding: "10px 14px",
+              border: "1px solid var(--border-color)",
+              borderRadius: "999px",
+              backgroundColor: "var(--button-bg)",
+              color: "var(--button-text)",
+              cursor: "pointer",
+              boxShadow: "0 2px 10px rgba(0,0,0,0.18)",
+              pointerEvents: "auto",
+            }}
+          >
+            ↓ To final assembly
+          </button>
+        </div>
+      )}
+
+      {/* Floating toggle back to assembly when hidden (phases view) */}
+      {!showInput && uiStage === "assembly" && !assemblyVisible && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 16,
+            left: toggleX,
+            transform: "translateX(-50%)",
+            zIndex: 20,
+            pointerEvents: "none",
+          }}
+        >
+          <button
+            onClick={() => setAssemblyVisible(true)}
+            style={{
+              padding: "10px 14px",
+              border: "1px solid var(--border-color)",
+              borderRadius: "999px",
+              backgroundColor: "var(--button-bg)",
+              color: "var(--button-text)",
+              cursor: "pointer",
+              boxShadow: "0 2px 10px rgba(0,0,0,0.18)",
+              pointerEvents: "auto",
+            }}
+          >
+            ↓ Back to assembly
+          </button>
+        </div>
+      )}
 
       <StyleInstructionsBlade
         isOpen={showStyleBlade}
