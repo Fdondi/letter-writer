@@ -6,6 +6,7 @@ export default function DocumentsPage() {
   const [selected, setSelected] = useState(null);
   const [loadingList, setLoadingList] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState(null);
 
   const fetchList = async () => {
@@ -50,6 +51,25 @@ export default function DocumentsPage() {
       setSelected(null);
     }
   }, [selectedId]);
+
+  const deleteSelected = async () => {
+    if (!selectedId) return;
+    const confirmed = window.confirm("Delete this document? This cannot be undone.");
+    if (!confirmed) return;
+    try {
+      setDeleting(true);
+      setError(null);
+      const res = await fetch(`/api/documents/${selectedId}/`, { method: "DELETE" });
+      if (!res.ok) throw new Error(await res.text());
+      setSelectedId(null);
+      setSelected(null);
+      await fetchList();
+    } catch (e) {
+      setError(`Failed to delete document: ${e.message || e}`);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const renderRow = (doc) => {
     return (
@@ -140,6 +160,22 @@ export default function DocumentsPage() {
 
       <div style={{ flex: 1, border: "1px solid var(--border-color)", borderRadius: 4, padding: 12 }}>
         <h3 style={{ marginTop: 0, color: "var(--text-color)" }}>Details</h3>
+        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+          <button
+            onClick={deleteSelected}
+            disabled={!selectedId || deleting}
+            style={{
+              padding: "6px 12px",
+              background: deleting ? "var(--border-color)" : "#ef4444",
+              color: deleting ? "var(--secondary-text-color)" : "white",
+              border: "1px solid var(--border-color)",
+              borderRadius: 4,
+              cursor: !selectedId || deleting ? "not-allowed" : "pointer",
+            }}
+          >
+            {deleting ? "Deleting..." : "Delete"}
+          </button>
+        </div>
         {loadingDetail && <p style={{ color: "var(--secondary-text-color)" }}>Loading...</p>}
         {!loadingDetail && !selected && (
           <p style={{ color: "var(--secondary-text-color)" }}>Select a document to view details.</p>
@@ -212,31 +248,6 @@ export default function DocumentsPage() {
                       }}
                     >
                       {l.text || ""}
-                    </pre>
-                  </div>
-                ))
-              )}
-            </div>
-            <div>
-              <strong>Negatives:</strong>
-              {(selected.negatives || []).length === 0 ? (
-                <div style={{ color: "var(--secondary-text-color)" }}>None</div>
-              ) : (
-                (selected.negatives || []).map((n) => (
-                  <div key={n.id} style={{ marginBottom: 6 }}>
-                    <div style={{ fontWeight: 600 }}>{n.reason || "Negative example"}</div>
-                    <pre
-                      style={{
-                        whiteSpace: "pre-wrap",
-                        background: "var(--pre-bg)",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: 4,
-                        padding: 8,
-                        maxHeight: 120,
-                        overflowY: "auto",
-                      }}
-                    >
-                      {n.text || ""}
                     </pre>
                   </div>
                 ))

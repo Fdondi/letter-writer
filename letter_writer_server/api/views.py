@@ -24,6 +24,8 @@ from letter_writer.mongo_store import (
     upsert_document,
 )
 from letter_writer.vector_store import (
+    collection_exists,
+    delete_documents,
     embed,
     ensure_collection,
     get_qdrant_client,
@@ -526,6 +528,21 @@ def document_detail_view(request: HttpRequest, document_id: str):
         if not existing:
             return _json_error("Not found", status=404)
         return JsonResponse({"document": existing})
+
+    if request.method == "DELETE":
+        if existing is None:
+            return _json_error("Not found", status=404)
+        db.documents.delete_one({"_id": document_id})
+        # Best-effort delete from Qdrant
+        try:
+            qdrant_host = env_default("QDRANT_HOST", "localhost")
+            qdrant_port = int(env_default("QDRANT_PORT", "6333"))
+            qdrant_client = get_qdrant_client(qdrant_host, qdrant_port)
+            if collection_exists(qdrant_client):
+                delete_documents(qdrant_client, [document_id])
+        except Exception:
+            traceback.print_exc()
+        return JsonResponse({"status": "deleted"})
 
     if request.method != "PUT":
         return _json_error("Method not allowed", status=405)

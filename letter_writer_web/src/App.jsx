@@ -80,19 +80,32 @@ export default function App() {
   };
 
   const persistFinalLetter = async (finalText) => {
-    if (!documentId || !finalText) return;
+    if (!finalText || !companyName || !jobText) return;
+    const aiLetters = Object.entries(letters).map(([vendor, text]) => ({
+      vendor,
+      text: text || "",
+      cost: vendorCosts[vendor] ?? null,
+    }));
+    const payload = {
+      company_name: companyName,
+      job_text: jobText,
+      letter_text: finalText,
+      ai_letters: aiLetters,
+    };
+    const url = documentId ? `/api/documents/${documentId}/` : "/api/documents/";
+    const method = documentId ? "PUT" : "POST";
     try {
       setSavingFinal(true);
-      const res = await fetch(`/api/documents/${documentId}/`, {
-        method: "PUT",
+      const res = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          letter_text: finalText,
-          company_name: companyName,
-          job_text: jobText,
-        }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      if (!documentId && data.document?.id) {
+        setDocumentId(data.document.id);
+      }
     } catch (e) {
       setError(`Failed to save letter: ${e.message || e}`);
     } finally {
