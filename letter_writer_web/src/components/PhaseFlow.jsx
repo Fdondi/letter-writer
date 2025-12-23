@@ -195,14 +195,36 @@ const cardStyle = {
   border: "1px solid #e5e7eb",
   borderRadius: 8,
   padding: 12,
+  paddingBottom: 36, // reserve space for bottom action buttons
   background: "#fafafa",
-  minHeight: 180,
   display: "flex",
   flexDirection: "column",
   gap: 8,
   flex: "0 0 340px",
   maxWidth: 340,
-  height: "100%",
+  position: "relative",
+  boxSizing: "border-box",
+};
+
+const contentContainerStyle = {
+  flex: 1,
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  overflowY: "auto",
+  paddingRight: 2,
+  paddingBottom: 8,
+  boxSizing: "border-box",
+};
+
+const buttonBarStyle = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+  position: "absolute",
+  bottom: 12,
+  left: 12,
+  right: 12,
 };
 
 function VendorCard({
@@ -268,210 +290,216 @@ function VendorCard({
 
       {error && <div style={{ color: "red", marginBottom: 8, fontSize: 13 }}>{error}</div>}
 
-      {(phaseToRender === "background" || (isDone && !collapsed && !forcePhase)) && (
-        <>
-          <div style={{ fontSize: 13, color: "#374151" }}>
-            Review the background search. Edit if needed, then approve to generate the letter.
-          </div>
-          <EditableField
-            label="Summary"
-            value={edits?.background?.background_summary ?? backgroundData.background_summary ?? ""}
-            minHeight={80}
-            placeholder="Background summary"
-            onSave={(val) => onEditChange(vendor, "background", "background_summary", val)}
-          />
-          <EditableField
-            label="Company report"
-            value={edits?.background?.company_report ?? backgroundData.company_report ?? ""}
-            minHeight={140}
-            placeholder="Company research"
-            onSave={(val) => onEditChange(vendor, "background", "company_report", val)}
-          />
-          {backgroundData.main_points?.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>Main points</div>
-              <ul style={{ paddingLeft: 18, marginTop: 4 }}>
-                {backgroundData.main_points.map((p, idx) => (
-                  <li key={`${vendor}-mp-${idx}`} style={{ fontSize: 13 }}>
-                    {p}
-                  </li>
-                ))}
-              </ul>
+      <div style={contentContainerStyle}>
+        {(phaseToRender === "background" || (isDone && !collapsed && !forcePhase)) && (
+          <>
+            <div style={{ fontSize: 13, color: "#374151" }}>
+              Review the background search. Edit if needed, then approve to generate the letter.
             </div>
-          )}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: "auto" }}>
-            <button
-              onClick={() => onApprove("background", vendor)}
-              disabled={
-                loading ||
-                (backgroundApproved && !backgroundDirty)
-              }
-              style={{
-                opacity: loading || (backgroundApproved && !backgroundDirty) ? 0.6 : 1,
-                cursor: loading || (backgroundApproved && !backgroundDirty) ? "not-allowed" : "pointer",
-              }}
-            >
-              {loading
-                ? "Processing..."
-                : backgroundApproved
-                  ? backgroundDirty
-                    ? "Save and restart from here"
-                    : "Edit to restart from here"
-                  : "Approve background → generate letter"}
-            </button>
-            {isDone && (
-              <button
-                onClick={() => onRerunFromBackground(vendor)}
-                style={{ opacity: 0.8 }}
-              >
-                Rebuild letter from edited background
-              </button>
-            )}
-          </div>
-        </>
-      )}
-
-      {(phaseToRender === "refine" || (isDone && !collapsed && !forcePhase)) && (
-        <>
-          <div style={{ fontSize: 13, color: "#374151" }}>
-            {!backgroundApproved
-              ? "Background approval required before refining this vendor."
-              : refineApproved
-                ? "Final letter is approved. Edit to rerun refinement if needed."
-                : "Edit if desired, then approve to move to assembly."}
-          </div>
-          <EditableField
-            label="Final letter"
-            value={edits?.refine?.final_letter ?? refineData.final_letter ?? ""}
-            minHeight={220}
-            placeholder="Final letter"
-            onSave={(val) => onEditChange(vendor, "refine", "final_letter", val)}
-          />
-          {feedbackKeys.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {feedbackKeys.map((key) => {
-                  const overriddenVal = feedbackOverrides[key];
-                  const baseVal = feedback[key] || "";
-                  const displayVal = overriddenVal !== undefined ? overriddenVal : baseVal;
-                  const trimmedUpper = (displayVal || "").trim().toUpperCase();
-                  const isNoComment = trimmedUpper === "" || trimmedUpper === "NO COMMENT";
-                  const hasContent = !isNoComment;
-                  const approved = feedbackApprovals[key];
-                  const isModified = overriddenVal !== undefined && overriddenVal !== baseVal;
-
-                  // Machine block: 🤖 | status
-                  const machineStatus = hasContent ? "📜" : "✅";
-
-                  // Human block: 🧑 | status (stacked with thick divider between machine and human)
-                  let humanStatus = "❔";
-                  if (approved) {
-                    humanStatus = isNoComment ? "✅" : "👍";
-                  } else if (isModified) {
-                    humanStatus = isNoComment ? "✅" : "✏️";
-                  } else if (!hasContent && !approved) {
-                    humanStatus = "❔";
-                  }
-
-                  const isSelected = activeFeedbackKey === key;
-                  return (
-                    <button
-                      key={`${vendor}-tab-${key}`}
-                      onClick={() => onSelectFeedbackTab(key)}
-                      style={{
-                        padding: "4px 8px",
-                        fontSize: 12,
-                        borderRadius: 4,
-                        border: isSelected ? "1px solid #2563eb" : "1px solid #ccc",
-                        background: isSelected ? "#e0e7ff" : "#f9fafb",
-                        cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {key}
-                      <div style={{ display: "inline-flex", alignItems: "center", gap: 0, marginLeft: 4 }}>
-                        <div style={{ display: "inline-flex", alignItems: "center", gap: 2, padding: "0 4px" }}>
-                          🤖 {machineStatus}
-                        </div>
-                        <div style={{ width: 2, background: "#d1d5db", height: 14, margin: "0 4px" }} />
-                        <div style={{ display: "inline-flex", alignItems: "center", gap: 2, padding: "0 4px" }}>
-                          🧑 {humanStatus}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-                <button
-                  type="button"
-                  onClick={() => {
-                    const allKeys = feedbackKeys;
-                    allKeys.forEach((k) => onApproveFeedback(k));
-                  }}
-                  style={{ padding: "4px 8px", fontSize: 12 }}
-                >
-                  Approve all comments
-                </button>
+            <EditableField
+              label="Summary"
+              value={edits?.background?.background_summary ?? backgroundData.background_summary ?? ""}
+              minHeight={80}
+              placeholder="Background summary"
+              onSave={(val) => onEditChange(vendor, "background", "background_summary", val)}
+            />
+            <EditableField
+              label="Company report"
+              value={edits?.background?.company_report ?? backgroundData.company_report ?? ""}
+              minHeight={140}
+              placeholder="Company research"
+              onSave={(val) => onEditChange(vendor, "background", "company_report", val)}
+            />
+            {backgroundData.main_points?.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>Main points</div>
+                <ul style={{ paddingLeft: 18, marginTop: 4 }}>
+                  {backgroundData.main_points.map((p, idx) => (
+                    <li key={`${vendor}-mp-${idx}`} style={{ fontSize: 13 }}>
+                      {p}
+                    </li>
+                  ))}
+                </ul>
               </div>
-              {activeFeedbackKey && (feedback[activeFeedbackKey] !== undefined || feedbackOverrides[activeFeedbackKey] !== undefined) && (
-                <EditableFeedback
-                  label={activeFeedbackKey}
-                  value={feedbackOverrides[activeFeedbackKey] ?? feedback[activeFeedbackKey] ?? ""}
-                  placeholder="Feedback"
-                  approved={feedbackApprovals[activeFeedbackKey]}
-                  hasContent={(feedback[activeFeedbackKey] || "").trim().length > 0}
-                  onApprove={() => onApproveFeedback(activeFeedbackKey)}
-                  onSave={(val) => onSaveFeedbackOverride(activeFeedbackKey, val)}
-                  isModified={
-                    feedbackOverrides[activeFeedbackKey] !== undefined &&
-                    feedbackOverrides[activeFeedbackKey] !== feedback[activeFeedbackKey]
-                  }
-                />
-              )}
+            )}
+          </>
+        )}
+
+        {(phaseToRender === "refine" || (isDone && !collapsed && !forcePhase)) && (
+          <>
+            <div style={{ fontSize: 13, color: "#374151" }}>
+              {!backgroundApproved
+                ? "Background approval required before refining this vendor."
+                : refineApproved
+                  ? "Final letter is approved. Edit to rerun refinement if needed."
+                  : "Edit if desired, then approve to move to assembly."}
             </div>
-          )}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: "auto" }}>
-            <button
-              onClick={() => onApprove("refine", vendor)}
-              style={{ marginTop: 10,
-                opacity:
-                  loading ||
-                  !backgroundApproved ||
-                  (refineApproved && !refineDirty) ||
-                  (feedbackKeys.length > 0 &&
-                    feedbackKeys.some((k) => feedbackApprovals[k] === false || feedbackApprovals[k] === undefined))
-                    ? 0.6
-                    : 1,
-                cursor:
-                  loading ||
-                  !backgroundApproved ||
-                  (refineApproved && !refineDirty) ||
-                  (feedbackKeys.length > 0 &&
-                    feedbackKeys.some((k) => feedbackApprovals[k] === false || feedbackApprovals[k] === undefined))
-                    ? "not-allowed"
-                    : "pointer",
-              }}
-              disabled={
+            <EditableField
+              label="Final letter"
+              value={edits?.refine?.final_letter ?? refineData.final_letter ?? ""}
+              minHeight={220}
+              placeholder="Final letter"
+              onSave={(val) => onEditChange(vendor, "refine", "final_letter", val)}
+            />
+            {feedbackKeys.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {feedbackKeys.map((key) => {
+                    const overriddenVal = feedbackOverrides[key];
+                    const baseVal = feedback[key] || "";
+                    const displayVal = overriddenVal !== undefined ? overriddenVal : baseVal;
+                    const trimmedUpper = (displayVal || "").trim().toUpperCase();
+                    const isNoComment = trimmedUpper === "" || trimmedUpper === "NO COMMENT";
+                    const hasContent = !isNoComment;
+                    const approved = feedbackApprovals[key];
+                    const isModified = overriddenVal !== undefined && overriddenVal !== baseVal;
+
+                    // Machine block: 🤖 | status
+                    const machineStatus = hasContent ? "📜" : "✅";
+
+                    // Human block: 🧑 | status (stacked with thick divider between machine and human)
+                    let humanStatus = "❔";
+                    if (approved) {
+                      humanStatus = isNoComment ? "✅" : "👍";
+                    } else if (isModified) {
+                      humanStatus = isNoComment ? "✅" : "✏️";
+                    } else if (!hasContent && !approved) {
+                      humanStatus = "❔";
+                    }
+
+                    const isSelected = activeFeedbackKey === key;
+                    return (
+                      <button
+                        key={`${vendor}-tab-${key}`}
+                        onClick={() => onSelectFeedbackTab(key)}
+                        style={{
+                          padding: "4px 8px",
+                          fontSize: 12,
+                          borderRadius: 4,
+                          border: isSelected ? "1px solid #2563eb" : "1px solid #ccc",
+                          background: isSelected ? "#e0e7ff" : "#f9fafb",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {key}
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: 0, marginLeft: 4 }}>
+                          <div style={{ display: "inline-flex", alignItems: "center", gap: 2, padding: "0 4px" }}>
+                            🤖 {machineStatus}
+                          </div>
+                          <div style={{ width: 2, background: "#d1d5db", height: 14, margin: "0 4px" }} />
+                          <div style={{ display: "inline-flex", alignItems: "center", gap: 2, padding: "0 4px" }}>
+                            🧑 {humanStatus}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allKeys = feedbackKeys;
+                      allKeys.forEach((k) => onApproveFeedback(k));
+                    }}
+                    style={{ padding: "4px 8px", fontSize: 12 }}
+                  >
+                    Approve all comments
+                  </button>
+                </div>
+                {activeFeedbackKey && (feedback[activeFeedbackKey] !== undefined || feedbackOverrides[activeFeedbackKey] !== undefined) && (
+                  <EditableFeedback
+                    label={activeFeedbackKey}
+                    value={feedbackOverrides[activeFeedbackKey] ?? feedback[activeFeedbackKey] ?? ""}
+                    placeholder="Feedback"
+                    approved={feedbackApprovals[activeFeedbackKey]}
+                    hasContent={(feedback[activeFeedbackKey] || "").trim().length > 0}
+                    onApprove={() => onApproveFeedback(activeFeedbackKey)}
+                    onSave={(val) => onSaveFeedbackOverride(activeFeedbackKey, val)}
+                    isModified={
+                      feedbackOverrides[activeFeedbackKey] !== undefined &&
+                      feedbackOverrides[activeFeedbackKey] !== feedback[activeFeedbackKey]
+                    }
+                  />
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div style={buttonBarStyle}>
+        {(phaseToRender === "background" || (isDone && !collapsed && !forcePhase)) && (
+          <button
+            onClick={() => onApprove("background", vendor)}
+            disabled={
+              loading ||
+              (backgroundApproved && !backgroundDirty)
+            }
+            style={{
+              opacity: loading || (backgroundApproved && !backgroundDirty) ? 0.6 : 1,
+              cursor: loading || (backgroundApproved && !backgroundDirty) ? "not-allowed" : "pointer",
+            }}
+          >
+            {loading
+              ? "Processing..."
+              : backgroundApproved
+                ? backgroundDirty
+                  ? "Save and restart from here"
+                  : "Edit to restart from here"
+                : "Approve background → generate letter"}
+          </button>
+        )}
+        {(phaseToRender === "background" || (isDone && !collapsed && !forcePhase)) && isDone && (
+          <button
+            onClick={() => onRerunFromBackground(vendor)}
+            style={{ opacity: 0.8 }}
+          >
+            Rebuild letter from edited background
+          </button>
+        )}
+
+        {(phaseToRender === "refine" || (isDone && !collapsed && !forcePhase)) && (
+          <button
+            onClick={() => onApprove("refine", vendor)}
+            style={{
+              opacity:
                 loading ||
                 !backgroundApproved ||
                 (refineApproved && !refineDirty) ||
                 (feedbackKeys.length > 0 &&
                   feedbackKeys.some((k) => feedbackApprovals[k] === false || feedbackApprovals[k] === undefined))
-              }
-            >
-              {loading
-                ? "Processing..."
-                : refineApproved
-                  ? refineDirty
-                    ? "Save and restart from here"
-                    : "Edit to restart from here"
-                  : "Approve refined letter"}
-            </button>
-          </div>
-        </>
-      )}
+                  ? 0.6
+                  : 1,
+              cursor:
+                loading ||
+                !backgroundApproved ||
+                (refineApproved && !refineDirty) ||
+                (feedbackKeys.length > 0 &&
+                  feedbackKeys.some((k) => feedbackApprovals[k] === false || feedbackApprovals[k] === undefined))
+                  ? "not-allowed"
+                  : "pointer",
+            }}
+            disabled={
+              loading ||
+              !backgroundApproved ||
+              (refineApproved && !refineDirty) ||
+              (feedbackKeys.length > 0 &&
+                feedbackKeys.some((k) => feedbackApprovals[k] === false || feedbackApprovals[k] === undefined))
+            }
+          >
+            {loading
+              ? "Processing..."
+              : refineApproved
+                ? refineDirty
+                  ? "Save and restart from here"
+                  : "Edit to restart from here"
+                : "Approve refined letter"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -615,8 +643,10 @@ export default function PhaseFlow({
         </summary>
         <div
           style={{
-            display: "flex",
-            flexWrap: "nowrap",
+            display: "grid",
+            gridAutoFlow: "column",
+            gridAutoColumns: "340px",
+            gridAutoRows: "1fr",
             gap: 12,
             marginTop: 8,
             overflowX: "auto",
