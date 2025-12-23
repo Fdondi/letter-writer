@@ -191,6 +191,8 @@ export default function App() {
     setFinalParagraphs([]);
     setLoadingVendors(new Set());
     setDocumentId(null);
+    setShowInput(false);
+    setUiStage("phases");
     const vendorList = Array.from(selectedVendors);
 
     setLoadingVendors(new Set(vendorList));
