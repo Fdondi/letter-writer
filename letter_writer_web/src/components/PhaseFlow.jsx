@@ -358,13 +358,20 @@ function VendorCard({
                     const machineStatus = hasContent ? "📜" : "✅";
 
                     // Human block: 🧑 | status (stacked with thick divider between machine and human)
+                    // Human status rules:
+                    // - ✅ only when the user edited a non-NO COMMENT to NO COMMENT
+                    // - 👍 when the user approved without changing content
+                    // - ✏️ when the user edited but did not clear issues
+                    // - ❔ otherwise
+                    const baseNoComment = (baseVal || "").trim().toUpperCase().endsWith("NO COMMENT");
                     let humanStatus = "❔";
-                    if (approved) {
-                      humanStatus = isNoComment ? "✅" : "👍";
+                    const userClearedIssue = isModified && isNoComment && !baseNoComment;
+                    if (userClearedIssue) {
+                      humanStatus = "✅";
+                    } else if (approved) {
+                      humanStatus = "👍";
                     } else if (isModified) {
-                      humanStatus = isNoComment ? "✅" : "✏️";
-                    } else if (!hasContent && !approved) {
-                      humanStatus = "❔";
+                      humanStatus = "✏️";
                     }
 
                     const isSelected = activeFeedbackKey === key;
