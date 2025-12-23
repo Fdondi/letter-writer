@@ -47,11 +47,32 @@ def build_slug(company_name: str, role: Optional[str], timestamp: Optional[datet
     return _slugify("-".join(parts))
 
 
+def _prepare_ai_letters(ai_letters: Optional[List[dict]]) -> List[dict]:
+    """Normalize AI/negative letters for storage."""
+    now = datetime.utcnow()
+    prepared: List[dict] = []
+    for letter in ai_letters or []:
+        if not isinstance(letter, dict):
+            continue
+        prepared.append(
+            {
+                "id": letter.get("id") or str(uuid4()),
+                "vendor": letter.get("vendor"),
+                "model": letter.get("model"),
+                "text": (letter.get("text") or "").strip(),
+                "cost": letter.get("cost"),
+                "created_at": letter.get("created_at") or now,
+            }
+        )
+    return prepared
+
+
 def serialize_document(doc: dict) -> dict:
     if not doc:
         return {}
     result = {k: v for k, v in doc.items() if k != "_id"}
     result["id"] = str(doc.get("_id"))
+    result["ai_letters"] = doc.get("ai_letters") or []
     for ts_field in ("created_at", "updated_at"):
         if ts_field in doc and hasattr(doc[ts_field], "isoformat"):
             result[ts_field] = doc[ts_field].isoformat()
@@ -67,6 +88,8 @@ def upsert_document(db, data: dict, *, allow_update: bool = True) -> dict:
     ts_for_slug = data.get("timestamp") or data.get("created_at") or now
     slug = data.get("slug") or (build_slug(company_name, role, ts_for_slug) if company_name else None)
 
+    ai_letters = _prepare_ai_letters(data.get("ai_letters"))
+
     base = {
         "_id": doc_id,
         "slug": slug,
@@ -81,8 +104,7 @@ def upsert_document(db, data: dict, *, allow_update: bool = True) -> dict:
         "letter_text": (data.get("letter_text") or "").strip(),
         "negative_letter_text": (data.get("negative_letter_text") or "").strip() if data.get("negative_letter_text") else None,
         "blocks": data.get("blocks") or [],
-        "negatives": data.get("negatives") or [],
-        "ai_letters": data.get("ai_letters") or [],
+        "ai_letters": ai_letters,
         "tags": data.get("tags") or [],
         "notes": data.get("notes"),
         "version": int(data.get("version") or 1),
@@ -156,20 +178,15 @@ def list_documents(
 
 
 def append_negatives(db, doc_id: str, negatives: List[dict]) -> dict | None:
+    """Backwards-compatible API: append provided negatives into ai_letters."""
     if not negatives:
         return get_document(db, doc_id)
     now = datetime.utcnow()
-    prepared = []
-    for neg in negatives:
-        prepared.append(
-            {
-                "id": neg.get("id") or str(uuid4()),
-                "text": neg.get("text", "").strip(),
-                "reason": neg.get("reason"),
-                "created_at": neg.get("created_at") or now,
-            }
-        )
-    db.documents.update_one({"_id": doc_id}, {"$push": {"negatives": {"$each": prepared}}, "$set": {"updated_at": now}})
+    prepared = _prepare_ai_letters(negatives)
+    db.documents.update_one(
+        {"_id": doc_id},
+        {"$push": {"ai_letters": {"$each": prepared}}, "$set": {"updated_at": now}},
+    )
     return get_document(db, doc_id)
 
 

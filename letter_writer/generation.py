@@ -211,15 +211,25 @@ def user_fit_check(letter: str, examples: List[dict], client: OpenAI) -> str:
 
 def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     """Check the letter for consistency with the instructions."""
-    rewritten_examples = [ex for ex in examples if "letter_text" in ex and "negative_letter_text" in ex]
+    rewritten_examples = [
+        ex
+        for ex in examples
+        if ex.get("letter_text") and isinstance(ex.get("ai_letters"), list) and ex["ai_letters"]
+    ]
     
     if not rewritten_examples:
-        print(f"none of {', '.join(ex['company_name'] for ex in examples)} have a negative letter, skipping")
+        print(f"none of {', '.join(ex.get('company_name','?') for ex in examples)} have AI letters, skipping")
         return "NO COMMENT"
 
     examples_formatted = "\n\n".join(
         f"---- Example #{i+1} - {ex['company_name']} ----\n"
-        f"Initial cover Letter:\n{ex['negative_letter_text']}\n\n"
+        "Initial cover letters:\n"
+        + "\n\n".join(
+            f"[attempt {j+1}]:\n{al.get('text','')}"
+            for j, al in enumerate(ex["ai_letters"])
+            if isinstance(al, dict) and al.get("text")
+        )
+        + "\n\n"
         f"Revised cover Letter:\n{ex['letter_text']}\n\n"
         for i, ex in enumerate(rewritten_examples)
     )

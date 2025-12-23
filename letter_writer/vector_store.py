@@ -29,6 +29,17 @@ def upsert_documents(client: QdrantClient, points: List[qdrant_models.PointStruc
     if points:
         client.upsert(collection_name=COLLECTION_NAME, points=points)
     
+
+def delete_documents(client: QdrantClient, ids: List[str]) -> None:
+    """Delete documents from Qdrant collection by point ids."""
+    if not ids:
+        return
+    client.delete(
+        collection_name=COLLECTION_NAME,
+        points_selector=qdrant_models.PointIdsList(points=ids),
+    )
+
+
 def collection_exists(client: QdrantClient) -> bool:
     """Check if the collection exists."""
     return COLLECTION_NAME in [c.name for c in client.get_collections().collections] 
