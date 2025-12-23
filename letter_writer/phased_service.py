@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 
@@ -33,8 +32,6 @@ from .retrieval import retrieve_similar_job_offers, select_top_documents
 class VendorPhaseState:
     top_docs: List[dict] = field(default_factory=list)
     company_report: Optional[str] = None
-    background_summary: Optional[str] = None
-    main_points: List[str] = field(default_factory=list)
     draft_letter: Optional[str] = None
     final_letter: Optional[str] = None
     feedback: Dict[str, str] = field(default_factory=dict)
@@ -54,61 +51,6 @@ class SessionState:
 
 
 SESSION_STORE: Dict[str, SessionState] = {}
-
-
-def _strip_code_fence(payload: str) -> str:
-    if payload.startswith("```json"):
-        payload = payload[len("```json") :]
-    if payload.startswith("```"):
-        payload = payload[len("```") :]
-    if payload.endswith("```"):
-        payload = payload[: -len("```")]
-    return payload.strip()
-
-
-def _summarize_background(
-    job_text: str,
-    top_docs: List[dict],
-    company_report: str,
-    client,
-    trace_dir: Path,
-    vendor_name: str,
-) -> Tuple[str, List[str]]:
-    """Summarize the background research into a short memo and bullet points."""
-    docs_preview = "\n\n".join(
-        f"- {doc.get('company_name')}: score {doc.get('score')}/10\n{doc.get('job_text','')[:500]}"
-        for doc in top_docs
-    )
-    system = (
-        "You are preparing a brief background memo for a cover-letter writer.\n"
-        "Given the target job description, the retrieved similar roles, and a company research note, "
-        "produce a concise summary and 3-6 main bullet points. "
-        "Return JSON with keys `summary` (string) and `main_points` (array of strings)."
-    )
-    prompt = (
-        f"Target job description:\n{job_text}\n\n"
-        f"Retrieved roles:\n{docs_preview}\n\n"
-        f"Company research:\n{company_report}"
-    )
-    print(f"[PHASE] background -> {vendor_name} :: summarize (BASE)")
-    raw = client.call(ModelSize.BASE, system, [prompt])
-    cleaned = _strip_code_fence(raw)
-
-    summary = cleaned
-    points: List[str] = []
-    try:
-        parsed = json.loads(cleaned)
-        summary = parsed.get("summary", summary)
-        points = parsed.get("main_points", []) or []
-    except Exception:
-        pass
-
-    (trace_dir / "background_summary.txt").write_text(summary, encoding="utf-8")
-    if points:
-        (trace_dir / "background_main_points.json").write_text(
-            json.dumps(points, indent=2), encoding="utf-8"
-        )
-    return summary, points
 
 
 def _update_cost(state: VendorPhaseState, client) -> None:
@@ -150,9 +92,6 @@ def start_background_phase(
             top_docs = select_top_documents(search_result, job_text, ai_client, trace_dir)
             print(f"[PHASE] background -> {vendor.value} :: company_research")
             company_report = company_research(company_name, job_text, ai_client, trace_dir)
-            summary, main_points = _summarize_background(
-                job_text, top_docs, company_report, ai_client, trace_dir, vendor.value
-            )
         except Exception:
             traceback.print_exc()
             raise
@@ -160,8 +99,6 @@ def start_background_phase(
         state = VendorPhaseState(
             top_docs=top_docs,
             company_report=company_report,
-            background_summary=summary,
-            main_points=main_points,
         )
         _update_cost(state, ai_client)
         session.vendors[vendor.value] = state
@@ -175,7 +112,6 @@ def advance_to_draft(
     session_id: str,
     vendor: ModelVendor,
     company_report_override: Optional[str] = None,
-    background_summary_override: Optional[str] = None,
     top_docs_override: Optional[List[dict]] = None,
     job_text_override: Optional[str] = None,
     cv_text_override: Optional[str] = None,
@@ -197,7 +133,6 @@ def advance_to_draft(
     job_text = job_text_override or session.job_text
     cv_text = cv_text_override or session.cv_text
 
-    state.background_summary = background_summary_override or state.background_summary
     state.company_report = company_report
     state.top_docs = top_docs
 

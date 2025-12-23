@@ -257,7 +257,6 @@ function VendorCard({
   const refineApproved = !!state?.refine?.approved;
 
   const backgroundDirty =
-    (edits?.background?.background_summary ?? "").trim() !== (backgroundData.background_summary ?? "").trim() ||
     (edits?.background?.company_report ?? "").trim() !== (backgroundData.company_report ?? "").trim();
   const refineDirty =
     (edits?.refine?.final_letter ?? "").trim() !== (refineData.final_letter ?? "").trim();
@@ -297,31 +296,12 @@ function VendorCard({
               Review the background search. Edit if needed, then approve to generate the letter.
             </div>
             <EditableField
-              label="Summary"
-              value={edits?.background?.background_summary ?? backgroundData.background_summary ?? ""}
-              minHeight={80}
-              placeholder="Background summary"
-              onSave={(val) => onEditChange(vendor, "background", "background_summary", val)}
-            />
-            <EditableField
               label="Company report"
               value={edits?.background?.company_report ?? backgroundData.company_report ?? ""}
               minHeight={140}
               placeholder="Company research"
               onSave={(val) => onEditChange(vendor, "background", "company_report", val)}
             />
-            {backgroundData.main_points?.length > 0 && (
-              <div style={{ marginTop: 8 }}>
-                <div style={{ fontWeight: 600, fontSize: 13 }}>Main points</div>
-                <ul style={{ paddingLeft: 18, marginTop: 4 }}>
-                  {backgroundData.main_points.map((p, idx) => (
-                    <li key={`${vendor}-mp-${idx}`} style={{ fontSize: 13 }}>
-                      {p}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
           </>
         )}
 
