@@ -1,4 +1,5 @@
-from typing import List
+import json
+from typing import Dict, List
 from pathlib import Path
 from openai import OpenAI
 
@@ -51,6 +52,72 @@ def _call_with_required_suffix(
 def _is_no_comment(feedback: str) -> bool:
     """Return True only if feedback explicitly ends with NO COMMENT."""
     return (feedback or "").strip().upper().endswith("NO COMMENT")
+
+
+def extract_job_metadata(
+    job_text: str,
+    client: BaseClient,
+    trace_dir: Path | None = None,
+) -> Dict[str, str]:
+    """Extract key job details (company, role, location, etc.) from the posting.
+
+    If ``trace_dir`` is provided, we dump the prompt and raw model output to disk
+    to help debug empty / malformed responses.
+    """
+    system = (
+        "You are an assistant that extracts a concise job summary from a job description. "
+        "Return strict JSON with these keys: company_name, job_title, location, language, salary, requirements. "
+        "Use null for unknown values. Keep requirements as a short bullet-style list (array of strings). "
+        "Do not add any additional keys or prose."
+    )
+    prompt = (
+        "Job description:\n"
+        f"{job_text}\n\n"
+        "Respond with JSON only. Example format:\n"
+        '{"company_name":"Acme","job_title":"Senior Engineer","location":"Remote","language":"English","salary":"€80-100k","requirements":["Python","AWS"]}'
+    )
+
+    raw = client.call(ModelSize.TINY, system, [prompt])
+
+    if trace_dir is not None:
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            (trace_dir / "prompt.txt").write_text(f"SYSTEM:\n{system}\n\nPROMPT:\n{prompt}", encoding="utf-8")
+            (trace_dir / "raw.txt").write_text(raw, encoding="utf-8")
+        except Exception:
+            # tracing should not break main flow
+            pass
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        data = {}
+
+    def _clean(val):
+        if val is None:
+            return ""
+        if isinstance(val, (int, float)):
+            return str(val)
+        if isinstance(val, list):
+            return ", ".join(str(x).strip() for x in val if str(x).strip())
+        return str(val).strip()
+
+    requirements = data.get("requirements")
+    if isinstance(requirements, list):
+        req_list = [str(r).strip() for r in requirements if str(r).strip()]
+    elif requirements:
+        req_list = [str(requirements).strip()]
+    else:
+        req_list = []
+
+    return {
+        "company_name": _clean(data.get("company_name")),
+        "job_title": _clean(data.get("job_title")),
+        "location": _clean(data.get("location")),
+        "language": _clean(data.get("language")),
+        "salary": _clean(data.get("salary")),
+        "requirements": req_list,
+    }
 
 def get_style_instructions() -> str:
     """Load style instructions from file."""
