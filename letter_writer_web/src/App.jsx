@@ -24,6 +24,13 @@ export default function App() {
   const [finalParagraphs, setFinalParagraphs] = useState([]);
   const [jobText, setJobText] = useState("");
   const [companyName, setCompanyName] = useState("");
+  const [jobTitle, setJobTitle] = useState("");
+  const [location, setLocation] = useState("");
+  const [language, setLanguage] = useState("");
+  const [salary, setSalary] = useState("");
+  const [requirements, setRequirements] = useState([]);
+  const [extracting, setExtracting] = useState(false);
+  const [extractionError, setExtractionError] = useState(null);
   const [documentId, setDocumentId] = useState(null);
   const [selectedVendors, setSelectedVendors] = useState(new Set());
   const [letters, setLetters] = useState({}); // vendor -> text
@@ -79,8 +86,47 @@ export default function App() {
     setSelectedVendors(checked ? new Set(vendors) : new Set());
   };
 
+  const extractData = async () => {
+    if (!jobText.trim()) {
+      setExtractionError("Please enter job description first");
+      return;
+    }
+    setExtracting(true);
+    setExtractionError(null);
+    try {
+      const res = await fetch("/api/extract/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_text: jobText }),
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(detail || "Failed to extract data");
+      }
+      const data = await res.json();
+      const extracted = data.extraction || {};
+      if (extracted.company_name) setCompanyName(extracted.company_name);
+      if (extracted.job_title) setJobTitle(extracted.job_title);
+      if (extracted.location) setLocation(extracted.location);
+      if (extracted.language) setLanguage(extracted.language);
+      if (extracted.salary) setSalary(extracted.salary);
+      if (extracted.requirements) {
+        const reqs = Array.isArray(extracted.requirements)
+          ? extracted.requirements
+          : [extracted.requirements];
+        setRequirements(reqs.filter(Boolean));
+      }
+    } catch (e) {
+      console.error("Extract error", e);
+      setExtractionError(e?.message || String(e));
+    } finally {
+      setExtracting(false);
+    }
+  };
+
   const persistFinalLetter = async (finalText) => {
     if (!finalText || !companyName || !jobText) return;
+    const requirementsList = Array.isArray(requirements) ? requirements : requirements ? [requirements] : [];
     const aiLetters = Object.entries(letters).map(([vendor, text]) => ({
       vendor,
       text: text || "",
@@ -88,6 +134,11 @@ export default function App() {
     }));
     const payload = {
       company_name: companyName,
+      role: jobTitle || "",
+      location: location || "",
+      language: language || "",
+      salary: salary || "",
+      requirements: requirementsList,
       job_text: jobText,
       letter_text: finalText,
       ai_letters: aiLetters,
@@ -120,21 +171,29 @@ export default function App() {
       delete next[vendor];
       return next;
     });
+    const extractionPayload = {
+      company_name: companyName,
+      job_title: jobTitle,
+      location: location,
+      language: language,
+      salary: salary,
+      requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
+    };
 
     try {
-      const res = await fetch("/api/phases/start/", {
+      const res = await fetch(`/api/phases/background/${vendor}/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          session_id: phaseSessionId,
           job_text: jobText,
-          company_name: companyName,
-          vendors: [vendor],
+          extraction: extractionPayload,
         }),
       });
 
       if (!res.ok) {
         const detail = await res.text();
-        throw new Error(detail || `Failed to restart flow for ${vendor}`);
+        throw new Error(detail || `Failed to restart background for ${vendor}`);
       }
 
       const data = await res.json();
@@ -143,8 +202,7 @@ export default function App() {
       }
 
       const vendorData = data.vendors?.[vendor] || {};
-
-      setPhaseSessions((prev) => ({ ...prev, [vendor]: data.session_id }));
+      setPhaseSessions((prev) => ({ ...prev, [vendor]: data.session_id || phaseSessionId }));
       setPhaseState((prev) => ({
         ...prev,
         [vendor]: {
@@ -170,7 +228,7 @@ export default function App() {
     } catch (e) {
       console.error("Retry vendor error", e);
       setFailedVendors((prev) => ({ ...prev, [vendor]: String(e) }));
-      setError(String(e));
+      setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
     } finally {
       setLoadingVendors((prev) => {
         const next = new Set(prev);
@@ -191,9 +249,92 @@ export default function App() {
         },
       },
     }));
+    
+    // If user manually edits a field, clear any error for this vendor
+    // The user's edited data is the data to use - no synthetic data needed
+    if ((phase === "background" && field === "company_report") || 
+        (phase === "refine" && field === "final_letter")) {
+      if (value?.trim()) {
+        setPhaseErrors((prev) => {
+          const next = { ...prev };
+          delete next[vendor];
+          return next;
+        });
+      }
+    }
+  };
+
+  const approveExtraction = async (vendor) => {
+    if (!phaseSessionId || !vendor) return;
+    const extractionPayload = {
+      company_name: companyName,
+      job_title: jobTitle,
+      location: location,
+      language: language,
+      salary: salary,
+      requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
+    };
+
+    setError(null);
+    setLoadingVendors((prev) => new Set(prev).add(vendor));
+
+    try {
+      const res = await fetch(`/api/phases/background/${vendor}/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: phaseSessionId,
+          extraction: extractionPayload,
+          job_text: jobText,
+        }),
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(detail || "Failed to start background phase");
+      }
+      const data = await res.json();
+      const vendorData = data.vendors?.[vendor] || {};
+
+      setPhaseSessions((prev) => ({ ...prev, [vendor]: data.session_id || phaseSessionId }));
+      setPhaseState((prev) => ({
+        ...prev,
+        [vendor]: {
+          background: { data: vendorData, approved: false },
+          refine: { data: null, approved: false },
+          cost: vendorData.cost || 0,
+        },
+      }));
+      setPhaseEdits((prev) => ({
+        ...prev,
+        [vendor]: {
+          background: {
+            company_report: vendorData.company_report || "",
+          },
+          refine: { final_letter: "", draft_letter: "" },
+        },
+      }));
+      if (!documentId && data.document?.id) {
+        setDocumentId(data.document.id);
+      }
+    } catch (e) {
+      console.error("Background phase error", e);
+      const message = e?.message || String(e);
+      setPhaseErrors((prev) => ({ ...prev, [vendor]: message }));
+    } finally {
+      setLoadingVendors((prev) => {
+        const next = new Set(prev);
+        next.delete(vendor);
+        return next;
+      });
+    }
   };
 
   const handleSubmit = async () => {
+    if (!companyName.trim() || !jobTitle.trim()) {
+      setError("Company name and job title are required");
+      return;
+    }
+    
     setLoading(true);
     setError(null);
     setLetters({});
@@ -205,67 +346,93 @@ export default function App() {
     setDocumentId(null);
     setShowInput(false);
     setUiStage("phases");
+    setPhaseState({});
+    setPhaseEdits({});
+    setPhaseErrors({});
+    setPhaseSessions({});
+    
     const vendorList = Array.from(selectedVendors);
+    const initialSessionId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2);
 
-    setLoadingVendors(new Set(vendorList));
-    try {
-      const results = await Promise.all(
-        vendorList.map(async (vendor) => {
-          const res = await fetch("/api/phases/start/", {
+    const extractionPayload = {
+      company_name: companyName,
+      job_title: jobTitle,
+      location: location,
+      language: language,
+      salary: salary,
+      requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
+    };
+
+    // Start background phase for all vendors in parallel, updating state immediately as each completes
+    // Each vendor runs independently - no waiting for others
+    vendorList.forEach((vendor) => {
+      // Each vendor runs independently, updating state immediately on completion/failure
+      (async () => {
+        try {
+          const res = await fetch(`/api/phases/background/${vendor}/`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+              session_id: initialSessionId,
+              extraction: extractionPayload,
               job_text: jobText,
-              company_name: companyName,
-              vendors: [vendor],
             }),
           });
           if (!res.ok) {
             const detail = await res.text();
-            throw new Error(detail || `Failed to start phased flow for ${vendor}`);
+            throw new Error(detail || `Failed to start background for ${vendor}`);
           }
           const data = await res.json();
+          const vendorData = data.vendors?.[vendor] || {};
+          
+          // Update state for this vendor immediately on success
+          setPhaseSessions((prev) => ({ ...prev, [vendor]: data.session_id || initialSessionId }));
+          setPhaseState((prev) => ({
+            ...prev,
+            [vendor]: {
+              background: { data: vendorData, approved: false },
+              refine: { data: null, approved: false },
+              cost: vendorData.cost || 0,
+            },
+          }));
+          setPhaseEdits((prev) => ({
+            ...prev,
+            [vendor]: {
+              background: {
+                company_report: vendorData.company_report || "",
+              },
+              refine: { final_letter: "", draft_letter: "" },
+            },
+          }));
+          
+          // Clear any previous error for this vendor
+          setPhaseErrors((prev) => {
+            const next = { ...prev };
+            delete next[vendor];
+            return next;
+          });
+          
+          // Set session ID from first successful response
+          setPhaseSessionId((prev) => prev || data.session_id || initialSessionId);
+          
           if (!documentId && data.document?.id) {
             setDocumentId(data.document.id);
           }
-          return { vendor, data };
-        })
-      );
-
-      const nextState = {};
-      const nextEdits = {};
-      const nextSessions = {};
-
-      results.forEach(({ vendor, data }) => {
-        const vendorData = data.vendors?.[vendor] || {};
-        nextSessions[vendor] = data.session_id;
-        nextState[vendor] = {
-          background: { data: vendorData, approved: false },
-          refine: { data: null, approved: false },
-          cost: vendorData.cost || 0,
-        };
-        nextEdits[vendor] = {
-          background: {
-            company_report: vendorData.company_report || "",
-          },
-          refine: { final_letter: "", draft_letter: "" },
-        };
-      });
-
-      setPhaseSessions(nextSessions);
-      setPhaseSessionId(null); // no shared session anymore
-      setPhaseState(nextState);
-      setPhaseEdits(nextEdits);
-      setPhaseErrors({});
-      setShowInput(false);
-      setUiStage("phases");
-    } catch (e) {
-      console.error("Start phased flow error", e);
-      setError(String(e));
-    } finally {
-      setLoading(false);
-      setLoadingVendors(new Set());
-    }
+        } catch (e) {
+          // Update error state immediately for this vendor
+          const errorMsg = e?.message || String(e);
+          setPhaseErrors((prev) => ({ ...prev, [vendor]: errorMsg }));
+          console.error(`Background phase error for ${vendor}:`, e);
+        }
+      })();
+    });
+    
+    // Set initial session ID immediately (will be updated by first successful response)
+    setPhaseSessionId(initialSessionId);
+    setLoading(false);
   };
 
   const approvePhase = async (phase, vendor) => {
@@ -276,12 +443,11 @@ export default function App() {
       const sessionId = phaseSessions[vendor] || phaseSessionId;
 
       try {
-        const res = await fetch("/api/phases/draft/", {
+        const res = await fetch(`/api/phases/draft/${vendor}/`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             session_id: sessionId,
-            vendor,
             // background is user-editable; always send current edits to override cached
             company_report: edits.company_report,
           }),
@@ -346,7 +512,6 @@ export default function App() {
       try {
         const payload = {
           session_id: sessionId,
-          vendor,
           draft_letter: editedFinal || phaseState[vendor]?.refine?.data?.draft_letter || "",
         };
         // Only send background overrides if the user changed them
@@ -357,7 +522,7 @@ export default function App() {
           payload.feedback_override = feedbackOverrides;
         }
 
-        const res = await fetch("/api/phases/refine/", {
+        const res = await fetch(`/api/phases/refine/${vendor}/`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
@@ -422,16 +587,17 @@ export default function App() {
 
   const approveAllPhase = async (phase) => {
     if (phase === "background") {
-      const pending = Array.from(selectedVendors).filter(
-        (v) => !(phaseState[v]?.background?.approved)
+      // Only approve vendors that have background data ready (not just pending)
+      const ready = Array.from(selectedVendors).filter(
+        (v) => !(phaseState[v]?.background?.approved) && phaseState[v]?.background?.data
       );
-      await Promise.all(pending.map((v) => approvePhase("background", v)));
+      await Promise.all(ready.map((v) => approvePhase("background", v)));
     } else if (phase === "refine") {
-      Array.from(selectedVendors).forEach((v) => {
-        if (!phaseState[v]?.refine?.approved && phaseState[v]?.refine?.data) {
-          approvePhase("refine", v);
-        }
-      });
+      // Only approve vendors that have refine data ready
+      const ready = Array.from(selectedVendors).filter(
+        (v) => !phaseState[v]?.refine?.approved && phaseState[v]?.refine?.data
+      );
+      await Promise.all(ready.map((v) => approvePhase("refine", v)));
     }
   };
 
@@ -493,6 +659,14 @@ export default function App() {
     setSavingFinal(false);
     setActiveTab("compose");
     setAssemblyVisible(true);
+    // Keep extracted data and job text - don't clear them
+    // setCompanyName("");
+    // setJobTitle("");
+    // setLocation("");
+    // setLanguage("");
+    // setSalary("");
+    // setRequirements([]);
+    setExtractionError(null);
   };
 
   const vendorsList = Array.from(selectedVendors);
@@ -509,21 +683,6 @@ export default function App() {
             onToggle={toggleVendor}
             onSelectAll={selectAll}
           />
-          <input
-            type="text"
-            placeholder="Company name"
-            value={companyName}
-            onChange={(e) => setCompanyName(e.target.value)}
-            style={{
-              width: "100%",
-              marginTop: 10,
-              padding: 8,
-              backgroundColor: "var(--input-bg)",
-              color: "var(--text-color)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "4px",
-            }}
-          />
           <textarea
             style={{
               width: "100%",
@@ -539,21 +698,163 @@ export default function App() {
             value={jobText}
             onChange={(e) => setJobText(e.target.value)}
           />
+          <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+            <button
+              onClick={extractData}
+              disabled={extracting || !jobText.trim()}
+              style={{
+                padding: "10px 20px",
+                backgroundColor: extracting || !jobText.trim() ? "var(--header-bg)" : "#10b981",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: extracting || !jobText.trim() ? "not-allowed" : "pointer",
+              }}
+            >
+              {extracting ? "Extracting..." : "Extract data"}
+            </button>
+            {extractionError && (
+              <div style={{ color: "var(--error-text)", padding: "10px 0", fontSize: "14px" }}>
+                {extractionError}
+              </div>
+            )}
+          </div>
+          
+          <div style={{ marginTop: 20, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div>
+              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                Company Name *
+              </label>
+              <input
+                type="text"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: 8,
+                  backgroundColor: "var(--input-bg)",
+                  color: "var(--text-color)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                }}
+                placeholder="Company name"
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                Job Title *
+              </label>
+              <input
+                type="text"
+                value={jobTitle}
+                onChange={(e) => setJobTitle(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: 8,
+                  backgroundColor: "var(--input-bg)",
+                  color: "var(--text-color)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                }}
+                placeholder="Job title"
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                Location
+              </label>
+              <input
+                type="text"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: 8,
+                  backgroundColor: "var(--input-bg)",
+                  color: "var(--text-color)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                }}
+                placeholder="Location"
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                Language
+              </label>
+              <input
+                type="text"
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: 8,
+                  backgroundColor: "var(--input-bg)",
+                  color: "var(--text-color)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                }}
+                placeholder="Language"
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                Salary
+              </label>
+              <input
+                type="text"
+                value={salary}
+                onChange={(e) => setSalary(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: 8,
+                  backgroundColor: "var(--input-bg)",
+                  color: "var(--text-color)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                }}
+                placeholder="Salary range"
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                Requirements
+              </label>
+              <textarea
+                value={Array.isArray(requirements) ? requirements.join("\n") : requirements}
+                onChange={(e) => {
+                  const lines = e.target.value.split("\n").map((l) => l.trim()).filter(Boolean);
+                  setRequirements(lines);
+                }}
+                style={{
+                  width: "100%",
+                  height: 80,
+                  padding: 8,
+                  backgroundColor: "var(--input-bg)",
+                  color: "var(--text-color)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                }}
+                placeholder="One requirement per line"
+              />
+            </div>
+          </div>
+          
           <button
             onClick={handleSubmit}
-            disabled={loading || !jobText || !companyName || selectedVendors.size === 0}
+            disabled={loading || !jobText || !companyName.trim() || !jobTitle.trim() || selectedVendors.size === 0}
             style={{
-              marginTop: 10,
+              marginTop: 20,
               padding: "10px 20px",
               backgroundColor:
-                loading || !jobText || !companyName || selectedVendors.size === 0
+                loading || !jobText || !companyName.trim() || !jobTitle.trim() || selectedVendors.size === 0
                   ? "var(--header-bg)"
                   : "#3b82f6",
               color: "white",
               border: "none",
               borderRadius: "4px",
               cursor:
-                loading || !jobText || !companyName || selectedVendors.size === 0
+                loading || !jobText || !companyName.trim() || !jobTitle.trim() || selectedVendors.size === 0
                   ? "not-allowed"
                   : "pointer",
             }}
@@ -658,6 +959,13 @@ export default function App() {
                 onApprove={approvePhase}
                 onApproveAll={approveAllPhase}
                 onRerunFromBackground={rerunFromBackground}
+                extraction={extractionData}
+                extractionEdits={extractionEdits}
+                onExtractionChange={updateExtractionEdit}
+                onApproveExtraction={approveExtraction}
+                extractionApproved={extractionApproved}
+                extractionLoading={extractionLoading}
+                extractionError={extractionError}
               />
             </>
           )}

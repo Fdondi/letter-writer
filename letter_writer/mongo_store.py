@@ -83,12 +83,21 @@ def upsert_document(db, data: dict, *, allow_update: bool = True) -> dict:
     """Insert or update a document. Returns the stored document."""
     now = datetime.utcnow()
     doc_id = data.get("id") or data.get("document_id") or data.get("_id") or str(uuid4())
-    company_name = data.get("company_name") or data.get("company")
+    company_name_raw = data.get("company_name") or data.get("company")
+    # Normalize company_name by stripping whitespace to prevent mismatches
+    company_name = company_name_raw.strip() if company_name_raw else None
     role = data.get("role")
     ts_for_slug = data.get("timestamp") or data.get("created_at") or now
     slug = data.get("slug") or (build_slug(company_name, role, ts_for_slug) if company_name else None)
 
     ai_letters = _prepare_ai_letters(data.get("ai_letters"))
+    requirements = data.get("requirements")
+    if isinstance(requirements, list):
+        requirements_value = requirements
+    elif requirements:
+        requirements_value = [requirements]
+    else:
+        requirements_value = []
 
     base = {
         "_id": doc_id,
@@ -96,6 +105,9 @@ def upsert_document(db, data: dict, *, allow_update: bool = True) -> dict:
         "company_name": company_name,
         "role": role,
         "location": data.get("location"),
+        "language": data.get("language"),
+        "salary": data.get("salary"),
+        "requirements": requirements_value,
         "date_applied": data.get("date_applied"),
         "status": data.get("status"),
         "vendor": data.get("vendor"),

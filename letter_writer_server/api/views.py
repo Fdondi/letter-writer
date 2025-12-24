@@ -15,6 +15,8 @@ from letter_writer.phased_service import (
     advance_to_draft,
     advance_to_refinement,
     start_background_phase,
+    start_extraction_phase,
+    resume_background_phase,
 )
 from letter_writer.mongo_store import (
     append_negatives,
@@ -213,7 +215,8 @@ def process_job_view(request: HttpRequest):
 
 
 @csrf_exempt
-def start_phased_job_view(request: HttpRequest):
+def extract_view(request: HttpRequest):
+    """Extract job metadata from job text. Uses a default vendor (openai) for extraction."""
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
 
@@ -223,17 +226,55 @@ def start_phased_job_view(request: HttpRequest):
         return JsonResponse({"detail": "Invalid JSON"}, status=400)
 
     job_text = data.get("job_text")
-    company_name = data.get("company_name")
-    vendor_values = data.get("vendors") or []
-    if not job_text or not company_name:
-        return JsonResponse({"detail": "job_text and company_name are required"}, status=400)
-    if not vendor_values:
-        return JsonResponse({"detail": "vendors array is required"}, status=400)
+    if not job_text:
+        return JsonResponse({"detail": "job_text is required"}, status=400)
+
+    # Use OpenAI as default for extraction (fast and reliable)
+    try:
+        from letter_writer.client import get_client
+        from letter_writer.clients.base import ModelVendor
+        from letter_writer.generation import extract_job_metadata
+        from pathlib import Path
+
+        ai_client = get_client(ModelVendor.OPENAI)
+        trace_dir = Path("trace", "extraction.openai")
+        extraction = extract_job_metadata(job_text, ai_client, trace_dir=trace_dir)
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+    return JsonResponse(
+        {
+            "status": "ok",
+            "extraction": extraction,
+        }
+    )
+
+
+@csrf_exempt
+def background_phase_view(request: HttpRequest, vendor: str):
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
 
     try:
-        vendors = [ModelVendor(v) for v in vendor_values]
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Invalid JSON"}, status=400)
+
+    session_id = data.get("session_id")
+    if not session_id:
+        return JsonResponse({"detail": "session_id is required"}, status=400)
+
+    try:
+        vendors = [ModelVendor(vendor)]
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
+
+    # Extract metadata from form (single dict, not per-vendor)
+    extraction_data = data.get("extraction") or {}
+    job_text = data.get("job_text")
+    if not job_text:
+        return JsonResponse({"detail": "job_text is required"}, status=400)
 
     cv_text = data.get("cv_text")
     if cv_text is None:
@@ -247,14 +288,36 @@ def start_phased_job_view(request: HttpRequest):
     qdrant_port = int(data.get("qdrant_port") or env_default("QDRANT_PORT", "6333"))
 
     try:
-        session = start_background_phase(
-            job_text=job_text,
-            cv_text=cv_text,
-            company_name=company_name,
-            vendors=vendors,
-            qdrant_host=qdrant_host,
-            qdrant_port=qdrant_port,
-        )
+        from letter_writer.phased_service import SESSION_STORE, _create_session, _run_background_phase
+        
+        # Check if session exists, otherwise create it with metadata
+        session = SESSION_STORE.get(session_id)
+        if session is None:
+            # Create new session with metadata for all vendors
+            metadata = {v.value: extraction_data for v in vendors}
+            session = _create_session(
+                job_text=job_text,
+                cv_text=cv_text,
+                vendors=vendors,
+                qdrant_host=qdrant_host,
+                qdrant_port=qdrant_port,
+                session_id=session_id,
+                metadata=metadata,
+            )
+        else:
+            # Update existing session
+            session.job_text = job_text
+            session.cv_text = cv_text
+            # Update metadata for this vendor (use vendor.value as key)
+            session.metadata[vendors[0].value] = extraction_data
+            if vendors[0] not in session.vendors_list:
+                session.vendors_list.extend(vendors)
+            SESSION_STORE[session.session_id] = session
+
+        # Run background phase for this vendor
+        session = _run_background_phase(session, vendors)
+    except ValueError as exc:
+        return JsonResponse({"detail": str(exc)}, status=400)
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         return JsonResponse({"detail": str(exc)}, status=500)
@@ -273,12 +336,13 @@ def start_phased_job_view(request: HttpRequest):
             "phase": "background",
             "session_id": session.session_id,
             "vendors": vendors_payload,
+            "metadata": session.metadata,
         }
     )
 
 
 @csrf_exempt
-def refinement_phase_view(request: HttpRequest):
+def refinement_phase_view(request: HttpRequest, vendor: str):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
 
@@ -288,11 +352,10 @@ def refinement_phase_view(request: HttpRequest):
         return JsonResponse({"detail": "Invalid JSON"}, status=400)
 
     session_id = data.get("session_id")
-    vendor_val = data.get("vendor")
-    if not session_id or not vendor_val:
+    if not session_id:
         return JsonResponse({"detail": "session_id and vendor are required"}, status=400)
     try:
-        vendor = ModelVendor(vendor_val)
+        vendor_enum = ModelVendor(vendor)
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
 
@@ -301,7 +364,7 @@ def refinement_phase_view(request: HttpRequest):
     try:
         state = advance_to_refinement(
             session_id=session_id,
-            vendor=vendor,
+            vendor=vendor_enum,
             draft_override=data.get("draft_letter"),
             feedback_override=data.get("feedback_override"),
             company_report_override=data.get("company_report"),
@@ -320,7 +383,7 @@ def refinement_phase_view(request: HttpRequest):
         {
             "status": "ok",
             "phase": "refine",
-            "vendor": vendor.value,
+            "vendor": vendor_enum.value,
             "final_letter": state.final_letter,
             "draft_letter": state.draft_letter,
             "feedback": state.feedback,
@@ -331,7 +394,7 @@ def refinement_phase_view(request: HttpRequest):
 
 
 @csrf_exempt
-def draft_phase_view(request: HttpRequest):
+def draft_phase_view(request: HttpRequest, vendor: str):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
 
@@ -341,18 +404,17 @@ def draft_phase_view(request: HttpRequest):
         return JsonResponse({"detail": "Invalid JSON"}, status=400)
 
     session_id = data.get("session_id")
-    vendor_val = data.get("vendor")
-    if not session_id or not vendor_val:
+    if not session_id:
         return JsonResponse({"detail": "session_id and vendor are required"}, status=400)
     try:
-        vendor = ModelVendor(vendor_val)
+        vendor_enum = ModelVendor(vendor)
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
 
     try:
         state = advance_to_draft(
             session_id=session_id,
-            vendor=vendor,
+            vendor=vendor_enum,
             company_report_override=data.get("company_report"),
             top_docs_override=data.get("top_docs"),
             job_text_override=data.get("job_text"),
@@ -368,7 +430,7 @@ def draft_phase_view(request: HttpRequest):
         {
             "status": "ok",
             "phase": "draft",
-            "vendor": vendor.value,
+            "vendor": vendor_enum.value,
             "draft_letter": state.draft_letter,
             "feedback": state.feedback,
             "company_report": state.company_report,

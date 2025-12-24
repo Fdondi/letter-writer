@@ -72,9 +72,41 @@ def select_top_documents(
     for doc in documents:
         company = doc.get("company_name")
         if company:
-            retrieved_docs[company] = doc
+            # Normalize company name by stripping whitespace to match AI output
+            # Store both the normalized key and original value for debugging
+            normalized_company = company.strip()
+            if normalized_company != company:
+                # Log normalization if there was a mismatch
+                (trace_dir / "company_name_normalization.txt").write_text(
+                    f"Normalized company name: '{company}' -> '{normalized_company}'\n",
+                    encoding="utf-8"
+                )
+            retrieved_docs[normalized_company] = doc
 
     top_docs = rerank_documents(job_text, retrieved_docs, ai_client, trace_dir)
+
+    # Validate that all reranked company names exist in retrieved_docs
+    missing_names = [name for name in top_docs.keys() if name not in retrieved_docs]
+    if missing_names:
+        expected_names = sorted(retrieved_docs.keys())
+        got_names = sorted(top_docs.keys())
+        error_msg = (
+            f"Mismatch between reranked company names and retrieved documents. "
+            f"Missing from retrieved_docs: {missing_names}. "
+            f"Expected company names: {expected_names}. "
+            f"Got from reranking: {got_names}."
+        )
+        # Log detailed error to trace directory
+        error_log = (
+            f"PANIC: Company name mismatch in select_top_documents\n"
+            f"Expected company names (from retrieved_docs): {expected_names}\n"
+            f"Got from reranking (from top_docs): {got_names}\n"
+            f"Missing names: {missing_names}\n"
+            f"Retrieved docs count: {len(retrieved_docs)}\n"
+            f"Reranked docs count: {len(top_docs)}\n"
+        )
+        (trace_dir / "error_mismatch.txt").write_text(error_log, encoding="utf-8")
+        raise ValueError(error_msg)
 
     return [
         {

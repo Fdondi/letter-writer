@@ -1,6 +1,81 @@
 import React, { useState, useEffect } from "react";
 
-function EditableField({ label, value, minHeight = 120, placeholder, onSave }) {
+function InputRow({ label, value, onChange, placeholder }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+      <span style={{ fontWeight: 600 }}>{label}</span>
+      <input
+        value={value}
+        onChange={(e) => onChange?.(e.target.value)}
+        placeholder={placeholder}
+        style={{ padding: 8, border: "1px solid #e5e7eb", borderRadius: 4 }}
+      />
+    </label>
+  );
+}
+
+function PhaseSection({
+  title,
+  children,
+  collapsed,
+  onToggle,
+  onApproveAll,
+  approveAllDisabled,
+  showApproveAll,
+  readyCount,
+  totalCount,
+  gridAutoColumns = "340px",
+}) {
+  // Show remaining count: if 2/6 ready, after approving 2, show 0/4 remaining
+  const approveButtonText = readyCount !== undefined && totalCount !== undefined
+    ? readyCount < totalCount
+      ? `Approve (${readyCount}/${totalCount})`
+      : readyCount > 0
+        ? "Approve all"
+        : "Approve all"
+    : "Approve all";
+  
+  return (
+    <details open={!collapsed} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
+      <summary
+        style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", listStyle: "none" }}
+        onClick={onToggle}
+      >
+        <h3 style={{ margin: 0 }}>{title}</h3>
+        {showApproveAll && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onApproveAll?.();
+            }}
+            disabled={approveAllDisabled || readyCount === 0}
+            style={{ fontSize: 12, padding: "4px 8px", opacity: (approveAllDisabled || readyCount === 0) ? 0.6 : 1 }}
+          >
+            {approveButtonText}
+          </button>
+        )}
+      </summary>
+      <div
+        style={{
+          display: "grid",
+          gridAutoFlow: "column",
+          gridAutoColumns,
+          gridAutoRows: "1fr",
+          gap: 12,
+          marginTop: 8,
+          overflowX: "auto",
+          alignItems: "stretch",
+        }}
+      >
+        {children}
+      </div>
+    </details>
+  );
+}
+
+function EditableField({ label, value, minHeight = 120, placeholder, onSave, disabled = false }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value || "");
 
@@ -18,7 +93,13 @@ function EditableField({ label, value, minHeight = 120, placeholder, onSave }) {
           <button
             type="button"
             onClick={() => setEditing(true)}
-            style={{ fontSize: 12, padding: "4px 8px" }}
+            disabled={disabled}
+            style={{ 
+              fontSize: 12, 
+              padding: "4px 8px",
+              opacity: disabled ? 0.6 : 1,
+              cursor: disabled ? "not-allowed" : "pointer"
+            }}
           >
             ✎ Edit
           </button>
@@ -32,6 +113,7 @@ function EditableField({ label, value, minHeight = 120, placeholder, onSave }) {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder={placeholder}
+            disabled={disabled}
             // allow long URLs to wrap
             wrap="soft"
             spellCheck={true}
@@ -43,6 +125,7 @@ function EditableField({ label, value, minHeight = 120, placeholder, onSave }) {
                 onSave(draft);
                 setEditing(false);
               }}
+              disabled={disabled}
             >
               Save
             </button>
@@ -52,6 +135,7 @@ function EditableField({ label, value, minHeight = 120, placeholder, onSave }) {
                 setDraft(value || "");
                 setEditing(false);
               }}
+              disabled={disabled}
             >
               Discard
             </button>
@@ -104,9 +188,27 @@ function EditableFeedback({
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, fontWeight: 600 }}>{label}</div>
         {!editing && (
-          <button type="button" onClick={() => setEditing(true)} style={{ fontSize: 12, padding: "4px 8px" }}>
-            ✎ Edit
-          </button>
+          <>
+            {hasContent && (
+              <button 
+                type="button" 
+                onClick={() => onSave("NO COMMENT")} 
+                style={{ 
+                  fontSize: 12, 
+                  padding: "4px 8px",
+                  border: "1px solid #dc2626",
+                  background: "#fff",
+                  color: "#dc2626",
+                  cursor: "pointer",
+                }}
+              >
+                Remove
+              </button>
+            )}
+            <button type="button" onClick={() => setEditing(true)} style={{ fontSize: 12, padding: "4px 8px" }}>
+              Edit
+            </button>
+          </>
         )}
         {isModified ? (
           <span
@@ -191,6 +293,97 @@ function EditableFeedback({
   );
 }
 
+function ExtractionCard({
+  vendor,
+  data,
+  edits,
+  onChange,
+  onApprove,
+  loading,
+  error,
+  approved,
+}) {
+  const fields = [
+    { key: "company_name", label: "Company", placeholder: "Detected company name (required)" },
+    { key: "job_title", label: "Job title", placeholder: "e.g. Senior Backend Engineer" },
+    { key: "location", label: "Location", placeholder: "e.g. Remote, Berlin, Hybrid" },
+    { key: "language", label: "Language", placeholder: "Primary language" },
+    { key: "salary", label: "Salary", placeholder: "Salary range or notes" },
+  ];
+
+  const requirementsValue = Array.isArray(edits?.requirements)
+    ? edits.requirements.join("\n")
+    : edits?.requirements || data?.requirements?.join?.("\n") || data?.requirements || "";
+
+  return (
+    <div style={{ ...cardStyle, flex: "1 1 360px", maxWidth: 420 }}>
+      <h3 style={{ marginTop: 0, marginBottom: 6 }}>1) Extract job info ({vendor})</h3>
+      <div style={{ fontSize: 13, color: "#374151", marginBottom: 8 }}>
+        We parsed the job description. Tweak any fields, then approve to run background search.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+        {fields.map(({ key, label, placeholder }) => (
+          <label key={key} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+            <span style={{ fontWeight: 600 }}>{label}</span>
+            <input
+              value={edits?.[key] ?? data?.[key] ?? ""}
+              onChange={(e) => onChange?.(key, e.target.value)}
+              placeholder={placeholder}
+              style={{ padding: 8, border: "1px solid #e5e7eb", borderRadius: 4 }}
+            />
+          </label>
+        ))}
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+          <span style={{ fontWeight: 600 }}>Main requirements</span>
+          <textarea
+            value={requirementsValue}
+            onChange={(e) =>
+              onChange?.(
+                "requirements",
+                e.target.value
+                  .split("\n")
+                  .map((line) => line.trim())
+                  .filter(Boolean)
+              )
+            }
+            placeholder="One per line"
+            style={{ padding: 8, minHeight: 90, border: "1px solid #e5e7eb", borderRadius: 4 }}
+          />
+        </label>
+      </div>
+
+      {error && (
+        <div style={{
+          marginTop: 8,
+          color: "var(--error-text)",
+          fontSize: 12,
+          padding: 8,
+          background: "var(--error-bg)",
+          border: "1px solid var(--error-border)",
+          borderRadius: 4
+        }}>
+          {error}
+        </div>
+      )}
+
+      <div style={{ ...buttonBarStyle, position: "static", marginTop: 12 }}>
+        <button
+          onClick={() => onApprove(vendor)}
+          disabled={loading || !(edits?.company_name || data?.company_name)}
+          style={{
+            padding: "8px 12px",
+            opacity: loading || !(edits?.company_name || data?.company_name) ? 0.6 : 1,
+            cursor: loading || !(edits?.company_name || data?.company_name) ? "not-allowed" : "pointer",
+          }}
+        >
+          {loading ? "Running background..." : approved ? "Re-run background" : "Approve & run background"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const cardStyle = {
   border: "1px solid #e5e7eb",
   borderRadius: 8,
@@ -244,7 +437,102 @@ function VendorCard({
   onToggleCollapsed,
   onRerunFromBackground,
   forcePhase,
+  disabled = false,
+  extractionData,
+  extractionEdits,
+  onExtractionChange,
+  onApproveExtraction,
+  extractionApproved = false,
+  extractionLoading = false,
+  extractionError,
 }) {
+  const renderExtraction = () => {
+    const requirementsValue = Array.isArray(extractionEdits?.requirements)
+      ? extractionEdits.requirements.join("\n")
+      : extractionEdits?.requirements ||
+        extractionData?.requirements?.join?.("\n") ||
+        extractionData?.requirements ||
+        "";
+    const isBusy = extractionLoading;
+    const hasCompany = (extractionEdits?.company_name || extractionData?.company_name || "").trim().length > 0;
+
+    return (
+      <>
+        <div style={{ fontSize: 13, color: "#374151" }}>
+          We parsed the job description. Tweak any fields, then approve to run background search.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+          <InputRow
+            label="Company"
+            value={extractionEdits?.company_name ?? extractionData?.company_name ?? ""}
+            onChange={(val) => onExtractionChange?.(vendor, "company_name", val)}
+            placeholder="Detected company name (required)"
+          />
+          <InputRow
+            label="Job title"
+            value={extractionEdits?.job_title ?? extractionData?.job_title ?? ""}
+            onChange={(val) => onExtractionChange?.(vendor, "job_title", val)}
+            placeholder="e.g. Senior Backend Engineer"
+          />
+          <InputRow
+            label="Location"
+            value={extractionEdits?.location ?? extractionData?.location ?? ""}
+            onChange={(val) => onExtractionChange?.(vendor, "location", val)}
+            placeholder="e.g. Remote, Berlin, Hybrid"
+          />
+          <InputRow
+            label="Language"
+            value={extractionEdits?.language ?? extractionData?.language ?? ""}
+            onChange={(val) => onExtractionChange?.(vendor, "language", val)}
+            placeholder="Primary language"
+          />
+          <InputRow
+            label="Salary"
+            value={extractionEdits?.salary ?? extractionData?.salary ?? ""}
+            onChange={(val) => onExtractionChange?.(vendor, "salary", val)}
+            placeholder="Salary range or notes"
+          />
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+            <span style={{ fontWeight: 600 }}>Main requirements</span>
+            <textarea
+              value={requirementsValue}
+              onChange={(e) =>
+                onExtractionChange?.(
+                  vendor,
+                  "requirements",
+                  e.target.value
+                    .split("\n")
+                    .map((line) => line.trim())
+                    .filter(Boolean)
+                )
+              }
+              placeholder="One per line"
+              style={{ padding: 8, minHeight: 90, border: "1px solid #e5e7eb", borderRadius: 4 }}
+            />
+          </label>
+        </div>
+        {extractionError && (
+          <div style={{ marginTop: 8, color: "red", fontSize: 12 }}>
+            {extractionError}
+          </div>
+        )}
+        <div style={{ ...buttonBarStyle, position: "static", marginTop: 12 }}>
+          <button
+            onClick={() => onApproveExtraction?.(vendor)}
+            disabled={isBusy || !hasCompany}
+            style={{
+              padding: "8px 12px",
+              opacity: isBusy || !hasCompany ? 0.6 : 1,
+              cursor: isBusy || !hasCompany ? "not-allowed" : "pointer",
+            }}
+          >
+            {isBusy ? "Running background..." : extractionApproved ? "Re-run background" : "Approve background → generate letter"}
+          </button>
+        </div>
+      </>
+    );
+  };
+
   const backgroundData = state?.background?.data || {};
   const refineData = state?.refine?.data || {};
   const feedback = refineData.feedback || {};
@@ -271,7 +559,7 @@ function VendorCard({
   const pendingLabel = isPendingRefine ? "Running next phase..." : null;
 
   return (
-    <div style={cardStyle}>
+    <div style={{ ...cardStyle, opacity: disabled ? 0.6 : 1, pointerEvents: disabled ? "none" : "auto" }}>
       <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 8 }}>
         <h4 style={{ margin: 0, flex: 1, textTransform: "capitalize" }}>{vendor}</h4>
         {isDone && (
@@ -287,9 +575,24 @@ function VendorCard({
         </div>
       )}
 
-      {error && <div style={{ color: "red", marginBottom: 8, fontSize: 13 }}>{error}</div>}
+      {error && (
+        <div style={{
+          color: "var(--error-text)",
+          marginBottom: 8,
+          fontSize: 13,
+          padding: 8,
+          background: "var(--error-bg)",
+          border: "1px solid var(--error-border)",
+          borderRadius: 4
+        }}>
+          {error}
+        </div>
+      )}
 
       <div style={contentContainerStyle}>
+        {phaseToRender === "extraction" && (
+          renderExtraction()
+        )}
         {(phaseToRender === "background" || (isDone && !collapsed && !forcePhase)) && (
           <>
             <div style={{ fontSize: 13, color: "#374151" }}>
@@ -301,6 +604,7 @@ function VendorCard({
               minHeight={140}
               placeholder="Company research"
               onSave={(val) => onEditChange(vendor, "background", "company_report", val)}
+              disabled={loading}
             />
           </>
         )}
@@ -320,6 +624,7 @@ function VendorCard({
               minHeight={220}
               placeholder="Final letter"
               onSave={(val) => onEditChange(vendor, "refine", "final_letter", val)}
+              disabled={loading}
             />
             {feedbackKeys.length > 0 && (
               <div style={{ marginTop: 8 }}>
@@ -335,7 +640,10 @@ function VendorCard({
                     const isModified = overriddenVal !== undefined && overriddenVal !== baseVal;
 
                     // Machine block: 🤖 | status
-                    const machineStatus = hasContent ? "📜" : "✅";
+                    // Robot should remain 📜 if base value had content, even if user changed it to NO COMMENT
+                    const baseHasContent = (baseVal || "").trim().length > 0 && 
+                      !(baseVal || "").trim().toUpperCase().endsWith("NO COMMENT");
+                    const machineStatus = baseHasContent ? "📜" : "✅";
 
                     // Human block: 🧑 | status (stacked with thick divider between machine and human)
                     // Human status rules:
@@ -506,7 +814,7 @@ export default function PhaseFlow({
   const [feedbackApprovals, setFeedbackApprovals] = useState({});
   const [collapsedCards, setCollapsedCards] = useState({});
   const [collapsedPhases, setCollapsedPhases] = useState({
-    background: false,
+    background: false, // first phase starts open
     refine: true,
   });
 
@@ -569,14 +877,18 @@ export default function PhaseFlow({
       const next = { ...prev };
       let changed = false;
 
-      if (backgroundDone && prev.background === false) {
-        next.background = true;
-        changed = true;
+      // If background completes, collapse background and open refine
+      if (backgroundDone) {
+        if (!prev.background) {
+          next.background = true;
+          changed = true;
+        }
+        if (prev.refine) {
+          next.refine = false;
+          changed = true;
+        }
       }
-      if (backgroundDone && refineVisible && prev.refine === true) {
-        next.refine = false; // open refine when first refine appears
-        changed = true;
-      }
+
       return changed ? next : prev;
     });
   }, [backgroundDone, refineVisible]);
@@ -599,50 +911,80 @@ export default function PhaseFlow({
   };
 
   const pendingBackground = vendorsList.filter((v) => !(phaseState[v]?.background?.approved));
+  const readyBackground = vendorsList.filter((v) => {
+    if (phaseState[v]?.background?.approved) return false;
+    // Vendor is ready if they have data from API OR user has manually entered data
+    const hasApiData = !!phaseState[v]?.background?.data;
+    const hasUserData = !!(phaseEdits[v]?.background?.company_report?.trim());
+    return hasApiData || hasUserData;
+  });
   const pendingRefine = vendorsList.filter(
     (v) => phaseState[v]?.background?.approved && !phaseState[v]?.refine?.approved && phaseState[v]?.refine?.data
   );
+  const readyRefine = vendorsList.filter((v) => {
+    if (phaseState[v]?.refine?.approved) return false;
+    // Vendor is ready if they have data from API OR user has manually entered data
+    const hasApiData = !!phaseState[v]?.refine?.data;
+    const hasUserData = !!(phaseEdits[v]?.refine?.final_letter?.trim());
+    return hasApiData || hasUserData;
+  });
 
   return (
     <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 12 }}>
       {/* Background phase */}
-      <details open={!collapsedPhases.background} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
-        <summary
-          style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", listStyle: "none" }}
-            onClick={() => {
-              setCollapsedPhases((prev) => ({ ...prev, background: !prev.background }));
-            }}
-        >
-          <h3 style={{ margin: 0 }}>Background</h3>
-          {pendingBackground.length > 1 && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                  onApproveAll("background");
-              }}
-              style={{ fontSize: 12, padding: "4px 8px" }}
-            >
-              Approve all background
-            </button>
-          )}
-        </summary>
-        <div
-          style={{
-            display: "grid",
-            gridAutoFlow: "column",
-            gridAutoColumns: "340px",
-            gridAutoRows: "1fr",
-            gap: 12,
-            marginTop: 8,
-            overflowX: "auto",
-            alignItems: "stretch",
-          }}
+      <PhaseSection
+        title="Background"
+        collapsed={collapsedPhases.background}
+        onToggle={() => setCollapsedPhases((prev) => ({ ...prev, background: !prev.background }))}
+        showApproveAll={pendingBackground.length > 1}
+        approveAllDisabled={false}
+        readyCount={readyBackground.length}
+        totalCount={pendingBackground.length}
+        onApproveAll={() => onApproveAll("background")}
+      >
+        {vendorsList.map((vendor) => (
+          <VendorCard
+            key={`bg-${vendor}`}
+            vendor={vendor}
+            state={phaseState[vendor]}
+            edits={phaseEdits[vendor]}
+            onEditChange={onEditChange}
+            loading={loadingVendors.has(vendor)}
+            error={errors[vendor]}
+            onApprove={onApprove}
+            selectedFeedbackTab={selectedFeedbackTab[vendor]}
+            onSelectFeedbackTab={(tab) => setSelectedFeedbackTab((prev) => ({ ...prev, [vendor]: tab }))}
+            feedbackApprovals={feedbackApprovals[vendor] || {}}
+            onApproveFeedback={(key) => approveFeedback(vendor, key)}
+            onSaveFeedbackOverride={(key, val) => saveFeedbackOverride(vendor, key, val)}
+            collapsed={!!collapsedCards[vendor]}
+            onToggleCollapsed={() =>
+              setCollapsedCards((prev) => ({
+                ...prev,
+                [vendor]: !prev[vendor],
+              }))
+            }
+            onRerunFromBackground={onRerunFromBackground}
+            forcePhase="background"
+          />
+        ))}
+      </PhaseSection>
+
+      {/* Refine phase */}
+      {refineVisible && (
+        <PhaseSection
+          title="Refine"
+          collapsed={collapsedPhases.refine}
+          onToggle={() => setCollapsedPhases((prev) => ({ ...prev, refine: !prev.refine }))}
+          showApproveAll={pendingRefine.length > 1}
+          approveAllDisabled={false}
+          readyCount={readyRefine.length}
+          totalCount={pendingRefine.length}
+          onApproveAll={() => onApproveAll("refine")}
         >
           {vendorsList.map((vendor) => (
             <VendorCard
-              key={`bg-${vendor}`}
+              key={`refine-${vendor}`}
               vendor={vendor}
               state={phaseState[vendor]}
               edits={phaseEdits[vendor]}
@@ -663,74 +1005,10 @@ export default function PhaseFlow({
                 }))
               }
               onRerunFromBackground={onRerunFromBackground}
-              forcePhase="background"
+              forcePhase="refine"
             />
           ))}
-        </div>
-      </details>
-
-      {/* Refine phase */}
-      {refineVisible && (
-        <details open={!collapsedPhases.refine} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
-          <summary
-            style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", listStyle: "none" }}
-            onClick={() => {
-              setCollapsedPhases((prev) => ({ ...prev, refine: !prev.refine }));
-            }}
-          >
-            <h3 style={{ margin: 0 }}>Refine</h3>
-              {pendingRefine.length > 1 && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onApproveAll("refine");
-                }}
-                style={{ fontSize: 12, padding: "4px 8px" }}
-              >
-                  Approve all comments & write final letters
-              </button>
-            )}
-          </summary>
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "nowrap",
-            gap: 12,
-            marginTop: 8,
-            overflowX: "auto",
-            alignItems: "stretch",
-          }}
-        >
-            {vendorsList.map((vendor) => (
-              <VendorCard
-                key={`refine-${vendor}`}
-                vendor={vendor}
-                state={phaseState[vendor]}
-                edits={phaseEdits[vendor]}
-                onEditChange={onEditChange}
-                loading={loadingVendors.has(vendor)}
-                error={errors[vendor]}
-              onApprove={onApprove}
-                selectedFeedbackTab={selectedFeedbackTab[vendor]}
-                onSelectFeedbackTab={(tab) => setSelectedFeedbackTab((prev) => ({ ...prev, [vendor]: tab }))}
-                feedbackApprovals={feedbackApprovals[vendor] || {}}
-                onApproveFeedback={(key) => approveFeedback(vendor, key)}
-              onSaveFeedbackOverride={(key, val) => saveFeedbackOverride(vendor, key, val)}
-                collapsed={!!collapsedCards[vendor]}
-                onToggleCollapsed={() =>
-                  setCollapsedCards((prev) => ({
-                    ...prev,
-                    [vendor]: !prev[vendor],
-                  }))
-                }
-              onRerunFromBackground={onRerunFromBackground}
-                forcePhase="refine"
-              />
-            ))}
-          </div>
-        </details>
+        </PhaseSection>
       )}
     </div>
   );
