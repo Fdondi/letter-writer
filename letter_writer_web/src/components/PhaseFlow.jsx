@@ -919,7 +919,7 @@ export default function PhaseFlow({
     return hasApiData || hasUserData;
   });
   const pendingRefine = vendorsList.filter(
-    (v) => phaseState[v]?.background?.approved && !phaseState[v]?.refine?.approved && phaseState[v]?.refine?.data
+    (v) => phaseState[v]?.background?.approved && !phaseState[v]?.refine?.approved
   );
   const readyRefine = vendorsList.filter((v) => {
     if (phaseState[v]?.refine?.approved) return false;
@@ -929,87 +929,96 @@ export default function PhaseFlow({
     return hasApiData || hasUserData;
   });
 
+  const phases = [
+    {
+      key: "background",
+      title: "Background",
+      visible: true,
+      pending: pendingBackground,
+      ready: readyBackground,
+      collapsed: collapsedPhases.background,
+      toggle: () => setCollapsedPhases((prev) => ({ ...prev, background: !prev.background })),
+      renderVendor: (vendor) => (
+        <VendorCard
+          key={`bg-${vendor}`}
+          vendor={vendor}
+          state={phaseState[vendor]}
+          edits={phaseEdits[vendor]}
+          onEditChange={onEditChange}
+          loading={loadingVendors.has(vendor)}
+          error={errors[vendor]}
+          onApprove={onApprove}
+          selectedFeedbackTab={selectedFeedbackTab[vendor]}
+          onSelectFeedbackTab={(tab) => setSelectedFeedbackTab((prev) => ({ ...prev, [vendor]: tab }))}
+          feedbackApprovals={feedbackApprovals[vendor] || {}}
+          onApproveFeedback={(key) => approveFeedback(vendor, key)}
+          onSaveFeedbackOverride={(key, val) => saveFeedbackOverride(vendor, key, val)}
+          collapsed={!!collapsedCards[vendor]}
+          onToggleCollapsed={() =>
+            setCollapsedCards((prev) => ({
+              ...prev,
+              [vendor]: !prev[vendor],
+            }))
+          }
+          onRerunFromBackground={onRerunFromBackground}
+          forcePhase="background"
+        />
+      ),
+    },
+    {
+      key: "refine",
+      title: "Refine",
+      visible: refineVisible,
+      pending: pendingRefine,
+      ready: readyRefine,
+      collapsed: collapsedPhases.refine,
+      toggle: () => setCollapsedPhases((prev) => ({ ...prev, refine: !prev.refine })),
+      renderVendor: (vendor) => (
+        <VendorCard
+          key={`refine-${vendor}`}
+          vendor={vendor}
+          state={phaseState[vendor]}
+          edits={phaseEdits[vendor]}
+          onEditChange={onEditChange}
+          loading={loadingVendors.has(vendor)}
+          error={errors[vendor]}
+          onApprove={onApprove}
+          selectedFeedbackTab={selectedFeedbackTab[vendor]}
+          onSelectFeedbackTab={(tab) => setSelectedFeedbackTab((prev) => ({ ...prev, [vendor]: tab }))}
+          feedbackApprovals={feedbackApprovals[vendor] || {}}
+          onApproveFeedback={(key) => approveFeedback(vendor, key)}
+          onSaveFeedbackOverride={(key, val) => saveFeedbackOverride(vendor, key, val)}
+          collapsed={!!collapsedCards[vendor]}
+          onToggleCollapsed={() =>
+            setCollapsedCards((prev) => ({
+              ...prev,
+              [vendor]: !prev[vendor],
+            }))
+          }
+          onRerunFromBackground={onRerunFromBackground}
+          forcePhase="refine"
+        />
+      ),
+    },
+  ];
+
   return (
     <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* Background phase */}
-      <PhaseSection
-        title="Background"
-        collapsed={collapsedPhases.background}
-        onToggle={() => setCollapsedPhases((prev) => ({ ...prev, background: !prev.background }))}
-        showApproveAll={pendingBackground.length > 1}
-        approveAllDisabled={false}
-        readyCount={readyBackground.length}
-        totalCount={pendingBackground.length}
-        onApproveAll={() => onApproveAll("background")}
-      >
-        {vendorsList.map((vendor) => (
-          <VendorCard
-            key={`bg-${vendor}`}
-            vendor={vendor}
-            state={phaseState[vendor]}
-            edits={phaseEdits[vendor]}
-            onEditChange={onEditChange}
-            loading={loadingVendors.has(vendor)}
-            error={errors[vendor]}
-            onApprove={onApprove}
-            selectedFeedbackTab={selectedFeedbackTab[vendor]}
-            onSelectFeedbackTab={(tab) => setSelectedFeedbackTab((prev) => ({ ...prev, [vendor]: tab }))}
-            feedbackApprovals={feedbackApprovals[vendor] || {}}
-            onApproveFeedback={(key) => approveFeedback(vendor, key)}
-            onSaveFeedbackOverride={(key, val) => saveFeedbackOverride(vendor, key, val)}
-            collapsed={!!collapsedCards[vendor]}
-            onToggleCollapsed={() =>
-              setCollapsedCards((prev) => ({
-                ...prev,
-                [vendor]: !prev[vendor],
-              }))
-            }
-            onRerunFromBackground={onRerunFromBackground}
-            forcePhase="background"
-          />
-        ))}
-      </PhaseSection>
-
-      {/* Refine phase */}
-      {refineVisible && (
+      {phases.filter((p) => p.visible).map((phase) => (
         <PhaseSection
-          title="Refine"
-          collapsed={collapsedPhases.refine}
-          onToggle={() => setCollapsedPhases((prev) => ({ ...prev, refine: !prev.refine }))}
-          showApproveAll={pendingRefine.length > 1}
+          key={phase.key}
+          title={phase.title}
+          collapsed={phase.collapsed}
+          onToggle={phase.toggle}
+          showApproveAll={phase.pending.length > 1}
           approveAllDisabled={false}
-          readyCount={readyRefine.length}
-          totalCount={pendingRefine.length}
-          onApproveAll={() => onApproveAll("refine")}
+          readyCount={phase.ready.length}
+          totalCount={phase.pending.length}
+          onApproveAll={() => onApproveAll(phase.key)}
         >
-          {vendorsList.map((vendor) => (
-            <VendorCard
-              key={`refine-${vendor}`}
-              vendor={vendor}
-              state={phaseState[vendor]}
-              edits={phaseEdits[vendor]}
-              onEditChange={onEditChange}
-              loading={loadingVendors.has(vendor)}
-              error={errors[vendor]}
-              onApprove={onApprove}
-              selectedFeedbackTab={selectedFeedbackTab[vendor]}
-              onSelectFeedbackTab={(tab) => setSelectedFeedbackTab((prev) => ({ ...prev, [vendor]: tab }))}
-              feedbackApprovals={feedbackApprovals[vendor] || {}}
-              onApproveFeedback={(key) => approveFeedback(vendor, key)}
-              onSaveFeedbackOverride={(key, val) => saveFeedbackOverride(vendor, key, val)}
-              collapsed={!!collapsedCards[vendor]}
-              onToggleCollapsed={() =>
-                setCollapsedCards((prev) => ({
-                  ...prev,
-                  [vendor]: !prev[vendor],
-                }))
-              }
-              onRerunFromBackground={onRerunFromBackground}
-              forcePhase="refine"
-            />
-          ))}
+          {vendorsList.map((vendor) => phase.renderVendor(vendor))}
         </PhaseSection>
-      )}
+      ))}
     </div>
   );
 }
