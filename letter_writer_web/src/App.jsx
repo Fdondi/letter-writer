@@ -50,6 +50,7 @@ export default function App() {
   const [savingFinal, setSavingFinal] = useState(false);
   const [activeTab, setActiveTab] = useState("compose"); // "compose" | "documents"
   const [assemblyVisible, setAssemblyVisible] = useState(true); // when in assembly stage, show assembly or phases
+  const [extractedData, setExtractedData] = useState(null); // Track extracted data to detect modifications
 
   // Update colors when system theme changes
   useEffect(() => {
@@ -60,6 +61,25 @@ export default function App() {
     mediaQuery.addEventListener("change", handleChange);
     return () => mediaQuery.removeEventListener("change", handleChange);
   }, [vendors]);
+
+  // Initialize session when component mounts
+  useEffect(() => {
+    const sessionId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2);
+    setPhaseSessionId(sessionId);
+    
+    // Initialize session on backend
+    fetch("/api/phases/init/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId }),
+    }).catch((e) => {
+      console.error("Failed to initialize session:", e);
+      // Continue anyway - session will be created when needed
+    });
+  }, []);
 
   // Fetch vendors on mount
   useEffect(() => {
@@ -93,11 +113,22 @@ export default function App() {
     }
     setExtracting(true);
     setExtractionError(null);
+    
+    // Generate session_id upfront
+    const sessionId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2);
+    setPhaseSessionId(sessionId);
+    
     try {
       const res = await fetch("/api/extract/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ job_text: jobText }),
+        body: JSON.stringify({ 
+          job_text: jobText,
+          session_id: sessionId,
+        }),
       });
       if (!res.ok) {
         const detail = await res.text();
@@ -116,6 +147,16 @@ export default function App() {
           : [extracted.requirements];
         setRequirements(reqs.filter(Boolean));
       }
+      // Store extracted data to detect if user modified it later
+      setExtractedData({
+        company_name: extracted.company_name || companyName,
+        job_title: extracted.job_title || jobTitle,
+        location: extracted.location || location,
+        language: extracted.language || language,
+        salary: extracted.salary || salary,
+        requirements: extracted.requirements || requirements,
+        job_text: jobText,
+      });
     } catch (e) {
       console.error("Extract error", e);
       setExtractionError(e?.message || String(e));
@@ -171,23 +212,12 @@ export default function App() {
       delete next[vendor];
       return next;
     });
-    const extractionPayload = {
-      company_name: companyName,
-      job_title: jobTitle,
-      location: location,
-      language: language,
-      salary: salary,
-      requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
-    };
-
     try {
       const res = await fetch(`/api/phases/background/${vendor}/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           session_id: phaseSessionId,
-          job_text: jobText,
-          extraction: extractionPayload,
         }),
       });
 
@@ -266,7 +296,9 @@ export default function App() {
 
   const approveExtraction = async (vendor) => {
     if (!phaseSessionId || !vendor) return;
-    const extractionPayload = {
+    
+    // Check if extraction was edited (different from extracted data)
+    const currentExtraction = {
       company_name: companyName,
       job_title: jobTitle,
       location: location,
@@ -274,18 +306,43 @@ export default function App() {
       salary: salary,
       requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
     };
+    const extractionEdited = extractedData && (
+      extractedData.company_name !== currentExtraction.company_name ||
+      extractedData.job_title !== currentExtraction.job_title ||
+      extractedData.location !== currentExtraction.location ||
+      extractedData.language !== currentExtraction.language ||
+      extractedData.salary !== currentExtraction.salary ||
+      JSON.stringify(extractedData.requirements) !== JSON.stringify(currentExtraction.requirements)
+    );
 
     setError(null);
     setLoadingVendors((prev) => new Set(prev).add(vendor));
 
     try {
+      // If extraction was edited, save it to session first
+      if (extractionEdited) {
+        await fetch("/api/phases/session/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: phaseSessionId,
+            job_text: jobText,
+            company_name: companyName,
+            job_title: jobTitle,
+            location: location,
+            language: language,
+            salary: salary,
+            requirements: currentExtraction.requirements,
+          }),
+        });
+      }
+      
+      // Background phase only needs session_id - it reads all data from the session
       const res = await fetch(`/api/phases/background/${vendor}/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           session_id: phaseSessionId,
-          extraction: extractionPayload,
-          job_text: jobText,
         }),
       });
       if (!res.ok) {
@@ -352,24 +409,83 @@ export default function App() {
     setPhaseSessions({});
     
     const vendorList = Array.from(selectedVendors);
-    const initialSessionId =
+    // Session should already be initialized on mount, but ensure it exists
+    const initialSessionId = phaseSessionId || (
       typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
-        : Math.random().toString(36).slice(2);
+        : Math.random().toString(36).slice(2)
+    );
+    if (!phaseSessionId) {
+      setPhaseSessionId(initialSessionId);
+      // Initialize session if not already done
+      try {
+        await fetch("/api/phases/init/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: initialSessionId }),
+        });
+      } catch (e) {
+        console.error("Failed to initialize session:", e);
+      }
+    }
 
-    const extractionPayload = {
+    // Check if data was modified after extraction
+    const currentData = {
       company_name: companyName,
       job_title: jobTitle,
       location: location,
       language: language,
       salary: salary,
       requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
+      job_text: jobText,
     };
+    const dataModified = !extractedData || 
+      extractedData.company_name !== currentData.company_name ||
+      extractedData.job_title !== currentData.job_title ||
+      extractedData.location !== currentData.location ||
+      extractedData.language !== currentData.language ||
+      extractedData.salary !== currentData.salary ||
+      JSON.stringify(extractedData.requirements) !== JSON.stringify(currentData.requirements) ||
+      extractedData.job_text !== currentData.job_text;
 
-    // Start background phase for all vendors in parallel, updating state immediately as each completes
-    // Each vendor runs independently - no waiting for others
+    // Update common session data if:
+    // - No extraction was called (extractedData is null), OR
+    // - User modified data after extraction
+    // Wait for it to complete before starting background phases
+    // Call session endpoint if:
+    // 1. Data was modified after extraction, OR
+    // 2. No extraction was called (user manually input data)
+    const shouldUpdateSession = dataModified || !extractedData;
+    if (shouldUpdateSession) {
+      try {
+        // Send individual fields that the user sees in the webpage
+        const sessionPayload = {
+          session_id: initialSessionId,
+          job_text: jobText,
+          company_name: companyName,
+          job_title: jobTitle,
+          location: location,
+          language: language,
+          salary: salary,
+          requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
+        };
+        
+        await fetch("/api/phases/session/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(sessionPayload),
+        });
+      } catch (e) {
+        console.error("Failed to update session data:", e);
+        setError("Failed to update session data. Please try again.");
+        setLoading(false);
+        return;
+      }
+    }
+
+    // Start background phase for all vendors in parallel
+    // Each vendor only needs session_id - they read all data from the session
     vendorList.forEach((vendor) => {
-      // Each vendor runs independently, updating state immediately on completion/failure
       (async () => {
         try {
           const res = await fetch(`/api/phases/background/${vendor}/`, {
@@ -377,8 +493,6 @@ export default function App() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               session_id: initialSessionId,
-              extraction: extractionPayload,
-              job_text: jobText,
             }),
           });
           if (!res.ok) {

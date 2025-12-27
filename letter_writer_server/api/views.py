@@ -229,16 +229,44 @@ def extract_view(request: HttpRequest):
     if not job_text:
         return JsonResponse({"detail": "job_text is required"}, status=400)
 
+    session_id = data.get("session_id")
+    if not session_id:
+        return JsonResponse({"detail": "session_id is required"}, status=400)
+
     # Use OpenAI as default for extraction (fast and reliable)
     try:
         from letter_writer.client import get_client
         from letter_writer.clients.base import ModelVendor
         from letter_writer.generation import extract_job_metadata
         from pathlib import Path
+        from letter_writer.session_store import save_session_common_data
 
         ai_client = get_client(ModelVendor.OPENAI)
         trace_dir = Path("trace", "extraction.openai")
         extraction = extract_job_metadata(job_text, ai_client, trace_dir=trace_dir)
+        
+        # Save common session data with extraction metadata
+        cv_text = data.get("cv_text")
+        if cv_text is None:
+            cv_path = Path(env_default("CV_PATH", "cv.md"))
+            if cv_path.exists():
+                cv_text = cv_path.read_text(encoding="utf-8")
+            else:
+                cv_text = ""
+        
+        # qdrant_host and qdrant_port are server-side constants, not user-facing
+        qdrant_host = env_default("QDRANT_HOST", "localhost")
+        qdrant_port = int(env_default("QDRANT_PORT", "6333"))
+        
+        # Save common data with extraction metadata (common to all vendors)
+        save_session_common_data(
+            session_id=session_id,
+            job_text=job_text,
+            cv_text=cv_text,
+            qdrant_host=qdrant_host,
+            qdrant_port=qdrant_port,
+            metadata={"common": extraction},  # Store extraction as common metadata
+        )
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         return JsonResponse({"detail": str(exc)}, status=500)
@@ -247,8 +275,124 @@ def extract_view(request: HttpRequest):
         {
             "status": "ok",
             "extraction": extraction,
+            "session_id": session_id,
         }
     )
+
+
+@csrf_exempt
+def init_session_view(request: HttpRequest):
+    """Initialize a new session. Called when page loads or user first interacts."""
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Invalid JSON"}, status=400)
+
+    session_id = data.get("session_id")
+    if not session_id:
+        return JsonResponse({"detail": "session_id is required"}, status=400)
+
+    try:
+        from letter_writer.session_store import save_session_common_data
+        
+        # Initialize session with empty/default data
+        # This ensures the session exists even if user skips extraction
+        save_session_common_data(
+            session_id=session_id,
+            job_text=data.get("job_text", ""),
+            cv_text=data.get("cv_text", ""),
+            qdrant_host=data.get("qdrant_host") or env_default("QDRANT_HOST", "localhost"),
+            qdrant_port=int(data.get("qdrant_port") or env_default("QDRANT_PORT", "6333")),
+            metadata=data.get("metadata", {}),
+        )
+        
+        return JsonResponse({"status": "ok", "session_id": session_id})
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+
+@csrf_exempt
+def update_session_common_data_view(request: HttpRequest):
+    """Update common session data. Called when 'start phases' is clicked if user modified data.
+    
+    Accepts individual fields that the user sees in the webpage:
+    - job_text, cv_text
+    - company_name, job_title, location, language, salary, requirements
+    
+    These fields are saved as common metadata (together with job_text and cv_text).
+    qdrant_host and qdrant_port are server-side constants, not user-facing.
+    """
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Invalid JSON"}, status=400)
+
+    session_id = data.get("session_id")
+    if not session_id:
+        return JsonResponse({"detail": "session_id is required"}, status=400)
+
+    job_text = data.get("job_text")
+    cv_text = data.get("cv_text")
+    if cv_text is None:
+        cv_path = Path(env_default("CV_PATH", "cv.md"))
+        if cv_path.exists():
+            cv_text = cv_path.read_text(encoding="utf-8")
+        else:
+            cv_text = ""
+
+    # qdrant_host and qdrant_port are server-side constants, not user-facing
+    qdrant_host = env_default("QDRANT_HOST", "localhost")
+    qdrant_port = int(env_default("QDRANT_PORT", "6333"))
+    
+    try:
+        from letter_writer.session_store import save_session_common_data, load_session_common_data
+        
+        # Load existing session to preserve other fields
+        existing = load_session_common_data(session_id)
+        existing_metadata = existing["metadata"] if existing else {}
+        
+        # Build common metadata from individual fields (if provided)
+        # These are the fields the user sees in the webpage
+        common_metadata = existing_metadata.get("common", {})
+        
+        # Update metadata fields if provided in request
+        if "company_name" in data:
+            common_metadata["company_name"] = data["company_name"]
+        if "job_title" in data:
+            common_metadata["job_title"] = data["job_title"]
+        if "location" in data:
+            common_metadata["location"] = data["location"]
+        if "language" in data:
+            common_metadata["language"] = data["language"]
+        if "salary" in data:
+            common_metadata["salary"] = data["salary"]
+        if "requirements" in data:
+            common_metadata["requirements"] = data["requirements"]
+        
+        # Save updated metadata
+        existing_metadata["common"] = common_metadata
+        
+        # Save common data (job_text, cv_text, and metadata)
+        save_session_common_data(
+            session_id=session_id,
+            job_text=job_text,
+            cv_text=cv_text,
+            qdrant_host=qdrant_host,
+            qdrant_port=qdrant_port,
+            metadata=existing_metadata,
+        )
+        
+        return JsonResponse({"status": "ok", "session_id": session_id})
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return JsonResponse({"detail": str(exc)}, status=500)
 
 
 @csrf_exempt
@@ -270,75 +414,53 @@ def background_phase_view(request: HttpRequest, vendor: str):
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
 
-    # Extract metadata from form (single dict, not per-vendor)
-    extraction_data = data.get("extraction") or {}
-    job_text = data.get("job_text")
-    if not job_text:
-        return JsonResponse({"detail": "job_text is required"}, status=400)
-
-    cv_text = data.get("cv_text")
-    if cv_text is None:
-        cv_path = Path(env_default("CV_PATH", "cv.md"))
-        if cv_path.exists():
-            cv_text = cv_path.read_text(encoding="utf-8")
-        else:
-            cv_text = ""
-
-    qdrant_host = data.get("qdrant_host") or env_default("QDRANT_HOST", "localhost")
-    qdrant_port = int(data.get("qdrant_port") or env_default("QDRANT_PORT", "6333"))
+    # Background phase reads ALL data from session - only session_id needed
+    # Fields are saved to common store by extraction phase or /api/phases/session/ before this is called
 
     try:
-        from letter_writer.phased_service import SESSION_STORE, _create_session, _run_background_phase
+        from letter_writer.phased_service import _run_background_phase
+        from letter_writer.session_store import (
+            load_session_common_data,
+            load_all_vendor_data,
+        )
         
-        # Check if session exists, otherwise create it with metadata
-        session = SESSION_STORE.get(session_id)
-        if session is None:
-            # Create new session with metadata for all vendors
-            metadata = {v.value: extraction_data for v in vendors}
-            session = _create_session(
-                job_text=job_text,
-                cv_text=cv_text,
-                vendors=vendors,
-                qdrant_host=qdrant_host,
-                qdrant_port=qdrant_port,
-                session_id=session_id,
-                metadata=metadata,
-            )
-        else:
-            # Update existing session
-            session.job_text = job_text
-            session.cv_text = cv_text
-            # Update metadata for this vendor (use vendor.value as key)
-            session.metadata[vendors[0].value] = extraction_data
-            if vendors[0] not in session.vendors_list:
-                session.vendors_list.extend(vendors)
-            SESSION_STORE[session.session_id] = session
-
-        # Run background phase for this vendor
-        session = _run_background_phase(session, vendors)
+        # Load common data (read-only - background phase does NOT write common data)
+        common_data = load_session_common_data(session_id)
+        if common_data is None:
+            raise ValueError(f"Session {session_id} not found. Common data must be saved by extraction phase or 'start phases' API call first.")
+        
+        # Metadata must exist in common store (created by extraction phase or session call)
+        if "common" not in common_data["metadata"]:
+            raise ValueError(f"Metadata not found in session. Please run extraction first or provide extraction data via /api/phases/session/")
+        
+        # Run background phase for this vendor (writes only vendor-specific data)
+        vendor_state = _run_background_phase(session_id, vendors[0], common_data)
+        
+        # Load all vendor data for response
+        all_vendor_data = load_all_vendor_data(session_id)
+        
+        vendors_payload = {
+            key: {
+                "company_report": vendor_state.company_report,
+                "top_docs": vendor_state.top_docs,
+                "cost": vendor_state.cost,
+            }
+            for key, vendor_state in all_vendor_data.items()
+        }
+        return JsonResponse(
+            {
+                "status": "ok",
+                "phase": "background",
+                "session_id": session_id,
+                "vendors": vendors_payload,
+                "metadata": common_data["metadata"],
+            }
+        )
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         return JsonResponse({"detail": str(exc)}, status=500)
-
-    vendors_payload = {
-        key: {
-            "company_report": state.company_report,
-            "top_docs": state.top_docs,
-            "cost": state.cost,
-        }
-        for key, state in session.vendors.items()
-    }
-    return JsonResponse(
-        {
-            "status": "ok",
-            "phase": "background",
-            "session_id": session.session_id,
-            "vendors": vendors_payload,
-            "metadata": session.metadata,
-        }
-    )
 
 
 @csrf_exempt
