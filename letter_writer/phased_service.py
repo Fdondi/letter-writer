@@ -46,8 +46,6 @@ class SessionState:
     session_id: str
     job_text: str
     cv_text: str
-    qdrant_host: str
-    qdrant_port: int
     search_result: List[ScoredPoint]
     vendors: Dict[str, VendorPhaseState] = field(default_factory=dict)
     metadata: Dict[str, Dict[str, str]] = field(default_factory=dict)  # vendor -> extraction
@@ -117,8 +115,6 @@ def _create_session(
     job_text: str,
     cv_text: str,
     vendors: List[ModelVendor],
-    qdrant_host: str,
-    qdrant_port: int,
     session_id: str | None = None,
     metadata: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> SessionState:
@@ -126,8 +122,6 @@ def _create_session(
         session_id=session_id or str(uuid4()),
         job_text=job_text,
         cv_text=cv_text,
-        qdrant_host=qdrant_host,
-        qdrant_port=qdrant_port,
         search_result=[],
         metadata=metadata or {},
         vendors_list=vendors,  # Keep for backward compatibility during migration
@@ -148,13 +142,15 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
     # Extract common data
     job_text = common_data["job_text"]
     cv_text = common_data["cv_text"]
-    qdrant_host = common_data["qdrant_host"]
-    qdrant_port = common_data["qdrant_port"]
     metadata = common_data["metadata"]
     search_result = common_data.get("search_result", [])
     
     # Get search results if not already cached (read-only, don't save)
     if not search_result:
+        # Qdrant connection is a server-side constant, read from environment
+        from .config import env_default
+        qdrant_host = env_default("QDRANT_HOST", "localhost")
+        qdrant_port = int(env_default("QDRANT_PORT", "6333"))
         qdrant_client = QdrantClient(host=qdrant_host, port=qdrant_port)
         openai_client = OpenAI()
         search_result = retrieve_similar_job_offers(job_text, qdrant_client, openai_client)
@@ -192,8 +188,6 @@ def start_extraction_phase(
     job_text: str,
     cv_text: str,
     vendors: List[ModelVendor],
-    qdrant_host: str,
-    qdrant_port: int,
     session_id: str | None = None,
 ) -> SessionState:
     """First phase: per-vendor extraction of company/job info using each vendor's TINY model."""
@@ -229,8 +223,6 @@ def start_extraction_phase(
             job_text=job_text,
             cv_text=cv_text,
             vendors=vendors,
-            qdrant_host=qdrant_host,
-            qdrant_port=qdrant_port,
             session_id=session_id,
             metadata=metadata,
         )
@@ -242,8 +234,6 @@ def start_background_phase(
     job_text: str,
     cv_text: str,
     vendors: List[ModelVendor],
-    qdrant_host: str,
-    qdrant_port: int,
 ) -> SessionState:
     """Start a phased run directly at background (legacy entrypoint)."""
     metadata = {v.value: {"company_name": ""} for v in vendors}
@@ -251,8 +241,6 @@ def start_background_phase(
         job_text=job_text,
         cv_text=cv_text,
         vendors=vendors,
-        qdrant_host=qdrant_host,
-        qdrant_port=qdrant_port,
         metadata=metadata,
     )
     return _run_background_phase(session, vendors)

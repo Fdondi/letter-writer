@@ -106,8 +106,6 @@ def _serialize_session(session) -> dict:
         "session_id": session.session_id,
         "job_text": session.job_text,
         "cv_text": session.cv_text,
-        "qdrant_host": session.qdrant_host,
-        "qdrant_port": session.qdrant_port,
         "search_result": [_serialize_scored_point(p) for p in session.search_result],
         "vendors": {k: _serialize_vendor_state(v) for k, v in session.vendors.items()},
         "metadata": session.metadata,
@@ -126,8 +124,6 @@ def _deserialize_session(data: dict):
         session_id=data["session_id"],
         job_text=data["job_text"],
         cv_text=data["cv_text"],
-        qdrant_host=data["qdrant_host"],
-        qdrant_port=data["qdrant_port"],
         search_result=[_deserialize_scored_point(p) for p in data.get("search_result", [])],
         vendors={k: _deserialize_vendor_state(v) for k, v in data.get("vendors", {}).items()},
         metadata=data.get("metadata", {}),
@@ -216,7 +212,6 @@ def save_session(session, db=None) -> None:
 
 
 def save_session_common_data(session_id: str, job_text: str, cv_text: str,
-                             qdrant_host: str, qdrant_port: int,
                              metadata: dict, search_result: list = None, db=None) -> None:
     """Save or update common session data. Called by extraction phase or start phased flow.
     
@@ -239,8 +234,6 @@ def save_session_common_data(session_id: str, job_text: str, cv_text: str,
                 "session_id": session_id,
                 "job_text": job_text,
                 "cv_text": cv_text,
-                "qdrant_host": qdrant_host,
-                "qdrant_port": qdrant_port,
                 "search_result": [_serialize_scored_point(p) for p in (search_result or [])],
                 "metadata": metadata,
                 "created_at": now,
@@ -252,8 +245,6 @@ def save_session_common_data(session_id: str, job_text: str, cv_text: str,
                 "$set": {
                     "job_text": job_text,
                     "cv_text": cv_text,
-                    "qdrant_host": qdrant_host,
-                    "qdrant_port": qdrant_port,
                     "updated_at": now,
                 },
             }
@@ -286,8 +277,6 @@ def load_session_common_data(session_id: str, db=None):
         "session_id": doc["session_id"],
         "job_text": doc.get("job_text", ""),
         "cv_text": doc.get("cv_text", ""),
-        "qdrant_host": doc.get("qdrant_host", "localhost"),
-        "qdrant_port": doc.get("qdrant_port", 6333),
         "search_result": [_deserialize_scored_point(p) for p in doc.get("search_result", [])],
         "metadata": doc.get("metadata", {}),
         "created_at": doc.get("created_at"),
@@ -364,22 +353,6 @@ def load_all_vendor_data(session_id: str, db=None):
         result[vendor] = _deserialize_vendor_state(doc)
     
     return result
-
-
-# Deprecated - use save_session_common_data instead
-def ensure_session_exists(session_id: str, job_text: str, cv_text: str, 
-                         qdrant_host: str, qdrant_port: int, 
-                         vendor_metadata: dict, db=None) -> None:
-    """Deprecated: Use save_session_common_data instead."""
-    save_session_common_data(
-        session_id=session_id,
-        job_text=job_text,
-        cv_text=cv_text,
-        qdrant_host=qdrant_host,
-        qdrant_port=qdrant_port,
-        metadata=vendor_metadata,
-        db=db,
-    )
 
 
 def load_session(session_id: str, db=None, force_reload: bool = False):

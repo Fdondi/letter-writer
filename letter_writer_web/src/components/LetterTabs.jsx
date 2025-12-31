@@ -14,7 +14,6 @@ export default function LetterTabs({
   setFinalParagraphs, 
   originalText, 
   failedVendors, 
-  loadingVendors, 
   onRetry, 
   vendorColors, 
   onAddParagraph,
@@ -737,25 +736,13 @@ export default function LetterTabs({
                     </span>
                   )}
                 </span>
-                {loadingVendors.has(v) && (
-                  <span style={{ marginLeft: "8px", fontSize: "12px" }}>Loading...</span>
-                )}
                 {failedVendors[v] && (
                   <span style={{ marginLeft: "8px", fontSize: "12px", color: "var(--error-text)" }}>Failed</span>
                 )}
               </h4>
               
               <div style={{ padding: "8px" }}>
-                {loadingVendors.has(v) ? (
-                  <div style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    height: "100px"
-                  }}>
-                    <div className="spinner" />
-                  </div>
-                ) : failedVendors[v] ? (
+                {failedVendors[v] ? (
                   <div style={{
                     padding: "16px",
                     color: "var(--error-text)",
