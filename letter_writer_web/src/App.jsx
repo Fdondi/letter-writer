@@ -37,7 +37,6 @@ export default function App() {
   const [vendorCosts, setVendorCosts] = useState({}); // vendor -> cost
   const [failedVendors, setFailedVendors] = useState({}); // vendor -> error message
   const [loading, setLoading] = useState(false);
-  const [loadingVendors, setLoadingVendors] = useState(new Set()); // vendors currently loading
   const [error, setError] = useState(null);
   const [showInput, setShowInput] = useState(true);
   const [showStyleBlade, setShowStyleBlade] = useState(false);
@@ -206,7 +205,6 @@ export default function App() {
   };
 
   const retryVendor = async (vendor) => {
-    setLoadingVendors((prev) => new Set(prev).add(vendor));
     setFailedVendors((prev) => {
       const next = { ...prev };
       delete next[vendor];
@@ -259,12 +257,6 @@ export default function App() {
       console.error("Retry vendor error", e);
       setFailedVendors((prev) => ({ ...prev, [vendor]: String(e) }));
       setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
-    } finally {
-      setLoadingVendors((prev) => {
-        const next = new Set(prev);
-        next.delete(vendor);
-        return next;
-      });
     }
   };
 
@@ -316,7 +308,6 @@ export default function App() {
     );
 
     setError(null);
-    setLoadingVendors((prev) => new Set(prev).add(vendor));
 
     try {
       // If extraction was edited, save it to session first
@@ -399,7 +390,6 @@ export default function App() {
     setFailedVendors({});
     setVendorParagraphs({});
     setFinalParagraphs([]);
-    setLoadingVendors(new Set());
     setDocumentId(null);
     setShowInput(false);
     setUiStage("phases");
@@ -552,7 +542,6 @@ export default function App() {
   const approvePhase = async (phase, vendor) => {
     if (phase === "background") {
       setPhaseErrors((prev) => ({ ...prev, [vendor]: null }));
-      setLoadingVendors((prev) => new Set(prev).add(vendor));
       const edits = phaseEdits[vendor]?.background || {};
       const sessionId = phaseSessions[vendor] || phaseSessionId;
 
@@ -600,21 +589,14 @@ export default function App() {
         }));
       } catch (e) {
         console.error("Draft generation error", e);
-        setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
-      } finally {
-        setLoadingVendors((prev) => {
-          const next = new Set(prev);
-          next.delete(vendor);
-          return next;
-        });
-      }
+      setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
+    }
     } else if (phase === "refine") {
       const editedFinal =
         (phaseEdits[vendor]?.refine?.final_letter ??
           phaseState[vendor]?.refine?.data?.final_letter ??
           "").trim();
       setPhaseErrors((prev) => ({ ...prev, [vendor]: null }));
-      setLoadingVendors((prev) => new Set(prev).add(vendor));
       const sessionId = phaseSessions[vendor] || phaseSessionId;
       const bg = phaseState[vendor]?.background?.data || {};
       const bgEdits = phaseEdits[vendor]?.background || {};
@@ -688,14 +670,8 @@ export default function App() {
         }
       } catch (e) {
         console.error("Refine approve error", e);
-        setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
-      } finally {
-        setLoadingVendors((prev) => {
-          const next = new Set(prev);
-          next.delete(vendor);
-          return next;
-        });
-      }
+      setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
+    }
     }
   };
 
@@ -767,7 +743,6 @@ export default function App() {
     setVendorParagraphs({});
     setFailedVendors({});
     setError(null);
-    setLoadingVendors(new Set());
     setFinalParagraphs([]);
     setDocumentId(null);
     setSavingFinal(false);
@@ -1032,12 +1007,12 @@ export default function App() {
           vendorsList={vendorsList}
           phaseState={phaseState}
           phaseEdits={phaseEdits}
-          loadingVendors={loadingVendors}
           errors={phaseErrors}
           onEditChange={updatePhaseEdit}
           onApprove={approvePhase}
           onApproveAll={approveAllPhase}
           onRerunFromBackground={rerunFromBackground}
+          sessionId={phaseSessionId}
         />
       )}
 
@@ -1054,7 +1029,6 @@ export default function App() {
                 originalText={jobText}
                 vendorColors={vendorColors}
                 failedVendors={failedVendors}
-                loadingVendors={loadingVendors}
                 onRetry={retryVendor}
                 onAddParagraph={onAddParagraph}
                 onCopyFinal={persistFinalLetter}
@@ -1067,18 +1041,26 @@ export default function App() {
                 vendorsList={vendorsList}
                 phaseState={phaseState}
                 phaseEdits={phaseEdits}
-                loadingVendors={loadingVendors}
                 errors={phaseErrors}
                 onEditChange={updatePhaseEdit}
                 onApprove={approvePhase}
                 onApproveAll={approveAllPhase}
                 onRerunFromBackground={rerunFromBackground}
-                extraction={extractionData}
-                extractionEdits={extractionEdits}
-                onExtractionChange={updateExtractionEdit}
+                sessionId={phaseSessionId}
+                companyName={companyName}
+                jobTitle={jobTitle}
+                location={location}
+                language={language}
+                salary={salary}
+                requirements={requirements}
+                onCompanyNameChange={setCompanyName}
+                onJobTitleChange={setJobTitle}
+                onLocationChange={setLocation}
+                onLanguageChange={setLanguage}
+                onSalaryChange={setSalary}
+                onRequirementsChange={setRequirements}
                 onApproveExtraction={approveExtraction}
-                extractionApproved={extractionApproved}
-                extractionLoading={extractionLoading}
+                extractionLoading={false}
                 extractionError={extractionError}
               />
             </>
@@ -1104,7 +1086,6 @@ export default function App() {
               {errorMsg}
               <button
                 onClick={() => retryVendor(vendor)}
-                disabled={loadingVendors.has(vendor)}
                 style={{
                   marginLeft: 10,
                   padding: "4px 8px",
@@ -1115,7 +1096,7 @@ export default function App() {
                   cursor: "pointer",
                 }}
               >
-                {loadingVendors.has(vendor) ? "Retrying..." : "Retry"}
+                Retry
               </button>
             </div>
           ))}

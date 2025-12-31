@@ -1,4 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
+
+// Card status enum - cards report their status to phases
+const CardStatus = {
+  PENDING: 'pending',
+  READY: 'ready',
+  APPROVED: 'approved',
+};
 
 function InputRow({ label, value, onChange, placeholder }) {
   return (
@@ -26,13 +33,12 @@ function PhaseSection({
   totalCount,
   gridAutoColumns = "340px",
 }) {
-  // Show remaining count: if 2/6 ready, after approving 2, show 0/4 remaining
+  // Always show count format when we have counts: "Approve (X/Y)"
+  // Only show "Approve all" when all are ready (readyCount === totalCount > 0)
   const approveButtonText = readyCount !== undefined && totalCount !== undefined
-    ? readyCount < totalCount
-      ? `Approve (${readyCount}/${totalCount})`
-      : readyCount > 0
-        ? "Approve all"
-        : "Approve all"
+    ? readyCount === totalCount && readyCount > 0
+      ? "Approve all"
+      : `Approve (${readyCount}/${totalCount})`
     : "Approve all";
   
   return (
@@ -422,39 +428,108 @@ const buttonBarStyle = {
 
 function VendorCard({
   vendor,
-  state,
-  edits,
+  // Phase structure - for navigation only, not for state
+  phases, // Array of phase objects
+  phaseObj, // The phase object this card belongs to: { phase: "background", previous: null, next: <phaseObj>, ... }
+  // Card owns its own state
+  data = {}, // The phase data for this vendor
+  approved = false, // Whether this card is approved
+  edits = {}, // The edits for this vendor in this phase
+  previousPhaseApproved = true, // Whether the previous phase is approved for this vendor
+  allPhasesDone = false, // Whether all phases are done for this vendor
   onEditChange,
   onSaveFeedbackOverride,
-  loading,
-  error,
   onApprove,
-  selectedFeedbackTab,
-  onSelectFeedbackTab,
-  feedbackApprovals,
-  onApproveFeedback,
-  collapsed,
-  onToggleCollapsed,
+  sessionId, // Required: session ID for API calls
+  onStatusChange, // Callback to register status with phase: (status: CardStatus) => void
   onRerunFromBackground,
-  forcePhase,
   disabled = false,
-  extractionData,
-  extractionEdits,
-  onExtractionChange,
+  // Form data for extraction phase
+  companyName,
+  jobTitle,
+  location,
+  language,
+  salary,
+  requirements,
+  onCompanyNameChange,
+  onJobTitleChange,
+  onLocationChange,
+  onLanguageChange,
+  onSalaryChange,
+  onRequirementsChange,
   onApproveExtraction,
-  extractionApproved = false,
   extractionLoading = false,
   extractionError,
 }) {
+  // This card knows which phase it belongs to
+  const cardPhase = phaseObj?.phase || null;
+  
+  // Card owns its state - use props directly
+  const cardPhaseData = data || {};
+  const isCardPhaseApproved = approved || false;
+  const cardPhaseEdits = edits || {};
+  
+  // This card's loading state - source of truth for THIS card
+  // Initialize as loading if no data
+  const hasInitialData = cardPhaseData && Object.keys(cardPhaseData).length > 0;
+  const [isLoading, setIsLoading] = useState(!hasInitialData);
+  const [cardError, setCardError] = useState(null);
+  
+  // Card-specific UI state
+  const [selectedFeedbackTab, setSelectedFeedbackTab] = useState(null);
+  const [feedbackApprovals, setFeedbackApprovals] = useState({});
+  const [collapsed, setCollapsed] = useState(false);
+
+  const error = cardError;
+
+  // Update loading state when data arrives
+  useEffect(() => {
+    const hasDataNow = cardPhaseData && Object.keys(cardPhaseData).length > 0;
+    if (hasDataNow && isLoading) {
+      // Data arrived - stop loading
+      setIsLoading(false);
+    } else if (!hasDataNow && !isLoading && cardPhase) {
+      // Data was cleared or we're in a loading state but isLoading wasn't set
+      setIsLoading(true);
+    }
+  }, [cardPhaseData, isLoading, cardPhase]);
+  
+  // Track current registered status to avoid infinite loops
+  const registeredStatusRef = useRef(null);
+  
+  // Register status changes with phase (only when status actually changes)
+  useEffect(() => {
+    if (!cardPhase || !onStatusChange) return;
+    
+    const hasDataNow = cardPhaseData && Object.keys(cardPhaseData).length > 0;
+    
+    let newStatus = null;
+    if (isCardPhaseApproved) {
+      newStatus = CardStatus.APPROVED;
+    } else if (isLoading && !hasDataNow) {
+      newStatus = CardStatus.PENDING;
+    } else if (!isLoading && hasDataNow) {
+      newStatus = CardStatus.READY;
+    }
+    
+    // Only register if status changed
+    if (newStatus && newStatus !== registeredStatusRef.current) {
+      registeredStatusRef.current = newStatus;
+      onStatusChange(newStatus);
+    }
+  }, [isLoading, cardPhaseData, isCardPhaseApproved, cardPhase, onStatusChange]);
   const renderExtraction = () => {
-    const requirementsValue = Array.isArray(extractionEdits?.requirements)
-      ? extractionEdits.requirements.join("\n")
-      : extractionEdits?.requirements ||
-        extractionData?.requirements?.join?.("\n") ||
-        extractionData?.requirements ||
-        "";
-    const isBusy = extractionLoading;
-    const hasCompany = (extractionEdits?.company_name || extractionData?.company_name || "").trim().length > 0;
+    // For extraction phase, approved means background phase has started (has data)
+    // We can't check this directly since we don't have background data here
+    // This should be passed as a prop if needed, or checked differently
+    const isExtractionApproved = false; // TODO: pass as prop if needed
+    const isExtractionLoading = extractionLoading;
+    
+    const requirementsValue = Array.isArray(requirements)
+      ? requirements.join("\n")
+      : requirements || "";
+    const isBusy = isExtractionLoading;
+    const hasCompany = (companyName || "").trim().length > 0;
 
     return (
       <>
@@ -464,32 +539,32 @@ function VendorCard({
         <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
           <InputRow
             label="Company"
-            value={extractionEdits?.company_name ?? extractionData?.company_name ?? ""}
-            onChange={(val) => onExtractionChange?.(vendor, "company_name", val)}
+            value={companyName || ""}
+            onChange={(val) => onCompanyNameChange?.(val)}
             placeholder="Detected company name (required)"
           />
           <InputRow
             label="Job title"
-            value={extractionEdits?.job_title ?? extractionData?.job_title ?? ""}
-            onChange={(val) => onExtractionChange?.(vendor, "job_title", val)}
+            value={jobTitle || ""}
+            onChange={(val) => onJobTitleChange?.(val)}
             placeholder="e.g. Senior Backend Engineer"
           />
           <InputRow
             label="Location"
-            value={extractionEdits?.location ?? extractionData?.location ?? ""}
-            onChange={(val) => onExtractionChange?.(vendor, "location", val)}
+            value={location || ""}
+            onChange={(val) => onLocationChange?.(val)}
             placeholder="e.g. Remote, Berlin, Hybrid"
           />
           <InputRow
             label="Language"
-            value={extractionEdits?.language ?? extractionData?.language ?? ""}
-            onChange={(val) => onExtractionChange?.(vendor, "language", val)}
+            value={language || ""}
+            onChange={(val) => onLanguageChange?.(val)}
             placeholder="Primary language"
           />
           <InputRow
             label="Salary"
-            value={extractionEdits?.salary ?? extractionData?.salary ?? ""}
-            onChange={(val) => onExtractionChange?.(vendor, "salary", val)}
+            value={salary || ""}
+            onChange={(val) => onSalaryChange?.(val)}
             placeholder="Salary range or notes"
           />
           <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
@@ -497,9 +572,7 @@ function VendorCard({
             <textarea
               value={requirementsValue}
               onChange={(e) =>
-                onExtractionChange?.(
-                  vendor,
-                  "requirements",
+                onRequirementsChange?.(
                   e.target.value
                     .split("\n")
                     .map((line) => line.trim())
@@ -526,56 +599,92 @@ function VendorCard({
               cursor: isBusy || !hasCompany ? "not-allowed" : "pointer",
             }}
           >
-            {isBusy ? "Running background..." : extractionApproved ? "Re-run background" : "Approve background → generate letter"}
+            {isBusy ? "Running background..." : isExtractionApproved ? "Re-run background" : "Approve background → generate letter"}
           </button>
         </div>
       </>
     );
   };
 
-  const backgroundData = state?.background?.data || {};
-  const refineData = state?.refine?.data || {};
-  const feedback = refineData.feedback || {};
-  const feedbackKeys = Object.keys(feedback || {});
-  const feedbackOverrides = edits?.refine?.feedback_overrides || {};
+  // Phase-agnostic: work with phase objects from phase-centric structure
+  const thisPhaseData = cardPhaseData;
+  const thisPhaseApproved = isCardPhaseApproved;
+  
+  // Check if this card's phase data is dirty (edits differ from data) - phase-agnostic
+  const thisPhaseDirty = phaseObj ? Object.keys(cardPhaseEdits).some(key => {
+    const editValue = (cardPhaseEdits[key] ?? '').toString().trim();
+    const dataValue = (thisPhaseData[key] ?? '').toString().trim();
+    return editValue !== dataValue;
+  }) : false;
+  
+  // Check if all phases are done (for "done" state) - use prop
+  const isDone = allPhasesDone;
+  
+  // For refine-specific features (feedback) - initialize tab when feedback data arrives
+  useEffect(() => {
+    if (cardPhase === "refine") {
+      const feedback = cardPhaseData?.feedback || {};
+      const feedbackKeys = Object.keys(feedback);
+      if (feedbackKeys.length > 0 && !selectedFeedbackTab) {
+        setSelectedFeedbackTab(feedbackKeys[0]);
+        // Initialize approvals as all unreviewed
+        const initialApprovals = {};
+        feedbackKeys.forEach(k => {
+          initialApprovals[k] = false;
+        });
+        setFeedbackApprovals(initialApprovals);
+      }
+    }
+  }, [cardPhase, cardPhaseData, selectedFeedbackTab]);
+  
+  // For refine-specific features (feedback)
+  const feedback = cardPhase === "refine" ? (cardPhaseData?.feedback || {}) : {};
+  const feedbackKeys = Object.keys(feedback);
+  const feedbackOverrides = cardPhase === "refine" ? (cardPhaseEdits?.feedback_overrides || {}) : {};
   const activeFeedbackKey = selectedFeedbackTab || feedbackKeys[0] || null;
-
-  const isDone = state?.background?.approved && state?.refine?.approved;
-  const backgroundApproved = !!state?.background?.approved;
-  const refineApproved = !!state?.refine?.approved;
-
-  const backgroundDirty =
-    (edits?.background?.company_report ?? "").trim() !== (backgroundData.company_report ?? "").trim();
-  const refineDirty =
-    (edits?.refine?.final_letter ?? "").trim() !== (refineData.final_letter ?? "").trim();
-
+  
+  // Auto-collapse when done
+  useEffect(() => {
+    if (isDone && !collapsed) {
+      setCollapsed(true);
+    }
+  }, [isDone, collapsed]);
+  
+  // Previous phase approval status - use prop (calculated in renderVendor)
+  // Determine stage from this card's phase and approval status
   let stage = "done";
-  if (!state?.background?.approved) stage = "background";
-  else if (!state?.refine?.approved) stage = refineData && Object.keys(refineData).length ? "refine" : "pending-refine";
+  if (!isCardPhaseApproved && cardPhase) {
+    const hasData = cardPhaseData && Object.keys(cardPhaseData).length > 0;
+    stage = hasData ? cardPhase : "pending-refine";
+  }
 
-  const phaseToRender = forcePhase || stage;
-
+  const phaseToRender = cardPhase || stage;
   const isPendingRefine = stage === "pending-refine";
   const pendingLabel = isPendingRefine ? "Running next phase..." : null;
+
+  // Phase-agnostic check: show loading UI when loading and no data yet
+  // When re-running, old data is cleared so we go back to loading state
+  const hasPhaseData = cardPhase && cardPhaseData && Object.keys(cardPhaseData).length > 0;
+  const isLoadingWithoutData = isLoading && !hasPhaseData && !isCardPhaseApproved;
 
   return (
     <div style={{ ...cardStyle, opacity: disabled ? 0.6 : 1, pointerEvents: disabled ? "none" : "auto" }}>
       <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 8 }}>
         <h4 style={{ margin: 0, flex: 1, textTransform: "capitalize" }}>{vendor}</h4>
         {isDone && (
-          <button onClick={onToggleCollapsed} style={{ fontSize: 12, padding: "4px 8px" }}>
+          <button onClick={() => setCollapsed(!collapsed)} style={{ fontSize: 12, padding: "4px 8px" }}>
             {collapsed ? "Expand" : "Collapse"}
           </button>
         )}
       </div>
 
-      {!isDone && loading && (
+      {isLoadingWithoutData && (
         <div style={{ padding: 6, color: "#6b7280", fontSize: 12 }}>
-          {pendingLabel || "Preparing next phase..."}
+          {pendingLabel || "Loading..."}
         </div>
       )}
 
-      {error && (
+      {error && !isLoadingWithoutData && (
         <div style={{
           color: "var(--error-text)",
           marginBottom: 8,
@@ -589,42 +698,44 @@ function VendorCard({
         </div>
       )}
 
+      {!isLoadingWithoutData && (
       <div style={contentContainerStyle}>
         {phaseToRender === "extraction" && (
           renderExtraction()
         )}
-        {(phaseToRender === "background" || (isDone && !collapsed && !forcePhase)) && (
+        {/* Render content for this card's phase - phase-agnostic */}
+        {cardPhase === "background" && (phaseToRender === "background" || (isDone && !collapsed)) && (
           <>
             <div style={{ fontSize: 13, color: "#374151" }}>
               Review the background search. Edit if needed, then approve to generate the letter.
             </div>
             <EditableField
               label="Company report"
-              value={edits?.background?.company_report ?? backgroundData.company_report ?? ""}
+              value={cardPhaseEdits.company_report ?? thisPhaseData.company_report ?? ""}
               minHeight={140}
               placeholder="Company research"
-              onSave={(val) => onEditChange(vendor, "background", "company_report", val)}
-              disabled={loading}
+              onSave={(val) => onEditChange(vendor, cardPhase, "company_report", val)}
+              disabled={isLoading}
             />
           </>
         )}
 
-        {(phaseToRender === "refine" || (isDone && !collapsed && !forcePhase)) && (
+        {cardPhase === "refine" && (phaseToRender === "refine" || (isDone && !collapsed)) && (
           <>
             <div style={{ fontSize: 13, color: "#374151" }}>
-              {!backgroundApproved
-                ? "Background approval required before refining this vendor."
-                : refineApproved
+              {!previousPhaseApproved
+                ? `${previousPhase ? previousPhase.charAt(0).toUpperCase() + previousPhase.slice(1) : "Previous"} approval required before ${cardPhase} phase.`
+                : thisPhaseApproved
                   ? "Final letter is approved. Edit to rerun refinement if needed."
                   : "Edit if desired, then approve to move to assembly."}
             </div>
             <EditableField
               label="Final letter"
-              value={edits?.refine?.final_letter ?? refineData.final_letter ?? ""}
+              value={cardPhaseEdits.final_letter ?? thisPhaseData.final_letter ?? ""}
               minHeight={220}
               placeholder="Final letter"
-              onSave={(val) => onEditChange(vendor, "refine", "final_letter", val)}
-              disabled={loading}
+              onSave={(val) => onEditChange(vendor, cardPhase, "final_letter", val)}
+              disabled={isLoading}
             />
             {feedbackKeys.length > 0 && (
               <div style={{ marginTop: 8 }}>
@@ -666,7 +777,7 @@ function VendorCard({
                     return (
                       <button
                         key={`${vendor}-tab-${key}`}
-                        onClick={() => onSelectFeedbackTab(key)}
+                        onClick={() => setSelectedFeedbackTab(key)}
                         style={{
                           padding: "4px 8px",
                           fontSize: 12,
@@ -697,7 +808,9 @@ function VendorCard({
                     type="button"
                     onClick={() => {
                       const allKeys = feedbackKeys;
-                      allKeys.forEach((k) => onApproveFeedback(k));
+                      allKeys.forEach((k) => {
+                        setFeedbackApprovals(prev => ({ ...prev, [k]: true }));
+                      });
                     }}
                     style={{ padding: "4px 8px", fontSize: 12 }}
                   >
@@ -711,8 +824,12 @@ function VendorCard({
                     placeholder="Feedback"
                     approved={feedbackApprovals[activeFeedbackKey]}
                     hasContent={(feedback[activeFeedbackKey] || "").trim().length > 0}
-                    onApprove={() => onApproveFeedback(activeFeedbackKey)}
-                    onSave={(val) => onSaveFeedbackOverride(activeFeedbackKey, val)}
+                    onApprove={() => {
+                      setFeedbackApprovals(prev => ({ ...prev, [activeFeedbackKey]: true }));
+                    }}
+                    onSave={(val) => {
+                      onSaveFeedbackOverride(activeFeedbackKey, val);
+                    }}
                     isModified={
                       feedbackOverrides[activeFeedbackKey] !== undefined &&
                       feedbackOverrides[activeFeedbackKey] !== feedback[activeFeedbackKey]
@@ -724,297 +841,459 @@ function VendorCard({
           </>
         )}
       </div>
+      )}
 
+      {!isLoadingWithoutData && (
       <div style={buttonBarStyle}>
-        {(phaseToRender === "background" || (isDone && !collapsed && !forcePhase)) && (
+        {cardPhase === "background" && (phaseToRender === "background" || (isDone && !collapsed)) && (
           <button
-            onClick={() => onApprove("background", vendor)}
+            onClick={() => {
+              // When re-running (has data but dirty), clear data and set loading
+              if (hasPhaseData && thisPhaseDirty) {
+                setIsLoading(true);
+                if (onStatusChange) onStatusChange(CardStatus.PENDING);
+              }
+              onApprove(cardPhase, vendor);
+            }}
             disabled={
-              loading ||
-              (backgroundApproved && !backgroundDirty)
+              isLoading ||
+              (thisPhaseApproved && !thisPhaseDirty)
             }
             style={{
-              opacity: loading || (backgroundApproved && !backgroundDirty) ? 0.6 : 1,
-              cursor: loading || (backgroundApproved && !backgroundDirty) ? "not-allowed" : "pointer",
+              opacity: isLoading || (thisPhaseApproved && !thisPhaseDirty) ? 0.6 : 1,
+              cursor: isLoading || (thisPhaseApproved && !thisPhaseDirty) ? "not-allowed" : "pointer",
             }}
           >
-            {loading
+            {isLoading
               ? "Processing..."
-              : backgroundApproved
-                ? backgroundDirty
+              : thisPhaseApproved
+                ? thisPhaseDirty
                   ? "Save and restart from here"
                   : "Edit to restart from here"
                 : "Approve background → generate letter"}
           </button>
         )}
-        {(phaseToRender === "background" || (isDone && !collapsed && !forcePhase)) && isDone && (
+        {cardPhase === "background" && (phaseToRender === "background" || (isDone && !collapsed && !forcePhase)) && isDone && (
           <button
-            onClick={() => onRerunFromBackground(vendor)}
+            onClick={() => {
+              onRerunFromBackground(vendor);
+            }}
             style={{ opacity: 0.8 }}
           >
             Rebuild letter from edited background
           </button>
         )}
 
-        {(phaseToRender === "refine" || (isDone && !collapsed && !forcePhase)) && (
+        {cardPhase === "refine" && (phaseToRender === "refine" || (isDone && !collapsed)) && (
           <button
-            onClick={() => onApprove("refine", vendor)}
+            onClick={() => {
+              // When re-running (has data but dirty), clear data and set loading
+              if (hasPhaseData && thisPhaseDirty) {
+                setIsLoading(true);
+                if (onStatusChange) onStatusChange(CardStatus.PENDING);
+              }
+              onApprove(cardPhase, vendor);
+            }}
             style={{
               opacity:
-                loading ||
-                !backgroundApproved ||
-                (refineApproved && !refineDirty) ||
+                isLoading ||
+                !previousPhaseApproved ||
+                (thisPhaseApproved && !thisPhaseDirty) ||
                 (feedbackKeys.length > 0 &&
-                  feedbackKeys.some((k) => feedbackApprovals[k] === false || feedbackApprovals[k] === undefined))
+                  feedbackKeys.some((k) => {
+                    // Feedback is reviewed if: approved OR edited (has override)
+                    // Editing includes removing (setting to NO COMMENT)
+                    const isApproved = feedbackApprovals[k] === true;
+                    const isEdited = feedbackOverrides[k] !== undefined;
+                    // Not reviewed if neither approved nor edited
+                    return !isApproved && !isEdited;
+                  }))
                   ? 0.6
                   : 1,
               cursor:
-                loading ||
-                !backgroundApproved ||
-                (refineApproved && !refineDirty) ||
+                isLoading ||
+                !previousPhaseApproved ||
+                (thisPhaseApproved && !thisPhaseDirty) ||
                 (feedbackKeys.length > 0 &&
-                  feedbackKeys.some((k) => feedbackApprovals[k] === false || feedbackApprovals[k] === undefined))
+                  feedbackKeys.some((k) => {
+                    const isApproved = feedbackApprovals[k] === true;
+                    const isEdited = feedbackOverrides[k] !== undefined;
+                    const baseVal = feedback[k] || "";
+                    const overrideVal = feedbackOverrides[k];
+                    const displayVal = overrideVal !== undefined ? overrideVal : baseVal;
+                    const trimmedUpper = (displayVal || "").trim().toUpperCase();
+                    const isRemoved = trimmedUpper === "" || trimmedUpper.endsWith("NO COMMENT");
+                    return !isApproved && !isEdited && !isRemoved;
+                  }))
                   ? "not-allowed"
                   : "pointer",
             }}
             disabled={
-              loading ||
-              !backgroundApproved ||
-              (refineApproved && !refineDirty) ||
+              isLoading ||
+              !previousPhaseApproved ||
+              (thisPhaseApproved && !thisPhaseDirty) ||
               (feedbackKeys.length > 0 &&
-                feedbackKeys.some((k) => feedbackApprovals[k] === false || feedbackApprovals[k] === undefined))
+                feedbackKeys.some((k) => {
+                  const isApproved = feedbackApprovals[k] === true;
+                  const isEdited = feedbackOverrides[k] !== undefined;
+                  const baseVal = feedback[k] || "";
+                  const overrideVal = feedbackOverrides[k];
+                  const displayVal = overrideVal !== undefined ? overrideVal : baseVal;
+                  const trimmedUpper = (displayVal || "").trim().toUpperCase();
+                  const isRemoved = trimmedUpper === "" || trimmedUpper.endsWith("NO COMMENT");
+                  return !isApproved && !isEdited && !isRemoved;
+                }))
             }
           >
-            {loading
+            {isLoading
               ? "Processing..."
-              : refineApproved
-                ? refineDirty
+              : thisPhaseApproved
+                ? thisPhaseDirty
                   ? "Save and restart from here"
                   : "Edit to restart from here"
                 : "Approve refined letter"}
           </button>
         )}
       </div>
+      )}
     </div>
   );
+}
+
+// Transform vendor-indexed state to phase-indexed structure with cards containing their state
+// Input: phaseState[vendor][phase] = { data: {...}, approved: bool }, phaseEdits[vendor][phase] = {...}
+// Output: phases = [{ phase: "background", previous: null, next: <phaseObj>, cards: [{vendor, data, approved, edits}, ...], readyCount, pendingCount }, ...]
+function transformToPhaseStructure(vendorsList, phaseState, phaseEdits, setPhaseUpdateTrigger, phaseCounters, setPhaseCounters) {
+  const phaseOrder = ["background", "refine"];
+  
+  // First pass: create all phase objects with cards containing their state
+  const phaseObjects = phaseOrder.map((phaseName, index) => {
+    // Create cards array - each card owns its state
+    const cards = vendorsList.map(vendor => {
+      const vendorPhaseState = phaseState[vendor]?.[phaseName] || {};
+      const vendorPhaseEdits = phaseEdits[vendor]?.[phaseName] || {};
+      return {
+        vendor,
+        data: vendorPhaseState.data || {},
+        approved: vendorPhaseState.approved || false,
+        edits: vendorPhaseEdits,
+      };
+    });
+    
+    // Get or initialize counters (preserve state across re-renders)
+    const existingCounters = phaseCounters && phaseCounters[phaseName];
+    const vendorCount = vendorsList.length;
+    
+    let readyCount = existingCounters?.readyCount ?? 0;
+    let pendingCount = existingCounters?.pendingCount ?? vendorCount;
+    
+    if (!existingCounters) {
+      // Initialize counters based on current card states
+      const approvedCount = cards.filter(card => card.approved).length;
+      pendingCount = vendorCount - approvedCount;
+      
+      // Count ready cards (have data, not approved)
+      readyCount = cards.filter(card => {
+        if (card.approved) return false;
+        const hasData = !!(card.data && Object.keys(card.data).length > 0);
+        const hasUserData = !!Object.keys(card.edits || {}).some(key => {
+          const editValue = card.edits[key];
+          return editValue && typeof editValue === 'string' && editValue.trim().length > 0;
+        });
+        return hasData || hasUserData;
+      }).length;
+      
+      // Store initial counters
+      setPhaseCounters(prev => ({
+        ...prev,
+        [phaseName]: { readyCount, pendingCount }
+      }));
+    }
+    
+    const phaseObj = {
+      phase: phaseName,
+      previous: null, // Will be set in second pass
+      next: null, // Will be set in second pass
+      cards, // Cards with their state - cards own their state
+      readyCount, // Number of cards ready for approval
+      pendingCount, // Number of cards pending (not approved)
+      // Status registration function - updates counters
+      // Status parameter IS the card's status - no need to look it up
+      registerStatus: (vendor, status) => {
+        switch (status) {
+          case CardStatus.PENDING:
+            // Card is loading - decrement readyCount if it was ready (but don't change pendingCount)
+            if (phaseObj.readyCount > 0) {
+              phaseObj.readyCount--;
+            }
+            break;
+          case CardStatus.READY:
+            // Card has data and is ready - increment readyCount
+            phaseObj.readyCount++;
+            break;
+          case CardStatus.APPROVED:
+            // Card is approved - decrement both counters
+            if (phaseObj.readyCount > 0) {
+              phaseObj.readyCount--;
+            }
+            if (phaseObj.pendingCount > 0) {
+              phaseObj.pendingCount--;
+            }
+            break;
+          default:
+            // Unknown status - ignore
+            break;
+        }
+        
+        // Update stored counters
+        setPhaseCounters(prev => ({
+          ...prev,
+          [phaseName]: { readyCount: phaseObj.readyCount, pendingCount: phaseObj.pendingCount }
+        }));
+        
+        // Force re-render
+        setPhaseUpdateTrigger(prev => prev + 1);
+      },
+      // Function to approve all ready cards (have data, not approved)
+      // Look up from cards array
+      approveAllReady: () => {
+        const approvedVendors = [];
+        phaseObj.cards.forEach(card => {
+          if (!card.approved) {
+            const hasData = !!(card.data && Object.keys(card.data).length > 0);
+            const hasUserData = !!Object.keys(card.edits || {}).some(key => {
+              const editValue = card.edits[key];
+              return editValue && typeof editValue === 'string' && editValue.trim().length > 0;
+            });
+            // Ready if has data - if loading, approve will be no-op
+            if (hasData || hasUserData) {
+              approvedVendors.push(card.vendor);
+            }
+          }
+        });
+        
+        const approvedCount = approvedVendors.length;
+        
+        // Update counters: readyCount becomes 0, pendingCount decreases by approvedCount
+        phaseObj.readyCount = 0; // All ready ones were approved
+        phaseObj.pendingCount = Math.max(0, phaseObj.pendingCount - approvedCount);
+        
+        // Update stored counters
+        setPhaseCounters(prev => ({
+          ...prev,
+          [phaseName]: { readyCount: phaseObj.readyCount, pendingCount: phaseObj.pendingCount }
+        }));
+        
+        // Force re-render
+        setPhaseUpdateTrigger(prev => prev + 1);
+        
+        return approvedVendors;
+      }
+    };
+    
+    return phaseObj;
+  });
+  
+  // Second pass: link phase objects with actual object references
+  phaseObjects.forEach((phaseObj, index) => {
+    phaseObj.previous = index > 0 ? phaseObjects[index - 1] : null;
+    phaseObj.next = index < phaseObjects.length - 1 ? phaseObjects[index + 1] : null;
+  });
+  
+  return phaseObjects;
 }
 
 export default function PhaseFlow({
   vendorsList,
   phaseState,
   phaseEdits,
-  loadingVendors,
-  errors,
+  errors, // Deprecated - cards manage their own errors
   onEditChange,
   onApprove,
   onApproveAll,
   onRerunFromBackground,
+  sessionId, // Required for cards to make API calls
+  // Form data for extraction phase
+  companyName,
+  jobTitle,
+  location,
+  language,
+  salary,
+  requirements,
+  onCompanyNameChange,
+  onJobTitleChange,
+  onLocationChange,
+  onLanguageChange,
+  onSalaryChange,
+  onRequirementsChange,
+  onApproveExtraction,
+  extractionLoading,
+  extractionError,
 }) {
-  const [selectedFeedbackTab, setSelectedFeedbackTab] = useState({});
-  const [feedbackApprovals, setFeedbackApprovals] = useState({});
-  const [collapsedCards, setCollapsedCards] = useState({});
   const [collapsedPhases, setCollapsedPhases] = useState({
     background: false, // first phase starts open
     refine: true,
   });
+  
+  // Track phase updates to trigger re-renders when status changes
+  const [phaseUpdateTrigger, setPhaseUpdateTrigger] = useState(0);
+  
+  // Store counters per phase (preserved across re-renders)
+  // readyCount: number of cards ready for approval (starts at 0, incremented when card becomes ready)
+  // pendingCount: number of cards pending (starts at vendor count, decremented on error/approval)
+  const [phaseCounters, setPhaseCounters] = useState({}); // { phaseName: { readyCount: 0, pendingCount: vendorCount } }
+  
+  // Transform vendor-indexed state to phase-indexed structure
+  // Each phase contains all vendor states for that phase
+  const phases = transformToPhaseStructure(vendorsList, phaseState, phaseEdits, setPhaseUpdateTrigger, phaseCounters, setPhaseCounters);
+  
+  // Callback for cards to report their loading state
+  const onCardLoadingChange = (vendor, phase, loading) => {
+    setCardLoadingStates(prev => ({
+      ...prev,
+      [`${vendor}-${phase}`]: loading,
+    }));
+  };
 
-  useEffect(() => {
-    // initialize tabs and approvals when refine data arrives; reset per session
-    const nextSelected = {};
-    const nextApprovals = {};
-    vendorsList.forEach((vendor) => {
-      const feedback = phaseState[vendor]?.refine?.data?.feedback || {};
-      const keys = Object.keys(feedback || {});
-      if (keys.length > 0) {
-        nextSelected[vendor] = keys[0];
-        nextApprovals[vendor] = {};
-        keys.forEach((k) => {
-          // Start all as unreviewed (❔)
-          nextApprovals[vendor][k] = false;
-        });
-      }
-    });
-    setSelectedFeedbackTab(nextSelected);
-    setFeedbackApprovals(nextApprovals);
-  }, [vendorsList, phaseState]);
+  // Cards manage their own state - no need to track here
 
-  useEffect(() => {
-    // auto-collapse vendors once they are fully done
-    setCollapsedCards((prev) => {
-      const next = { ...prev };
-      let changed = false;
-
-      vendorsList.forEach((v) => {
-        const done = phaseState[v]?.refine?.approved;
-        if (done && next[v] === undefined) {
-          next[v] = true;
-          changed = true;
-        }
-        if (!done && next[v] === true) {
-          // keep expanded for in-progress vendors
-          next[v] = false;
-          changed = true;
-        }
-      });
-
-      Object.keys(next).forEach((v) => {
-        if (!vendorsList.includes(v)) {
-          delete next[v];
-          changed = true;
-        }
-      });
-
-      return changed ? next : prev;
-    });
-  }, [vendorsList, phaseState]);
-
-  const backgroundDone = vendorsList.length > 0 && vendorsList.every((v) => phaseState[v]?.background?.approved);
-  const refineVisible = vendorsList.some((v) => phaseState[v]?.refine?.data);
-  const refineDone = vendorsList.length > 0 && vendorsList.every((v) => phaseState[v]?.refine?.approved);
-
+  // Auto-collapse/expand phases based on previous phase completion
   useEffect(() => {
     setCollapsedPhases((prev) => {
       const next = { ...prev };
       let changed = false;
 
-      // If background completes, collapse background and open refine
-      if (backgroundDone) {
-        if (!prev.background) {
-          next.background = true;
-          changed = true;
+      phases.forEach(phaseObj => {
+        // Background phase: no previous phase, so it manages itself
+        if (!phaseObj.previous) {
+          // Background collapses when all its cards are approved
+          const allApproved = phaseObj.cards.length > 0 && phaseObj.cards.every(card => card.approved);
+          if (allApproved && !prev[phaseObj.phase]) {
+            next[phaseObj.phase] = true;
+            changed = true;
+          }
+        } else {
+          // Other phases: expand when previous phase is fully approved
+          const previousPhase = phaseObj.previous;
+          const previousAllApproved = previousPhase.cards.length > 0 && previousPhase.cards.every(card => card.approved);
+          if (previousAllApproved && prev[phaseObj.phase]) {
+            next[phaseObj.phase] = false;
+            changed = true;
+          }
         }
-        if (prev.refine) {
-          next.refine = false;
-          changed = true;
-        }
-      }
+      });
 
       return changed ? next : prev;
     });
-  }, [backgroundDone, refineVisible]);
-
-  const approveFeedback = (vendor, key) => {
-    setFeedbackApprovals((prev) => ({
-      ...prev,
-      [vendor]: {
-        ...(prev[vendor] || {}),
-        [key]: true,
-      },
-    }));
-  };
+  }, [phases, phaseState, vendorsList]);
 
   const saveFeedbackOverride = (vendor, key, val) => {
     if (!vendor || !key) return;
-    const current = phaseEdits[vendor]?.refine?.feedback_overrides || {};
+    // Look up card from refine phase's cards array
+    const refinePhase = phases.find(p => p.phase === "refine");
+    const card = refinePhase?.cards.find(c => c.vendor === vendor);
+    const current = card?.edits?.feedback_overrides || {};
     const next = { ...current, [key]: val };
     onEditChange(vendor, "refine", "feedback_overrides", next);
   };
 
-  const pendingBackground = vendorsList.filter((v) => !(phaseState[v]?.background?.approved));
-  const readyBackground = vendorsList.filter((v) => {
-    if (phaseState[v]?.background?.approved) return false;
-    // Vendor is ready if they have data from API OR user has manually entered data
-    const hasApiData = !!phaseState[v]?.background?.data;
-    const hasUserData = !!(phaseEdits[v]?.background?.company_report?.trim());
-    return hasApiData || hasUserData;
-  });
-  const pendingRefine = vendorsList.filter(
-    (v) => phaseState[v]?.background?.approved && !phaseState[v]?.refine?.approved
-  );
-  const readyRefine = vendorsList.filter((v) => {
-    if (phaseState[v]?.refine?.approved) return false;
-    // Vendor is ready if they have data from API OR user has manually entered data
-    const hasApiData = !!phaseState[v]?.refine?.data;
-    const hasUserData = !!(phaseEdits[v]?.refine?.final_letter?.trim());
-    return hasApiData || hasUserData;
-  });
-
-  const phases = [
-    {
-      key: "background",
-      title: "Background",
-      visible: true,
-      pending: pendingBackground,
-      ready: readyBackground,
-      collapsed: collapsedPhases.background,
-      toggle: () => setCollapsedPhases((prev) => ({ ...prev, background: !prev.background })),
-      renderVendor: (vendor) => (
+  // Add rendering configuration to phase objects
+  phases.forEach(phaseObj => {
+    const phaseName = phaseObj.phase;
+    const title = phaseName === "background" ? "Background" : "Refine";
+    
+    // Visibility: phase is visible if no previous phase OR at least one vendor in previous phase is approved
+    let visible = true;
+    if (phaseObj.previous) {
+      // Phase becomes visible when first card in previous phase is approved
+      const previousHasApproved = phaseObj.previous.cards.some(card => card.approved);
+      // Also visible if any card has data in this phase (already started)
+      const hasData = phaseObj.cards.some(card => {
+        return card.data && Object.keys(card.data).length > 0;
+      });
+      visible = previousHasApproved || hasData;
+    }
+    
+    phaseObj.title = title;
+    phaseObj.visible = visible;
+    phaseObj.collapsed = collapsedPhases[phaseName] || false;
+    phaseObj.toggle = () => setCollapsedPhases((prev) => ({ ...prev, [phaseName]: !prev[phaseName] }));
+    phaseObj.renderVendor = (vendor) => {
+      // Find card in this phase's cards array
+      const card = phaseObj.cards.find(c => c.vendor === vendor);
+      if (!card) return null;
+      
+      // Calculate previous phase approval status for this vendor
+      const previousPhaseApproved = phaseObj.previous 
+        ? (phaseObj.previous.cards.find(c => c.vendor === vendor)?.approved || false)
+        : true;
+      
+      // Calculate if all phases are done for this vendor
+      const allPhasesDone = phases.every(p => 
+        p.cards.find(c => c.vendor === vendor)?.approved || false
+      );
+      
+      return (
         <VendorCard
-          key={`bg-${vendor}`}
+          key={`${phaseName}-${vendor}`}
           vendor={vendor}
-          state={phaseState[vendor]}
-          edits={phaseEdits[vendor]}
+          phases={phases}
+          phaseObj={phaseObj}
+          data={card.data}
+          approved={card.approved}
+          edits={card.edits}
+          previousPhaseApproved={previousPhaseApproved}
+          allPhasesDone={allPhasesDone}
           onEditChange={onEditChange}
-          loading={loadingVendors.has(vendor)}
-          error={errors[vendor]}
           onApprove={onApprove}
-          selectedFeedbackTab={selectedFeedbackTab[vendor]}
-          onSelectFeedbackTab={(tab) => setSelectedFeedbackTab((prev) => ({ ...prev, [vendor]: tab }))}
-          feedbackApprovals={feedbackApprovals[vendor] || {}}
-          onApproveFeedback={(key) => approveFeedback(vendor, key)}
+          sessionId={sessionId}
+          onStatusChange={(status) => phaseObj.registerStatus?.(vendor, status)}
           onSaveFeedbackOverride={(key, val) => saveFeedbackOverride(vendor, key, val)}
-          collapsed={!!collapsedCards[vendor]}
-          onToggleCollapsed={() =>
-            setCollapsedCards((prev) => ({
-              ...prev,
-              [vendor]: !prev[vendor],
-            }))
-          }
           onRerunFromBackground={onRerunFromBackground}
-          forcePhase="background"
+          companyName={companyName}
+          jobTitle={jobTitle}
+          location={location}
+          language={language}
+          salary={salary}
+          requirements={requirements}
+          onCompanyNameChange={onCompanyNameChange}
+          onJobTitleChange={onJobTitleChange}
+          onLocationChange={onLocationChange}
+          onLanguageChange={onLanguageChange}
+          onSalaryChange={onSalaryChange}
+          onRequirementsChange={onRequirementsChange}
+          onApproveExtraction={onApproveExtraction}
+          extractionLoading={extractionLoading}
+          extractionError={extractionError}
         />
-      ),
-    },
-    {
-      key: "refine",
-      title: "Refine",
-      visible: refineVisible,
-      pending: pendingRefine,
-      ready: readyRefine,
-      collapsed: collapsedPhases.refine,
-      toggle: () => setCollapsedPhases((prev) => ({ ...prev, refine: !prev.refine })),
-      renderVendor: (vendor) => (
-        <VendorCard
-          key={`refine-${vendor}`}
-          vendor={vendor}
-          state={phaseState[vendor]}
-          edits={phaseEdits[vendor]}
-          onEditChange={onEditChange}
-          loading={loadingVendors.has(vendor)}
-          error={errors[vendor]}
-          onApprove={onApprove}
-          selectedFeedbackTab={selectedFeedbackTab[vendor]}
-          onSelectFeedbackTab={(tab) => setSelectedFeedbackTab((prev) => ({ ...prev, [vendor]: tab }))}
-          feedbackApprovals={feedbackApprovals[vendor] || {}}
-          onApproveFeedback={(key) => approveFeedback(vendor, key)}
-          onSaveFeedbackOverride={(key, val) => saveFeedbackOverride(vendor, key, val)}
-          collapsed={!!collapsedCards[vendor]}
-          onToggleCollapsed={() =>
-            setCollapsedCards((prev) => ({
-              ...prev,
-              [vendor]: !prev[vendor],
-            }))
-          }
-          onRerunFromBackground={onRerunFromBackground}
-          forcePhase="refine"
-        />
-      ),
-    },
-  ];
+      );
+    };
+  });
 
   return (
     <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 12 }}>
-      {phases.filter((p) => p.visible).map((phase) => (
+      {phases.filter((phase) => phase.visible).map((phase) => (
         <PhaseSection
-          key={phase.key}
+          key={phase.phase}
           title={phase.title}
           collapsed={phase.collapsed}
           onToggle={phase.toggle}
-          showApproveAll={phase.pending.length > 1}
+          showApproveAll={phase.cards && phase.cards.length > 0}
           approveAllDisabled={false}
-          readyCount={phase.ready.length}
-          totalCount={phase.pending.length}
-          onApproveAll={() => onApproveAll(phase.key)}
+          readyCount={phase.readyCount || 0}
+          totalCount={phase.pendingCount || 0}
+          onApproveAll={() => {
+            // Approve all ready vendors
+            const approvedVendors = phase.approveAllReady?.() || [];
+            // Call individual approve for each approved vendor
+            approvedVendors.forEach(vendor => {
+              onApprove(phase.phase, vendor);
+            });
+            // Also call parent's onApproveAll if provided
+            if (onApproveAll) {
+              onApproveAll(phase.phase);
+            }
+          }}
         >
           {vendorsList.map((vendor) => phase.renderVendor(vendor))}
         </PhaseSection>

@@ -131,8 +131,6 @@ def refresh_view(request: HttpRequest):
         "letters_ignore_after": str,
         "negative_letters_source_folder": Path,
         "negative_letters_source_suffix": str,
-        "qdrant_host": str,
-        "qdrant_port": int,
         "clear": bool,
     }
 
@@ -161,8 +159,6 @@ def process_job_view(request: HttpRequest):
         "company_name": str,
         "out": Path,
         "model_vendor": ModelVendor,
-        "qdrant_host": str,
-        "qdrant_port": int,
         "refine": bool,
         "fancy": bool,
     }
@@ -254,17 +250,11 @@ def extract_view(request: HttpRequest):
             else:
                 cv_text = ""
         
-        # qdrant_host and qdrant_port are server-side constants, not user-facing
-        qdrant_host = env_default("QDRANT_HOST", "localhost")
-        qdrant_port = int(env_default("QDRANT_PORT", "6333"))
-        
         # Save common data with extraction metadata (common to all vendors)
         save_session_common_data(
             session_id=session_id,
             job_text=job_text,
             cv_text=cv_text,
-            qdrant_host=qdrant_host,
-            qdrant_port=qdrant_port,
             metadata={"common": extraction},  # Store extraction as common metadata
         )
     except Exception as exc:  # noqa: BLE001
@@ -304,8 +294,6 @@ def init_session_view(request: HttpRequest):
             session_id=session_id,
             job_text=data.get("job_text", ""),
             cv_text=data.get("cv_text", ""),
-            qdrant_host=data.get("qdrant_host") or env_default("QDRANT_HOST", "localhost"),
-            qdrant_port=int(data.get("qdrant_port") or env_default("QDRANT_PORT", "6333")),
             metadata=data.get("metadata", {}),
         )
         
@@ -324,7 +312,7 @@ def update_session_common_data_view(request: HttpRequest):
     - company_name, job_title, location, language, salary, requirements
     
     These fields are saved as common metadata (together with job_text and cv_text).
-    qdrant_host and qdrant_port are server-side constants, not user-facing.
+    Qdrant connection is a server-side constant (from environment variables), not user-facing.
     """
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
@@ -347,10 +335,6 @@ def update_session_common_data_view(request: HttpRequest):
         else:
             cv_text = ""
 
-    # qdrant_host and qdrant_port are server-side constants, not user-facing
-    qdrant_host = env_default("QDRANT_HOST", "localhost")
-    qdrant_port = int(env_default("QDRANT_PORT", "6333"))
-    
     try:
         from letter_writer.session_store import save_session_common_data, load_session_common_data
         
@@ -384,8 +368,6 @@ def update_session_common_data_view(request: HttpRequest):
             session_id=session_id,
             job_text=job_text,
             cv_text=cv_text,
-            qdrant_host=qdrant_host,
-            qdrant_port=qdrant_port,
             metadata=existing_metadata,
         )
         
