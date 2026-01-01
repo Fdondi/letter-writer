@@ -101,13 +101,17 @@ def _deserialize_vendor_state(data: dict):
 
 
 def _serialize_session(session) -> dict:
-    """Serialize SessionState to a dict for MongoDB storage."""
+    """Serialize SessionState to a dict for MongoDB storage.
+    
+    Note: vendor data is NOT stored here - it's stored in the session_vendors
+    collection for lock-free parallel processing. Use save_vendor_data() to save vendor state.
+    """
     return {
         "session_id": session.session_id,
         "job_text": session.job_text,
         "cv_text": session.cv_text,
         "search_result": [_serialize_scored_point(p) for p in session.search_result],
-        "vendors": {k: _serialize_vendor_state(v) for k, v in session.vendors.items()},
+        # vendors NOT stored here - stored in session_vendors collection
         "metadata": session.metadata,
         "vendors_list": [v.value for v in session.vendors_list],
         "created_at": datetime.utcnow(),
@@ -116,16 +120,26 @@ def _serialize_session(session) -> dict:
 
 
 def _deserialize_session(data: dict):
-    """Deserialize a dict from MongoDB to SessionState."""
+    """Deserialize a dict from MongoDB to SessionState.
+    
+    Note: vendor data is loaded separately from session_vendors collection in load_session().
+    This still handles old sessions that might have vendors in the sessions collection for backward compatibility.
+    """
     # Import here to avoid circular dependency
     from .phased_service import SessionState, VendorPhaseState
+    
+    # For backward compatibility, still deserialize vendors if they exist in old sessions
+    # but new sessions won't have them (they're in session_vendors collection)
+    vendors_dict = {}
+    if "vendors" in data and data["vendors"]:
+        vendors_dict = {k: _deserialize_vendor_state(v) for k, v in data["vendors"].items()}
     
     return SessionState(
         session_id=data["session_id"],
         job_text=data["job_text"],
         cv_text=data["cv_text"],
         search_result=[_deserialize_scored_point(p) for p in data.get("search_result", [])],
-        vendors={k: _deserialize_vendor_state(v) for k, v in data.get("vendors", {}).items()},
+        vendors=vendors_dict,  # Will be overwritten by session_vendors data in load_session()
         metadata=data.get("metadata", {}),
         vendors_list=[ModelVendor(v) for v in data.get("vendors_list", [])],
     )
@@ -387,7 +401,9 @@ def load_session(session_id: str, db=None, force_reload: bool = False):
         # Load vendor data from separate collection
         vendor_data = load_all_vendor_data(session_id, db=db)
         if vendor_data:
+            # session_vendors is the source of truth for vendor-specific data
             # Update session.vendors with data from session_vendors collection
+            # (This overwrites any vendor data that was in the sessions collection)
             session.vendors.update(vendor_data)
         
         # Update cache
