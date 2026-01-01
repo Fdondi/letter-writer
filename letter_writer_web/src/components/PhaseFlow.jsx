@@ -437,6 +437,8 @@ function VendorCard({
   edits = {}, // The edits for this vendor in this phase
   previousPhaseApproved = true, // Whether the previous phase is approved for this vendor
   allPhasesDone = false, // Whether all phases are done for this vendor
+  phaseCost = 0, // Cost for this phase
+  runningTotal = 0, // Running total cost from the beginning
   onEditChange,
   onSaveFeedbackOverride,
   onApprove,
@@ -671,6 +673,12 @@ function VendorCard({
     <div style={{ ...cardStyle, opacity: disabled ? 0.6 : 1, pointerEvents: disabled ? "none" : "auto" }}>
       <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 8 }}>
         <h4 style={{ margin: 0, flex: 1, textTransform: "capitalize" }}>{vendor}</h4>
+        {(phaseCost > 0 || runningTotal > 0) && (
+          <div style={{ fontSize: "11px", color: "var(--secondary-text-color)", textAlign: "right" }}>
+            <div>${phaseCost.toFixed(4)}</div>
+            <div style={{ fontSize: "10px", opacity: 0.8 }}>Total: ${runningTotal.toFixed(4)}</div>
+          </div>
+        )}
         {isDone && (
           <button onClick={() => setCollapsed(!collapsed)} style={{ fontSize: 12, padding: "4px 8px" }}>
             {collapsed ? "Expand" : "Collapse"}
@@ -1130,6 +1138,34 @@ export default function PhaseFlow({
   extractionLoading,
   extractionError,
 }) {
+  // Helper function to calculate phase cost and running total for a vendor/phase
+  const calculateCosts = (vendor, phaseName) => {
+    const cardData = phaseState[vendor]?.[phaseName]?.data || {};
+    const currentCumulativeCost = phaseState[vendor]?.cost ?? 0;
+    
+    // Use cost from API response data if available, otherwise use cumulative cost
+    const cumulativeCost = cardData.cost ?? currentCumulativeCost;
+    
+    // Calculate phase cost by subtracting previous phase's cumulative cost
+    let phaseCost = cumulativeCost;
+    if (phaseName === "refine") {
+      // Refine phase includes both draft and refine steps
+      // The refine.data.cost is cumulative (background + draft + refine)
+      // background.data.cost is just background cost
+      // So refine phase cost = refine cumulative - background cost = draft + refine
+      const backgroundData = phaseState[vendor]?.background?.data || {};
+      const backgroundCost = backgroundData.cost ?? 0;
+      phaseCost = cumulativeCost - backgroundCost;
+    } else if (phaseName === "background") {
+      // Background phase: cost is just the cumulative cost at this point
+      phaseCost = cumulativeCost;
+    }
+    
+    return {
+      phaseCost: Math.max(0, phaseCost), // Ensure non-negative
+      runningTotal: cumulativeCost,
+    };
+  };
   const [collapsedPhases, setCollapsedPhases] = useState({
     background: false, // first phase starts open
     refine: true,
@@ -1233,6 +1269,9 @@ export default function PhaseFlow({
         p.cards.find(c => c.vendor === vendor)?.approved || false
       );
       
+      // Calculate costs for this phase
+      const costs = calculateCosts(vendor, phaseName);
+      
       return (
         <VendorCard
           key={`${phaseName}-${vendor}`}
@@ -1244,6 +1283,8 @@ export default function PhaseFlow({
           edits={card.edits}
           previousPhaseApproved={previousPhaseApproved}
           allPhasesDone={allPhasesDone}
+          phaseCost={costs.phaseCost}
+          runningTotal={costs.runningTotal}
           onEditChange={onEditChange}
           onApprove={onApprove}
           sessionId={sessionId}

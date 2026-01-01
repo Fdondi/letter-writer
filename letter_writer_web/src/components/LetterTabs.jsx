@@ -10,6 +10,7 @@ export default function LetterTabs({
   vendorsList, 
   vendorParagraphs, 
   vendorCosts,
+  vendorRefineCosts = {}, // Cost of producing the final letter (refine phase cost)
   finalParagraphs, 
   setFinalParagraphs, 
   originalText, 
@@ -728,17 +729,20 @@ export default function LetterTabs({
                 alignItems: "center",
                 color: 'var(--text-color)'
               }}>
-                <span>
-                  {v}
-                  {vendorCosts && vendorCosts[v] !== undefined && (
-                    <span style={{ fontSize: "0.8em", marginLeft: "8px", fontWeight: "normal", color: "var(--secondary-text-color)" }}>
-                      (${vendorCosts[v].toFixed(4)})
-                    </span>
+                <span>{v}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {vendorCosts && vendorCosts[v] !== undefined && vendorCosts[v] > 0 && (
+                    <div style={{ fontSize: "11px", color: "rgba(255, 255, 255, 0.9)", textAlign: "right" }}>
+                      {vendorRefineCosts[v] !== undefined && vendorRefineCosts[v] > 0 && (
+                        <div>${vendorRefineCosts[v].toFixed(4)}</div>
+                      )}
+                      <div style={{ fontSize: "10px", opacity: 0.85 }}>Total: ${vendorCosts[v].toFixed(4)}</div>
+                    </div>
                   )}
-                </span>
-                {failedVendors[v] && (
-                  <span style={{ marginLeft: "8px", fontSize: "12px", color: "var(--error-text)" }}>Failed</span>
-                )}
+                  {failedVendors[v] && (
+                    <span style={{ fontSize: "12px", color: "var(--error-text)" }}>Failed</span>
+                  )}
+                </div>
               </h4>
               
               <div style={{ padding: "8px" }}>
