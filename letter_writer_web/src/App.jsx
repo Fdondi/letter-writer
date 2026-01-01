@@ -34,7 +34,8 @@ export default function App() {
   const [documentId, setDocumentId] = useState(null);
   const [selectedVendors, setSelectedVendors] = useState(new Set());
   const [letters, setLetters] = useState({}); // vendor -> text
-  const [vendorCosts, setVendorCosts] = useState({}); // vendor -> cost
+  const [vendorCosts, setVendorCosts] = useState({}); // vendor -> cost (total cumulative)
+  const [vendorRefineCosts, setVendorRefineCosts] = useState({}); // vendor -> refine phase cost (final letter cost)
   const [failedVendors, setFailedVendors] = useState({}); // vendor -> error message
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -629,6 +630,14 @@ export default function App() {
         }
         const data = await res.json();
 
+        // Calculate refine phase cost (cost to produce final letter)
+        // This is the cost added in the refine phase (draft + refine steps)
+        // Refine cumulative cost is data.cost (background + draft + refine)
+        // Background cost is stored in phaseState before this update
+        const backgroundCost = phaseState[vendor]?.background?.data?.cost ?? 0;
+        const refineCumulativeCost = data.cost ?? phaseState[vendor]?.cost ?? 0;
+        const refinePhaseCost = Math.max(0, refineCumulativeCost - backgroundCost);
+
         let allDone = false;
         setPhaseState((prev) => {
           const next = {
@@ -661,6 +670,11 @@ export default function App() {
         setVendorCosts((prev) => ({
           ...prev,
           [vendor]: data.cost ?? prev[vendor]?.cost ?? 0,
+        }));
+        
+        setVendorRefineCosts((prev) => ({
+          ...prev,
+          [vendor]: refinePhaseCost,
         }));
 
         if (allDone) {
@@ -1024,6 +1038,7 @@ export default function App() {
                 vendorsList={vendorsList}
                 vendorParagraphs={vendorParagraphs}
                 vendorCosts={vendorCosts}
+                vendorRefineCosts={vendorRefineCosts}
                 finalParagraphs={finalParagraphs}
                 setFinalParagraphs={setFinalParagraphs}
                 originalText={jobText}
