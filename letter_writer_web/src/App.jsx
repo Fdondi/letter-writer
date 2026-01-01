@@ -249,7 +249,7 @@ export default function App() {
             company_report: vendorData.company_report || "",
           },
           draft: { draft_letter: "" },
-          refine: { final_letter: "" },
+          refine: { draft_letter: "" },
         },
       }));
       setPhaseErrors((prev) => ({ ...prev, [vendor]: null }));
@@ -277,7 +277,7 @@ export default function App() {
     // If user manually edits a field, clear any error for this vendor
     // The user's edited data is the data to use - no synthetic data needed
     if ((phase === "background" && field === "company_report") || 
-        (phase === "refine" && field === "final_letter")) {
+        (phase === "refine" && field === "draft_letter")) {
       if (value?.trim()) {
         setPhaseErrors((prev) => {
           const next = { ...prev };
@@ -361,7 +361,7 @@ export default function App() {
           background: {
             company_report: vendorData.company_report || "",
           },
-          refine: { final_letter: "", draft_letter: "" },
+          refine: { draft_letter: "" },
         },
       }));
       if (!documentId && data.document?.id) {
@@ -512,7 +512,7 @@ export default function App() {
               background: {
                 company_report: vendorData.company_report || "",
               },
-              refine: { final_letter: "", draft_letter: "" },
+              refine: { draft_letter: "" },
             },
           }));
           
@@ -580,9 +580,8 @@ export default function App() {
               company_report: edits.company_report ?? "",
             },
             refine: {
-              // Initialize editable draft in the refine stage; final letter will be produced later
+              // Initialize editable draft in the refine stage; final letter will be produced in assembly phase
               draft_letter: data.draft_letter || "",
-              final_letter: data.draft_letter || "",
               feedback_overrides: {},
             },
           },
@@ -592,17 +591,12 @@ export default function App() {
       setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
     }
     } else if (phase === "refine") {
-      const editedFinal =
-        (phaseEdits[vendor]?.refine?.final_letter ??
-          phaseState[vendor]?.refine?.data?.final_letter ??
-          "").trim();
-      // Get original draft from phaseEdits (set by draft phase) or from state as fallback
-      const originalDraft = (
-        phaseEdits[vendor]?.refine?.draft_letter ?? 
-        phaseState[vendor]?.refine?.data?.draft_letter ?? 
-        ""
-      ).trim();
-      const draftWasEdited = editedFinal !== originalDraft && editedFinal !== "";
+      // Get edited draft letter from phaseEdits (user edits) or fallback to state (original from draft phase)
+      const editedDraft = (phaseEdits[vendor]?.refine?.draft_letter ?? "").trim();
+      // Get original draft from state (set when draft phase completed)
+      const originalDraft = (phaseState[vendor]?.refine?.data?.draft_letter ?? "").trim();
+      // Check if user edited the draft (editedDraft exists and differs from original)
+      const draftWasEdited = editedDraft !== "" && editedDraft !== originalDraft;
       
       setPhaseErrors((prev) => ({ ...prev, [vendor]: null }));
       const sessionId = phaseSessions[vendor] || phaseSessionId;
@@ -619,7 +613,7 @@ export default function App() {
         };
         // Only send draft_letter if it was actually edited
         if (draftWasEdited) {
-          payload.draft_letter = editedFinal;
+          payload.draft_letter = editedDraft;
         }
         // Only send background overrides if the user changed them
         if (backgroundDirty) {
@@ -654,7 +648,12 @@ export default function App() {
             ...prev,
             [vendor]: {
               ...(prev[vendor] || {}),
-              refine: { data, approved: true },
+              // Refine phase keeps its original data (draft_letter, feedback) - don't overwrite with final_letter
+              // final_letter belongs to the assembly phase, not refine phase
+              refine: { 
+                ...(prev[vendor]?.refine || {}),
+                approved: true 
+              },
               cost: data.cost ?? prev[vendor]?.cost ?? 0,
             },
           };
@@ -666,12 +665,13 @@ export default function App() {
           [vendor]: {
             ...(prev[vendor] || {}),
             refine: {
-              final_letter: data.final_letter || editedFinal,
+              // Keep only draft_letter and feedback in refine phase edits
+              // final_letter belongs to assembly phase, not refine phase
               draft_letter: originalDraft, // Keep original draft, not from response
             },
           },
         }));
-        const finalText = data.final_letter || editedFinal;
+        const finalText = data.final_letter || editedDraft;
         setLetters((prev) => ({ ...prev, [vendor]: finalText }));
         setVendorParagraphs((prev) => ({
           ...prev,
@@ -750,7 +750,7 @@ export default function App() {
       ...prev,
       [vendor]: {
         ...(prev[vendor] || {}),
-        refine: { final_letter: "" },
+        refine: { draft_letter: "" },
       },
     }));
     await approvePhase("background", vendor);

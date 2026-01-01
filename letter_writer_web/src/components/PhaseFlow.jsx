@@ -884,15 +884,15 @@ function VendorCard({
               {!previousPhaseApproved
                 ? `${previousPhase ? previousPhase.charAt(0).toUpperCase() + previousPhase.slice(1) : "Previous"} approval required before ${cardPhase} phase.`
                 : thisPhaseApproved
-                  ? "Final letter is approved. Edit to rerun refinement if needed."
+                  ? "Draft letter is approved. Edit to rerun refinement if needed."
                   : "Edit if desired, then approve to move to assembly."}
             </div>
             <EditableField
-              label="Final letter"
-              value={cardPhaseEdits.final_letter ?? thisPhaseData.final_letter ?? ""}
+              label="Draft letter"
+              value={cardPhaseEdits.draft_letter ?? thisPhaseData.draft_letter ?? ""}
               minHeight={220}
-              placeholder="Final letter"
-              onSave={(val) => onEditChange(vendor, cardPhase, "final_letter", val)}
+              placeholder="Draft letter"
+              onSave={(val) => onEditChange(vendor, cardPhase, "draft_letter", val)}
               disabled={isLoading}
             />
             {feedbackKeys.length > 0 && (
