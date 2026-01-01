@@ -116,5 +116,5 @@ class BaseClient:
 
         self.total_cost += input_cost + output_cost + search_cost
 
-    def call(self, model_size: ModelSize, system: str, messages: List[Dict]) -> str:
+    def call(self, model_size: ModelSize, system: str, messages: List[Dict], search: bool = False) -> str:
         raise NotImplementedError("Subclasses must implement this method")
