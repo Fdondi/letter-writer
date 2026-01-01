@@ -356,6 +356,10 @@ def advance_to_draft(
             # Keep vendors_list in sync for backward compatibility
             if vendor not in session.vendors_list:
                 session.vendors_list.append(vendor)
+            # Save vendor state to session_vendors collection
+            from .session_store import save_vendor_data
+            save_vendor_data(session.session_id, vendor.value, state)
+            # Save common session data (vendors_list update)
             save_session(session)
         else:
             raise ValueError(f"Vendor {vendor.value} not in session")
@@ -408,7 +412,11 @@ def advance_to_draft(
     state.draft_letter = draft_letter
     state.feedback = feedback
     _update_cost(state, ai_client)
-    save_session(session)
+    
+    # Save vendor-specific data to session_vendors collection (lock-free)
+    from .session_store import save_vendor_data
+    save_vendor_data(session.session_id, vendor.value, state)
+    
     return state
 
 
@@ -450,8 +458,6 @@ def advance_to_refinement(
 
     top_docs = top_docs_override or state.top_docs
     company_report = company_report_override or state.company_report or ""
-    job_text = job_text_override or session.job_text
-    cv_text = cv_text_override or session.cv_text
     draft_letter = draft_override or state.draft_letter or ""
     if not draft_letter:
         try:
@@ -492,7 +498,11 @@ def advance_to_refinement(
     state.final_letter = refined
     state.feedback = feedback
     _update_cost(state, ai_client)
-    save_session(session)
+    
+    # Save vendor-specific data to session_vendors collection (lock-free)
+    from .session_store import save_vendor_data
+    save_vendor_data(session.session_id, vendor.value, state)
+    
     return state
 
 
