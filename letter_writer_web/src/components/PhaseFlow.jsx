@@ -644,6 +644,39 @@ function VendorCard({
   const feedbackKeys = Object.keys(feedback);
   const feedbackOverrides = cardPhase === "refine" ? (cardPhaseEdits?.feedback_overrides || {}) : {};
   const activeFeedbackKey = selectedFeedbackTab || feedbackKeys[0] || null;
+
+  // Helper function to find the next unseen feedback tab
+  const findNextUnseenFeedback = (currentKey, approvals, overrides, feedbackData) => {
+    if (feedbackKeys.length === 0) return null;
+    
+    // Helper to check if a feedback is "seen" (approved, edited, or removed)
+    const isSeen = (key) => {
+      const approved = approvals[key] === true;
+      const edited = overrides[key] !== undefined;
+      const baseVal = feedbackData[key] || "";
+      const overrideVal = overrides[key];
+      const displayVal = overrideVal !== undefined ? overrideVal : baseVal;
+      const trimmedUpper = (displayVal || "").trim().toUpperCase();
+      const isRemoved = trimmedUpper === "" || trimmedUpper.endsWith("NO COMMENT");
+      
+      return approved || edited || isRemoved;
+    };
+    
+    // Find current index
+    const currentIndex = feedbackKeys.indexOf(currentKey);
+    
+    // Start searching from the next item after current
+    for (let i = 1; i < feedbackKeys.length; i++) {
+      const nextIndex = (currentIndex + i) % feedbackKeys.length;
+      const nextKey = feedbackKeys[nextIndex];
+      if (!isSeen(nextKey)) {
+        return nextKey;
+      }
+    }
+    
+    // All feedbacks are seen, return null
+    return null;
+  };
   
   // Auto-collapse when done
   useEffect(() => {
@@ -833,10 +866,36 @@ function VendorCard({
                     approved={feedbackApprovals[activeFeedbackKey]}
                     hasContent={(feedback[activeFeedbackKey] || "").trim().length > 0}
                     onApprove={() => {
-                      setFeedbackApprovals(prev => ({ ...prev, [activeFeedbackKey]: true }));
+                      setFeedbackApprovals(prev => {
+                        const next = { ...prev, [activeFeedbackKey]: true };
+                        // Move to next unseen feedback after approval
+                        const nextUnseen = findNextUnseenFeedback(
+                          activeFeedbackKey,
+                          next,
+                          feedbackOverrides,
+                          feedback
+                        );
+                        if (nextUnseen) {
+                          setSelectedFeedbackTab(nextUnseen);
+                        }
+                        return next;
+                      });
                     }}
                     onSave={(val) => {
+                      // Construct updated overrides before calling onSaveFeedbackOverride
+                      // (since state update is async, we need to use the updated value for the check)
+                      const updatedOverrides = { ...feedbackOverrides, [activeFeedbackKey]: val };
                       onSaveFeedbackOverride(activeFeedbackKey, val);
+                      // After saving, move to next unseen feedback
+                      const nextUnseen = findNextUnseenFeedback(
+                        activeFeedbackKey,
+                        feedbackApprovals,
+                        updatedOverrides,
+                        feedback
+                      );
+                      if (nextUnseen) {
+                        setSelectedFeedbackTab(nextUnseen);
+                      }
                     }}
                     isModified={
                       feedbackOverrides[activeFeedbackKey] !== undefined &&
