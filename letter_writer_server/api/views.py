@@ -418,24 +418,13 @@ def background_phase_view(request: HttpRequest, vendor: str):
         # Run background phase for this vendor (writes only vendor-specific data)
         vendor_state = _run_background_phase(session_id, vendors[0], common_data)
         
-        # Load all vendor data for response
-        all_vendor_data = load_all_vendor_data(session_id)
-        
-        vendors_payload = {
-            key: {
-                "company_report": vendor_state.company_report,
-                "top_docs": vendor_state.top_docs,
-                "cost": vendor_state.cost,
-            }
-            for key, vendor_state in all_vendor_data.items()
-        }
+        # Return only data for the requested vendor
         return JsonResponse(
             {
                 "status": "ok",
-                "phase": "background",
-                "session_id": session_id,
-                "vendors": vendors_payload,
-                "metadata": common_data["metadata"],
+                "company_report": vendor_state.company_report,
+                "top_docs": vendor_state.top_docs,
+                "cost": vendor_state.cost,
             }
         )
     except ValueError as exc:
@@ -465,11 +454,15 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
 
     fancy = _safe_bool(data.get("fancy", False))
 
+    # Only use draft_override if it was explicitly provided in the request
+    # If the key is missing, use None to fall back to session draft
+    draft_override = data.get("draft_letter") if "draft_letter" in data else None
+
     try:
         state = advance_to_refinement(
             session_id=session_id,
             vendor=vendor_enum,
-            draft_override=data.get("draft_letter"),
+            draft_override=draft_override,
             feedback_override=data.get("feedback_override"),
             company_report_override=data.get("company_report"),
             top_docs_override=data.get("top_docs"),
@@ -486,12 +479,7 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
     return JsonResponse(
         {
             "status": "ok",
-            "phase": "refine",
-            "vendor": vendor_enum.value,
             "final_letter": state.final_letter,
-            "draft_letter": state.draft_letter,
-            "feedback": state.feedback,
-            "company_report": state.company_report,
             "cost": state.cost,
         }
     )
@@ -533,11 +521,8 @@ def draft_phase_view(request: HttpRequest, vendor: str):
     return JsonResponse(
         {
             "status": "ok",
-            "phase": "draft",
-            "vendor": vendor_enum.value,
             "draft_letter": state.draft_letter,
             "feedback": state.feedback,
-            "company_report": state.company_report,
             "cost": state.cost,
         }
     )

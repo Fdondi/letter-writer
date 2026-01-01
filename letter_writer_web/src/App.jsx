@@ -230,8 +230,9 @@ export default function App() {
         setDocumentId(data.document.id);
       }
 
-      const vendorData = data.vendors?.[vendor] || {};
-      setPhaseSessions((prev) => ({ ...prev, [vendor]: data.session_id || phaseSessionId }));
+      // Background response now returns data directly (no vendors wrapper)
+      const vendorData = data;
+      setPhaseSessions((prev) => ({ ...prev, [vendor]: phaseSessionId }));
       setPhaseState((prev) => ({
         ...prev,
         [vendor]: {
@@ -342,9 +343,10 @@ export default function App() {
         throw new Error(detail || "Failed to start background phase");
       }
       const data = await res.json();
-      const vendorData = data.vendors?.[vendor] || {};
+      // Background response now returns data directly (no vendors wrapper)
+      const vendorData = data;
 
-      setPhaseSessions((prev) => ({ ...prev, [vendor]: data.session_id || phaseSessionId }));
+      setPhaseSessions((prev) => ({ ...prev, [vendor]: phaseSessionId }));
       setPhaseState((prev) => ({
         ...prev,
         [vendor]: {
@@ -491,10 +493,11 @@ export default function App() {
             throw new Error(detail || `Failed to start background for ${vendor}`);
           }
           const data = await res.json();
-          const vendorData = data.vendors?.[vendor] || {};
+          // Background response now returns data directly (no vendors wrapper)
+          const vendorData = data;
           
           // Update state for this vendor immediately on success
-          setPhaseSessions((prev) => ({ ...prev, [vendor]: data.session_id || initialSessionId }));
+          setPhaseSessions((prev) => ({ ...prev, [vendor]: initialSessionId }));
           setPhaseState((prev) => ({
             ...prev,
             [vendor]: {
@@ -521,11 +524,7 @@ export default function App() {
           });
           
           // Set session ID from first successful response
-          setPhaseSessionId((prev) => prev || data.session_id || initialSessionId);
-          
-          if (!documentId && data.document?.id) {
-            setDocumentId(data.document.id);
-          }
+          setPhaseSessionId((prev) => prev || initialSessionId);
         } catch (e) {
           // Update error state immediately for this vendor
           const errorMsg = e?.message || String(e);
@@ -578,7 +577,7 @@ export default function App() {
             ...(prev[vendor] || {}),
             background: {
               ...(prev[vendor]?.background || {}),
-              company_report: data.company_report ?? edits.company_report ?? "",
+              company_report: edits.company_report ?? "",
             },
             refine: {
               // Initialize editable draft in the refine stage; final letter will be produced later
@@ -597,6 +596,14 @@ export default function App() {
         (phaseEdits[vendor]?.refine?.final_letter ??
           phaseState[vendor]?.refine?.data?.final_letter ??
           "").trim();
+      // Get original draft from phaseEdits (set by draft phase) or from state as fallback
+      const originalDraft = (
+        phaseEdits[vendor]?.refine?.draft_letter ?? 
+        phaseState[vendor]?.refine?.data?.draft_letter ?? 
+        ""
+      ).trim();
+      const draftWasEdited = editedFinal !== originalDraft && editedFinal !== "";
+      
       setPhaseErrors((prev) => ({ ...prev, [vendor]: null }));
       const sessionId = phaseSessions[vendor] || phaseSessionId;
       const bg = phaseState[vendor]?.background?.data || {};
@@ -609,8 +616,11 @@ export default function App() {
       try {
         const payload = {
           session_id: sessionId,
-          draft_letter: editedFinal || phaseState[vendor]?.refine?.data?.draft_letter || "",
         };
+        // Only send draft_letter if it was actually edited
+        if (draftWasEdited) {
+          payload.draft_letter = editedFinal;
+        }
         // Only send background overrides if the user changed them
         if (backgroundDirty) {
           payload.company_report = bgEdits.company_report ?? "";
@@ -657,7 +667,7 @@ export default function App() {
             ...(prev[vendor] || {}),
             refine: {
               final_letter: data.final_letter || editedFinal,
-              draft_letter: data.draft_letter || "",
+              draft_letter: originalDraft, // Keep original draft, not from response
             },
           },
         }));
