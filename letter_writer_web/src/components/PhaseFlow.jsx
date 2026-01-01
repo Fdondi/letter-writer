@@ -7,6 +7,99 @@ const CardStatus = {
   APPROVED: 'approved',
 };
 
+// Feedback type descriptions for tooltips (based on actual prompts in generation.py)
+const FEEDBACK_DESCRIPTIONS = {
+  'instruction': 'Checks the letter for consistency with the style instructions. Flags any strong inconsistencies with the specified writing style and tone.',
+  'instruction_feedback': 'Checks the letter for consistency with the style instructions. Flags any strong inconsistencies with the specified writing style and tone.',
+  'accuracy': 'Verifies factual accuracy against your CV. Checks if claims are coherent with themselves and supported by your CV. Flags unsupported expertise claims or inconsistencies.',
+  'accuracy_feedback': 'Verifies factual accuracy against your CV. Checks if claims are coherent with themselves and supported by your CV. Flags unsupported expertise claims or inconsistencies.',
+  'precision': 'Evaluates how well the letter addresses job requirements. Checks if all required competencies are addressed (or substituted), flags superfluous claims, and verifies company-related claims match the company report.',
+  'precision_feedback': 'Evaluates how well the letter addresses job requirements. Checks if all required competencies are addressed (or substituted), flags superfluous claims, and verifies company-related claims match the company report.',
+  'company_fit': 'Assesses alignment with the company\'s values, mission, tone, and culture. Checks if the letter feels personalized for the company rather than generic.',
+  'company_fit_feedback': 'Assesses alignment with the company\'s values, mission, tone, and culture. Checks if the letter feels personalized for the company rather than generic.',
+  'user_fit': 'Compares the letter to your previous cover letters. Checks if it matches the same writing style, pays attention to the same aspects, and highlights strengths/negotiates weaknesses in the same way.',
+  'user_fit_feedback': 'Compares the letter to your previous cover letters. Checks if it matches the same writing style, pays attention to the same aspects, and highlights strengths/negotiates weaknesses in the same way.',
+  'human': 'Analyzes patterns from your previous letter revisions. Flags elements that were typically changed or removed in your past edits, based on your review history.',
+  'human_feedback': 'Analyzes patterns from your previous letter revisions. Flags elements that were typically changed or removed in your past edits, based on your review history.',
+};
+
+// Tooltip component
+function InfoTooltip({ text, children }) {
+  const [showTooltip, setShowTooltip] = useState(false);
+  const tooltipRef = useRef(null);
+
+  useEffect(() => {
+    if (showTooltip && tooltipRef.current) {
+      const handleMouseLeave = () => setShowTooltip(false);
+      const element = tooltipRef.current;
+      element.addEventListener('mouseleave', handleMouseLeave);
+      return () => element.removeEventListener('mouseleave', handleMouseLeave);
+    }
+  }, [showTooltip]);
+
+  return (
+    <span
+      ref={tooltipRef}
+      style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}
+      onMouseEnter={() => setShowTooltip(true)}
+      onMouseLeave={() => setShowTooltip(false)}
+    >
+      {children}
+      {showTooltip && text && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '100%',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            marginBottom: '4px',
+            padding: '6px 10px',
+            backgroundColor: 'var(--bg-color)',
+            color: 'var(--text-color)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '4px',
+            fontSize: '12px',
+            zIndex: 1000,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+            maxWidth: '250px',
+            whiteSpace: 'normal',
+            textAlign: 'left',
+          }}
+        >
+          {text}
+          <div
+            style={{
+              position: 'absolute',
+              top: '100%',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: 0,
+              height: 0,
+              borderLeft: '6px solid transparent',
+              borderRight: '6px solid transparent',
+              borderTop: '6px solid var(--bg-color)',
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              top: '100%',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: 0,
+              height: 0,
+              borderLeft: '7px solid transparent',
+              borderRight: '7px solid transparent',
+              borderTop: '7px solid var(--border-color)',
+              zIndex: -1,
+            }}
+          />
+        </div>
+      )}
+    </span>
+  );
+}
+
 function InputRow({ label, value, onChange, placeholder }) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
@@ -189,10 +282,34 @@ function EditableFeedback({
   const statusColor = hasContent ? "#2563eb" : "#9ca3af"; // comment presence
   const approveColor = approved ? "#16a34a" : "#9ca3af";
 
+  const feedbackDescription = FEEDBACK_DESCRIPTIONS[label] || `Feedback about ${label.replace(/_/g, ' ')}.`;
+
   return (
     <div style={{ marginTop: 8, padding: 10, border: "1px solid #e5e7eb", borderRadius: 6, background: "#f9fafb" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, fontWeight: 600 }}>{label}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, fontWeight: 600 }}>
+          {label}
+          <InfoTooltip text={feedbackDescription}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '12px',
+                fontWeight: 'normal',
+                color: 'var(--text-color)',
+                opacity: 0.6,
+                cursor: 'help',
+                lineHeight: '1',
+                fontStyle: 'italic',
+                marginLeft: '4px',
+              }}
+              title={feedbackDescription}
+            >
+              (i)
+            </span>
+          </InfoTooltip>
+        </div>
         {!editing && (
           <>
             {hasContent && (
