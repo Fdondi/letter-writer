@@ -1193,6 +1193,9 @@ export default function PhaseFlow({
 
   // Cards manage their own state - no need to track here
 
+  // Track previous approval states to only auto-collapse on transition
+  const prevApprovalStatesRef = useRef({}); // { phaseName: allApproved }
+
   // Auto-collapse/expand phases based on previous phase completion
   useEffect(() => {
     setCollapsedPhases((prev) => {
@@ -1204,10 +1207,17 @@ export default function PhaseFlow({
         if (!phaseObj.previous) {
           // Background collapses when all its cards are approved
           const allApproved = phaseObj.cards.length > 0 && phaseObj.cards.every(card => card.approved);
-          if (allApproved && !prev[phaseObj.phase]) {
+          const prevAllApproved = prevApprovalStatesRef.current[phaseObj.phase] || false;
+          
+          // Only auto-collapse on transition from "not all approved" to "all approved"
+          // Don't re-collapse if user manually expanded it
+          if (allApproved && !prevAllApproved && !prev[phaseObj.phase]) {
             next[phaseObj.phase] = true;
             changed = true;
           }
+          
+          // Update ref for next comparison
+          prevApprovalStatesRef.current[phaseObj.phase] = allApproved;
         } else {
           // Other phases: expand when previous phase is fully approved
           const previousPhase = phaseObj.previous;
