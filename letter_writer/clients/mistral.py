@@ -64,6 +64,30 @@ class MistralClient(BaseClient):
         except Exception as e:
             raise RuntimeError(f"Failed to create Mistral agent: {e}") from e
 
+    def _extract_text_from_chunks(self, content) -> str:
+        """Extract text from Mistral response content which may be chunks or a string.
+        
+        When using agents API with tools, content can be a list of chunk objects:
+        - TextChunk: has .text attribute with the actual text
+        - ToolReferenceChunk: metadata about tools used, can be skipped
+        """
+        if isinstance(content, str):
+            return content
+        
+        if isinstance(content, list):
+            text_parts = []
+            for chunk in content:
+                # Check if it's a TextChunk (has text attribute)
+                if hasattr(chunk, 'text') and chunk.text:
+                    text_parts.append(chunk.text)
+                # ToolReferenceChunk and other metadata chunks can be skipped
+                # as they don't contain the actual response text
+            # Join text parts directly (LLM has already formatted the text appropriately)
+            return "".join(text_parts) if text_parts else ""
+        
+        # Fallback: try to convert to string
+        return str(content)
+
     def call(
         self,
         model_size: ModelSize,
@@ -130,4 +154,6 @@ class MistralClient(BaseClient):
             # If no usage info, still track search query if search was used
             self.track_cost(model, 0, 0, search_queries=1 if search else 0)
         
-        return assistant_reply.strip() if isinstance(assistant_reply, str) else str(assistant_reply)
+        # Extract text from chunks (handles both string and list of chunk objects)
+        extracted_text = self._extract_text_from_chunks(assistant_reply)
+        return extracted_text.strip()
