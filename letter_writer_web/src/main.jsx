@@ -3,6 +3,10 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
+import { setupApiNotifications } from "./utils/apiNotifications";
+
+// Install global fetch wrapper for API completion notifications.
+setupApiNotifications();
 
 const rootEl = document.getElementById("root");
 createRoot(rootEl).render(
