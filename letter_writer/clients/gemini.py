@@ -107,6 +107,21 @@ class GeminiClient(BaseClient):
         model_name = self.get_model_for_size(model_size)
         typer.echo(f"[INFO] using Gemini model {model_name}" + (" with search" if search else ""))
 
+        # Validate and filter user_messages - Gemini API requires all strings to be non-None
+        validated_messages = []
+        for i, msg in enumerate(user_messages):
+            if msg is None:
+                typer.echo(f"[WARNING] Skipping None message at index {i}")
+                continue
+            if not isinstance(msg, str):
+                typer.echo(f"[WARNING] Converting non-string message at index {i} to string")
+                msg = str(msg)
+            if msg.strip():  # Only add non-empty messages
+                validated_messages.append(msg)
+        
+        if not validated_messages:
+            raise ValueError("No valid user messages provided to Gemini API (all were None or empty)")
+
         try:
             response = self.client.models.generate_content(
                 model=model_name,
@@ -114,7 +129,7 @@ class GeminiClient(BaseClient):
                     system_instruction=system,
                     tools=tools,
                 ),
-                contents=user_messages,
+                contents=validated_messages,
             )
         except Exception as exc:
             raise RuntimeError(f"Gemini generate_content failed: {exc}") from exc
@@ -129,4 +144,31 @@ class GeminiClient(BaseClient):
                 search_queries=1 if search else 0,
             )
 
-        return response.text
+        # Handle response text - may be None if response has no text content
+        response_text = getattr(response, "text", None)
+        if response_text is None:
+            # Try to get text from candidates if available
+            if hasattr(response, "candidates") and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, "content") and candidate.content:
+                    if hasattr(candidate.content, "parts") and candidate.content.parts:
+                        # Extract text from parts
+                        text_parts = [
+                            part.text for part in candidate.content.parts
+                            if hasattr(part, "text") and part.text
+                        ]
+                        if text_parts:
+                            response_text = "".join(text_parts)
+            
+            # If still None, raise an error with helpful context
+            if response_text is None:
+                error_msg = "Gemini API returned no text content"
+                if hasattr(response, "candidates") and response.candidates:
+                    candidate = response.candidates[0]
+                    if hasattr(candidate, "finish_reason"):
+                        error_msg += f" (finish_reason: {candidate.finish_reason})"
+                    if hasattr(candidate, "safety_ratings"):
+                        error_msg += f" (safety_ratings: {candidate.safety_ratings})"
+                raise RuntimeError(error_msg)
+        
+        return response_text

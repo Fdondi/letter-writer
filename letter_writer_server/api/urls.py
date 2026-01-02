@@ -17,4 +17,7 @@ urlpatterns = [
     path("documents/<str:document_id>/", views.document_detail_view, name="document_detail"),
     path("documents/<str:document_id>/negatives/", views.document_negatives_view, name="document_negatives"),
     path("documents/<str:document_id>/reembed/", views.document_reembed_view, name="document_reembed"),
+    # Debug endpoints for spam prevention
+    path("debug/in-flight-requests/", views.debug_in_flight_requests_view, name="debug_in_flight"),
+    path("debug/clear-in-flight-requests/", views.debug_clear_in_flight_requests_view, name="debug_clear_in_flight"),
 ] 

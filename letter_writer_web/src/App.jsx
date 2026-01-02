@@ -5,6 +5,8 @@ import StyleInstructionsBlade from "./components/StyleInstructionsBlade";
 import PhaseFlow from "./components/PhaseFlow";
 import DocumentsPage from "./components/DocumentsPage";
 import { splitIntoParagraphs } from "./utils/split";
+import { fetchWithHeartbeat, retryApiCall } from "./utils/apiHelpers";
+import { phases as phaseModules } from "./components/phases";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
@@ -44,13 +46,14 @@ export default function App() {
   const [uiStage, setUiStage] = useState("input"); // input | phases | assembly
   const [phaseSessionId, setPhaseSessionId] = useState(null);
   const [phaseSessions, setPhaseSessions] = useState({}); // vendor -> session_id
-  const [phaseState, setPhaseState] = useState({});
-  const [phaseEdits, setPhaseEdits] = useState({});
-  const [phaseErrors, setPhaseErrors] = useState({});
   const [savingFinal, setSavingFinal] = useState(false);
   const [activeTab, setActiveTab] = useState("compose"); // "compose" | "documents"
   const [assemblyVisible, setAssemblyVisible] = useState(true); // when in assembly stage, show assembly or phases
   const [extractedData, setExtractedData] = useState(null); // Track extracted data to detect modifications
+  
+  // Registry of phase objects from PhaseFlow
+  const phaseRegistryRef = React.useRef(null);
+  const [, setPhaseRegistryTrigger] = useState(0); // For re-rendering when registry changes
 
   // Update colors when system theme changes
   useEffect(() => {
@@ -61,6 +64,17 @@ export default function App() {
     mediaQuery.addEventListener("change", handleChange);
     return () => mediaQuery.removeEventListener("change", handleChange);
   }, [vendors]);
+
+  // Helper to populate the "shelf" in PhaseFlow for a specific phase/vendor
+  const populatePhaseShelf = (phaseName, vendor, data) => {
+    if (phaseRegistryRef.current) {
+      const phase = phaseRegistryRef.current.find(p => p.phase === phaseName);
+      if (phase) {
+        phase.cardData[vendor] = data;
+        setPhaseRegistryTrigger(prev => prev + 1);
+      }
+    }
+  };
 
   // Initialize session when component mounts
   useEffect(() => {
@@ -245,99 +259,55 @@ export default function App() {
     }
   };
 
-  const retryVendor = async (vendor) => {
-    setFailedVendors((prev) => {
-      const next = { ...prev };
-      delete next[vendor];
-      return next;
-    });
-    try {
-      const res = await fetch(`/api/phases/background/${vendor}/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: phaseSessionId,
-        }),
-      });
-
-      if (!res.ok) {
-        let detail = `Failed to restart background for ${vendor}`;
-        try {
-          const text = await res.text();
-          try {
-            const json = JSON.parse(text);
-            detail = json.detail || json.message || text;
-          } catch {
-            detail = text || detail;
-          }
-        } catch (e) {
-          detail = `HTTP ${res.status}: ${res.statusText}`;
-        }
-        throw new Error(detail);
-      }
-
-      const data = await res.json();
-      if (!documentId && data.document?.id) {
-        setDocumentId(data.document.id);
-      }
-
-      // Background response now returns data directly (no vendors wrapper)
-      const vendorData = data;
-      setPhaseSessions((prev) => ({ ...prev, [vendor]: phaseSessionId }));
-      setPhaseState((prev) => ({
-        ...prev,
-        [vendor]: {
-          background: { data: vendorData, approved: false },
-          draft: { data: null, approved: false },
-          refine: { data: null, approved: false },
-          cost: vendorData.cost || 0,
-        },
-      }));
-      setPhaseEdits((prev) => ({
-        ...prev,
-        [vendor]: {
-          background: {
-            company_report: vendorData.company_report || "",
-          },
-          draft: { draft_letter: "" },
-          refine: { draft_letter: "" },
-        },
-      }));
-      setPhaseErrors((prev) => ({ ...prev, [vendor]: null }));
-      setUiStage("phases");
-      setShowInput(false);
-    } catch (e) {
-      console.error("Retry vendor error", e);
-      const errorMessage = extractErrorMessage(e);
-      setFailedVendors((prev) => ({ ...prev, [vendor]: errorMessage }));
-      setPhaseErrors((prev) => ({ ...prev, [vendor]: errorMessage }));
+  // Generic retry function - takes URL, body, and result handler
+  // No phase knowledge - caller provides everything
+  // Returns the result data or throws on error
+  const retryVendor = async (url, body, onResult) => {
+    await retryApiCall(url, body, onResult);
+  };
+  
+  // Helper to create a retry function for a specific phase/vendor
+  // This is phase-aware, but retryVendor itself is not
+  const createRetryForPhase = (phaseName, vendor) => {
+    const phaseModule = phaseModules[phaseName];
+    if (!phaseModule || !phaseModule.getApiConfig) {
+      throw new Error(`Phase module "${phaseName}" not found`);
     }
+    
+    const apiConfig = phaseModule.getApiConfig(vendor, phaseSessionId, null);
+    if (!apiConfig) {
+      throw new Error(`API config not available for phase "${phaseName}"`);
+    }
+    
+    // Create result handler using phase module
+    const onResult = (data) => {
+      // Populate the shelf in PhaseFlow
+      populatePhaseShelf(phaseName, vendor, data);
+
+      if (phaseModule.handleRetryResult) {
+        phaseModule.handleRetryResult(data, {
+          vendor,
+          sessionId: phaseSessionId,
+          setDocumentId: (id) => {
+            if (!documentId) setDocumentId(id);
+          },
+          setPhaseSessions,
+          setUiStage,
+          setShowInput,
+          setLetters,
+          setVendorParagraphs,
+          setVendorCosts,
+          splitIntoParagraphs,
+        });
+      }
+    };
+    
+    return () => retryVendor(apiConfig.url, apiConfig.body, onResult);
   };
 
   const updatePhaseEdit = (vendor, phase, field, value) => {
-    setPhaseEdits((prev) => ({
-      ...prev,
-      [vendor]: {
-        ...(prev[vendor] || {}),
-        [phase]: {
-          ...(prev[vendor]?.[phase] || {}),
-          [field]: value,
-        },
-      },
-    }));
-    
-    // If user manually edits a field, clear any error for this vendor
-    // The user's edited data is the data to use - no synthetic data needed
-    if ((phase === "background" && field === "company_report") || 
-        (phase === "refine" && field === "draft_letter")) {
-      if (value?.trim()) {
-        setPhaseErrors((prev) => {
-          const next = { ...prev };
-          delete next[vendor];
-          return next;
-        });
-      }
-    }
+    // Cards now own their edits, so this is just a no-op callback
+    // Cards will handle their own edit state
   };
 
   const approveExtraction = async (vendor) => {
@@ -383,63 +353,36 @@ export default function App() {
       }
       
       // Background phase only needs session_id - it reads all data from the session
-      const res = await fetch(`/api/phases/background/${vendor}/`, {
+      const result = await fetchWithHeartbeat(`/api/phases/background/${vendor}/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           session_id: phaseSessionId,
         }),
       });
-      if (!res.ok) {
-        let detail = "Failed to start background phase";
-        try {
-          const text = await res.text();
-          try {
-            const json = JSON.parse(text);
-            detail = json.detail || json.message || text;
-          } catch {
-            detail = text || detail;
-          }
-        } catch (e) {
-          detail = `HTTP ${res.status}: ${res.statusText}`;
-        }
-        throw new Error(detail);
+      
+      // Handle 202 Accepted (heartbeat/still processing)
+      if (result.isHeartbeat) {
+        // Don't throw error - request is still in progress
+        // Frontend should continue waiting for the original request to complete
+        return;
       }
-      const data = await res.json();
+      
+      const data = result.data;
       // Background response now returns data directly (no vendors wrapper)
       const vendorData = data;
 
+      // Populate the background phase shelf in PhaseFlow
+      populatePhaseShelf("background", vendor, vendorData);
+
       setPhaseSessions((prev) => ({ ...prev, [vendor]: phaseSessionId }));
-      setPhaseState((prev) => ({
-        ...prev,
-        [vendor]: {
-          background: { data: vendorData, approved: false },
-          refine: { data: null, approved: false },
-          cost: vendorData.cost || 0,
-        },
-      }));
-      setPhaseEdits((prev) => ({
-        ...prev,
-        [vendor]: {
-          background: {
-            company_report: vendorData.company_report || "",
-          },
-          refine: { draft_letter: "" },
-        },
-      }));
+      // phaseState, phaseEdits removed - cards own their state
       if (!documentId && data.document?.id) {
         setDocumentId(data.document.id);
       }
     } catch (e) {
       console.error("Background phase error", e);
-      const errorMessage = extractErrorMessage(e);
-      setPhaseErrors((prev) => ({ ...prev, [vendor]: errorMessage }));
-    } finally {
-      setLoadingVendors((prev) => {
-        const next = new Set(prev);
-        next.delete(vendor);
-        return next;
-      });
+      // Cards now own their error state
     }
   };
 
@@ -459,9 +402,7 @@ export default function App() {
     setDocumentId(null);
     setShowInput(false);
     setUiStage("phases");
-    setPhaseState({});
-    setPhaseEdits({});
-    setPhaseErrors({});
+    // phaseState, phaseEdits, phaseErrors removed - cards own their state
     setPhaseSessions({});
     
     const vendorList = Array.from(selectedVendors);
@@ -544,54 +485,35 @@ export default function App() {
     vendorList.forEach((vendor) => {
       (async () => {
         try {
-          const res = await fetch(`/api/phases/background/${vendor}/`, {
+          const result = await fetchWithHeartbeat(`/api/phases/background/${vendor}/`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               session_id: initialSessionId,
             }),
           });
-          if (!res.ok) {
-            const detail = await res.text();
-            throw new Error(detail || `Failed to start background for ${vendor}`);
+          
+          // Handle 202 Accepted (heartbeat/still processing)
+          if (result.isHeartbeat) {
+            // Don't throw error - request is still in progress
+            return;
           }
-          const data = await res.json();
+          
+          const data = result.data;
           // Background response now returns data directly (no vendors wrapper)
           const vendorData = data;
           
-          // Update state for this vendor immediately on success
+          // Populate the background phase shelf in PhaseFlow
+          populatePhaseShelf("background", vendor, vendorData);
+
+          // Update session for this vendor
           setPhaseSessions((prev) => ({ ...prev, [vendor]: initialSessionId }));
-          setPhaseState((prev) => ({
-            ...prev,
-            [vendor]: {
-              background: { data: vendorData, approved: false },
-              refine: { data: null, approved: false },
-              cost: vendorData.cost || 0,
-            },
-          }));
-          setPhaseEdits((prev) => ({
-            ...prev,
-            [vendor]: {
-              background: {
-                company_report: vendorData.company_report || "",
-              },
-              refine: { draft_letter: "" },
-            },
-          }));
-          
-          // Clear any previous error for this vendor
-          setPhaseErrors((prev) => {
-            const next = { ...prev };
-            delete next[vendor];
-            return next;
-          });
+          // phaseState, phaseEdits, phaseErrors removed - cards own their state
           
           // Set session ID from first successful response
           setPhaseSessionId((prev) => prev || initialSessionId);
         } catch (e) {
-          // Update error state immediately for this vendor
-          const errorMessage = extractErrorMessage(e);
-          setPhaseErrors((prev) => ({ ...prev, [vendor]: errorMessage }));
+          // Cards now own their error state
           console.error(`Background phase error for ${vendor}:`, e);
         }
       })();
@@ -602,168 +524,79 @@ export default function App() {
     setLoading(false);
   };
 
-  const approvePhase = async (phase, vendor) => {
+  const approvePhase = async (phase, vendor, edits = {}) => {
+    // Prevent duplicate calls if already approved/processing
+    // Note: session tracking is a decent proxy for "is in flight" if we assume
+    // that a phase session is set only once per phase. 
+    // However, the best guard is the UI button being disabled.
+    // We can also check if we already have the result data in the shelf to avoid re-fetching
+    // unless explicitly asked (which would likely be a different function or cleared state).
+
     if (phase === "background") {
-      setPhaseErrors((prev) => ({ ...prev, [vendor]: null }));
-      const edits = phaseEdits[vendor]?.background || {};
       const sessionId = phaseSessions[vendor] || phaseSessionId;
 
       try {
-        const res = await fetch(`/api/phases/draft/${vendor}/`, {
+        const result = await fetchWithHeartbeat(`/api/phases/draft/${vendor}/`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             session_id: sessionId,
-            // background is user-editable; always send current edits to override cached
-            company_report: edits.company_report,
+            company_report: edits.company_report || "",
           }),
         });
-        if (!res.ok) {
-          let detail = "Failed to generate draft";
-          try {
-            const text = await res.text();
-            // Try to parse as JSON first
-            try {
-              const json = JSON.parse(text);
-              detail = json.detail || json.message || text;
-            } catch {
-              // Not JSON, use as-is
-              detail = text || detail;
-            }
-          } catch (e) {
-            // Failed to read response body
-            detail = `HTTP ${res.status}: ${res.statusText}`;
-          }
-          throw new Error(detail);
+        
+        // Handle 202 Accepted (heartbeat/still processing)
+        if (result.isHeartbeat) {
+          return null;
         }
-        const data = await res.json();
+        
+        const data = result.data;
+        
+        // Populate the refine phase shelf in PhaseFlow (this contains the draft and feedback)
+        // Check if we already have data to avoid overwriting if a race condition occurs
+        // though typically the last write wins.
+        populatePhaseShelf("refine", vendor, data);
 
-        setPhaseState((prev) => ({
-          ...prev,
-          [vendor]: {
-            ...(prev[vendor] || {}),
-            background: { ...(prev[vendor]?.background || {}), approved: true },
-            refine: { data, approved: false },
-            cost: data.cost ?? prev[vendor]?.cost ?? 0,
-          },
-        }));
-
-        setPhaseEdits((prev) => ({
-          ...prev,
-          [vendor]: {
-            ...(prev[vendor] || {}),
-            background: {
-              ...(prev[vendor]?.background || {}),
-              company_report: edits.company_report ?? "",
-            },
-            refine: {
-              // Initialize editable draft in the refine stage; final letter will be produced in assembly phase
-              draft_letter: data.draft_letter || "",
-              feedback_overrides: {},
-            },
-          },
-        }));
+        // Return data to the caller (VendorCard) so it knows to proceed
+        return data;
       } catch (e) {
         console.error("Draft generation error", e);
         const errorMessage = extractErrorMessage(e);
-        setPhaseErrors((prev) => ({ ...prev, [vendor]: errorMessage }));
+        throw new Error(errorMessage);
       }
     } else if (phase === "refine") {
-      // Get edited draft letter from phaseEdits (user edits) or fallback to state (original from draft phase)
-      const editedDraft = (phaseEdits[vendor]?.refine?.draft_letter ?? "").trim();
-      // Get original draft from state (set when draft phase completed)
-      const originalDraft = (phaseState[vendor]?.refine?.data?.draft_letter ?? "").trim();
-      // Check if user edited the draft (editedDraft exists and differs from original)
-      const draftWasEdited = editedDraft !== "" && editedDraft !== originalDraft;
-      
-      setPhaseErrors((prev) => ({ ...prev, [vendor]: null }));
       const sessionId = phaseSessions[vendor] || phaseSessionId;
-      const bg = phaseState[vendor]?.background?.data || {};
-      const bgEdits = phaseEdits[vendor]?.background || {};
-      const backgroundDirty =
-        (bgEdits.company_report ?? "") !== (bg.company_report ?? "");
-      const feedbackOverrides = phaseEdits[vendor]?.refine?.feedback_overrides || {};
-      const hasFeedbackOverrides = Object.keys(feedbackOverrides).length > 0;
+      const payload = {
+        session_id: sessionId,
+      };
+      
+      // Send edits if provided
+      if (edits.draft_letter) {
+        payload.draft_letter = edits.draft_letter;
+      }
+      if (edits.company_report) {
+        payload.company_report = edits.company_report;
+      }
+      if (edits.feedback_overrides) {
+        payload.feedback_override = edits.feedback_overrides;
+      }
 
       try {
-        const payload = {
-          session_id: sessionId,
-        };
-        // Only send draft_letter if it was actually edited
-        if (draftWasEdited) {
-          payload.draft_letter = editedDraft;
-        }
-        // Only send background overrides if the user changed them
-        if (backgroundDirty) {
-          payload.company_report = bgEdits.company_report ?? "";
-        }
-        if (hasFeedbackOverrides) {
-          payload.feedback_override = feedbackOverrides;
-        }
-
-        const res = await fetch(`/api/phases/refine/${vendor}/`, {
+        const result = await fetchWithHeartbeat(`/api/phases/refine/${vendor}/`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        if (!res.ok) {
-          let detail = "Failed to refine letter";
-          try {
-            const text = await res.text();
-            // Try to parse as JSON first
-            try {
-              const json = JSON.parse(text);
-              detail = json.detail || json.message || text;
-            } catch {
-              // Not JSON, use as-is
-              detail = text || detail;
-            }
-          } catch (e) {
-            // Failed to read response body
-            detail = `HTTP ${res.status}: ${res.statusText}`;
-          }
-          throw new Error(detail);
+        
+        // Handle 202 Accepted (heartbeat/still processing)
+        if (result.isHeartbeat) {
+          return null;
         }
-        const data = await res.json();
-
-        // Calculate refine phase cost (cost to produce final letter)
-        // This is the cost added in the refine phase (draft + refine steps)
-        // Refine cumulative cost is data.cost (background + draft + refine)
-        // Background cost is stored in phaseState before this update
-        const backgroundCost = phaseState[vendor]?.background?.data?.cost ?? 0;
-        const refineCumulativeCost = data.cost ?? phaseState[vendor]?.cost ?? 0;
-        const refinePhaseCost = Math.max(0, refineCumulativeCost - backgroundCost);
-
-        let allDone = false;
-        setPhaseState((prev) => {
-          const next = {
-            ...prev,
-            [vendor]: {
-              ...(prev[vendor] || {}),
-              // Refine phase keeps its original data (draft_letter, feedback) - don't overwrite with final_letter
-              // final_letter belongs to the assembly phase, not refine phase
-              refine: { 
-                ...(prev[vendor]?.refine || {}),
-                approved: true 
-              },
-              cost: data.cost ?? prev[vendor]?.cost ?? 0,
-            },
-          };
-          allDone = Array.from(selectedVendors).every((v) => next[v]?.refine?.approved);
-          return next;
-        });
-        setPhaseEdits((prev) => ({
-          ...prev,
-          [vendor]: {
-            ...(prev[vendor] || {}),
-            refine: {
-              // Keep only draft_letter and feedback in refine phase edits
-              // final_letter belongs to assembly phase, not refine phase
-              draft_letter: originalDraft, // Keep original draft, not from response
-            },
-          },
-        }));
-        const finalText = data.final_letter || editedDraft;
+        
+        const data = result.data;
+        
+        // Update parent state for assembly phase
+        const finalText = data.final_letter || edits.draft_letter || "";
         setLetters((prev) => ({ ...prev, [vendor]: finalText }));
         setVendorParagraphs((prev) => ({
           ...prev,
@@ -771,41 +604,35 @@ export default function App() {
         }));
         setVendorCosts((prev) => ({
           ...prev,
-          [vendor]: data.cost ?? prev[vendor]?.cost ?? 0,
+          [vendor]: data.cost ?? prev[vendor] ?? 0,
         }));
         
-        setVendorRefineCosts((prev) => ({
-          ...prev,
-          [vendor]: refinePhaseCost,
-        }));
-
+        // Check if all vendors are done
+        const allDone = vendorsList.every((v) => {
+          // We can't check phaseState anymore, so we'll check if they have letters
+          return letters[v] || (v === vendor && finalText);
+        });
+        
         if (allDone) {
           setUiStage("assembly");
           setShowInput(false);
           setAssemblyVisible(true);
         }
+        
+        return data;
       } catch (e) {
-        console.error("Refine approve error", e);
+        console.error("Refine generation error", e);
         const errorMessage = extractErrorMessage(e);
-        setPhaseErrors((prev) => ({ ...prev, [vendor]: errorMessage }));
+        throw new Error(errorMessage);
       }
     }
   };
 
   const approveAllPhase = async (phase) => {
-    if (phase === "background") {
-      // Only approve vendors that have background data ready (not just pending)
-      const ready = Array.from(selectedVendors).filter(
-        (v) => !(phaseState[v]?.background?.approved) && phaseState[v]?.background?.data
-      );
-      await Promise.all(ready.map((v) => approvePhase("background", v)));
-    } else if (phase === "refine") {
-      // Only approve vendors that have refine data ready
-      const ready = Array.from(selectedVendors).filter(
-        (v) => !phaseState[v]?.refine?.approved && phaseState[v]?.refine?.data
-      );
-      await Promise.all(ready.map((v) => approvePhase("refine", v)));
-    }
+    // Cards now own their state, so we just call approve for all vendors
+    // Cards will handle their own approval logic
+    const vendorList = Array.from(selectedVendors);
+    await Promise.all(vendorList.map((v) => approvePhase(phase, v, {})));
   };
 
   const onAddParagraph = (paraObj) => {
@@ -830,32 +657,18 @@ export default function App() {
     });
   };
 
-  const rerunFromBackground = async (vendor) => {
+  const rerunFromBackground = async (vendor, phaseName = "background") => {
     clearVendorAssembly(vendor);
-    setPhaseState((prev) => ({
-      ...prev,
-      [vendor]: {
-        ...(prev[vendor] || {}),
-        refine: { data: null, approved: false },
-      },
-    }));
-    setPhaseEdits((prev) => ({
-      ...prev,
-      [vendor]: {
-        ...(prev[vendor] || {}),
-        refine: { draft_letter: "" },
-      },
-    }));
-    await approvePhase("background", vendor);
+    // Cards now own their state, so we just call approve
+    // The card will handle clearing its own state
+    await approvePhase("background", vendor, {});
   };
 
   const resetForm = () => {
     setShowInput(true);
     setUiStage("input");
     setPhaseSessionId(null);
-    setPhaseState({});
-    setPhaseEdits({});
-    setPhaseErrors({});
+    // phaseState, phaseEdits, phaseErrors removed - cards own their state
     setLetters({});
     setVendorParagraphs({});
     setFailedVendors({});
@@ -877,7 +690,8 @@ export default function App() {
 
   const vendorsList = Array.from(selectedVendors);
   const toggleX = "40%"; // horizontal placement for phases/assembly toggles
-  const hasAssembly = vendorsList.some((v) => phaseState[v]?.refine?.approved);
+  // Check if we have any letters (indicates at least one refine phase completed)
+  const hasAssembly = vendorsList.some((v) => letters[v]);
 
   const renderCompose = () => (
     <>
@@ -1122,14 +936,20 @@ export default function App() {
       {!showInput && uiStage !== "assembly" && (
         <PhaseFlow
           vendorsList={vendorsList}
-          phaseState={phaseState}
-          phaseEdits={phaseEdits}
-          errors={phaseErrors}
           onEditChange={updatePhaseEdit}
           onApprove={approvePhase}
           onApproveAll={approveAllPhase}
           onRerunFromBackground={rerunFromBackground}
           sessionId={phaseSessionId}
+          onRegisterPhases={(phases) => {
+            phaseRegistryRef.current = phases;
+          }}
+          onPhaseComplete={(vendor, phase, data) => {
+            // Handle phase completion - update parent state if needed
+            if (phase === "refine" && data?.final_letter) {
+              // Already handled in approvePhase
+            }
+          }}
         />
       )}
 
@@ -1147,7 +967,22 @@ export default function App() {
                 originalText={jobText}
                 vendorColors={vendorColors}
                 failedVendors={failedVendors}
-                onRetry={retryVendor}
+                onRetry={async (vendor) => {
+                  // In assembly stage, retry refine phase
+                  setFailedVendors((prev) => {
+                    const next = { ...prev };
+                    delete next[vendor];
+                    return next;
+                  });
+                  try {
+                    const retryFn = createRetryForPhase("refine", vendor);
+                    await retryFn();
+                  } catch (e) {
+                    console.error("Retry error:", e);
+                    const errorMessage = extractErrorMessage(e);
+                    setFailedVendors((prev) => ({ ...prev, [vendor]: errorMessage }));
+                  }
+                }}
                 onAddParagraph={onAddParagraph}
                 onCopyFinal={persistFinalLetter}
                 savingFinal={savingFinal}
@@ -1157,29 +992,20 @@ export default function App() {
             <>
               <PhaseFlow
                 vendorsList={vendorsList}
-                phaseState={phaseState}
-                phaseEdits={phaseEdits}
-                errors={phaseErrors}
                 onEditChange={updatePhaseEdit}
                 onApprove={approvePhase}
                 onApproveAll={approveAllPhase}
                 onRerunFromBackground={rerunFromBackground}
                 sessionId={phaseSessionId}
-                companyName={companyName}
-                jobTitle={jobTitle}
-                location={location}
-                language={language}
-                salary={salary}
-                requirements={requirements}
-                onCompanyNameChange={setCompanyName}
-                onJobTitleChange={setJobTitle}
-                onLocationChange={setLocation}
-                onLanguageChange={setLanguage}
-                onSalaryChange={setSalary}
-                onRequirementsChange={setRequirements}
-                onApproveExtraction={approveExtraction}
-                extractionLoading={false}
-                extractionError={extractionError}
+                onRegisterPhases={(phases) => {
+                  phaseRegistryRef.current = phases;
+                }}
+                onPhaseComplete={(vendor, phase, data) => {
+                  // Handle phase completion - update parent state if needed
+                  if (phase === "refine" && data?.final_letter) {
+                    // Already handled in approvePhase
+                  }
+                }}
               />
             </>
           )}
@@ -1203,7 +1029,23 @@ export default function App() {
               <strong style={{ color: "var(--text-color)" }}>{vendor}:</strong>{" "}
               {errorMsg}
               <button
-                onClick={() => retryVendor(vendor)}
+                onClick={async () => {
+                  // Default to background phase for failed vendors
+                  // In the future, we could track which phase failed
+                  setFailedVendors((prev) => {
+                    const next = { ...prev };
+                    delete next[vendor];
+                    return next;
+                  });
+                  try {
+                    const retryFn = createRetryForPhase("background", vendor);
+                    await retryFn();
+                  } catch (e) {
+                    console.error("Retry error:", e);
+                    const errorMessage = extractErrorMessage(e);
+                    setFailedVendors((prev) => ({ ...prev, [vendor]: errorMessage }));
+                  }
+                }}
                 style={{
                   marginLeft: 10,
                   padding: "4px 8px",
