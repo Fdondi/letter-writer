@@ -165,6 +165,46 @@ export default function App() {
     }
   };
 
+  // Helper function to extract user-friendly error messages
+  const extractErrorMessage = (error) => {
+    if (!error) return "Unknown error";
+    
+    // If it's already a string, try to parse it
+    const errorStr = typeof error === 'string' ? error : (error.message || String(error));
+    
+    // Handle NetworkError (TypeError)
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      return "Network error: Unable to connect to server. Please check your connection.";
+    }
+    
+    // Try to extract JSON detail from error string
+    try {
+      // Handle "API error occurred: Status XXX. Body: {...}" format
+      if (errorStr.includes('API error occurred:')) {
+        const bodyMatch = errorStr.match(/Body:\s*({[\s\S]*})/);
+        if (bodyMatch) {
+          const body = JSON.parse(bodyMatch[1]);
+          return body.detail || body.message || errorStr;
+        }
+        // Try to extract detail directly
+        const detailMatch = errorStr.match(/"detail"\s*:\s*"([^"]+)"/);
+        if (detailMatch) {
+          return detailMatch[1];
+        }
+      }
+      
+      // Try to parse as JSON directly
+      const parsed = JSON.parse(errorStr);
+      if (parsed.detail) return parsed.detail;
+      if (parsed.message) return parsed.message;
+    } catch (e) {
+      // Not JSON, continue with original string
+    }
+    
+    // Return the error string, but clean up common patterns
+    return errorStr.replace(/^Error:\s*/, '').trim() || "Unknown error";
+  };
+
   const persistFinalLetter = async (finalText) => {
     if (!finalText || !companyName || !jobText) return;
     const requirementsList = Array.isArray(requirements) ? requirements : requirements ? [requirements] : [];
@@ -221,8 +261,19 @@ export default function App() {
       });
 
       if (!res.ok) {
-        const detail = await res.text();
-        throw new Error(detail || `Failed to restart background for ${vendor}`);
+        let detail = `Failed to restart background for ${vendor}`;
+        try {
+          const text = await res.text();
+          try {
+            const json = JSON.parse(text);
+            detail = json.detail || json.message || text;
+          } catch {
+            detail = text || detail;
+          }
+        } catch (e) {
+          detail = `HTTP ${res.status}: ${res.statusText}`;
+        }
+        throw new Error(detail);
       }
 
       const data = await res.json();
@@ -257,8 +308,9 @@ export default function App() {
       setShowInput(false);
     } catch (e) {
       console.error("Retry vendor error", e);
-      setFailedVendors((prev) => ({ ...prev, [vendor]: String(e) }));
-      setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
+      const errorMessage = extractErrorMessage(e);
+      setFailedVendors((prev) => ({ ...prev, [vendor]: errorMessage }));
+      setPhaseErrors((prev) => ({ ...prev, [vendor]: errorMessage }));
     }
   };
 
@@ -339,8 +391,19 @@ export default function App() {
         }),
       });
       if (!res.ok) {
-        const detail = await res.text();
-        throw new Error(detail || "Failed to start background phase");
+        let detail = "Failed to start background phase";
+        try {
+          const text = await res.text();
+          try {
+            const json = JSON.parse(text);
+            detail = json.detail || json.message || text;
+          } catch {
+            detail = text || detail;
+          }
+        } catch (e) {
+          detail = `HTTP ${res.status}: ${res.statusText}`;
+        }
+        throw new Error(detail);
       }
       const data = await res.json();
       // Background response now returns data directly (no vendors wrapper)
@@ -369,8 +432,8 @@ export default function App() {
       }
     } catch (e) {
       console.error("Background phase error", e);
-      const message = e?.message || String(e);
-      setPhaseErrors((prev) => ({ ...prev, [vendor]: message }));
+      const errorMessage = extractErrorMessage(e);
+      setPhaseErrors((prev) => ({ ...prev, [vendor]: errorMessage }));
     } finally {
       setLoadingVendors((prev) => {
         const next = new Set(prev);
@@ -527,8 +590,8 @@ export default function App() {
           setPhaseSessionId((prev) => prev || initialSessionId);
         } catch (e) {
           // Update error state immediately for this vendor
-          const errorMsg = e?.message || String(e);
-          setPhaseErrors((prev) => ({ ...prev, [vendor]: errorMsg }));
+          const errorMessage = extractErrorMessage(e);
+          setPhaseErrors((prev) => ({ ...prev, [vendor]: errorMessage }));
           console.error(`Background phase error for ${vendor}:`, e);
         }
       })();
@@ -556,8 +619,22 @@ export default function App() {
           }),
         });
         if (!res.ok) {
-          const detail = await res.text();
-          throw new Error(detail || "Failed to generate draft");
+          let detail = "Failed to generate draft";
+          try {
+            const text = await res.text();
+            // Try to parse as JSON first
+            try {
+              const json = JSON.parse(text);
+              detail = json.detail || json.message || text;
+            } catch {
+              // Not JSON, use as-is
+              detail = text || detail;
+            }
+          } catch (e) {
+            // Failed to read response body
+            detail = `HTTP ${res.status}: ${res.statusText}`;
+          }
+          throw new Error(detail);
         }
         const data = await res.json();
 
@@ -588,8 +665,9 @@ export default function App() {
         }));
       } catch (e) {
         console.error("Draft generation error", e);
-      setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
-    }
+        const errorMessage = extractErrorMessage(e);
+        setPhaseErrors((prev) => ({ ...prev, [vendor]: errorMessage }));
+      }
     } else if (phase === "refine") {
       // Get edited draft letter from phaseEdits (user edits) or fallback to state (original from draft phase)
       const editedDraft = (phaseEdits[vendor]?.refine?.draft_letter ?? "").trim();
@@ -629,8 +707,22 @@ export default function App() {
           body: JSON.stringify(payload),
         });
         if (!res.ok) {
-          const detail = await res.text();
-          throw new Error(detail || "Failed to refine letter");
+          let detail = "Failed to refine letter";
+          try {
+            const text = await res.text();
+            // Try to parse as JSON first
+            try {
+              const json = JSON.parse(text);
+              detail = json.detail || json.message || text;
+            } catch {
+              // Not JSON, use as-is
+              detail = text || detail;
+            }
+          } catch (e) {
+            // Failed to read response body
+            detail = `HTTP ${res.status}: ${res.statusText}`;
+          }
+          throw new Error(detail);
         }
         const data = await res.json();
 
@@ -694,8 +786,9 @@ export default function App() {
         }
       } catch (e) {
         console.error("Refine approve error", e);
-      setPhaseErrors((prev) => ({ ...prev, [vendor]: String(e) }));
-    }
+        const errorMessage = extractErrorMessage(e);
+        setPhaseErrors((prev) => ({ ...prev, [vendor]: errorMessage }));
+      }
     }
   };
 

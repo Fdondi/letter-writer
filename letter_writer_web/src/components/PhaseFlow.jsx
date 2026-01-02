@@ -579,6 +579,7 @@ function VendorCard({
   onApproveExtraction,
   extractionLoading = false,
   extractionError,
+  phaseError = null, // Error from parent phaseErrors state
 }) {
   // This card knows which phase it belongs to
   const cardPhase = phaseObj?.phase || null;
@@ -593,6 +594,60 @@ function VendorCard({
   const hasInitialData = cardPhaseData && Object.keys(cardPhaseData).length > 0;
   const [isLoading, setIsLoading] = useState(!hasInitialData);
   const [cardError, setCardError] = useState(null);
+  
+  // Sync phaseError from parent to cardError state
+  useEffect(() => {
+    if (phaseError) {
+      // Parse error message - it might be a JSON string with detail field
+      let errorMessage = phaseError;
+      try {
+        // Handle "API error occurred: Status XXX. Body: {...}" format
+        if (phaseError.includes('API error occurred:')) {
+          // Try to extract JSON from "Body: {...}" part
+          const bodyMatch = phaseError.match(/Body:\s*({[\s\S]*})/);
+          if (bodyMatch) {
+            try {
+              const body = JSON.parse(bodyMatch[1]);
+              errorMessage = body.detail || body.message || errorMessage;
+            } catch (e) {
+              // If parsing fails, try to extract just the detail value directly
+              const detailMatch = phaseError.match(/"detail"\s*:\s*"([^"]+)"/);
+              if (detailMatch) {
+                errorMessage = detailMatch[1];
+              }
+            }
+          } else {
+            // Try to extract detail value directly even without full JSON
+            const detailMatch = phaseError.match(/"detail"\s*:\s*"([^"]+)"/);
+            if (detailMatch) {
+              errorMessage = detailMatch[1];
+            }
+          }
+        } else if (phaseError.trim().startsWith('{')) {
+          // Try to parse as JSON if it looks like JSON
+          const parsed = JSON.parse(phaseError);
+          if (parsed.detail) {
+            errorMessage = parsed.detail;
+          } else if (parsed.message) {
+            errorMessage = parsed.message;
+          }
+        } else if (phaseError.includes('detail')) {
+          // Try to extract detail from string that contains "detail"
+          const detailMatch = phaseError.match(/"detail"\s*:\s*"([^"]+)"/);
+          if (detailMatch) {
+            errorMessage = detailMatch[1];
+          }
+        }
+      } catch (e) {
+        // If parsing fails, use original error message
+      }
+      setCardError(errorMessage);
+      // When there's an error, stop loading
+      setIsLoading(false);
+    } else {
+      setCardError(null);
+    }
+  }, [phaseError]);
   
   // Card-specific UI state
   const [selectedFeedbackTab, setSelectedFeedbackTab] = useState(null);
@@ -766,17 +821,16 @@ function VendorCard({
   const findNextUnseenFeedback = (currentKey, approvals, overrides, feedbackData) => {
     if (feedbackKeys.length === 0) return null;
     
-    // Helper to check if a feedback is "seen" (approved, edited, or removed)
+    // Helper to check if a feedback is "seen" based on human status
+    // A feedback is "seen" if human status is not "❔" (i.e., it's 👍, ✏️, or ✅)
     const isSeen = (key) => {
-      const approved = approvals[key] === true;
-      const edited = overrides[key] !== undefined;
+      const isApproved = approvals[key] === true;
+      
       const baseVal = feedbackData[key] || "";
       const overrideVal = overrides[key];
-      const displayVal = overrideVal !== undefined ? overrideVal : baseVal;
-      const trimmedUpper = (displayVal || "").trim().toUpperCase();
-      const isRemoved = trimmedUpper === "" || trimmedUpper.endsWith("NO COMMENT");
-      
-      return approved || edited || isRemoved;
+      const isModified = overrideVal !== undefined && overrideVal !== baseVal;
+
+      return isApproved || isModified
     };
     
     // Find current index
@@ -882,7 +936,7 @@ function VendorCard({
           <>
             <div style={{ fontSize: 13, color: "#374151" }}>
               {!previousPhaseApproved
-                ? `${previousPhase ? previousPhase.charAt(0).toUpperCase() + previousPhase.slice(1) : "Previous"} approval required before ${cardPhase} phase.`
+                ? `${phaseObj?.previous?.phase ? phaseObj.previous.phase.charAt(0).toUpperCase() + phaseObj.previous.phase.slice(1) : "Previous"} approval required before ${cardPhase} phase.`
                 : thisPhaseApproved
                   ? "Draft letter is approved. Edit to rerun refinement if needed."
                   : "Edit if desired, then approve to move to assembly."}
@@ -1474,6 +1528,7 @@ export default function PhaseFlow({
           onEditChange={onEditChange}
           onApprove={onApprove}
           sessionId={sessionId}
+          phaseError={errors?.[vendor] || null}
           onStatusChange={(status) => phaseObj.registerStatus?.(vendor, status)}
           onSaveFeedbackOverride={(key, val) => saveFeedbackOverride(vendor, key, val)}
           onRerunFromBackground={onRerunFromBackground}
