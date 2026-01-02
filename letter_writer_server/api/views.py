@@ -8,6 +8,8 @@ import urllib.request
 from django.http import JsonResponse, HttpRequest
 from django.views.decorators.csrf import csrf_exempt
 
+from .spam_prevention import prevent_duplicate_requests
+
 from letter_writer.service import refresh_repository, write_cover_letter
 from letter_writer.client import ModelVendor
 from letter_writer.generation import get_style_instructions
@@ -144,6 +146,7 @@ def refresh_view(request: HttpRequest):
 
 
 @csrf_exempt
+@prevent_duplicate_requests(endpoint_path="process-job")
 def process_job_view(request: HttpRequest):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
@@ -211,6 +214,7 @@ def process_job_view(request: HttpRequest):
 
 
 @csrf_exempt
+@prevent_duplicate_requests(endpoint_path="extract")
 def extract_view(request: HttpRequest):
     """Extract job metadata from job text. Uses a default vendor (openai) for extraction."""
     if request.method != "POST":
@@ -304,6 +308,7 @@ def init_session_view(request: HttpRequest):
 
 
 @csrf_exempt
+@prevent_duplicate_requests(endpoint_path="phases/session")
 def update_session_common_data_view(request: HttpRequest):
     """Update common session data. Called when 'start phases' is clicked if user modified data.
     
@@ -378,6 +383,7 @@ def update_session_common_data_view(request: HttpRequest):
 
 
 @csrf_exempt
+@prevent_duplicate_requests(endpoint_path="phases/background", use_vendor_in_key=True)
 def background_phase_view(request: HttpRequest, vendor: str):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
@@ -435,6 +441,7 @@ def background_phase_view(request: HttpRequest, vendor: str):
 
 
 @csrf_exempt
+@prevent_duplicate_requests(endpoint_path="phases/refine", use_vendor_in_key=True)
 def refinement_phase_view(request: HttpRequest, vendor: str):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
@@ -486,6 +493,7 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
 
 
 @csrf_exempt
+@prevent_duplicate_requests(endpoint_path="phases/draft", use_vendor_in_key=True)
 def draft_phase_view(request: HttpRequest, vendor: str):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
@@ -570,6 +578,7 @@ def style_instructions_view(request: HttpRequest):
 
 
 @csrf_exempt
+@prevent_duplicate_requests(endpoint_path="translate")
 def translate_view(request: HttpRequest):
     """Translate text between English and German."""
     if request.method != "POST":
@@ -723,6 +732,7 @@ def document_negatives_view(request: HttpRequest, document_id: str):
 
 
 @csrf_exempt
+@prevent_duplicate_requests(endpoint_path="documents/reembed")
 def document_reembed_view(request: HttpRequest, document_id: str):
     if request.method != "POST":
         return _json_error("Method not allowed", status=405)
