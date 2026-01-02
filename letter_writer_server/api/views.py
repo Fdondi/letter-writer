@@ -8,7 +8,7 @@ import urllib.request
 from django.http import JsonResponse, HttpRequest
 from django.views.decorators.csrf import csrf_exempt
 
-from .spam_prevention import prevent_duplicate_requests
+from .spam_prevention import prevent_duplicate_requests, get_in_flight_requests, clear_in_flight_requests
 
 from letter_writer.service import refresh_repository, write_cover_letter
 from letter_writer.client import ModelVendor
@@ -383,7 +383,7 @@ def update_session_common_data_view(request: HttpRequest):
 
 
 @csrf_exempt
-@prevent_duplicate_requests(endpoint_path="phases/background", use_vendor_in_key=True)
+@prevent_duplicate_requests(endpoint_path="phases/background", use_vendor_in_key=True, replace_timeout=30.0)
 def background_phase_view(request: HttpRequest, vendor: str):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
@@ -441,7 +441,7 @@ def background_phase_view(request: HttpRequest, vendor: str):
 
 
 @csrf_exempt
-@prevent_duplicate_requests(endpoint_path="phases/refine", use_vendor_in_key=True)
+@prevent_duplicate_requests(endpoint_path="phases/refine", use_vendor_in_key=True, replace_timeout=30.0)
 def refinement_phase_view(request: HttpRequest, vendor: str):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
@@ -493,7 +493,7 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
 
 
 @csrf_exempt
-@prevent_duplicate_requests(endpoint_path="phases/draft", use_vendor_in_key=True)
+@prevent_duplicate_requests(endpoint_path="phases/draft", use_vendor_in_key=True, replace_timeout=30.0)
 def draft_phase_view(request: HttpRequest, vendor: str):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
@@ -758,3 +758,34 @@ def document_reembed_view(request: HttpRequest, document_id: str):
     )
     upsert_documents(qdrant_client, [point])
     return JsonResponse({"status": "ok"})
+
+
+# ---------------------------------------------------------------------------
+# Debug endpoints for spam prevention
+# ---------------------------------------------------------------------------
+
+
+@csrf_exempt
+def debug_in_flight_requests_view(request: HttpRequest):
+    """Debug endpoint to inspect in-flight requests."""
+    if request.method != "GET":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+    
+    in_flight = get_in_flight_requests()
+    return JsonResponse({
+        "count": len(in_flight),
+        "requests": in_flight,
+    })
+
+
+@csrf_exempt
+def debug_clear_in_flight_requests_view(request: HttpRequest):
+    """Debug endpoint to clear all in-flight requests."""
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+    
+    cleared = clear_in_flight_requests()
+    return JsonResponse({
+        "status": "ok",
+        "cleared_count": cleared,
+    })
