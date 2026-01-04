@@ -1,12 +1,16 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import ModelSelector from "./components/ModelSelector";
 import LetterTabs from "./components/LetterTabs";
 import StyleInstructionsBlade from "./components/StyleInstructionsBlade";
 import PhaseFlow from "./components/PhaseFlow";
 import DocumentsPage from "./components/DocumentsPage";
+import LanguageConfig from "./components/LanguageConfig";
+import LanguageSelector from "./components/LanguageSelector";
 import { splitIntoParagraphs } from "./utils/split";
 import { fetchWithHeartbeat, retryApiCall } from "./utils/apiHelpers";
 import { phases as phaseModules } from "./components/phases";
+import { translateText } from "./utils/translate";
+import { useLanguages } from "./contexts/LanguageContext";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
@@ -51,6 +55,14 @@ export default function App() {
   const [assemblyVisible, setAssemblyVisible] = useState(true); // when in assembly stage, show assembly or phases
   const [extractedData, setExtractedData] = useState(null); // Track extracted data to detect modifications
   
+  // Translation state for job text
+  const { enabledLanguages } = useLanguages();
+  const [jobTextViewLanguage, setJobTextViewLanguage] = useState("source");
+  const [jobTextTranslations, setJobTextTranslations] = useState({});
+  const [isTranslatingJobText, setIsTranslatingJobText] = useState(false);
+  const [jobTextTranslationError, setJobTextTranslationError] = useState(null);
+  const [lastJobTextSnapshot, setLastJobTextSnapshot] = useState(jobText);
+  
   // Registry of phase objects from PhaseFlow
   const phaseRegistryRef = React.useRef(null);
   const [, setPhaseRegistryTrigger] = useState(0); // For re-rendering when registry changes
@@ -64,6 +76,55 @@ export default function App() {
     mediaQuery.addEventListener("change", handleChange);
     return () => mediaQuery.removeEventListener("change", handleChange);
   }, [vendors]);
+
+  // Reset job text translation cache when source text changes
+  useEffect(() => {
+    if (jobText !== lastJobTextSnapshot) {
+      setJobTextTranslations({});
+      setLastJobTextSnapshot(jobText);
+      setJobTextViewLanguage("source");
+    }
+  }, [jobText, lastJobTextSnapshot]);
+
+  // Get displayed job text (translated or original)
+  const displayedJobText = useMemo(() => {
+    if (jobTextViewLanguage !== "source" && jobTextTranslations[jobTextViewLanguage]) {
+      return jobTextTranslations[jobTextViewLanguage];
+    }
+    return jobText;
+  }, [jobTextViewLanguage, jobTextTranslations, jobText]);
+
+  // Handle job text language change
+  const handleJobTextLanguageChange = async (code) => {
+    if (code === "source") {
+      setJobTextViewLanguage("source");
+      return;
+    }
+
+    setJobTextViewLanguage(code);
+    
+    // Check if already cached
+    if (jobTextTranslations[code] && lastJobTextSnapshot === jobText) {
+      return;
+    }
+
+    if (!jobText || !jobText.trim() || isTranslatingJobText) {
+      return;
+    }
+
+    setIsTranslatingJobText(true);
+    setJobTextTranslationError(null);
+
+    try {
+      const translated = await translateText(jobText, code, null);
+      setJobTextTranslations((prev) => ({ ...prev, [code]: translated }));
+      setLastJobTextSnapshot(jobText);
+    } catch (e) {
+      setJobTextTranslationError(e.message || "Translation failed");
+    } finally {
+      setIsTranslatingJobText(false);
+    }
+  };
 
   // Helper to populate the "shelf" in PhaseFlow for a specific phase/vendor
   const populatePhaseShelf = (phaseName, vendor, data) => {
@@ -697,27 +758,57 @@ export default function App() {
     <>
       {showInput ? (
         <>
-          <ModelSelector
-            vendors={vendors}
-            selected={selectedVendors}
-            onToggle={toggleVendor}
-            onSelectAll={selectAll}
-          />
-          <textarea
-            style={{
-              width: "100%",
-              height: 150,
-              marginTop: 10,
-              backgroundColor: "var(--input-bg)",
-              color: "var(--text-color)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "4px",
-              padding: 8,
-            }}
-            placeholder="Paste job description here"
-            value={jobText}
-            onChange={(e) => setJobText(e.target.value)}
-          />
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+            <ModelSelector
+              vendors={vendors}
+              selected={selectedVendors}
+              onToggle={toggleVendor}
+              onSelectAll={selectAll}
+            />
+            <LanguageConfig />
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <label style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-color)" }}>
+                Job Description
+              </label>
+              <LanguageSelector
+                languages={enabledLanguages}
+                viewLanguage={jobTextViewLanguage}
+                onLanguageChange={handleJobTextLanguageChange}
+                hasTranslation={(code) => Boolean(jobTextTranslations[code])}
+                disabled={false}
+                isTranslating={isTranslatingJobText}
+                size="small"
+              />
+            </div>
+            {jobTextTranslationError && (
+              <div style={{ color: "var(--error-text)", fontSize: "12px", marginBottom: 6 }}>
+                {jobTextTranslationError}
+              </div>
+            )}
+            <textarea
+              style={{
+                width: "100%",
+                height: 150,
+                backgroundColor: jobTextViewLanguage === "source" ? "var(--input-bg)" : "var(--panel-bg)",
+                color: "var(--text-color)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                padding: 8,
+                opacity: jobTextViewLanguage === "source" ? 1 : 0.9,
+              }}
+              placeholder="Paste job description here"
+              value={displayedJobText}
+              onChange={(e) => {
+                // Only allow editing in source language
+                if (jobTextViewLanguage === "source") {
+                  setJobText(e.target.value);
+                }
+              }}
+              readOnly={jobTextViewLanguage !== "source"}
+            />
+          </div>
           <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
             <button
               onClick={extractData}
@@ -887,9 +978,11 @@ export default function App() {
           style={{
             display: "flex",
             alignItems: "center",
+            justifyContent: "space-between",
             gap: 10,
             marginBottom: 10,
             position: "relative",
+            flexWrap: "wrap",
           }}
         >
           <button
@@ -905,6 +998,7 @@ export default function App() {
           >
             ← Back to Input
           </button>
+          <LanguageConfig />
           {uiStage === "assembly" && assemblyVisible && (
             <div
               style={{
@@ -1076,60 +1170,62 @@ export default function App() {
         minHeight: "100vh",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 12,
-        }}
-      >
-        <h1 style={{ margin: 0, color: "var(--text-color)" }}>Letter Writer</h1>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button
-            onClick={() => setActiveTab("compose")}
-            style={{
-              padding: "8px 12px",
-              border: "1px solid var(--border-color)",
-              borderRadius: "4px",
-              backgroundColor: activeTab === "compose" ? "#3b82f6" : "var(--button-bg)",
-              color: activeTab === "compose" ? "white" : "var(--button-text)",
-              cursor: "pointer",
-              fontSize: "14px",
-            }}
-          >
-            Compose
-          </button>
-          <button
-            onClick={() => setActiveTab("documents")}
-            style={{
-              padding: "8px 12px",
-              border: "1px solid var(--border-color)",
-              borderRadius: "4px",
-              backgroundColor:
-                activeTab === "documents" ? "#3b82f6" : "var(--button-bg)",
-              color: activeTab === "documents" ? "white" : "var(--button-text)",
-              cursor: "pointer",
-              fontSize: "14px",
-            }}
-          >
-            Documents
-          </button>
-          <button
-            onClick={() => setShowStyleBlade(true)}
-            style={{
-              padding: "8px 12px",
-              border: "1px solid var(--border-color)",
-              borderRadius: "4px",
-              backgroundColor: "var(--button-bg)",
-              color: "var(--button-text)",
-              cursor: "pointer",
-              fontSize: "14px",
-            }}
-          >
-            ⚙️ Style
-          </button>
+      <div style={{ position: "relative", marginBottom: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <h1 style={{ margin: 0, color: "var(--text-color)" }}>Letter Writer</h1>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => setActiveTab("compose")}
+              style={{
+                padding: "8px 12px",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                backgroundColor: activeTab === "compose" ? "#3b82f6" : "var(--button-bg)",
+                color: activeTab === "compose" ? "white" : "var(--button-text)",
+                cursor: "pointer",
+                fontSize: "14px",
+              }}
+            >
+              Compose
+            </button>
+            <button
+              onClick={() => setActiveTab("documents")}
+              style={{
+                padding: "8px 12px",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                backgroundColor:
+                  activeTab === "documents" ? "#3b82f6" : "var(--button-bg)",
+                color: activeTab === "documents" ? "white" : "var(--button-text)",
+                cursor: "pointer",
+                fontSize: "14px",
+              }}
+            >
+              Documents
+            </button>
+            <button
+              onClick={() => setShowStyleBlade(true)}
+              style={{
+                padding: "8px 12px",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                backgroundColor: "var(--button-bg)",
+                color: "var(--button-text)",
+                cursor: "pointer",
+                fontSize: "14px",
+              }}
+            >
+              ⚙️ Style
+            </button>
+          </div>
         </div>
+
       </div>
 
       {activeTab === "compose" ? renderCompose() : <DocumentsPage />}

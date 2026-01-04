@@ -15,6 +15,7 @@ Set up the required API keys as environment variables (or in a `.env` file):
 - `OPENAI_API_KEY`: Required for OpenAI models
 - `ANTHROPIC_API_KEY`: Required for Claude/Anthropic models  
 - `GOOGLE_API_KEY`: Required for Gemini models
+- `GOOGLE_TRANSLATE_API_KEY`: Required for Google Translate API (used in the assembly stage for translating letters)
 - `MISTRAL_API_KEY`: Required for Mistral models (optional)
 - `XAI_API_KEY`: Required for Grok models (optional)
 

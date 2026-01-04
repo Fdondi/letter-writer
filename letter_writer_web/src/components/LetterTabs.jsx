@@ -5,6 +5,7 @@ import LetterCard from "./LetterCard";
 import { useDrop } from "react-dnd";
 import { HoverProvider } from "../contexts/HoverContext";
 import { v4 as uuidv4 } from "uuid";
+import { useLanguages } from "../contexts/LanguageContext";
 
 export default function LetterTabs({ 
   vendorsList, 
@@ -25,14 +26,11 @@ export default function LetterTabs({
   const [finalLetter, setFinalLetter] = useState("");
   const [originalLetter, setOriginalLetter] = useState(originalText || "");
   const finalColumnRef = useRef(null);
-    const [languageInput, setLanguageInput] = useState("");
-    const [languageOptions, setLanguageOptions] = useState([
-      { code: "en", label: "EN", enabled: true },
-      { code: "de", label: "DE", enabled: true },
-      { code: "it", label: "IT", enabled: false },
-      { code: "fr", label: "FR", enabled: false },
-    ]);
-    const [languageLogic, setLanguageLogic] = useState("OR"); // "OR" or "AND"
+  
+  // Use shared language context instead of local state
+  const { enabledLanguages: languageOptions, addLanguage, toggleLanguage } = useLanguages();
+  const [languageInput, setLanguageInput] = useState("");
+  const [languageLogic, setLanguageLogic] = useState("OR"); // "OR" or "AND"
 
   const toggleCollapse = (vendor) => {
     setCollapsed((prev) =>
@@ -382,32 +380,12 @@ export default function LetterTabs({
     </div>
   );
 
-  const toggleLanguage = (code) => {
-    setLanguageOptions((prev) =>
-      prev.map((lang) =>
-        lang.code === code ? { ...lang, enabled: !lang.enabled } : lang
-      )
-    );
-  };
-
   const addLanguageFromSearch = () => {
     const code = languageInput.trim().toLowerCase();
     if (!code) return;
-
-    setLanguageOptions((prev) => {
-      const exists = prev.some((lang) => lang.code === code);
-      if (exists) {
-        return prev.map((lang) =>
-          lang.code === code ? { ...lang, enabled: true } : lang
-        );
-      }
-      const label = code.toUpperCase();
-      return [...prev, { code, label, enabled: true }];
-    });
+    addLanguage(code);
     setLanguageInput("");
   };
-
-  const enabledLanguages = languageOptions.filter((l) => l.enabled);
 
   const FinalColumn = () => (
     <div 
@@ -527,7 +505,7 @@ export default function LetterTabs({
                       }
                     }}
                     onDelete={() => deleteParagraph(idx)}
-                    languages={enabledLanguages}
+                    languages={languageOptions}
                   />
                 </div>
                 <PlusButton onClick={() => addNewParagraph(idx + 1)} />
@@ -614,37 +592,35 @@ export default function LetterTabs({
             {languageLogic}
           </button>
           <div style={{ display: "flex", alignItems: "center", border: "1px solid var(--border-color)", borderRadius: 4, padding: "2px 6px", flexWrap: "wrap", gap: 4, background: 'var(--input-bg)' }}>
-            {languageOptions
-              .filter((l) => l.enabled)
-              .map((lang) => (
-                <div
-                  key={lang.code}
+            {languageOptions.map((lang) => (
+              <div
+                key={lang.code}
+                style={{
+                  background: "var(--header-bg)",
+                  padding: "2px 6px",
+                  borderRadius: 3,
+                  fontSize: 12,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                {lang.label}
+                <button
+                  onClick={() => toggleLanguage(lang.code)}
                   style={{
-                    background: "var(--header-bg)",
-                    padding: "2px 6px",
-                    borderRadius: 3,
+                    background: "none",
+                    border: "none",
+                    color: "var(--secondary-text-color)",
+                    cursor: "pointer",
+                    padding: 0,
                     fontSize: 12,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 4,
                   }}
                 >
-                  {lang.label}
-                  <button
-                    onClick={() => toggleLanguage(lang.code)}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      color: "var(--secondary-text-color)",
-                      cursor: "pointer",
-                      padding: 0,
-                      fontSize: 12,
-                    }}
-                  >
-                    X
-                  </button>
-                </div>
-              ))}
+                  X
+                </button>
+              </div>
+            ))}
             <input
               type="text"
               value={languageInput}
@@ -780,7 +756,7 @@ export default function LetterTabs({
                       moveParagraph={() => {}} 
                       color={vendorColors?.[v]} 
                     editable={false}
-                    languages={enabledLanguages}
+                    languages={languageOptions}
                     />
                   ))
                 )}
@@ -795,7 +771,7 @@ export default function LetterTabs({
             text={originalLetter} 
             editable={false} 
             width={columnWidth}
-            languages={enabledLanguages}
+            languages={languageOptions}
           />
         </div>
       </div>

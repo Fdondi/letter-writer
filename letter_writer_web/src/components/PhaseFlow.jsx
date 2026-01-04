@@ -25,6 +25,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { phases as phaseModules } from "./phases";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
+import { useTranslation } from "../utils/useTranslation";
+import LanguageSelector from "./LanguageSelector";
 
 // Card status enum - cards report their status to phases
 const CardStatus = {
@@ -186,7 +188,7 @@ function PhaseSection({
   );
 }
 
-function EditableField({ label, value, minHeight = 120, placeholder, onSave, disabled = false }) {
+function EditableField({ label, value, minHeight = 120, placeholder, onSave, disabled = false, fieldId, translation }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value || "");
 
@@ -195,6 +197,18 @@ function EditableField({ label, value, minHeight = 120, placeholder, onSave, dis
       setDraft(value || "");
     }
   }, [value, editing]);
+
+  // Reset translation when source text changes
+  useEffect(() => {
+    if (translation && fieldId) {
+      translation.resetFieldTranslation(fieldId, value || "");
+    }
+  }, [value, fieldId, translation]);
+
+  // Get displayed text (translated or original)
+  const displayedText = translation && fieldId
+    ? translation.getTranslatedText(fieldId, value || "")
+    : (value || placeholder || "");
 
   return (
     <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -265,7 +279,7 @@ function EditableField({ label, value, minHeight = 120, placeholder, onSave, dis
             fontSize: 13,
           }}
         >
-          {value || placeholder || ""}
+          {displayedText}
         </div>
       )}
     </div>
@@ -281,6 +295,8 @@ function EditableFeedback({
   onApprove,
   hasContent,
   isModified,
+  fieldId,
+  translation,
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value || "");
@@ -290,6 +306,18 @@ function EditableFeedback({
       setDraft(value || "");
     }
   }, [value, editing]);
+
+  // Reset translation when source text changes
+  useEffect(() => {
+    if (translation && fieldId) {
+      translation.resetFieldTranslation(fieldId, value || "");
+    }
+  }, [value, fieldId, translation]);
+
+  // Get displayed text (translated or original)
+  const displayedText = translation && fieldId
+    ? translation.getTranslatedText(fieldId, value || "")
+    : (value || placeholder || "");
 
   const statusColor = hasContent ? "#2563eb" : "#9ca3af"; // comment presence
   const approveColor = approved ? "#16a34a" : "#9ca3af";
@@ -421,7 +449,7 @@ function EditableFeedback({
             fontSize: 13,
           }}
         >
-          {value || placeholder || ""}
+          {displayedText}
         </div>
       )}
     </div>
@@ -705,6 +733,9 @@ function VendorCard({
   const [feedbackApprovals, setFeedbackApprovals] = useState({});
   const [collapsed, setCollapsed] = useState(false);
   
+  // Translation support for this card
+  const translation = useTranslation();
+  
   // Track current registered status to avoid infinite loops
   const registeredStatusRef = useRef(null);
   
@@ -843,22 +874,81 @@ function VendorCard({
     });
   }, [isLoading, approved, thisPhaseDirty, cardPhase, previousPhaseApproved, feedbackKeys, feedbackApprovals, feedbackOverrides, feedback, phaseModule]);
 
+  // Helper to check if any field has translation for a language
+  const hasAnyTranslation = useCallback((code) => {
+    if (cardPhase === "background") {
+      return translation.hasTranslation("company_report");
+    } else if (cardPhase === "refine") {
+      return translation.hasTranslation("draft_letter") || 
+             feedbackKeys.some(k => translation.hasTranslation(`feedback_${k}`));
+    }
+    return false;
+  }, [cardPhase, translation, feedbackKeys]);
+
+  // Handle language change
+  const handleLanguageChange = useCallback(async (code) => {
+    // Set view language immediately
+    translation.setViewLanguage(code);
+    
+    if (code === "source") {
+      return; // No translation needed for source
+    }
+    
+    // Translate all fields in this card if not already cached
+    if (cardPhase === "background" && cardPhaseData.company_report) {
+      const sourceText = cardPhaseEdits.company_report ?? cardPhaseData.company_report ?? "";
+      if (sourceText) {
+        await translation.translateField("company_report", sourceText, code);
+      }
+    } else if (cardPhase === "refine") {
+      const draftText = cardPhaseEdits.draft_letter ?? cardPhaseData.draft_letter ?? "";
+      if (draftText) {
+        await translation.translateField("draft_letter", draftText, code);
+      }
+      // Translate all feedback fields
+      for (const key of feedbackKeys) {
+        const feedbackValue = feedbackOverrides[key] ?? feedback[key] ?? "";
+        if (feedbackValue) {
+          await translation.translateField(`feedback_${key}`, feedbackValue, code);
+        }
+      }
+    }
+  }, [cardPhase, cardPhaseData, cardPhaseEdits, translation, feedbackKeys, feedbackOverrides, feedback]);
+
   return (
     <div style={{ ...cardStyle, opacity: disabled ? 0.6 : 1, pointerEvents: disabled ? "none" : "auto" }}>
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
         <h4 style={{ margin: 0, flex: 1, textTransform: "capitalize" }}>{vendor}</h4>
-        {(phaseCost > 0 || runningTotal > 0) && (
-          <div style={{ fontSize: "11px", color: "var(--secondary-text-color)", textAlign: "right" }}>
-            <div>${phaseCost.toFixed(4)}</div>
-            <div style={{ fontSize: "10px", opacity: 0.8 }}>Total: ${runningTotal.toFixed(4)}</div>
-          </div>
-        )}
         {isDone && (
           <button onClick={() => setCollapsed(!collapsed)} style={{ fontSize: 12, padding: "4px 8px" }}>
             {collapsed ? "Expand" : "Collapse"}
           </button>
         )}
       </div>
+      
+      {/* Cost and Translation bar */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
+        {(phaseCost > 0 || runningTotal > 0) && (
+          <div style={{ fontSize: "11px", color: "var(--secondary-text-color)", whiteSpace: "nowrap" }}>
+            ${phaseCost.toFixed(4)} <span style={{ fontSize: "10px", opacity: 0.8 }}>(Total: ${runningTotal.toFixed(4)})</span>
+          </div>
+        )}
+        <LanguageSelector
+          languages={translation.languages}
+          viewLanguage={translation.viewLanguage}
+          onLanguageChange={handleLanguageChange}
+          hasTranslation={hasAnyTranslation}
+          disabled={isLoading}
+          isTranslating={translation.isAnyTranslating}
+          size="small"
+        />
+      </div>
+      {/* Translation errors */}
+      {Object.keys(translation.translationErrors).length > 0 && (
+        <div style={{ color: "var(--error-text)", fontSize: "12px", marginBottom: 8 }}>
+          {Object.values(translation.translationErrors)[0]}
+        </div>
+      )}
 
       {isLoadingWithoutData && (
         <div style={{ padding: 6, color: "#6b7280", fontSize: 12 }}>
@@ -906,6 +996,7 @@ function VendorCard({
             findNextUnseenFeedback: (currentKey, approvals, overrides, feedbackData) => 
               findNextUnseenFeedback(currentKey, approvals, overrides, feedbackData, feedbackKeys),
             handleSaveFeedbackOverride,
+            translation,
           })
         )}
       </div>

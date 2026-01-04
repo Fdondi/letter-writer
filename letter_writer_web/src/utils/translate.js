@@ -13,8 +13,16 @@ export async function translateText(text, targetLanguage = "de", sourceLanguage 
   });
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || "Translation request failed");
+    // Try to parse JSON error response (backend returns {"detail": "..."})
+    const text = await response.text();
+    let errorMessage = "Translation request failed";
+    try {
+      const json = JSON.parse(text);
+      errorMessage = json.detail || json.message || text || errorMessage;
+    } catch {
+      errorMessage = text || errorMessage;
+    }
+    throw new Error(errorMessage);
   }
 
   const payload = await response.json();

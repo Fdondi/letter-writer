@@ -1,3 +1,4 @@
+import html
 import json
 import os
 from pathlib import Path
@@ -109,7 +110,8 @@ def _translate_with_google(texts: List[str], target_language: str, source_langua
         raise RuntimeError(f"Failed to reach Google Translate API: {exc}") from exc
 
     translations = response_data.get("data", {}).get("translations", [])
-    return [item.get("translatedText", "") for item in translations]
+    # Decode HTML entities (e.g., &#39; -> ', &quot; -> ", etc.)
+    return [html.unescape(item.get("translatedText", "")) for item in translations]
 
 
 # No additional business logic here; shared service functions are imported instead.

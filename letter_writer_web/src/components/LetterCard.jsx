@@ -1,14 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { translateText } from "../utils/translate";
+import LanguageSelector from "./LanguageSelector";
+import { useLanguages } from "../contexts/LanguageContext";
 
-const LANGUAGE_BUTTONS = [
-  { code: "de", label: "DE", color: "#3b82f6" },
-  { code: "en", label: "EN", color: "#6366f1" },
-  { code: "it", label: "IT", color: "#f97316" },
-  { code: "fr", label: "FR", color: "#8b5cf6" },
-];
-
-export default function LetterCard({ title, text, loading = false, error = null, onRetry, onCollapse, editable = false, onChange, width, languages = [] }) {
+export default function LetterCard({ title, text, loading = false, error = null, onRetry, onCollapse, editable = false, onChange, width, languages = null }) {
   const [viewLanguage, setViewLanguage] = useState("source"); // "source" or target code
   const [translations, setTranslations] = useState({});
   const [isTranslating, setIsTranslating] = useState(false);
@@ -31,7 +26,14 @@ export default function LetterCard({ title, text, loading = false, error = null,
     return text;
   }, [viewLanguage, translations, text]);
 
-  const buttonLanguages = languages.length ? languages : LANGUAGE_BUTTONS;
+  // Use language context if available, otherwise use provided languages
+  let languageContext;
+  try {
+    languageContext = useLanguages();
+  } catch (e) {
+    languageContext = null;
+  }
+  const buttonLanguages = languages || languageContext?.enabledLanguages || [];
 
   const requestTranslation = async (targetLanguage) => {
     if (isTranslating) return;
@@ -80,51 +82,21 @@ export default function LetterCard({ title, text, loading = false, error = null,
       }}>
         <strong>{title}</strong>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <button
-            onClick={() => setViewLanguage("source")}
-            disabled={loading || !!error || isTranslating}
-            style={{
-              padding: "4px 8px",
-              fontSize: "12px",
-              background: viewLanguage === "source" ? "#10b981" : "var(--button-bg)",
-              color: viewLanguage === "source" ? "white" : "var(--button-text)",
-              border: "2px solid #10b981",
-              borderRadius: 4,
-              cursor: loading || !!error ? "not-allowed" : "pointer",
-              opacity: isTranslating ? 0.7 : 1,
+          <LanguageSelector
+            languages={buttonLanguages}
+            viewLanguage={viewLanguage}
+            onLanguageChange={(code) => {
+              if (code === "source") {
+                setViewLanguage("source");
+              } else {
+                requestTranslation(code);
+              }
             }}
-            title="Show original text (no API call)"
-          >
-            OR
-          </button>
-          {buttonLanguages.map(({ code, label, color }) => {
-            const isActive = viewLanguage === code;
-            const isCached = Boolean(translations[code]);
-            const baseOpacity = isCached ? 1 : 0.6;
-            const bg = color || "#3b82f6";
-            const lbl = label || code.toUpperCase();
-            return (
-              <button
-                key={code}
-                onClick={() => requestTranslation(code)}
-                disabled={loading || !!error || isTranslating}
-                style={{
-                  padding: "4px 8px",
-                  fontSize: "12px",
-                  background: isActive ? "#10b981" : bg,
-                  color: "white",
-                  border: isActive ? "2px solid #10b981" : (isCached ? "2px solid #10b981" : "2px solid transparent"),
-                  borderRadius: 4,
-                  cursor: loading || !!error ? "not-allowed" : "pointer",
-                  opacity: isActive ? 1 : baseOpacity,
-                  boxShadow: isActive ? "0 0 0 2px rgba(16,185,129,0.35)" : "none",
-                }}
-                title={`Translate to ${lbl}`}
-              >
-                {isTranslating && isActive ? "Translating..." : lbl}
-              </button>
-            );
-          })}
+            hasTranslation={(code) => Boolean(translations[code])}
+            disabled={loading || !!error}
+            isTranslating={isTranslating}
+            size="small"
+          />
           {onCollapse && (
             <button
               onClick={onCollapse}

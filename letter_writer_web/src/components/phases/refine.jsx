@@ -142,6 +142,7 @@ export function renderContent({
   setFeedbackApprovals,
   findNextUnseenFeedback,
   handleSaveFeedbackOverride,
+  translation,
 }) {
   return (
     <>
@@ -159,6 +160,8 @@ export function renderContent({
         placeholder="Draft letter"
         onSave={(val) => handleEditChange("draft_letter", val)}
         disabled={isLoading}
+        fieldId="draft_letter"
+        translation={translation}
       />
       {feedbackKeys.length > 0 && (
         <div style={{ marginTop: 8 }}>
@@ -260,6 +263,8 @@ export function renderContent({
                 feedbackOverrides[activeFeedbackKey] !== undefined &&
                 feedbackOverrides[activeFeedbackKey] !== feedback[activeFeedbackKey]
               }
+              fieldId={`feedback_${activeFeedbackKey}`}
+              translation={translation}
             />
           )}
         </div>
