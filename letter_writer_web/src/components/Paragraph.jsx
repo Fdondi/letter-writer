@@ -4,13 +4,8 @@ import { HoverContext } from "../contexts/HoverContext";
 import { v4 as uuidv4 } from "uuid";
 import { translateText } from "../utils/translate";
 import { ItemTypes } from "../constants";
-
-const LANGUAGE_BUTTONS = [
-  { code: "de", label: "DE", color: "#3b82f6" },
-  { code: "en", label: "EN", color: "#6366f1" },
-  { code: "it", label: "IT", color: "#f97316" },
-  { code: "fr", label: "FR", color: "#8b5cf6" },
-];
+import LanguageSelector from "./LanguageSelector";
+import { useLanguages } from "../contexts/LanguageContext";
 
 function splitTextIntoFragments(text, originalParagraph) {
   if (!text) return [];
@@ -199,62 +194,36 @@ export default function Paragraph({
     }
   };
 
-  const buttonLanguages = languages.length ? languages : LANGUAGE_BUTTONS;
+  // Use language context if available, otherwise use provided languages
+  let languageContext;
+  try {
+    languageContext = useLanguages();
+  } catch (e) {
+    languageContext = null;
+  }
+  const buttonLanguages = languages.length ? languages : (languageContext?.enabledLanguages || []);
 
   const TranslationBar = (
-    <div style={{ display: "flex", justifyContent: "flex-start", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+    <div 
+      onClick={(e) => e.stopPropagation()}
+      style={{ display: "flex", justifyContent: "flex-start", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}
+    >
       {isTranslating && <span style={{ fontSize: "10px", color: "var(--secondary-text-color)" }}>Translating…</span>}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setViewLanguage("source");
+      <LanguageSelector
+        languages={buttonLanguages}
+        viewLanguage={viewLanguage}
+        onLanguageChange={(code) => {
+          if (code === "source") {
+            setViewLanguage("source");
+          } else {
+            requestTranslation(code);
+          }
         }}
-        disabled={isTranslating}
-        style={{
-          padding: "2px 8px",
-          fontSize: "11px",
-          background: viewLanguage === "source" ? "#10b981" : "var(--button-bg)",
-          color: viewLanguage === "source" ? "white" : "var(--button-text)",
-          border: "2px solid #10b981",
-          borderRadius: 4,
-          cursor: isTranslating ? "not-allowed" : "pointer",
-          opacity: isTranslating ? 0.7 : 1,
-        }}
-        title="Show original text"
-      >
-        OR
-      </button>
-      {buttonLanguages.map(({ code, label, color }) => {
-        const isActive = viewLanguage === code;
-        const isCached = Boolean(translations[code]);
-        const baseOpacity = isCached ? 1 : 0.6;
-        const bg = color || "#3b82f6";
-        const lbl = label || code.toUpperCase();
-        return (
-          <button
-            key={code}
-            onClick={(e) => {
-              e.stopPropagation();
-              requestTranslation(code);
-            }}
-            disabled={isTranslating}
-            style={{
-              padding: "2px 8px",
-              fontSize: "11px",
-              background: isActive ? "#10b981" : bg,
-              color: "white",
-              border: isActive ? "2px solid #10b981" : (isCached ? "2px solid #10b981" : "2px solid transparent"),
-              borderRadius: 4,
-              cursor: isTranslating ? "not-allowed" : "pointer",
-              opacity: isActive ? 1 : baseOpacity,
-              boxShadow: isActive ? "0 0 0 2px rgba(16,185,129,0.35)" : "none",
-            }}
-            title={`Translate to ${lbl}`}
-          >
-            {isTranslating && isActive ? "…" : lbl}
-          </button>
-        );
-      })}
+        hasTranslation={(code) => Boolean(translations[code])}
+        disabled={false}
+        isTranslating={isTranslating}
+        size="small"
+      />
     </div>
   );
 

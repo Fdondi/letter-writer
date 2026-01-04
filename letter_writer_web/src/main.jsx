@@ -4,6 +4,7 @@ import App from "./App";
 import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { setupApiNotifications } from "./utils/apiNotifications";
+import { LanguageProvider } from "./contexts/LanguageContext";
 
 // Install global fetch wrapper for API completion notifications.
 setupApiNotifications();
@@ -14,6 +15,8 @@ setupApiNotifications();
 const rootEl = document.getElementById("root");
 createRoot(rootEl).render(
   <DndProvider backend={HTML5Backend}>
-    <App />
+    <LanguageProvider>
+      <App />
+    </LanguageProvider>
   </DndProvider>
 ); 

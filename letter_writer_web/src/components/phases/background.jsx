@@ -66,7 +66,7 @@ export function renderAdditionalButtons({ isDone, cardPhase, collapsed, onRerunF
 /**
  * Renders the content for background phase
  */
-export function renderContent({ EditableField, cardPhaseEdits, cardPhaseData, handleEditChange, isLoading }) {
+export function renderContent({ EditableField, cardPhaseEdits, cardPhaseData, handleEditChange, isLoading, translation }) {
   return (
     <>
       <div style={{ fontSize: 13, color: "#374151" }}>
@@ -79,6 +79,8 @@ export function renderContent({ EditableField, cardPhaseEdits, cardPhaseData, ha
         placeholder="Company research"
         onSave={(val) => handleEditChange("company_report", val)}
         disabled={isLoading}
+        fieldId="company_report"
+        translation={translation}
       />
     </>
   );
