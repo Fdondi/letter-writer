@@ -12,8 +12,6 @@ from typing import List, Optional
 import zlib
 
 from openai import OpenAI
-from qdrant_client.http import models as qdrant_models
-from qdrant_client.models import ScoredPoint
 
 from .client import ModelVendor, get_client
 from .config import env_default
@@ -32,12 +30,10 @@ from .generation import (
 )
 from .retrieval import retrieve_similar_job_offers, select_top_documents
 from .vector_store import (
-    ensure_collection,
     embed,
-    get_qdrant_client,
     upsert_documents,
-    collection_exists,
 )
+from .firestore_store import get_collection
 
 __all__ = [
     "refresh_repository",
@@ -54,22 +50,19 @@ def refresh_repository(
     letters_ignore_after: Optional[str] = env_default("LETTERS_IGNORE_AFTER", None),
     negative_letters_source_folder: Path = Path(env_default("NEGATIVE_LETTERS_SOURCE_FOLDER", "examples")),
     negative_letters_source_suffix: str = env_default("NEGATIVE_LETTERS_SOURCE_SUFFIX", ".txt"),
-    qdrant_host: str = env_default("QDRANT_HOST", "localhost"),
-    qdrant_port: int = int(env_default("QDRANT_PORT", "6333")),
     clear: bool = False,
     logger=print,
 ):
-    """Populate or refresh the Qdrant collection used for retrieval-augmented generation."""
-
-    from .config import COLLECTION_NAME
+    """Populate or refresh the Firestore collection used for retrieval-augmented generation."""
 
     openai_client = OpenAI()
-    client = get_qdrant_client(qdrant_host, qdrant_port)
+    collection = get_collection()
 
     if clear:
-        logger(f"[INFO] Resetting collection: {COLLECTION_NAME}")
-        client.delete_collection(collection_name=COLLECTION_NAME)
-    ensure_collection(client)
+        # Note: Firestore doesn't have a simple "delete collection" operation
+        # For now, just log a warning - documents will be overwritten on upsert
+        logger(f"[WARN] Clear flag is set, but Firestore doesn't support collection deletion.")
+        logger(f"[INFO] Documents will be overwritten if they already exist (same document ID).")
 
     logger(
         f"[INFO] Processing jobs from: {jobs_source_folder} with suffix: {jobs_source_suffix}"
@@ -84,7 +77,7 @@ def refresh_repository(
         f"[INFO] Processing negative letters from: {negative_letters_source_folder} with suffix: {negative_letters_source_suffix}"
     )
 
-    points: List[qdrant_models.PointStruct] = []
+    documents: List[dict] = []
     n_with_negative_letters = 0
     n_negative_letters = 0
     skipped = []
@@ -154,27 +147,25 @@ def refresh_repository(
             logger(f"[INFO] Processing {company_name} (without negative letter)")
 
         vector = embed(job_text, openai_client)
-        payload = {
+        
+        # Create document for Firestore (store everything together, including vector)
+        doc_id = str(zlib.adler32(company_name.encode()))
+        doc_data = {
+            "id": doc_id,
             "job_text": job_text,
             "letter_text": letter_text,
             "company_name": company_name,
-            "path": str(path),
+            "vector": vector,  # Firestore stores vector with document
         }
         if negative_letter_text is not None:
-            payload["negative_letter_text"] = negative_letter_text
+            doc_data["negative_letter_text"] = negative_letter_text
 
-        points.append(
-            qdrant_models.PointStruct(
-                id=zlib.adler32(company_name.encode()),
-                vector=vector,
-                payload=payload,
-            )
-        )
+        documents.append(doc_data)
 
-    if points:
-        upsert_documents(client, points)
+    if documents:
+        upsert_documents(collection, documents)
         logger(
-            f"[INFO] Upserted {len(points)} documents to Qdrant. ({n_with_negative_letters} with negative letters, in total {n_negative_letters} negative letters). Skipped {len(skipped)} companies: {', '.join(skipped)}"
+            f"[INFO] Upserted {len(documents)} documents to Firestore. ({n_with_negative_letters} with negative letters, in total {n_negative_letters} negative letters). Skipped {len(skipped)} companies: {', '.join(skipped)}"
         )
     else:
         logger("[WARN] No documents found to upsert.")
@@ -191,7 +182,7 @@ def _process_single_vendor(
     company_name: str,
     out: Optional[Path],
     model_vendor: ModelVendor,
-    search_result: List[ScoredPoint],
+    search_result: List[dict],  # Changed from List[ScoredPoint] to List[dict]
     refine: bool,
     fancy: bool,
     logger=print,
@@ -309,8 +300,6 @@ def write_cover_letter(
     company_name: Optional[str] = None,
     out: Optional[Path] = None,
     model_vendor: Optional[ModelVendor] = None,
-    qdrant_host: str = env_default("QDRANT_HOST", "localhost"),
-    qdrant_port: int = int(env_default("QDRANT_PORT", "6333")),
     refine: bool = True,
     fancy: bool = False,
     logger=print,
@@ -340,9 +329,7 @@ def write_cover_letter(
         Mapping ``vendor_name -> {"text": letter_text, "cost": cost_float}``.
     """
 
-    qdrant_client = get_qdrant_client(qdrant_host, qdrant_port)
-    if not collection_exists(qdrant_client):
-        raise RuntimeError("Qdrant collection not found. Run 'refresh' first.")
+    collection = get_collection()
     # Ensure we have job_text and cv_text
     if job_text is None:
         if path is None:
@@ -363,7 +350,7 @@ def write_cover_letter(
             raise ValueError("Either company_name or path must be provided")
 
     openai_client = OpenAI()
-    search_result = retrieve_similar_job_offers(job_text, qdrant_client, openai_client)
+    search_result = retrieve_similar_job_offers(job_text, collection, openai_client)
 
     letters: dict[str, dict] = {}
 

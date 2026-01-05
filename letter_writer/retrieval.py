@@ -1,21 +1,17 @@
 import json
 from typing import List, Dict
 from pathlib import Path
-from qdrant_client import QdrantClient
-from qdrant_client.models import ScoredPoint
 from openai import OpenAI
 import typer
 
 from .clients.base import BaseClient, ModelSize
 
-from .config import COLLECTION_NAME
-from .vector_store import embed
+from .vector_store import embed, query_vector_similarity
+from .firestore_store import get_collection
 
 import pandas as pd
 
 from pydantic import BaseModel, ValidationError
-
-from .mongo_store import documents_by_ids, get_db
 
 class ScoreRow(BaseModel):
     company_name: str
@@ -25,55 +21,49 @@ class ScoreRow(BaseModel):
 class ScoreTable(BaseModel):
     scores: List[ScoreRow]
 
-def retrieve_similar_job_offers(job_text: str, qdrant_client: QdrantClient, openai_client: OpenAI) -> List[ScoredPoint]:
-    """Retrieve and rerank similar job offers based on the input job text."""
+def retrieve_similar_job_offers(job_text: str, collection, openai_client: OpenAI) -> List[dict]:
+    """Retrieve similar job offers based on the input job text using Firestore vector search.
+    
+    Args:
+        job_text: Job description text to search for
+        collection: Firestore collection reference
+        openai_client: OpenAI client for generating embeddings
+        
+    Returns:
+        List of document dicts (Firestore returns full documents directly)
+    """
     vector = embed(job_text, openai_client)
-    # qdrant-client 1.16 uses query_points (search/search_points are not available here)
-    response = qdrant_client.query_points(
-        collection_name=COLLECTION_NAME,
-        query=vector,
-        limit=7,
-        with_payload=True,
-    )
-    return list(response.points or [])
-
-def _hydrate_documents(search_result: List[ScoredPoint]) -> List[dict]:
-    """Fetch documents from Mongo if payload only contains ids. Fallback to legacy payloads."""
-    mongo_docs: List[dict] = []
-    legacy_docs: List[dict] = []
-
-    doc_ids = []
-    for point in search_result:
-        payload = point.payload or {}
-        if payload.get("document_id"):
-            doc_ids.append(str(payload["document_id"]))
-        elif payload.get("company_name") and payload.get("letter_text"):
-            # Legacy payload already contains needed fields
-            legacy_docs.append(payload)
-
-    if doc_ids:
-        db = get_db()
-        mongo_docs = documents_by_ids(db, doc_ids)
-
-    return legacy_docs + mongo_docs
+    # Firestore vector search returns full documents directly
+    results = query_vector_similarity(collection, vector, limit=7)
+    return results
 
 
 def select_top_documents(
-    search_result: List[ScoredPoint],
+    search_result: List[dict],
     job_text: str,
     ai_client: BaseClient,
     trace_dir: Path,
 ) -> List[dict]:
-    documents = _hydrate_documents(search_result)
-    if not documents:
+    """Select top documents from search results and rerank them.
+    
+    Args:
+        search_result: List of document dicts from Firestore (already full documents)
+        job_text: Job description text
+        ai_client: AI client for reranking
+        trace_dir: Directory for tracing
+        
+    Returns:
+        List of top documents with scores
+    """
+    if not search_result:
         return []
 
     retrieved_docs: Dict[str, dict] = {}
-    for doc in documents:
-        company = doc.get("company_name")
+    for doc in search_result:
+        # Firestore returns full documents, use company_name_original if available, fallback to company_name
+        company = doc.get("company_name_original") or doc.get("company_name")
         if company:
             # Normalize company name by stripping whitespace to match AI output
-            # Store both the normalized key and original value for debugging
             normalized_company = company.strip()
             if normalized_company != company:
                 # Log normalization if there was a mismatch

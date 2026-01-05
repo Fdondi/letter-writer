@@ -21,23 +21,19 @@ from letter_writer.phased_service import (
     start_extraction_phase,
     resume_background_phase,
 )
-from letter_writer.mongo_store import (
+from letter_writer.firestore_store import (
     append_negatives,
-    get_db,
+    get_collection,
     get_document,
     list_documents,
     upsert_document,
 )
 from letter_writer.vector_store import (
-    collection_exists,
     delete_documents,
     embed,
-    ensure_collection,
-    get_qdrant_client,
     upsert_documents,
 )
 from letter_writer.config import env_default
-from qdrant_client.http import models as qdrant_models
 from openai import OpenAI
 import traceback
 
@@ -176,7 +172,7 @@ def process_job_view(request: HttpRequest):
 
     # Persist generation: store job_text and AI letters; keep first letter as primary.
     try:
-        db = get_db()
+        collection = get_collection()
         job_text = data.get("job_text")
         company_name = data.get("company_name")
         ai_letters = [
@@ -184,31 +180,22 @@ def process_job_view(request: HttpRequest):
             for vendor, payload in letters.items()
         ]
         primary_letter = next((l["text"] for l in ai_letters if l.get("text")), "")
+        
+        # Generate vector embedding
+        openai_client = OpenAI()
+        vector = embed(job_text, openai_client) if job_text else None
+        
         document = upsert_document(
-            db,
+            collection,
             {
                 "company_name": company_name,
                 "job_text": job_text,
                 "ai_letters": ai_letters,
                 "letter_text": primary_letter,
+                "vector": vector,  # Firestore stores vector with document
             },
             allow_update=False,
         )
-
-        # Upsert job embedding to Qdrant
-        qdrant_host = env_default("QDRANT_HOST", "localhost")
-        qdrant_port = int(env_default("QDRANT_PORT", "6333"))
-        qdrant_client = get_qdrant_client(qdrant_host, qdrant_port)
-        ensure_collection(qdrant_client)
-        openai_client = OpenAI()
-        vector = embed(job_text, openai_client) if job_text else None
-        if vector:
-            point = qdrant_models.PointStruct(
-                id=document["id"],
-                vector=vector,
-                payload={"document_id": document["id"], "company_name": company_name},
-            )
-            upsert_documents(qdrant_client, [point])
     except Exception as exc:  # noqa: BLE001
         return JsonResponse({"detail": f"letters generated but failed to save: {exc}"}, status=500)
 
@@ -627,12 +614,12 @@ def _require_json_body(request: HttpRequest) -> Dict[str, Any] | None:
 
 @csrf_exempt
 def documents_view(request: HttpRequest):
-    db = get_db()
+    collection = get_collection()
 
     if request.method == "GET":
         params = request.GET
         docs = list_documents(
-            db,
+            collection,
             company_name=params.get("company_name"),
             role=params.get("role"),
             status=params.get("status"),
@@ -656,31 +643,21 @@ def documents_view(request: HttpRequest):
     if not company_name or not job_text:
         return _json_error("company_name and job_text are required")
 
-    # Persist document
-    document = upsert_document(db, data, allow_update=False)
-
-    # Upsert to Qdrant using document id and minimal payload
-    qdrant_host = env_default("QDRANT_HOST", "localhost")
-    qdrant_port = int(env_default("QDRANT_PORT", "6333"))
-    qdrant_client = get_qdrant_client(qdrant_host, qdrant_port)
-    ensure_collection(qdrant_client)
-
+    # Generate vector embedding
     openai_client = OpenAI()
     vector = embed(job_text, openai_client)
-    point = qdrant_models.PointStruct(
-        id=document["id"],
-        vector=vector,
-        payload={"document_id": document["id"], "company_name": company_name},
-    )
-    upsert_documents(qdrant_client, [point])
+    
+    # Persist document with vector (Firestore stores everything together)
+    data["vector"] = vector
+    document = upsert_document(collection, data, allow_update=False)
 
     return JsonResponse({"document": document}, status=201)
 
 
 @csrf_exempt
 def document_detail_view(request: HttpRequest, document_id: str):
-    db = get_db()
-    existing = get_document(db, document_id)
+    collection = get_collection()
+    existing = get_document(collection, document_id)
     if request.method == "GET":
         if not existing:
             return _json_error("Not found", status=404)
@@ -689,16 +666,8 @@ def document_detail_view(request: HttpRequest, document_id: str):
     if request.method == "DELETE":
         if existing is None:
             return _json_error("Not found", status=404)
-        db.documents.delete_one({"_id": document_id})
-        # Best-effort delete from Qdrant
-        try:
-            qdrant_host = env_default("QDRANT_HOST", "localhost")
-            qdrant_port = int(env_default("QDRANT_PORT", "6333"))
-            qdrant_client = get_qdrant_client(qdrant_host, qdrant_port)
-            if collection_exists(qdrant_client):
-                delete_documents(qdrant_client, [document_id])
-        except Exception:
-            traceback.print_exc()
+        # Firestore: delete document (vector is stored with document, so deleted together)
+        delete_documents(collection, [document_id])
         return JsonResponse({"status": "deleted"})
 
     if request.method != "PUT":
@@ -712,7 +681,7 @@ def document_detail_view(request: HttpRequest, document_id: str):
         return _json_error("Not found", status=404)
 
     data["id"] = document_id
-    updated = upsert_document(db, data, allow_update=True)
+    updated = upsert_document(collection, data, allow_update=True)
     return JsonResponse({"document": updated})
 
 
@@ -726,8 +695,8 @@ def document_negatives_view(request: HttpRequest, document_id: str):
         return _json_error("Invalid JSON")
     negatives = data.get("negatives") or []
 
-    db = get_db()
-    updated = append_negatives(db, document_id, negatives)
+    collection = get_collection()
+    updated = append_negatives(collection, document_id, negatives)
     if updated is None:
         return _json_error("Not found", status=404)
     return JsonResponse({"document": updated})
@@ -739,26 +708,20 @@ def document_reembed_view(request: HttpRequest, document_id: str):
     if request.method != "POST":
         return _json_error("Method not allowed", status=405)
 
-    db = get_db()
-    doc = get_document(db, document_id)
+    collection = get_collection()
+    doc = get_document(collection, document_id)
     if not doc:
         return _json_error("Not found", status=404)
     if not doc.get("job_text"):
         return _json_error("Document is missing job_text", status=400)
 
-    qdrant_host = env_default("QDRANT_HOST", "localhost")
-    qdrant_port = int(env_default("QDRANT_PORT", "6333"))
-    qdrant_client = get_qdrant_client(qdrant_host, qdrant_port)
-    ensure_collection(qdrant_client)
-
     openai_client = OpenAI()
     vector = embed(doc["job_text"], openai_client)
-    point = qdrant_models.PointStruct(
-        id=document_id,
-        vector=vector,
-        payload={"document_id": document_id, "company_name": doc.get("company_name")},
-    )
-    upsert_documents(qdrant_client, [point])
+    
+    # Update document with new vector (Firestore stores vector with document)
+    doc_ref = collection.document(document_id)
+    doc_ref.update({"vector": vector})
+    
     return JsonResponse({"status": "ok"})
 
 

@@ -9,8 +9,6 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 
 from openai import OpenAI
-from qdrant_client import QdrantClient
-from qdrant_client.models import ScoredPoint
 
 from .client import get_client
 from .clients.base import ModelVendor, ModelSize
@@ -29,6 +27,7 @@ from .generation import (
 )
 from .retrieval import retrieve_similar_job_offers, select_top_documents
 from .session_store import get_session as get_session_from_store, save_session
+from .firestore_store import get_collection
 
 
 @dataclass
@@ -46,7 +45,7 @@ class SessionState:
     session_id: str
     job_text: str
     cv_text: str
-    search_result: List[ScoredPoint]
+    search_result: List[dict]  # Changed from List[ScoredPoint] to List[dict] for Firestore
     vendors: Dict[str, VendorPhaseState] = field(default_factory=dict)
     metadata: Dict[str, Dict[str, str]] = field(default_factory=dict)  # vendor -> extraction
     # vendors_list is deprecated - derive from vendors.keys() or metadata.keys() instead
@@ -58,7 +57,7 @@ class SessionState:
         return [ModelVendor(v) for v in vendor_names if v]
 
 
-# Keep SESSION_LOCK for thread safety, but sessions are now stored in MongoDB
+# Keep SESSION_LOCK for thread safety, but sessions are now stored in Firestore
 SESSION_LOCK = Lock()
 
 
@@ -147,13 +146,10 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
     
     # Get search results if not already cached (read-only, don't save)
     if not search_result:
-        # Qdrant connection is a server-side constant, read from environment
-        from .config import env_default
-        qdrant_host = env_default("QDRANT_HOST", "localhost")
-        qdrant_port = int(env_default("QDRANT_PORT", "6333"))
-        qdrant_client = QdrantClient(host=qdrant_host, port=qdrant_port)
+        # Firestore collection connection
+        collection = get_collection()
         openai_client = OpenAI()
-        search_result = retrieve_similar_job_offers(job_text, qdrant_client, openai_client)
+        search_result = retrieve_similar_job_offers(job_text, collection, openai_client)
         # Note: search_result is not saved here - it should be saved by the "start phases" API call
     
     # Process vendor-specific work

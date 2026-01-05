@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
 from typing import Dict, Optional, TYPE_CHECKING
 from threading import Lock
 
-from pymongo import MongoClient
-from qdrant_client.models import ScoredPoint
+from google.cloud import firestore
 
-from .mongo_store import get_db, get_mongo_client
+from .firestore_store import get_firestore_client
 from .clients.base import ModelVendor
 
 if TYPE_CHECKING:
@@ -30,47 +28,16 @@ SESSION_CREATE_LOCK = Lock()
 SESSION_TTL_DAYS = 30
 
 
-def _serialize_scored_point(point: ScoredPoint) -> dict:
-    """Serialize a ScoredPoint to a dict."""
-    # Try using Pydantic's model_dump if available (ScoredPoint is a Pydantic model)
-    if hasattr(point, 'model_dump'):
-        return point.model_dump()
-    
-    # Fallback to manual serialization
-    result = {
-        "id": str(point.id) if hasattr(point, 'id') and point.id is not None else None,
-        "score": float(point.score) if hasattr(point, 'score') and point.score is not None else None,
-        "payload": dict(point.payload) if hasattr(point, 'payload') and point.payload else {},
-        "vector": point.vector if hasattr(point, 'vector') else None,
-    }
-    # Include version if it exists (required by newer versions of qdrant_client)
-    if hasattr(point, 'version'):
-        result["version"] = point.version
-    return result
+def _get_sessions_collection():
+    """Get Firestore collection for sessions."""
+    client = get_firestore_client()
+    return client.collection("sessions")
 
 
-def _deserialize_scored_point(data: dict) -> ScoredPoint:
-    """Deserialize a dict to a ScoredPoint."""
-    # Try using Pydantic's model_validate if available
-    if hasattr(ScoredPoint, 'model_validate'):
-        return ScoredPoint.model_validate(data)
-    
-    # Fallback to manual deserialization
-    # Build kwargs dict, only including fields that are present
-    kwargs = {}
-    if "id" in data and data["id"] is not None:
-        kwargs["id"] = data["id"]
-    if "score" in data and data["score"] is not None:
-        kwargs["score"] = data["score"]
-    if "payload" in data:
-        kwargs["payload"] = data.get("payload", {})
-    if "vector" in data:
-        kwargs["vector"] = data.get("vector")
-    # Version is required by newer versions of qdrant_client
-    # Default to None if not present (for backward compatibility with old sessions)
-    kwargs["version"] = data.get("version", None)
-    
-    return ScoredPoint(**kwargs)
+def _get_session_vendors_collection():
+    """Get Firestore collection for session vendors."""
+    client = get_firestore_client()
+    return client.collection("session_vendors")
 
 
 def _serialize_vendor_state(state) -> dict:
@@ -101,124 +68,70 @@ def _deserialize_vendor_state(data: dict):
 
 
 def _serialize_session(session) -> dict:
-    """Serialize SessionState to a dict for MongoDB storage.
+    """Serialize SessionState to a dict for Firestore storage.
     
     Note: vendor data is NOT stored here - it's stored in the session_vendors
     collection for lock-free parallel processing. Use save_vendor_data() to save vendor state.
     """
+    # search_result is now List[dict], no need for ScoredPoint serialization
     return {
         "session_id": session.session_id,
         "job_text": session.job_text,
         "cv_text": session.cv_text,
-        "search_result": [_serialize_scored_point(p) for p in session.search_result],
+        "search_result": session.search_result,  # Already List[dict]
         # vendors NOT stored here - stored in session_vendors collection
         "metadata": session.metadata,
         "vendors_list": [v.value for v in session.vendors_list],
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": firestore.SERVER_TIMESTAMP,
+        "updated_at": firestore.SERVER_TIMESTAMP,
+        # TTL field for automatic expiration
+        "expire_at": datetime.utcnow() + timedelta(days=SESSION_TTL_DAYS),
     }
 
 
 def _deserialize_session(data: dict):
-    """Deserialize a dict from MongoDB to SessionState.
+    """Deserialize a dict from Firestore to SessionState.
     
     Note: vendor data is loaded separately from session_vendors collection in load_session().
-    This still handles old sessions that might have vendors in the sessions collection for backward compatibility.
     """
     # Import here to avoid circular dependency
-    from .phased_service import SessionState, VendorPhaseState
+    from .phased_service import SessionState
     
-    # For backward compatibility, still deserialize vendors if they exist in old sessions
-    # but new sessions won't have them (they're in session_vendors collection)
-    vendors_dict = {}
-    if "vendors" in data and data["vendors"]:
-        vendors_dict = {k: _deserialize_vendor_state(v) for k, v in data["vendors"].items()}
-    
+    # search_result is already List[dict] (no ScoredPoint deserialization needed)
     return SessionState(
         session_id=data["session_id"],
         job_text=data["job_text"],
         cv_text=data["cv_text"],
-        search_result=[_deserialize_scored_point(p) for p in data.get("search_result", [])],
-        vendors=vendors_dict,  # Will be overwritten by session_vendors data in load_session()
+        search_result=data.get("search_result", []),  # Already List[dict]
+        vendors={},  # Will be overwritten by session_vendors data in load_session()
         metadata=data.get("metadata", {}),
         vendors_list=[ModelVendor(v) for v in data.get("vendors_list", [])],
     )
 
 
-def ensure_session_indexes(db) -> None:
-    """Ensure MongoDB indexes exist for sessions and session_vendors collections, including TTL index."""
-    # Create TTL index on updated_at field (expires after SESSION_TTL_DAYS)
-    # MongoDB TTL indexes delete documents where the date field is older than expireAfterSeconds
-    ttl_seconds = SESSION_TTL_DAYS * 24 * 60 * 60  # Convert days to seconds
-    try:
-        db.sessions.create_index(
-            [("updated_at", 1)],
-            expireAfterSeconds=ttl_seconds,
-            name="updated_at_ttl",
-        )
-    except Exception:
-        # Index might already exist, try to recreate with new TTL
-        try:
-            db.sessions.drop_index("updated_at_ttl")
-            db.sessions.create_index(
-                [("updated_at", 1)],
-                expireAfterSeconds=ttl_seconds,
-                name="updated_at_ttl",
-            )
-        except Exception:
-            pass  # Ignore if it fails
-    
-    # Create index on session_id for fast lookups
-    try:
-        db.sessions.create_index("session_id", unique=True)
-    except Exception:
-        pass  # Index might already exist
-    
-    # Create indexes for session_vendors collection (vendor-specific data)
-    try:
-        # Compound index on (session_id, vendor) for fast lookups
-        db.session_vendors.create_index(
-            [("session_id", 1), ("vendor", 1)],
-            unique=True,
-            name="session_vendor_unique",
-        )
-        # TTL index for vendor data
-        db.session_vendors.create_index(
-            [("updated_at", 1)],
-            expireAfterSeconds=ttl_seconds,
-            name="updated_at_ttl",
-        )
-        # Index on session_id for finding all vendors for a session
-        db.session_vendors.create_index("session_id")
-    except Exception:
-        pass  # Indexes might already exist
-
-
-def save_session(session, db=None) -> None:
-    """Save a session to MongoDB and update the in-memory cache."""
-    if db is None:
-        db = get_db()
-    
-    ensure_session_indexes(db)
+def save_session(session, collection=None) -> None:
+    """Save a session to Firestore and update the in-memory cache."""
+    if collection is None:
+        collection = _get_sessions_collection()
     
     doc = _serialize_session(session)
     now = datetime.utcnow()
     doc["updated_at"] = now
+    doc["expire_at"] = now + timedelta(days=SESSION_TTL_DAYS)
     
-    # Upsert to MongoDB - set created_at only on insert, not on update
-    existing = db.sessions.find_one({"session_id": session.session_id})
-    if existing is None:
-        doc["created_at"] = now
-    else:
+    # Get existing document to preserve created_at
+    doc_ref = collection.document(session.session_id)
+    existing_doc = doc_ref.get()
+    
+    if existing_doc.exists:
+        existing_data = existing_doc.to_dict()
         # Preserve existing created_at
-        doc["created_at"] = existing.get("created_at", now)
+        doc["created_at"] = existing_data.get("created_at", now)
+    else:
+        doc["created_at"] = now
     
-    # Upsert to MongoDB
-    db.sessions.update_one(
-        {"session_id": session.session_id},
-        {"$set": doc},
-        upsert=True,
-    )
+    # Upsert to Firestore
+    doc_ref.set(doc, merge=True)
     
     # Update in-memory cache
     with CACHE_LOCK:
@@ -226,158 +139,166 @@ def save_session(session, db=None) -> None:
 
 
 def save_session_common_data(session_id: str, job_text: str, cv_text: str,
-                             metadata: dict, search_result: list = None, db=None) -> None:
+                             metadata: dict, search_result: list = None, collection=None) -> None:
     """Save or update common session data. Called by extraction phase or start phased flow.
     
     This is the ONLY place that writes common session data. Uses lock for session creation.
     """
-    if db is None:
-        db = get_db()
-    
-    ensure_session_indexes(db)
+    if collection is None:
+        collection = _get_sessions_collection()
     
     now = datetime.utcnow()
     
     # Use lock only for session creation to prevent duplicate sessions
     with SESSION_CREATE_LOCK:
-        existing = db.sessions.find_one({"session_id": session_id})
+        doc_ref = collection.document(session_id)
+        existing_doc = doc_ref.get()
         
-        if existing is None:
+        if not existing_doc.exists:
             # Create new session
-            db.sessions.insert_one({
+            doc_ref.set({
                 "session_id": session_id,
                 "job_text": job_text,
                 "cv_text": cv_text,
-                "search_result": [_serialize_scored_point(p) for p in (search_result or [])],
+                "search_result": search_result or [],  # Already List[dict]
                 "metadata": metadata,
                 "created_at": now,
                 "updated_at": now,
+                "expire_at": now + timedelta(days=SESSION_TTL_DAYS),
             })
         else:
             # Update existing session - merge metadata, update other fields
-            update_op = {
-                "$set": {
-                    "job_text": job_text,
-                    "cv_text": cv_text,
-                    "updated_at": now,
-                },
+            existing_data = existing_doc.to_dict()
+            update_data = {
+                "job_text": job_text,
+                "cv_text": cv_text,
+                "updated_at": now,
+                "expire_at": now + timedelta(days=SESSION_TTL_DAYS),
             }
-            # Merge metadata (don't overwrite existing)
-            for vendor_name, extraction_data in metadata.items():
-                update_op["$set"][f"metadata.{vendor_name}"] = extraction_data
+            
+            # Merge metadata (don't overwrite existing, merge at field level)
+            merged_metadata = existing_data.get("metadata", {}).copy()
+            merged_metadata.update(metadata)
+            update_data["metadata"] = merged_metadata
             
             # Update search_result if provided
             if search_result is not None:
-                update_op["$set"]["search_result"] = [_serialize_scored_point(p) for p in search_result]
+                update_data["search_result"] = search_result
             
-            db.sessions.update_one(
-                {"session_id": session_id},
-                update_op,
-            )
+            doc_ref.update(update_data)
 
 
-def load_session_common_data(session_id: str, db=None):
+def load_session_common_data(session_id: str, collection=None):
     """Load common session data (job_text, cv_text, metadata, search_result, etc.)."""
-    if db is None:
-        db = get_db()
+    if collection is None:
+        collection = _get_sessions_collection()
     
-    ensure_session_indexes(db)
+    doc_ref = collection.document(session_id)
+    doc = doc_ref.get()
     
-    doc = db.sessions.find_one({"session_id": session_id})
-    if doc is None:
+    if not doc.exists:
         return None
     
+    doc_dict = doc.to_dict()
+    
+    # Convert Firestore Timestamps to datetime if needed
+    created_at = doc_dict.get("created_at")
+    updated_at = doc_dict.get("updated_at")
+    if hasattr(created_at, 'isoformat'):
+        created_at = created_at
+    if hasattr(updated_at, 'isoformat'):
+        updated_at = updated_at
+    
     return {
-        "session_id": doc["session_id"],
-        "job_text": doc.get("job_text", ""),
-        "cv_text": doc.get("cv_text", ""),
-        "search_result": [_deserialize_scored_point(p) for p in doc.get("search_result", [])],
-        "metadata": doc.get("metadata", {}),
-        "created_at": doc.get("created_at"),
-        "updated_at": doc.get("updated_at"),
+        "session_id": doc_dict["session_id"],
+        "job_text": doc_dict.get("job_text", ""),
+        "cv_text": doc_dict.get("cv_text", ""),
+        "search_result": doc_dict.get("search_result", []),  # Already List[dict]
+        "metadata": doc_dict.get("metadata", {}),
+        "created_at": created_at,
+        "updated_at": updated_at,
     }
 
 
-def save_vendor_data(session_id: str, vendor: str, vendor_state, db=None) -> None:
+def save_vendor_data(session_id: str, vendor: str, vendor_state, collection=None) -> None:
     """Atomically save vendor-specific data to separate collection.
     
     Each vendor has their own document keyed by (session_id, vendor).
     This is completely lock-free - vendors can work in parallel.
     """
-    if db is None:
-        db = get_db()
-    
-    ensure_session_indexes(db)
+    if collection is None:
+        collection = _get_session_vendors_collection()
     
     # Import here to avoid circular dependency
     vendor_data = _serialize_vendor_state(vendor_state)
     
     now = datetime.utcnow()
     
+    # Create document ID: session_id + vendor (compound key)
+    doc_id = f"{session_id}_{vendor}"
+    doc_ref = collection.document(doc_id)
+    
     # Upsert vendor-specific data - completely independent from other vendors
-    db.session_vendors.update_one(
-        {
-            "session_id": session_id,
-            "vendor": vendor,
-        },
-        {
-            "$set": {
-                "session_id": session_id,
-                "vendor": vendor,
-                **vendor_data,  # Unpack vendor state data
-                "updated_at": now,
-            },
-            "$setOnInsert": {
-                "created_at": now,
-            },
-        },
-        upsert=True,
-    )
-
-
-def load_vendor_data(session_id: str, vendor: str, db=None):
-    """Load vendor-specific data."""
-    if db is None:
-        db = get_db()
-    
-    ensure_session_indexes(db)
-    
-    doc = db.session_vendors.find_one({
+    update_data = {
         "session_id": session_id,
         "vendor": vendor,
-    })
+        **vendor_data,  # Unpack vendor state data
+        "updated_at": now,
+        "expire_at": now + timedelta(days=SESSION_TTL_DAYS),
+    }
     
-    if doc is None:
+    # Check if document exists to preserve created_at
+    existing_doc = doc_ref.get()
+    if existing_doc.exists:
+        existing_data = existing_doc.to_dict()
+        update_data["created_at"] = existing_data.get("created_at", now)
+    else:
+        update_data["created_at"] = now
+    
+    doc_ref.set(update_data, merge=True)
+
+
+def load_vendor_data(session_id: str, vendor: str, collection=None):
+    """Load vendor-specific data."""
+    if collection is None:
+        collection = _get_session_vendors_collection()
+    
+    doc_id = f"{session_id}_{vendor}"
+    doc_ref = collection.document(doc_id)
+    doc = doc_ref.get()
+    
+    if not doc.exists:
         return None
     
-    return _deserialize_vendor_state(doc)
+    return _deserialize_vendor_state(doc.to_dict())
 
 
-def load_all_vendor_data(session_id: str, db=None):
+def load_all_vendor_data(session_id: str, collection=None):
     """Load all vendor data for a session."""
-    if db is None:
-        db = get_db()
+    if collection is None:
+        collection = _get_session_vendors_collection()
     
-    ensure_session_indexes(db)
+    # Query all vendor documents for this session
+    query = collection.where("session_id", "==", session_id).stream()
     
-    cursor = db.session_vendors.find({"session_id": session_id})
     result = {}
-    for doc in cursor:
-        vendor = doc["vendor"]
-        result[vendor] = _deserialize_vendor_state(doc)
+    for doc in query:
+        doc_dict = doc.to_dict()
+        vendor = doc_dict["vendor"]
+        result[vendor] = _deserialize_vendor_state(doc_dict)
     
     return result
 
 
-def load_session(session_id: str, db=None, force_reload: bool = False):
-    """Load a session from MongoDB if not in cache. Returns None if not found.
+def load_session(session_id: str, collection=None, force_reload: bool = False):
+    """Load a session from Firestore if not in cache. Returns None if not found.
     
     Also loads vendor data from the session_vendors collection.
     
     Args:
         session_id: The session ID to load
-        db: Optional database connection
-        force_reload: If True, bypass cache and reload from MongoDB
+        collection: Optional Firestore collection reference
+        force_reload: If True, bypass cache and reload from Firestore
     """
     # Check cache first (unless forcing reload)
     if not force_reload:
@@ -385,25 +306,26 @@ def load_session(session_id: str, db=None, force_reload: bool = False):
             if session_id in SESSION_CACHE:
                 return SESSION_CACHE[session_id]
     
-    # Load from MongoDB
-    if db is None:
-        db = get_db()
+    # Load from Firestore
+    if collection is None:
+        collection = _get_sessions_collection()
     
-    ensure_session_indexes(db)
+    doc_ref = collection.document(session_id)
+    doc = doc_ref.get()
     
-    doc = db.sessions.find_one({"session_id": session_id})
-    if doc is None:
+    if not doc.exists:
         return None
     
     try:
-        session = _deserialize_session(doc)
+        doc_dict = doc.to_dict()
+        session = _deserialize_session(doc_dict)
         
         # Load vendor data from separate collection
-        vendor_data = load_all_vendor_data(session_id, db=db)
+        vendor_collection = _get_session_vendors_collection()
+        vendor_data = load_all_vendor_data(session_id, collection=vendor_collection)
         if vendor_data:
             # session_vendors is the source of truth for vendor-specific data
             # Update session.vendors with data from session_vendors collection
-            # (This overwrites any vendor data that was in the sessions collection)
             session.vendors.update(vendor_data)
         
         # Update cache
@@ -412,27 +334,47 @@ def load_session(session_id: str, db=None, force_reload: bool = False):
         return session
     except Exception as e:
         # If deserialization fails, raise a more descriptive error
-        # This is better than returning None, which would cause "Invalid session_id" error
         import traceback
         error_msg = f"Failed to deserialize session {session_id}: {e}"
         print(f"Error deserializing session {session_id}: {e}")
         traceback.print_exc()
-        # Raise a ValueError with the actual error so it's clear what went wrong
         raise ValueError(error_msg) from e
 
 
-def get_session(session_id: str, db=None):
-    """Get a session from cache or MongoDB. Returns None if not found."""
-    return load_session(session_id, db)
+def get_session(session_id: str, collection=None):
+    """Get a session from cache or Firestore. Returns None if not found."""
+    return load_session(session_id, collection)
 
 
-def delete_session(session_id: str, db=None) -> None:
-    """Delete a session from MongoDB and cache."""
-    if db is None:
-        db = get_db()
+def delete_session(session_id: str, collection=None) -> None:
+    """Delete a session from Firestore and cache."""
+    if collection is None:
+        collection = _get_sessions_collection()
     
-    db.sessions.delete_one({"session_id": session_id})
+    # Delete session document
+    doc_ref = collection.document(session_id)
+    doc_ref.delete()
     
+    # Delete all vendor documents for this session
+    vendor_collection = _get_session_vendors_collection()
+    vendor_query = vendor_collection.where("session_id", "==", session_id).stream()
+    
+    batch = get_firestore_client().batch()
+    batch_count = 0
+    max_batch_size = 500
+    
+    for vendor_doc in vendor_query:
+        batch.delete(vendor_collection.document(vendor_doc.id))
+        batch_count += 1
+        if batch_count >= max_batch_size:
+            batch.commit()
+            batch = get_firestore_client().batch()
+            batch_count = 0
+    
+    if batch_count > 0:
+        batch.commit()
+    
+    # Remove from cache
     with CACHE_LOCK:
         SESSION_CACHE.pop(session_id, None)
 
@@ -441,4 +383,3 @@ def clear_cache() -> None:
     """Clear the in-memory cache (useful for testing or memory management)."""
     with CACHE_LOCK:
         SESSION_CACHE.clear()
-

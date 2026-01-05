@@ -1,33 +1,4 @@
 services:
-  qdrant:
-    image: qdrant/qdrant:v1.16
-    container_name: letter-writer-qdrant
-    restart: unless-stopped
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      # Use the existing volume from your previously initialized Qdrant container
-      - letter-writer_qdrant_storage:/qdrant/storage
-    environment:
-      - QDRANT__SERVICE__GRPC_PORT=6334
-    # Health check removed - Qdrant container doesn't have wget/curl
-    # The service will start and be ready when it's listening on port 6333
-    # healthcheck:
-    #   test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6333/health"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-
-  mongo:
-    image: mongo:7
-    container_name: letter-writer-mongo
-    restart: unless-stopped
-    ports:
-      - "27017:27017"
-    volumes:
-      - letter-writer_mongo_data:/data/db
-
   backend:
     build:
       context: .
@@ -47,23 +18,19 @@ services:
     environment:
       - DJANGO_DEBUG=true
       - DJANGO_ALLOWED_HOSTS=*
-      # Connect to Qdrant service in docker-compose network
-      - QDRANT_HOST=${QDRANT_HOST:-qdrant}
-      - QDRANT_PORT=${QDRANT_PORT:-6333}
-      # Mongo connection
-      - MONGO_URI=${MONGO_URI:-mongodb://mongo:27017}
-      - MONGO_DB=${MONGO_DB:-letter_writer}
+      # Firestore connection (uses Application Default Credentials)
+      # Set GOOGLE_APPLICATION_CREDENTIALS to path to service account JSON
+      # Or use gcloud auth application-default login
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS}
+      - FIRESTORE_PROJECT_ID=${FIRESTORE_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}
+      - FIRESTORE_COLLECTION=${FIRESTORE_COLLECTION:-documents}
       # Override CV_PATH for Docker - uses path relative to /app (project root)
       # This overrides the CV_PATH from .env file, so local .env can keep Windows paths
       # The CV directory is mounted at /app/cv-external
       - CV_PATH=cv-external/Experience.md
     env_file:
       - .env
-    depends_on:
-      qdrant:
-        condition: service_started
-      mongo:
-        condition: service_started
     command: python letter_writer_server/manage.py runserver 0.0.0.0:8000
 
   frontend:
@@ -83,8 +50,6 @@ services:
       - backend
     command: npm run dev -- --host 0.0.0.0
 
-volumes:
-  # Managed volume for Qdrant storage
-  letter-writer_qdrant_storage:
-  letter-writer_mongo_data:
+# Volumes removed - no longer using Qdrant or MongoDB
+# Firestore is a managed service, no local volumes needed
 
