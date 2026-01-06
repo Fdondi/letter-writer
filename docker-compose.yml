@@ -21,8 +21,9 @@ services:
       # Note: For Podman (rootless), the file must be readable by your user (e.g., chmod 600 or 644)
       - ${GOOGLE_APPLICATION_CREDENTIALS_HOST:-./gcloud-credentials.json}:/app/gcloud-credentials.json:ro
     environment:
-      - DJANGO_DEBUG=true
-      - DJANGO_ALLOWED_HOSTS=*
+      # DJANGO_DEBUG should be false in production
+      # DJANGO_ALLOWED_HOSTS is auto-detected (GCP) or defaults to localhost/backend (local)
+      # DJANGO_SECRET_KEY must be set in .env file
       # Firestore connection (uses Application Default Credentials)
       # The credentials file is mounted at /app/gcloud-credentials.json
       - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
