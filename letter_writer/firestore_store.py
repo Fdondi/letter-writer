@@ -12,9 +12,10 @@ from .config import env_default
 def get_firestore_client() -> firestore.Client:
     """Return a Firestore client using env defaults."""
     project_id = env_default("GOOGLE_CLOUD_PROJECT") or env_default("FIRESTORE_PROJECT_ID")
+    database_id = env_default("FIRESTORE_DATABASE")
     # Firestore client will use Application Default Credentials
     # Set GOOGLE_APPLICATION_CREDENTIALS env var or use gcloud auth
-    return firestore.Client(project=project_id)
+    return firestore.Client(project=project_id, database=database_id)
 
 
 def get_collection():

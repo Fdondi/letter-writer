@@ -15,15 +15,20 @@ services:
       # Mount CV directory if it's outside the project directory
       # Adjust the path to match your CV location:
       - ${CV_LOCAL_PATH:-./cv-external}:/app/cv-external
+      # Mount Google Cloud credentials file for Firestore access
+      # Set GOOGLE_APPLICATION_CREDENTIALS_HOST to the host path of your service account JSON
+      # If not set, defaults to ./gcloud-credentials.json in the project root
+      # Note: For Podman (rootless), the file must be readable by your user (e.g., chmod 600 or 644)
+      - ${GOOGLE_APPLICATION_CREDENTIALS_HOST:-./gcloud-credentials.json}:/app/gcloud-credentials.json:ro
     environment:
       - DJANGO_DEBUG=true
       - DJANGO_ALLOWED_HOSTS=*
       # Firestore connection (uses Application Default Credentials)
-      # Set GOOGLE_APPLICATION_CREDENTIALS to path to service account JSON
-      # Or use gcloud auth application-default login
+      # The credentials file is mounted at /app/gcloud-credentials.json
       - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
-      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS}
-      - FIRESTORE_PROJECT_ID=${FIRESTORE_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcloud-credentials.json
+      - FIRESTORE_PROJECT_ID=${FIRESTORE_PROJECT_ID}
+      - FIRESTORE_DATABASE=letter
       - FIRESTORE_COLLECTION=${FIRESTORE_COLLECTION:-documents}
       # Override CV_PATH for Docker - uses path relative to /app (project root)
       # This overrides the CV_PATH from .env file, so local .env can keep Windows paths
