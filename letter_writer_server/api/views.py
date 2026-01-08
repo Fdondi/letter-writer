@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Any, Dict, List
 import urllib.error
 import urllib.request
+import base64
+import io
+from datetime import datetime
 
 from django.http import JsonResponse, HttpRequest
 from django.views.decorators.csrf import csrf_exempt
@@ -22,6 +25,7 @@ from letter_writer.firestore_store import (
     append_negatives,
     get_collection,
     get_document,
+    get_personal_data_collection,
     list_documents,
     upsert_document,
 )
@@ -233,10 +237,37 @@ def extract_view(request: HttpRequest):
         # Save common session data with extraction metadata
         cv_text = data.get("cv_text")
         if cv_text is None:
-            cv_path = Path(env_default("CV_PATH", "cv.md"))
-            if cv_path.exists():
-                cv_text = cv_path.read_text(encoding="utf-8")
-            else:
+            # Load CV from Firebase personal_data collection
+            try:
+                personal_collection = get_personal_data_collection()
+                cv_doc = personal_collection.document("cv").get()
+                if cv_doc.exists:
+                    cv_data = cv_doc.to_dict()
+                    revisions = cv_data.get("revisions", [])
+                    if revisions:
+                        # Get the latest revision by comparing timestamps
+                        def get_datetime(rev):
+                            ts = rev.get("created_at")
+                            if ts is None:
+                                return datetime.min
+                            if hasattr(ts, "timestamp"):  # Firestore Timestamp
+                                return datetime.fromtimestamp(ts.timestamp())
+                            elif isinstance(ts, datetime):
+                                return ts
+                            elif isinstance(ts, str):
+                                try:
+                                    return datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                                except:
+                                    return datetime.min
+                            return datetime.min
+                        
+                        latest = max(revisions, key=get_datetime)
+                        cv_text = latest.get("content", "")
+                    else:
+                        cv_text = ""
+                else:
+                    cv_text = ""
+            except Exception:
                 cv_text = ""
         
         # Save common data with extraction metadata (common to all vendors)
@@ -458,10 +489,37 @@ def update_session_common_data_view(request: HttpRequest):
     job_text = data.get("job_text")
     cv_text = data.get("cv_text")
     if cv_text is None:
-        cv_path = Path(env_default("CV_PATH", "cv.md"))
-        if cv_path.exists():
-            cv_text = cv_path.read_text(encoding="utf-8")
-        else:
+        # Load CV from Firebase personal_data collection
+        try:
+            personal_collection = get_personal_data_collection()
+            cv_doc = personal_collection.document("cv").get()
+            if cv_doc.exists:
+                cv_data = cv_doc.to_dict()
+                revisions = cv_data.get("revisions", [])
+                if revisions:
+                    # Get the latest revision by comparing timestamps
+                    def get_datetime(rev):
+                        ts = rev.get("created_at")
+                        if ts is None:
+                            return datetime.min
+                        if hasattr(ts, "timestamp"):  # Firestore Timestamp
+                            return datetime.fromtimestamp(ts.timestamp())
+                        elif isinstance(ts, datetime):
+                            return ts
+                        elif isinstance(ts, str):
+                            try:
+                                return datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                            except:
+                                return datetime.min
+                        return datetime.min
+                    
+                    latest = max(revisions, key=get_datetime)
+                    cv_text = latest.get("content", "")
+                else:
+                    cv_text = ""
+            else:
+                cv_text = ""
+        except Exception:
             cv_text = ""
 
     try:
@@ -899,6 +957,181 @@ def document_reembed_view(request: HttpRequest, document_id: str):
     doc_ref.update({"vector": vector})
     
     return JsonResponse({"status": "ok"})
+
+
+# ---------------------------------------------------------------------------
+# Personal Data (CV) Management
+# ---------------------------------------------------------------------------
+
+
+def _extract_text_from_file(file_content: bytes, filename: str) -> str:
+    """Extract text from uploaded file (PDF, TXT, MD)."""
+    filename_lower = filename.lower()
+    
+    if filename_lower.endswith('.txt'):
+        try:
+            return file_content.decode('utf-8')
+        except UnicodeDecodeError:
+            try:
+                return file_content.decode('latin-1')
+            except UnicodeDecodeError:
+                return file_content.decode('utf-8', errors='replace')
+    
+    elif filename_lower.endswith('.md'):
+        try:
+            return file_content.decode('utf-8')
+        except UnicodeDecodeError:
+            return file_content.decode('utf-8', errors='replace')
+    
+    elif filename_lower.endswith('.pdf'):
+        try:
+            import PyPDF2
+        except ImportError:
+            raise ValueError("PyPDF2 is required for PDF extraction. Install with: pip install PyPDF2")
+        try:
+            pdf_file = io.BytesIO(file_content)
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            text_parts = []
+            for page in pdf_reader.pages:
+                text_parts.append(page.extract_text())
+            return '\n'.join(text_parts)
+        except Exception as exc:
+            raise ValueError(f"Failed to extract text from PDF: {exc}")
+    
+    else:
+        raise ValueError(f"Unsupported file type: {filename}. Supported: .txt, .md, .pdf")
+
+
+@csrf_exempt
+def personal_data_cv_view(request: HttpRequest):
+    """Get or update CV from personal_data collection."""
+    personal_collection = get_personal_data_collection()
+    cv_doc_ref = personal_collection.document("cv")
+    
+    if request.method == "GET":
+        cv_doc = cv_doc_ref.get()
+        if not cv_doc.exists:
+            return JsonResponse({
+                "cv": None,
+                "revisions": [],
+            })
+        
+        cv_data = cv_doc.to_dict()
+        revisions = cv_data.get("revisions", [])
+        
+        # Convert Firestore Timestamps to ISO strings and find latest
+        latest_content = ""
+        if revisions:
+            # Convert timestamps to datetime objects for comparison, then to ISO strings
+            revision_datetimes = []
+            for rev in revisions:
+                if "created_at" in rev:
+                    ts = rev["created_at"]
+                    # Convert to datetime if it's a Firestore Timestamp
+                    if hasattr(ts, "timestamp"):  # Firestore Timestamp
+                        dt = datetime.fromtimestamp(ts.timestamp())
+                    elif isinstance(ts, datetime):
+                        dt = ts
+                    elif isinstance(ts, str):
+                        # Already a string, try to parse it
+                        try:
+                            dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                        except:
+                            dt = datetime.min
+                    else:
+                        dt = datetime.min
+                    rev["created_at"] = dt.isoformat()
+                    revision_datetimes.append((dt, rev))
+                else:
+                    revision_datetimes.append((datetime.min, rev))
+            
+            # Find latest revision by datetime
+            if revision_datetimes:
+                latest_dt, latest = max(revision_datetimes, key=lambda x: x[0])
+                latest_content = latest.get("content", "")
+        
+        return JsonResponse({
+            "cv": latest_content,
+            "revisions": revisions,
+        })
+    
+    if request.method == "POST":
+        # Handle file upload or text update
+        content_type = request.content_type or ""
+        
+        if "multipart/form-data" in content_type:
+            # File upload
+            if "file" not in request.FILES:
+                return JsonResponse({"detail": "No file provided"}, status=400)
+            
+            uploaded_file = request.FILES["file"]
+            filename = uploaded_file.name
+            
+            # Validate file type
+            if not (filename.lower().endswith(('.txt', '.md', '.pdf'))):
+                return JsonResponse({"detail": "Unsupported file type. Supported: .txt, .md, .pdf"}, status=400)
+            
+            try:
+                file_content = uploaded_file.read()
+                extracted_text = _extract_text_from_file(file_content, filename)
+            except Exception as exc:
+                return JsonResponse({"detail": str(exc)}, status=400)
+            
+            content = extracted_text
+            source = f"upload:{filename}"
+        else:
+            # JSON text update
+            try:
+                data = json.loads(request.body or "{}")
+            except json.JSONDecodeError:
+                return JsonResponse({"detail": "Invalid JSON"}, status=400)
+            
+            content = data.get("content", "")
+            if not content:
+                return JsonResponse({"detail": "content is required"}, status=400)
+            source = data.get("source", "manual_edit")
+        
+        # Get existing document
+        cv_doc = cv_doc_ref.get()
+        existing_data = cv_doc.to_dict() if cv_doc.exists else {}
+        revisions = existing_data.get("revisions", [])
+        
+        # Create new revision
+        now = datetime.utcnow()
+        new_revision = {
+            "content": content,
+            "source": source,
+            "created_at": now,
+            "revision_number": len(revisions) + 1,
+        }
+        
+        revisions.append(new_revision)
+        
+        # Update document
+        cv_doc_ref.set({
+            "revisions": revisions,
+            "updated_at": now,
+        }, merge=True)
+        
+        # Convert timestamps for response
+        response_revisions = []
+        for rev in revisions:
+            rev_copy = dict(rev)
+            if "created_at" in rev_copy:
+                ts = rev_copy["created_at"]
+                if hasattr(ts, "isoformat"):
+                    rev_copy["created_at"] = ts.isoformat()
+                elif isinstance(ts, datetime):
+                    rev_copy["created_at"] = ts.isoformat()
+            response_revisions.append(rev_copy)
+        
+        return JsonResponse({
+            "status": "ok",
+            "cv": content,
+            "revisions": response_revisions,
+        }, status=201)
+    
+    return JsonResponse({"detail": "Method not allowed"}, status=405)
 
 
 # ---------------------------------------------------------------------------

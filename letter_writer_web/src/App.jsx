@@ -4,6 +4,7 @@ import LetterTabs from "./components/LetterTabs";
 import StyleInstructionsBlade from "./components/StyleInstructionsBlade";
 import PhaseFlow from "./components/PhaseFlow";
 import DocumentsPage from "./components/DocumentsPage";
+import PersonalDataPage from "./components/PersonalDataPage";
 import LanguageConfig from "./components/LanguageConfig";
 import LanguageSelector from "./components/LanguageSelector";
 import { splitIntoParagraphs } from "./utils/split";
@@ -51,7 +52,7 @@ export default function App() {
   const [phaseSessionId, setPhaseSessionId] = useState(null);
   const [phaseSessions, setPhaseSessions] = useState({}); // vendor -> session_id
   const [savingFinal, setSavingFinal] = useState(false);
-  const [activeTab, setActiveTab] = useState("compose"); // "compose" | "documents"
+  const [activeTab, setActiveTab] = useState("compose"); // "compose" | "documents" | "personal-data"
   const [assemblyVisible, setAssemblyVisible] = useState(true); // when in assembly stage, show assembly or phases
   const [extractedData, setExtractedData] = useState(null); // Track extracted data to detect modifications
   
@@ -1236,6 +1237,21 @@ export default function App() {
               Documents
             </button>
             <button
+              onClick={() => setActiveTab("personal-data")}
+              style={{
+                padding: "8px 12px",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                backgroundColor:
+                  activeTab === "personal-data" ? "#3b82f6" : "var(--button-bg)",
+                color: activeTab === "personal-data" ? "white" : "var(--button-text)",
+                cursor: "pointer",
+                fontSize: "14px",
+              }}
+            >
+              Your data
+            </button>
+            <button
               onClick={() => setShowStyleBlade(true)}
               style={{
                 padding: "8px 12px",
@@ -1254,7 +1270,7 @@ export default function App() {
 
       </div>
 
-      {activeTab === "compose" ? renderCompose() : <DocumentsPage />}
+      {activeTab === "compose" ? renderCompose() : activeTab === "documents" ? <DocumentsPage /> : <PersonalDataPage />}
 
       {/* Floating toggle to assembly while still in phases (after first refinement ready) */}
       {!showInput && uiStage !== "assembly" && hasAssembly && (

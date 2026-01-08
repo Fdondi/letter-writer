@@ -25,6 +25,12 @@ def get_collection():
     return client.collection(collection_name)
 
 
+def get_personal_data_collection():
+    """Return the Firestore collection reference for personal data."""
+    client = get_firestore_client()
+    return client.collection("personal_data")
+
+
 def _prepare_ai_letters(ai_letters: Optional[List[dict]]) -> List[dict]:
     """Normalize AI/negative letters for storage."""
     now = datetime.utcnow()
