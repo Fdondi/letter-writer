@@ -86,15 +86,19 @@ class ClaudeClient(BaseClient):
                     # Send a follow-up to encourage synthesis
                     conversation_messages.append({
                         "role": "user",
-                        "content": [{"type": "text", "text": "Please provide a comprehensive synthesis of the search results in your response."}]
+                        "content": [{"type": "text", "text": "Please provide a concise synthesis of the search results in your response."}]
                     })
+                    
+                    # Calculate remaining tokens to respect the global limit
+                    current_usage = response.usage.output_tokens if response.usage else 0
+                    remaining_tokens = max(1, max_tokens - current_usage)
                     
                     # Continue the conversation
                     continuation_response = self.client.messages.create(
                         model=model,
                         system=system,
                         messages=conversation_messages,
-                        max_tokens=max_tokens,
+                        max_tokens=remaining_tokens,
                     )
                     
                     # Track usage from continuation
@@ -108,6 +112,8 @@ class ClaudeClient(BaseClient):
                             if hasattr(block, 'text') and block.text:
                                 text_so_far.append(block.text)
                     
+                    # Update response to continuation response for final processing, 
+                    # but keep accumulated text_so_far separate
                     response = continuation_response
         
         # Track total cost
@@ -119,10 +125,26 @@ class ClaudeClient(BaseClient):
                 search_queries=1 if search else 0
             )
         
-        # Handle different response content types
+        # Return accumulated text if we have any, otherwise parse the last response
+        if 'text_so_far' in locals() and text_so_far:
+            full_text = "\n\n".join(text_so_far)
+            # Clean up newlines only if this was a search request
+            if search:
+                # 1. Collapse multiple newlines to single newline
+                import re
+                full_text = re.sub(r'\n+', '\n', full_text)
+                # 2. Join lines unless the next line starts with a capital letter, bullet point, or markdown header/bold
+                # Logic: Look for a newline followed by a character that IS NOT (uppercase, *, -, or #)
+                # We use a negative lookahead to identify lines that should be joined
+                full_text = re.sub(r'\n(?![A-Z*#\-])', ' ', full_text)
+            
+            typer.echo(f"[DEBUG] Anthropic response length (accumulated): {len(full_text)} characters, {len(full_text.split())} words")
+            return full_text
+            
+        # Handle different response content types if we didn't accumulate text
         if not response.content:
             return ""
-        
+            
         # Collect all text from all content blocks
         text_parts = []
         for content_block in response.content:
@@ -132,10 +154,31 @@ class ClaudeClient(BaseClient):
                 # Log non-text blocks for debugging
                 block_type = getattr(content_block, 'type', 'unknown')
                 typer.echo(f"[DEBUG] Found non-text content block type: {block_type}")
+                # Log detailed info for tool results/usage
+                if block_type == 'tool_use' or block_type == 'server_tool_use':
+                    tool_name = getattr(content_block, 'name', 'unknown')
+                    tool_input = getattr(content_block, 'input', {})
+                    typer.echo(f"[DEBUG] Tool Use - Name: {tool_name}, Input: {tool_input}")
+                elif block_type == 'tool_result' or block_type == 'web_search_tool_result':
+                    tool_id = getattr(content_block, 'tool_use_id', 'unknown')
+                    is_error = getattr(content_block, 'is_error', False)
+                    # Truncate content for display
+                    content = getattr(content_block, 'content', '')
+                    content_preview = str(content)[:100] + "..." if len(str(content)) > 100 else str(content)
+                    typer.echo(f"[DEBUG] Tool Result - ID: {tool_id}, Error: {is_error}, Content: {content_preview}")
+
         
         if text_parts:
             # Concatenate all text blocks
             full_text = "\n\n".join(text_parts)
+            # Clean up newlines only if this was a search request
+            if search:
+                # 1. Collapse multiple newlines to single newline
+                import re
+                full_text = re.sub(r'\n+', '\n', full_text)
+                # 2. Join lines unless the next line starts with a capital letter, bullet point, or markdown header/bold
+                full_text = re.sub(r'\n(?![A-Z*#\-])', ' ', full_text)
+
             typer.echo(f"[DEBUG] Anthropic response length: {len(full_text)} characters, {len(full_text.split())} words")
             return full_text
         else:
