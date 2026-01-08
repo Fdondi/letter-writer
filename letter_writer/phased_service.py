@@ -179,119 +179,12 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
     return state
 
 
-def start_extraction_phase(
-    *,
-    job_text: str,
-    cv_text: str,
-    vendors: List[ModelVendor],
-    session_id: str | None = None,
-) -> SessionState:
-    """First phase: per-vendor extraction of company/job info using each vendor's TINY model."""
-    print(f"[PHASE] extraction -> start (vendors={','.join(v.value for v in vendors)})")
-
-    def _extract(vendor: ModelVendor) -> tuple[str, Dict[str, str]]:
-        ai_client = get_client(vendor)
-        trace_dir = Path("trace", f"extraction.{vendor.value}")
-        extraction = extract_job_metadata(job_text, ai_client, trace_dir=trace_dir)
-        return vendor.value, extraction
-
-    metadata: Dict[str, Dict[str, str]] = {}
-    with ThreadPoolExecutor(max_workers=len(vendors) or 1) as executor:
-        for vendor_name, extraction in executor.map(_extract, vendors):
-            metadata[vendor_name] = extraction
-
-    # Ensure we do not race when multiple vendors reuse the same session_id
-    with SESSION_LOCK:
-        if session_id:
-            session = get_session_from_store(session_id)
-            if session is not None:
-                session.metadata.update(metadata)
-                # Keep vendors_list in sync - derive from actual data
-                existing_vendors = set(session.vendors_list)
-                new_vendors = set(vendors)
-                session.vendors_list = list(existing_vendors | new_vendors)
-                session.job_text = job_text
-                session.cv_text = cv_text
-                save_session(session)
-                return session
-
-        session = _create_session(
-            job_text=job_text,
-            cv_text=cv_text,
-            vendors=vendors,
-            session_id=session_id,
-            metadata=metadata,
-        )
-        return session
-
-
-def start_background_phase(
-    *,
-    job_text: str,
-    cv_text: str,
-    vendors: List[ModelVendor],
-) -> SessionState:
-    """Start a phased run directly at background (legacy entrypoint)."""
-    metadata = {v.value: {"company_name": ""} for v in vendors}
-    session = _create_session(
-        job_text=job_text,
-        cv_text=cv_text,
-        vendors=vendors,
-        metadata=metadata,
-    )
-    return _run_background_phase(session, vendors)
-
-
-def resume_background_phase(
-    *,
-    session_id: str,
-    metadata_override: Optional[Dict[str, Dict[str, str]]] = None,
-    job_text_override: Optional[str] = None,
-    cv_text_override: Optional[str] = None,
-    vendors: Optional[List[ModelVendor]] = None,
-) -> SessionState:
-    """Resume or run background after extraction with optional metadata overrides."""
-    session = get_session_from_store(session_id)
-    if session is None:
-        raise ValueError(f"Session {session_id} not found")
-
-    if metadata_override:
-        for key, val in metadata_override.items():
-            if val is None:
-                continue
-            session.metadata[key] = val
-
-    session.job_text = job_text_override or session.job_text
-    session.cv_text = cv_text_override or session.cv_text
-    
-    # Determine which vendors to process:
-    # 1. Use explicitly provided vendors
-    # 2. Fall back to vendors with metadata (extraction completed)
-    # 3. Fall back to vendors_list (for backward compatibility)
-    if vendors:
-        target_vendors = vendors
-    elif session.metadata:
-        # Use vendors that have extraction metadata
-        target_vendors = [ModelVendor(v) for v in session.metadata.keys()]
-    elif session.vendors_list:
-        target_vendors = session.vendors_list
-    else:
-        target_vendors = []
-    
-    if not target_vendors:
-        raise ValueError("No vendors provided for background phase")
-
-    return _run_background_phase(session, target_vendors)
-
-
 def advance_to_draft(
     *,
     session_id: str,
     vendor: ModelVendor,
     company_report_override: Optional[str] = None,
     top_docs_override: Optional[List[dict]] = None,
-    job_text_override: Optional[str] = None,
-    cv_text_override: Optional[str] = None,
 ) -> VendorPhaseState:
     # Force reload from MongoDB to ensure we have the latest session state
     # This is important because the session might have been updated by background phase
@@ -368,8 +261,8 @@ def advance_to_draft(
 
     top_docs = top_docs_override or state.top_docs
     company_report = company_report_override or state.company_report or ""
-    job_text = job_text_override or session.job_text
-    cv_text = cv_text_override or session.cv_text
+    job_text = session.job_text
+    cv_text = session.cv_text
 
     state.company_report = company_report
     state.top_docs = top_docs
@@ -424,8 +317,6 @@ def advance_to_refinement(
     feedback_override: Optional[Dict[str, str]] = None,
     company_report_override: Optional[str] = None,
     top_docs_override: Optional[List[dict]] = None,
-    job_text_override: Optional[str] = None,
-    cv_text_override: Optional[str] = None,
     fancy: bool = False,
 ) -> VendorPhaseState:
     # Force reload from MongoDB to ensure we have the latest session state

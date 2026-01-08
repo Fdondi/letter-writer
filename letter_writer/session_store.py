@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Dict, Optional, TYPE_CHECKING
-from threading import Lock
+from threading import Lock, local
 
 from google.cloud import firestore
 
 from .firestore_store import get_firestore_client
 from .clients.base import ModelVendor
+
+# Thread-local storage for Django request (for cookie-based sessions)
+_thread_local = local()
 
 if TYPE_CHECKING:
     from .phased_service import SessionState, VendorPhaseState
@@ -110,30 +113,38 @@ def _deserialize_session(data: dict):
 
 
 def save_session(session, collection=None) -> None:
-    """Save a session to Firestore and update the in-memory cache."""
-    if collection is None:
-        collection = _get_sessions_collection()
+    """Save a session to Django sessions.
     
-    doc = _serialize_session(session)
-    now = datetime.utcnow()
-    doc["updated_at"] = now
-    doc["expire_at"] = now + timedelta(days=SESSION_TTL_DAYS)
+    REQUIRES request context - all session data is stored in Django sessions (in-memory).
+    All restore must be from client data if server restarts.
+    """
+    request = _get_current_request()
+    if request is None:
+        raise RuntimeError(
+            "save_session called without request context. "
+            "Session operations require a Django request. "
+            "If server restarted, restore from client-side data."
+        )
     
-    # Get existing document to preserve created_at
-    doc_ref = collection.document(session.session_id)
-    existing_doc = doc_ref.get()
+    from letter_writer_server.api.session_helpers import (
+        save_session_common_data,
+        save_vendor_data,
+    )
     
-    if existing_doc.exists:
-        existing_data = existing_doc.to_dict()
-        # Preserve existing created_at
-        doc["created_at"] = existing_data.get("created_at", now)
-    else:
-        doc["created_at"] = now
+    # Save common data
+    save_session_common_data(
+        request=request,
+        job_text=session.job_text,
+        cv_text=session.cv_text,
+        metadata=session.metadata,
+        search_result=session.search_result,
+    )
     
-    # Upsert to Firestore
-    doc_ref.set(doc, merge=True)
+    # Save vendor data
+    for vendor_name, vendor_state in session.vendors.items():
+        save_vendor_data(request, vendor_name, vendor_state)
     
-    # Update in-memory cache
+    # Update cache (for compatibility)
     with CACHE_LOCK:
         SESSION_CACHE[session.session_id] = session
 
@@ -220,42 +231,33 @@ def load_session_common_data(session_id: str, collection=None):
     }
 
 
+def _get_current_request():
+    """Get current Django request from thread-local storage."""
+    return getattr(_thread_local, 'request', None)
+
+
+def set_current_request(request):
+    """Set current Django request in thread-local storage."""
+    _thread_local.request = request
+
+
 def save_vendor_data(session_id: str, vendor: str, vendor_state, collection=None) -> None:
-    """Atomically save vendor-specific data to separate collection.
+    """Atomically save vendor-specific data to Django sessions.
     
-    Each vendor has their own document keyed by (session_id, vendor).
-    This is completely lock-free - vendors can work in parallel.
+    NO LONGER USES FIRESTORE - all session data is stored in Django sessions (in-memory).
+    Each vendor writes to independent keys (vendors[vendor_name]), allowing parallel writes.
     """
-    if collection is None:
-        collection = _get_session_vendors_collection()
+    # Get Django request from thread-local storage
+    request = _get_current_request()
+    if request is None:
+        raise RuntimeError(
+            "save_vendor_data called without request context. "
+            "Ensure set_current_request() is called before using phased_service functions."
+        )
     
-    # Import here to avoid circular dependency
-    vendor_data = _serialize_vendor_state(vendor_state)
-    
-    now = datetime.utcnow()
-    
-    # Create document ID: session_id + vendor (compound key)
-    doc_id = f"{session_id}_{vendor}"
-    doc_ref = collection.document(doc_id)
-    
-    # Upsert vendor-specific data - completely independent from other vendors
-    update_data = {
-        "session_id": session_id,
-        "vendor": vendor,
-        **vendor_data,  # Unpack vendor state data
-        "updated_at": now,
-        "expire_at": now + timedelta(days=SESSION_TTL_DAYS),
-    }
-    
-    # Check if document exists to preserve created_at
-    existing_doc = doc_ref.get()
-    if existing_doc.exists:
-        existing_data = existing_doc.to_dict()
-        update_data["created_at"] = existing_data.get("created_at", now)
-    else:
-        update_data["created_at"] = now
-    
-    doc_ref.set(update_data, merge=True)
+    # Use Django sessions (no Firestore fallback)
+    from letter_writer_server.api.session_helpers import save_vendor_data as django_save_vendor_data
+    django_save_vendor_data(request, vendor, vendor_state)
 
 
 def load_vendor_data(session_id: str, vendor: str, collection=None):
@@ -274,105 +276,126 @@ def load_vendor_data(session_id: str, vendor: str, collection=None):
 
 
 def load_all_vendor_data(session_id: str, collection=None):
-    """Load all vendor data for a session."""
-    if collection is None:
-        collection = _get_session_vendors_collection()
+    """Load all vendor data for a session from Django sessions.
     
-    # Query all vendor documents for this session
-    query = collection.where("session_id", "==", session_id).stream()
+    REQUIRES request context - all vendor data is stored in Django sessions (in-memory).
+    All restore must be from client data if server restarts.
+    """
+    request = _get_current_request()
+    if request is None:
+        raise RuntimeError(
+            "load_all_vendor_data called without request context. "
+            "Session operations require a Django request. "
+            "If server restarted, restore from client-side data."
+        )
     
-    result = {}
-    for doc in query:
-        doc_dict = doc.to_dict()
-        vendor = doc_dict["vendor"]
-        result[vendor] = _deserialize_vendor_state(doc_dict)
+    from letter_writer_server.api.session_helpers import load_all_vendor_data as django_load_all_vendor_data
     
-    return result
+    # Verify session_id matches
+    if request.session.session_key != session_id:
+        raise ValueError(
+            f"Session ID mismatch: requested {session_id}, got {request.session.session_key}. "
+            "If server restarted, restore from client-side data."
+        )
+    
+    return django_load_all_vendor_data(request)
 
 
 def load_session(session_id: str, collection=None, force_reload: bool = False):
-    """Load a session from Firestore if not in cache. Returns None if not found.
+    """Load a session from Django sessions.
     
-    Also loads vendor data from the session_vendors collection.
+    REQUIRES request context - all session data is stored in Django sessions (in-memory).
+    All restore must be from client data if server restarts.
     
     Args:
         session_id: The session ID to load
-        collection: Optional Firestore collection reference
-        force_reload: If True, bypass cache and reload from Firestore
+        collection: Ignored (kept for backward compatibility)
+        force_reload: Ignored (Django sessions are always fresh)
     """
-    # Check cache first (unless forcing reload)
-    if not force_reload:
-        with CACHE_LOCK:
-            if session_id in SESSION_CACHE:
-                return SESSION_CACHE[session_id]
+    request = _get_current_request()
+    if request is None:
+        raise RuntimeError(
+            "load_session called without request context. "
+            "Session operations require a Django request. "
+            "If server restarted, restore from client-side data."
+        )
     
-    # Load from Firestore
-    if collection is None:
-        collection = _get_sessions_collection()
+    from letter_writer_server.api.session_helpers import (
+        load_session_common_data,
+        load_all_vendor_data as django_load_all_vendor_data,
+    )
     
-    doc_ref = collection.document(session_id)
-    doc = doc_ref.get()
+    # Verify session_id matches
+    if request.session.session_key != session_id:
+        raise ValueError(
+            f"Session ID mismatch: requested {session_id}, got {request.session.session_key}. "
+            "If server restarted, restore from client-side data."
+        )
     
-    if not doc.exists:
+    # Load common data from Django session
+    common_data = load_session_common_data(request)
+    if common_data is None:
         return None
     
-    try:
-        doc_dict = doc.to_dict()
-        session = _deserialize_session(doc_dict)
-        
-        # Load vendor data from separate collection
-        vendor_collection = _get_session_vendors_collection()
-        vendor_data = load_all_vendor_data(session_id, collection=vendor_collection)
-        if vendor_data:
-            # session_vendors is the source of truth for vendor-specific data
-            # Update session.vendors with data from session_vendors collection
-            session.vendors.update(vendor_data)
-        
-        # Update cache
-        with CACHE_LOCK:
-            SESSION_CACHE[session_id] = session
-        return session
-    except Exception as e:
-        # If deserialization fails, raise a more descriptive error
-        import traceback
-        error_msg = f"Failed to deserialize session {session_id}: {e}"
-        print(f"Error deserializing session {session_id}: {e}")
-        traceback.print_exc()
-        raise ValueError(error_msg) from e
+    # Load vendor data from Django session
+    vendors_data = django_load_all_vendor_data(request)
+    
+    # Convert Django session format to SessionState object
+    from .phased_service import SessionState, VendorPhaseState
+    
+    # Convert vendor data dict to VendorPhaseState objects
+    vendors = {}
+    for vendor_name, vendor_dict in vendors_data.items():
+        vendors[vendor_name] = VendorPhaseState(
+            top_docs=vendor_dict.get("top_docs", []),
+            company_report=vendor_dict.get("company_report"),
+            draft_letter=vendor_dict.get("draft_letter"),
+            final_letter=vendor_dict.get("final_letter"),
+            feedback=vendor_dict.get("feedback", {}),
+            cost=vendor_dict.get("cost", 0.0),
+        )
+    
+    # Create SessionState object
+    session = SessionState(
+        session_id=session_id,
+        job_text=common_data.get("job_text", ""),
+        cv_text=common_data.get("cv_text", ""),
+        search_result=common_data.get("search_result", []),
+        metadata=common_data.get("metadata", {}),
+        vendors=vendors,
+    )
+    
+    # Update cache (for compatibility)
+    with CACHE_LOCK:
+        SESSION_CACHE[session_id] = session
+    
+    return session
 
 
 def get_session(session_id: str, collection=None):
-    """Get a session from cache or Firestore. Returns None if not found."""
+    """Get a session from Django sessions. Returns None if not found.
+    
+    REQUIRES request context - all session data is stored in Django sessions (in-memory).
+    All restore must be from client data if server restarts.
+    """
     return load_session(session_id, collection)
 
 
 def delete_session(session_id: str, collection=None) -> None:
-    """Delete a session from Firestore and cache."""
-    if collection is None:
-        collection = _get_sessions_collection()
+    """Delete a session from Django sessions.
     
-    # Delete session document
-    doc_ref = collection.document(session_id)
-    doc_ref.delete()
+    REQUIRES request context - all session data is stored in Django sessions (in-memory).
+    """
+    request = _get_current_request()
+    if request is None:
+        raise RuntimeError(
+            "delete_session called without request context. "
+            "Session operations require a Django request."
+        )
     
-    # Delete all vendor documents for this session
-    vendor_collection = _get_session_vendors_collection()
-    vendor_query = vendor_collection.where("session_id", "==", session_id).stream()
-    
-    batch = get_firestore_client().batch()
-    batch_count = 0
-    max_batch_size = 500
-    
-    for vendor_doc in vendor_query:
-        batch.delete(vendor_collection.document(vendor_doc.id))
-        batch_count += 1
-        if batch_count >= max_batch_size:
-            batch.commit()
-            batch = get_firestore_client().batch()
-            batch_count = 0
-    
-    if batch_count > 0:
-        batch.commit()
+    # Clear the Django session
+    from letter_writer_server.api.session_helpers import clear_session_data
+    clear_session_data(request)
     
     # Remove from cache
     with CACHE_LOCK:

@@ -158,6 +158,23 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 
+# Session configuration
+# Custom backend: session key in cookie (small), data stored server-side (in-memory/filesystem)
+# This allows large session data without hitting cookie size limits
+# No Firestore costs - data stored in VM memory with optional filesystem backup
+SESSION_ENGINE = "letter_writer_server.api.session_backend"
+SESSION_COOKIE_NAME = "letter_writer_session"
+SESSION_COOKIE_HTTPONLY = True  # Prevent JavaScript access (XSS protection)
+SESSION_COOKIE_SECURE = os.environ.get("DJANGO_SESSION_COOKIE_SECURE", "false").lower() in ("1", "true", "yes")  # HTTPS only in production
+SESSION_COOKIE_SAMESITE = "Lax"  # CSRF protection
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 30  # 30 days (same as Firestore TTL)
+SESSION_SAVE_EVERY_REQUEST = False  # Only save when modified (saves writes)
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False  # Persist across browser restarts
+
+# Optional: Persist sessions to filesystem across server restarts
+# Set DJANGO_SESSION_PERSIST=true to enable (default: false, data lost on restart)
+# Set DJANGO_SESSION_STORAGE_DIR to customize storage location (default: /tmp/django_sessions)
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 

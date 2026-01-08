@@ -595,7 +595,6 @@ function VendorCardWrapper({
   onSaveFeedbackOverride,
   onRerunFromBackground,
   onPhaseComplete,
-  saveFeedbackOverride,
   triggerUpdate,
 }) {
   // Get previous phase data (to check if we SHOULD be loading)
@@ -611,6 +610,11 @@ function VendorCardWrapper({
   // We don't need a complex useEffect with fetch anymore.
   // The card is purely a consumer of phaseObj.cardData[vendor].
   
+  // Status logic:
+  // - "success" if we have data (already processed)
+  // - "loading" only if previous phase is approved AND we don't have data (triggers API call)
+  // - "idle" otherwise (waiting for previous phase or no data)
+  // Note: When navigating back from assembly, data should already be in shelf, so status will be "success"
   const status = currentPhaseData 
     ? "success" 
     : (previousPhaseApproved ? "loading" : "idle");
@@ -630,7 +634,17 @@ function VendorCardWrapper({
       onApprove={onApprove}
       sessionId={sessionId}
       onStatusChange={(status) => phaseObj.registerStatus?.(vendor, status)}
-      onSaveFeedbackOverride={(key, val) => saveFeedbackOverride(vendor, key, val)}
+      onSaveFeedbackOverride={(key, val) => {
+        // Use the onSaveFeedbackOverride prop (which is the saveFeedbackOverride callback from parent)
+        if (typeof onSaveFeedbackOverride === 'function') {
+          onSaveFeedbackOverride(vendor, key, val);
+        } else {
+          // Fallback: use onEditChange if available
+          if (onEditChange) {
+            onEditChange(vendor, "refine", "feedback_overrides", { [key]: val });
+          }
+        }
+      }}
       onRerunFromBackground={onRerunFromBackground}
       onPhaseComplete={(vendor, phase, completionData) => {
         // Completion data is already handled by the onApprove caller (App.jsx)

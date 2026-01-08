@@ -67,6 +67,16 @@ export default function App() {
   const phaseRegistryRef = React.useRef(null);
   const [, setPhaseRegistryTrigger] = useState(0); // For re-rendering when registry changes
 
+  // Helper function to get current state for session restoration
+  const getStateForRestore = React.useCallback(() => {
+    return {
+      jobText: jobText || "",
+      cvText: "", // Not used in this app, but required by restore endpoint
+      extractedData: extractedData,
+      phaseRegistry: phaseRegistryRef.current,
+    };
+  }, [jobText, extractedData]);
+
   // Update colors when system theme changes
   useEffect(() => {
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -414,13 +424,17 @@ export default function App() {
       }
       
       // Background phase only needs session_id - it reads all data from the session
-      const result = await fetchWithHeartbeat(`/api/phases/background/${vendor}/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: phaseSessionId,
-        }),
-      });
+      const result = await fetchWithHeartbeat(
+        `/api/phases/background/${vendor}/`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: phaseSessionId,
+          }),
+        },
+        { getState: getStateForRestore }
+      );
       
       // Handle 202 Accepted (heartbeat/still processing)
       if (result.isHeartbeat) {
@@ -546,13 +560,17 @@ export default function App() {
     vendorList.forEach((vendor) => {
       (async () => {
         try {
-          const result = await fetchWithHeartbeat(`/api/phases/background/${vendor}/`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              session_id: initialSessionId,
-            }),
-          });
+          const result = await fetchWithHeartbeat(
+            `/api/phases/background/${vendor}/`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                session_id: initialSessionId,
+              }),
+            },
+            { getState: getStateForRestore }
+          );
           
           // Handle 202 Accepted (heartbeat/still processing)
           if (result.isHeartbeat) {
@@ -597,14 +615,18 @@ export default function App() {
       const sessionId = phaseSessions[vendor] || phaseSessionId;
 
       try {
-        const result = await fetchWithHeartbeat(`/api/phases/draft/${vendor}/`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            session_id: sessionId,
-            company_report: edits.company_report || "",
-          }),
-        });
+        const result = await fetchWithHeartbeat(
+          `/api/phases/draft/${vendor}/`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              session_id: sessionId,
+              company_report: edits.company_report || "",
+            }),
+          },
+          { getState: getStateForRestore }
+        );
         
         // Handle 202 Accepted (heartbeat/still processing)
         if (result.isHeartbeat) {
@@ -643,11 +665,15 @@ export default function App() {
       }
 
       try {
-        const result = await fetchWithHeartbeat(`/api/phases/refine/${vendor}/`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+        const result = await fetchWithHeartbeat(
+          `/api/phases/refine/${vendor}/`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          },
+          { getState: getStateForRestore }
+        );
         
         // Handle 202 Accepted (heartbeat/still processing)
         if (result.isHeartbeat) {

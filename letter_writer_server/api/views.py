@@ -17,9 +17,6 @@ from letter_writer.generation import get_style_instructions
 from letter_writer.phased_service import (
     advance_to_draft,
     advance_to_refinement,
-    start_background_phase,
-    start_extraction_phase,
-    resume_background_phase,
 )
 from letter_writer.firestore_store import (
     append_negatives,
@@ -218,9 +215,9 @@ def extract_view(request: HttpRequest):
     if not job_text:
         return JsonResponse({"detail": "job_text is required"}, status=400)
 
-    session_id = data.get("session_id")
-    if not session_id:
-        return JsonResponse({"detail": "session_id is required"}, status=400)
+    # Session ID comes from Django session cookie, not request body
+    from .session_helpers import get_session_id, save_session_common_data
+    session_id = get_session_id(request)
 
     # Use OpenAI as default for extraction (fast and reliable)
     try:
@@ -228,7 +225,6 @@ def extract_view(request: HttpRequest):
         from letter_writer.clients.base import ModelVendor
         from letter_writer.generation import extract_job_metadata
         from pathlib import Path
-        from letter_writer.session_store import save_session_common_data
 
         ai_client = get_client(ModelVendor.OPENAI)
         trace_dir = Path("trace", "extraction.openai")
@@ -245,7 +241,7 @@ def extract_view(request: HttpRequest):
         
         # Save common data with extraction metadata (common to all vendors)
         save_session_common_data(
-            session_id=session_id,
+            request=request,
             job_text=job_text,
             cv_text=cv_text,
             metadata={"common": extraction},  # Store extraction as common metadata
@@ -265,7 +261,10 @@ def extract_view(request: HttpRequest):
 
 @csrf_exempt
 def init_session_view(request: HttpRequest):
-    """Initialize a new session. Called when page loads or user first interacts."""
+    """Initialize a new session. Called when page loads or user first interacts.
+    
+    Also handles session recovery - if client sends full session data, restores it.
+    """
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
 
@@ -274,23 +273,159 @@ def init_session_view(request: HttpRequest):
     except json.JSONDecodeError:
         return JsonResponse({"detail": "Invalid JSON"}, status=400)
 
-    session_id = data.get("session_id")
-    if not session_id:
-        return JsonResponse({"detail": "session_id is required"}, status=400)
+    # Session ID comes from Django session cookie, not request body
+    from .session_helpers import (
+        get_session_id,
+        save_session_common_data,
+        check_session_exists,
+        restore_session_data,
+    )
+    
+    # Check if this is a recovery request (client sending full session data)
+    is_recovery = bool(
+        data.get("job_text") or
+        data.get("cv_text") or
+        data.get("metadata") or
+        data.get("vendors")
+    )
+    
+    session_id = get_session_id(request)
+    session_exists = check_session_exists(request)
+    
+    try:
+        if is_recovery and not session_exists:
+            # Server lost session, client is restoring it
+            session_id = restore_session_data(
+                request=request,
+                job_text=data.get("job_text", ""),
+                cv_text=data.get("cv_text", ""),
+                metadata=data.get("metadata", {}),
+                search_result=data.get("search_result"),
+                vendors=data.get("vendors", {}),
+            )
+            return JsonResponse({
+                "status": "ok",
+                "session_id": session_id,
+                "recovered": True,
+                "message": "Session restored from client data",
+            })
+        else:
+            # Normal initialization
+            save_session_common_data(
+                request=request,
+                job_text=data.get("job_text", ""),
+                cv_text=data.get("cv_text", ""),
+                metadata=data.get("metadata", {}),
+            )
+            return JsonResponse({
+                "status": "ok",
+                "session_id": session_id,
+                "session_exists": session_exists,
+            })
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+
+@csrf_exempt
+def restore_session_view(request: HttpRequest):
+    """Restore session data from client.
+    
+    Called when server restarts and loses in-memory sessions.
+    Client sends all session data (job_text, cv_text, metadata, vendors, etc.)
+    and server restores it to the current session.
+    """
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
 
     try:
-        from letter_writer.session_store import save_session_common_data
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Invalid JSON"}, status=400)
+
+    try:
+        from .session_helpers import restore_session_data, get_session_id
         
-        # Initialize session with empty/default data
-        # This ensures the session exists even if user skips extraction
-        save_session_common_data(
-            session_id=session_id,
+        # Restore full session from client data
+        session_id = restore_session_data(
+            request=request,
             job_text=data.get("job_text", ""),
             cv_text=data.get("cv_text", ""),
             metadata=data.get("metadata", {}),
+            search_result=data.get("search_result"),
+            vendors=data.get("vendors", {}),
         )
         
-        return JsonResponse({"status": "ok", "session_id": session_id})
+        return JsonResponse({
+            "status": "ok",
+            "session_id": session_id,
+            "message": "Session restored successfully",
+        })
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+
+@csrf_exempt
+def get_session_state_view(request: HttpRequest):
+    """Get full session state for restoring frontend UI.
+    
+    Called on page load to restore user's work if they navigated away.
+    Returns all session data (job_text, cv_text, metadata, vendors, etc.)
+    """
+    if request.method != "GET":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+
+    try:
+        from .session_helpers import get_full_session_state, get_session_id
+        
+        session_id = get_session_id(request)
+        session_state = get_full_session_state(request)
+        
+        if session_state is None:
+            # No session data - return empty state
+            return JsonResponse({
+                "status": "ok",
+                "session_id": session_id,
+                "session_state": None,
+                "has_data": False,
+            })
+        
+        return JsonResponse({
+            "status": "ok",
+            "session_id": session_id,
+            "session_state": session_state,
+            "has_data": True,
+        })
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+
+@csrf_exempt
+def clear_session_view(request: HttpRequest):
+    """Clear all session data.
+    
+    Called when:
+    - User explicitly clicks "clear" button
+    - Final data is saved/copied (user is done with this letter)
+    """
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+
+    try:
+        from .session_helpers import clear_session, get_session_id
+        
+        old_session_id = get_session_id(request)
+        clear_session(request)
+        new_session_id = get_session_id(request)
+        
+        return JsonResponse({
+            "status": "ok",
+            "old_session_id": old_session_id,
+            "new_session_id": new_session_id,
+            "message": "Session cleared successfully",
+        })
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         return JsonResponse({"detail": str(exc)}, status=500)
@@ -316,9 +451,9 @@ def update_session_common_data_view(request: HttpRequest):
     except json.JSONDecodeError:
         return JsonResponse({"detail": "Invalid JSON"}, status=400)
 
-    session_id = data.get("session_id")
-    if not session_id:
-        return JsonResponse({"detail": "session_id is required"}, status=400)
+    # Session ID comes from Django session cookie, not request body
+    from .session_helpers import get_session_id, save_session_common_data, load_session_common_data
+    session_id = get_session_id(request)
 
     job_text = data.get("job_text")
     cv_text = data.get("cv_text")
@@ -330,10 +465,8 @@ def update_session_common_data_view(request: HttpRequest):
             cv_text = ""
 
     try:
-        from letter_writer.session_store import save_session_common_data, load_session_common_data
-        
         # Load existing session to preserve other fields
-        existing = load_session_common_data(session_id)
+        existing = load_session_common_data(request)
         existing_metadata = existing["metadata"] if existing else {}
         
         # Build common metadata from individual fields (if provided)
@@ -359,7 +492,7 @@ def update_session_common_data_view(request: HttpRequest):
         
         # Save common data (job_text, cv_text, and metadata)
         save_session_common_data(
-            session_id=session_id,
+            request=request,
             job_text=job_text,
             cv_text=cv_text,
             metadata=existing_metadata,
@@ -382,9 +515,19 @@ def background_phase_view(request: HttpRequest, vendor: str):
     except json.JSONDecodeError:
         return JsonResponse({"detail": "Invalid JSON"}, status=400)
 
-    session_id = data.get("session_id")
-    if not session_id:
-        return JsonResponse({"detail": "session_id is required"}, status=400)
+    # Session ID comes from Django session cookie, not request body
+    from .session_helpers import get_session_id, load_session_common_data, check_session_exists
+    session_id = get_session_id(request)
+    
+    # Check if session exists - server tells client if it needs to restore
+    if not check_session_exists(request):
+        return JsonResponse({
+            "status": "session_lost",
+            "detail": "Session not found on server. Server restarted or session expired. Please restore session data.",
+            "session_id": session_id,
+            "requires_restore": True,
+            "error_code": "SESSION_NOT_FOUND",
+        }, status=410)  # 410 Gone - resource no longer available
 
     try:
         vendors = [ModelVendor(vendor)]
@@ -396,21 +539,28 @@ def background_phase_view(request: HttpRequest, vendor: str):
 
     try:
         from letter_writer.phased_service import _run_background_phase
-        from letter_writer.session_store import (
-            load_session_common_data,
-            load_all_vendor_data,
-        )
+        from letter_writer.session_store import set_current_request
+        
+        # Set request in thread-local so session_store can use Django sessions
+        set_current_request(request)
         
         # Load common data (read-only - background phase does NOT write common data)
-        common_data = load_session_common_data(session_id)
+        common_data = load_session_common_data(request)
         if common_data is None:
-            raise ValueError(f"Session {session_id} not found. Common data must be saved by extraction phase or 'start phases' API call first.")
+            return JsonResponse({
+                "status": "session_lost",
+                "detail": "Session data not found on server. Please restore session data.",
+                "session_id": session_id,
+                "requires_restore": True,
+                "error_code": "SESSION_DATA_NOT_FOUND",
+            }, status=410)
         
         # Metadata must exist in common store (created by extraction phase or session call)
         if "common" not in common_data["metadata"]:
             raise ValueError(f"Metadata not found in session. Please run extraction first or provide extraction data via /api/phases/session/")
         
         # Run background phase for this vendor (writes only vendor-specific data)
+        # Note: _run_background_phase still expects session_id for compatibility, but we'll update it to use request
         vendor_state = _run_background_phase(session_id, vendors[0], common_data)
         
         # Return only data for the requested vendor
@@ -440,9 +590,20 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
     except json.JSONDecodeError:
         return JsonResponse({"detail": "Invalid JSON"}, status=400)
 
-    session_id = data.get("session_id")
-    if not session_id:
-        return JsonResponse({"detail": "session_id and vendor are required"}, status=400)
+    # Session ID comes from Django session cookie, not request body
+    from .session_helpers import get_session_id, check_session_exists
+    session_id = get_session_id(request)
+    
+    # Check if session exists - server tells client if it needs to restore
+    if not check_session_exists(request):
+        return JsonResponse({
+            "status": "session_lost",
+            "detail": "Session not found on server. Server restarted or session expired. Please restore session data.",
+            "session_id": session_id,
+            "requires_restore": True,
+            "error_code": "SESSION_NOT_FOUND",
+        }, status=410)  # 410 Gone - resource no longer available
+    
     try:
         vendor_enum = ModelVendor(vendor)
     except ValueError as exc:
@@ -455,6 +616,10 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
     draft_override = data.get("draft_letter") if "draft_letter" in data else None
 
     try:
+        from letter_writer.session_store import set_current_request
+        # Set request in thread-local so session_store can use Django sessions
+        set_current_request(request)
+        
         state = advance_to_refinement(
             session_id=session_id,
             vendor=vendor_enum,
@@ -462,8 +627,6 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
             feedback_override=data.get("feedback_override"),
             company_report_override=data.get("company_report"),
             top_docs_override=data.get("top_docs"),
-            job_text_override=data.get("job_text"),
-            cv_text_override=data.get("cv_text"),
             fancy=fancy,
         )
     except ValueError as exc:
@@ -492,22 +655,35 @@ def draft_phase_view(request: HttpRequest, vendor: str):
     except json.JSONDecodeError:
         return JsonResponse({"detail": "Invalid JSON"}, status=400)
 
-    session_id = data.get("session_id")
-    if not session_id:
-        return JsonResponse({"detail": "session_id and vendor are required"}, status=400)
+    # Session ID comes from Django session cookie, not request body
+    from .session_helpers import get_session_id, check_session_exists
+    session_id = get_session_id(request)
+    
+    # Check if session exists - server tells client if it needs to restore
+    if not check_session_exists(request):
+        return JsonResponse({
+            "status": "session_lost",
+            "detail": "Session not found on server. Server restarted or session expired. Please restore session data.",
+            "session_id": session_id,
+            "requires_restore": True,
+            "error_code": "SESSION_NOT_FOUND",
+        }, status=410)  # 410 Gone - resource no longer available
+    
     try:
         vendor_enum = ModelVendor(vendor)
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
 
     try:
+        from letter_writer.session_store import set_current_request
+        # Set request in thread-local so session_store can use Django sessions
+        set_current_request(request)
+        
         state = advance_to_draft(
             session_id=session_id,
             vendor=vendor_enum,
             company_report_override=data.get("company_report"),
             top_docs_override=data.get("top_docs"),
-            job_text_override=data.get("job_text"),
-            cv_text_override=data.get("cv_text"),
         )
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
