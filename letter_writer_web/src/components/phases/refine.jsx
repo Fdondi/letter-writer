@@ -224,6 +224,7 @@ export function renderContent({
           </div>
           {activeFeedbackKey && (feedback[activeFeedbackKey] !== undefined || feedbackOverrides[activeFeedbackKey] !== undefined) && (
             <EditableFeedback
+              key={activeFeedbackKey}
               label={activeFeedbackKey}
               value={feedbackOverrides[activeFeedbackKey] ?? feedback[activeFeedbackKey] ?? ""}
               placeholder="Feedback"
