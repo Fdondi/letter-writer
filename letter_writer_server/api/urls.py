@@ -2,6 +2,13 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    # Authentication endpoints
+    path("auth/csrf-token/", views.csrf_token_view, name="csrf_token"),
+    path("auth/user/", views.current_user_view, name="current_user"),
+    path("auth/status/", views.auth_status_view, name="auth_status"),
+    path("auth/login/", views.login_view, name="login"),
+    path("auth/logout/", views.logout_view, name="logout"),
+    # API endpoints
     path("refresh/", views.refresh_view, name="refresh"),
     path("process-job/", views.process_job_view, name="process_job"),
     path("extract/", views.extract_view, name="extract"),

@@ -10,9 +10,90 @@ import io
 from datetime import datetime
 
 from django.http import JsonResponse, HttpRequest
-from django.views.decorators.csrf import csrf_exempt
+from django.middleware.csrf import get_token
+from django.contrib.auth import login, logout
+from django.contrib.auth.decorators import login_required
+from django.views.decorators.http import require_http_methods
 
 from .spam_prevention import prevent_duplicate_requests, get_in_flight_requests, clear_in_flight_requests
+
+
+def require_auth_user(request: HttpRequest):
+    """Helper to require authentication and return user ID.
+    
+    Uses Google OAuth UID (from SocialAccount) if available, otherwise Django user ID.
+    This ensures consistent identification using the Google account ID.
+    
+    Returns:
+        tuple: (user_id_str, None) if authenticated, (None, JsonResponse) if not
+        
+    Raises:
+        JsonResponse: HTTP 401 Unauthorized if not authenticated
+    """
+    if not request.user.is_authenticated:
+        from django.http import JsonResponse
+        return None, JsonResponse({"detail": "Authentication required"}, status=401)
+    
+    # Try to get Google OAuth UID first (preferred)
+    user_id = None
+    try:
+        from allauth.socialaccount.models import SocialAccount
+        social_account = SocialAccount.objects.filter(user=request.user, provider='google').first()
+        if social_account:
+            user_id = social_account.uid  # Google's user ID (stable, unique)
+    except (ImportError, Exception):
+        pass
+    
+    # Fallback to Django user ID if no Google account
+    if not user_id:
+        user_id = str(request.user.id)
+    
+    return str(user_id), None
+
+
+def _migrate_old_cv_data(user_id: str) -> bool:
+    """Migrate old personal_data/cv structure to new personal_data/{user_id} structure.
+    
+    Old structure: personal_data/cv with "revisions" field
+    New structure: personal_data/{user_id} with "cv_revisions" field
+    
+    This is automatically called on first access if user document doesn't exist.
+    
+    Args:
+        user_id: User ID (document ID for new structure)
+    
+    Returns:
+        True if migration occurred, False if nothing to migrate
+    """
+    personal_collection = get_personal_data_collection()
+    
+    # Check if old cv document exists
+    cv_doc_ref = personal_collection.document('cv')
+    cv_doc = cv_doc_ref.get()
+    
+    if not cv_doc.exists:
+        return False
+    
+    # Check if user document already exists (don't overwrite)
+    user_doc_ref = get_personal_data_document(user_id)
+    user_doc = user_doc_ref.get()
+    
+    if user_doc.exists:
+        return False  # Already migrated or exists
+    
+    # Migrate: old "revisions" → new "cv_revisions"
+    cv_data = cv_doc.to_dict()
+    old_revisions = cv_data.get('revisions', [])
+    
+    if old_revisions:
+        now = datetime.utcnow()
+        user_doc_ref.set({
+            'cv_revisions': old_revisions,  # Rename field from "revisions" to "cv_revisions"
+            'updated_at': now,
+        })
+        return True
+    
+    return False
 
 from letter_writer.service import refresh_repository, write_cover_letter
 from letter_writer.client import ModelVendor
@@ -26,6 +107,9 @@ from letter_writer.firestore_store import (
     get_collection,
     get_document,
     get_personal_data_collection,
+    get_personal_data_document,
+    get_user_data,
+    clear_user_data_cache,
     list_documents,
     upsert_document,
 )
@@ -37,6 +121,245 @@ from letter_writer.vector_store import (
 from letter_writer.config import env_default
 from openai import OpenAI
 import traceback
+
+
+# Authentication views
+
+@require_http_methods(["GET"])
+def csrf_token_view(request: HttpRequest):
+    """Get CSRF token for use in API requests."""
+    token = get_token(request)
+    return JsonResponse({"csrfToken": token})
+
+
+@require_http_methods(["GET"])
+def auth_status_view(request: HttpRequest):
+    """Get authentication status and configuration info."""
+    from django.conf import settings
+    
+    status = {
+        "authenticated": request.user.is_authenticated,
+        "user": None,
+        "auth_available": getattr(settings, "AUTHENTICATION_AVAILABLE", False),
+        "cors_available": getattr(settings, "CORS_AVAILABLE", False),
+    }
+    
+    if request.user.is_authenticated:
+        try:
+            from allauth.socialaccount.models import SocialAccount
+            social_account = SocialAccount.objects.filter(user=request.user).first()
+            provider = social_account.provider if social_account else None
+        except (ImportError, Exception):
+            provider = None
+        
+        status["user"] = {
+            "id": request.user.id,
+            "email": request.user.email,
+            "name": request.user.get_full_name() or request.user.email,
+            "provider": provider,
+        }
+    
+    return JsonResponse(status)
+
+
+@require_http_methods(["GET"])
+def current_user_view(request: HttpRequest):
+    """Get current authenticated user info."""
+    if request.user.is_authenticated:
+        # Check if user authenticated via social account (Google) - only if allauth is installed
+        social_account = None
+        try:
+            from allauth.socialaccount.models import SocialAccount
+            social_account = SocialAccount.objects.filter(user=request.user).first()
+            provider = social_account.provider if social_account else None
+        except ImportError:
+            # allauth not installed
+            provider = None
+        except Exception:
+            # Other error (e.g., table doesn't exist yet)
+            provider = None
+        
+        return JsonResponse({
+            "authenticated": True,
+            "user": {
+                "id": request.user.id,
+                "email": request.user.email,
+                "name": request.user.get_full_name() or request.user.email,
+                "provider": provider,
+            }
+        })
+    else:
+        return JsonResponse({
+            "authenticated": False,
+            "user": None
+        })
+
+
+@require_http_methods(["GET", "POST"])
+def login_view(request: HttpRequest):
+    """API endpoint for login (redirects to Google OAuth)."""
+    from django.shortcuts import redirect
+    
+    # If already authenticated, return user info
+    if request.user.is_authenticated:
+        return JsonResponse({
+            "status": "ok",
+            "authenticated": True,
+            "user": {
+                "id": request.user.id,
+                "email": request.user.email,
+                "name": request.user.get_full_name() or request.user.email,
+            }
+        })
+    
+    # Redirect to Google OAuth login
+    return redirect("/accounts/google/login/")
+
+
+def google_oauth_redirect(request):
+    """Custom view to redirect directly to Google OAuth, bypassing django-allauth consent page.
+    
+    This view overrides django-allauth's /accounts/google/login/ URL.
+    Instead of showing the intermediate consent page ("You are about to sign in..."),
+    it redirects directly to Google's OAuth endpoint.
+    
+    This constructs the OAuth URL manually using django-allauth's OAuth2Client and adapter class attributes.
+    """
+    try:
+        from allauth.socialaccount.providers.google.views import GoogleOAuth2Adapter
+        from allauth.socialaccount.models import SocialApp
+        from allauth.socialaccount.providers.oauth2.client import OAuth2Client
+        from django.contrib.sites.models import Site
+        from django.http import HttpResponseRedirect
+        from urllib.parse import urlencode
+        
+        # Get the current site
+        site = Site.objects.get_current(request)
+        
+        # Get Google SocialApp (prefer one associated with current site)
+        app = SocialApp.objects.filter(provider='google', sites__id=site.id).first()
+        if not app:
+            app = SocialApp.objects.filter(provider='google').first()
+        
+        if not app:
+            from django.http import HttpResponse
+            return HttpResponse(
+                "Google OAuth is not configured. Please run: python manage.py setup_google_oauth",
+                status=500
+            )
+        
+        # Use Google's standard OAuth URLs (these are constants)
+        # These match django-allauth's GoogleOAuth2Adapter defaults
+        authorize_url = 'https://accounts.google.com/o/oauth2/v2/auth'
+        access_token_url = 'https://oauth2.googleapis.com/token'
+        
+        # Build callback URL (same as django-allauth would use)
+        from django.contrib.sites.shortcuts import get_current_site
+        from django.conf import settings
+        
+        current_site = get_current_site(request)
+        site_domain = current_site.domain
+        
+        # Use ACCOUNT_DEFAULT_HTTP_PROTOCOL or detect from request
+        protocol = getattr(settings, 'ACCOUNT_DEFAULT_HTTP_PROTOCOL', 'http')
+        if request.is_secure() or 'K_SERVICE' in os.environ:  # GCP Cloud Run uses HTTPS
+            protocol = 'https'
+        elif 'localhost' in site_domain or '127.0.0.1' in site_domain or ':8000' in site_domain:
+            protocol = 'http'
+        
+        # Clean up domain (remove protocol if present, remove port if not needed)
+        if site_domain.startswith('http://') or site_domain.startswith('https://'):
+            site_domain = site_domain.split('://', 1)[1]
+        
+        # Build callback URL - django-allauth uses this pattern
+        callback_url = f"{protocol}://{site_domain}/accounts/google/login/callback/"
+        
+        # Get OAuth scope and params from settings or use defaults
+        socialaccount_providers = getattr(settings, 'SOCIALACCOUNT_PROVIDERS', {})
+        google_provider = socialaccount_providers.get('google', {})
+        scope = google_provider.get('SCOPE', ['profile', 'email'])
+        auth_params = google_provider.get('AUTH_PARAMS', {'access_type': 'online'})
+        
+        # Manually construct Google OAuth authorization URL
+        # OAuth2Client.get_redirect_url() seems to return relative URLs, so build it manually
+        from urllib.parse import urlencode
+        
+        # Build query parameters for Google OAuth
+        params = {
+            'client_id': app.client_id,
+            'redirect_uri': callback_url,
+            'scope': ' '.join(scope),
+            'response_type': 'code',
+            **auth_params  # Include additional params like access_type
+        }
+        
+        # Build the full Google OAuth authorization URL
+        auth_url = f"{authorize_url}?{urlencode(params)}"
+        
+        return HttpResponseRedirect(auth_url)
+        
+    except ImportError:
+        # django-allauth not available
+        from django.http import HttpResponse
+        return HttpResponse(
+            "django-allauth is not installed. Please install it first.",
+            status=500
+        )
+    except Exception as e:
+        # On error, fall back to django-allauth's default behavior
+        # Use django-allauth's OAuth2LoginView normally (will show consent page, but better than 500)
+        try:
+            from allauth.socialaccount.providers.google.views import GoogleOAuth2Adapter
+            from allauth.socialaccount.providers.oauth2.views import OAuth2LoginView
+            
+            # Create a view class that uses GoogleOAuth2Adapter
+            class FallbackGoogleLoginView(OAuth2LoginView):
+                adapter_class = GoogleOAuth2Adapter
+            
+            # Use the view class
+            view = FallbackGoogleLoginView.as_view()
+            return view(request)
+        except Exception as inner_e:
+            # If even that fails, just show the error
+            from django.http import HttpResponse
+            import traceback
+            return HttpResponse(
+                f"Error initiating Google OAuth: {str(e)}\n\nFallback error: {str(inner_e)}\n{traceback.format_exc()}",
+                status=500,
+                content_type='text/plain'
+            )
+
+
+@require_http_methods(["POST"])
+def logout_view(request: HttpRequest):
+    """Logout current user."""
+    from django.conf import settings
+    
+    # Log for debugging
+    print(f"[LOGOUT] Starting logout for user: {request.user}")
+    print(f"[LOGOUT] Session key before logout: {request.session.session_key}")
+    
+    # Clear Django auth
+    logout(request)
+    
+    # Flush session completely
+    request.session.flush()
+    
+    print(f"[LOGOUT] Session key after flush: {request.session.session_key}")
+    
+    response = JsonResponse({"status": "ok", "message": "Logged out successfully"})
+    
+    # Delete session cookie with explicit path to match how it was set
+    response.delete_cookie(
+        settings.SESSION_COOKIE_NAME,
+        path="/",
+        domain=getattr(settings, 'SESSION_COOKIE_DOMAIN', None),
+        samesite=getattr(settings, 'SESSION_COOKIE_SAMESITE', 'Lax'),
+    )
+    
+    print(f"[LOGOUT] Cookie deletion set for: {settings.SESSION_COOKIE_NAME}")
+    
+    return response
 
 
 # Utility helpers
@@ -113,7 +436,6 @@ def _translate_with_google(texts: List[str], target_language: str, source_langua
 
 # No additional business logic here; shared service functions are imported instead.
 
-@csrf_exempt
 def refresh_view(request: HttpRequest):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
@@ -144,7 +466,6 @@ def refresh_view(request: HttpRequest):
     return JsonResponse({"status": "ok"})
 
 
-@csrf_exempt
 @prevent_duplicate_requests(endpoint_path="process-job")
 def process_job_view(request: HttpRequest):
     if request.method != "POST":
@@ -173,37 +494,45 @@ def process_job_view(request: HttpRequest):
 
     # Persist generation: store job_text and AI letters; keep first letter as primary.
     try:
-        collection = get_collection()
-        job_text = data.get("job_text")
-        company_name = data.get("company_name")
-        ai_letters = [
-            {"vendor": vendor, "text": payload.get("text", ""), "cost": payload.get("cost")}
-            for vendor, payload in letters.items()
-        ]
-        primary_letter = next((l["text"] for l in ai_letters if l.get("text")), "")
-        
-        # Generate vector embedding
-        openai_client = OpenAI()
-        vector = embed(job_text, openai_client) if job_text else None
-        
-        document = upsert_document(
-            collection,
-            {
-                "company_name": company_name,
-                "job_text": job_text,
-                "ai_letters": ai_letters,
-                "letter_text": primary_letter,
-                "vector": vector,  # Firestore stores vector with document
-            },
-            allow_update=False,
-        )
+        # Require authentication for document storage
+        if not request.user.is_authenticated:
+            # Skip document storage if not authenticated (legacy endpoint)
+            pass
+        else:
+            user_id = str(request.user.id)
+            collection = get_collection()
+            job_text = data.get("job_text")
+            company_name = data.get("company_name")
+            ai_letters = [
+                {"vendor": vendor, "text": payload.get("text", ""), "cost": payload.get("cost")}
+                for vendor, payload in letters.items()
+            ]
+            primary_letter = next((l["text"] for l in ai_letters if l.get("text")), "")
+            
+            # Generate vector embedding
+            openai_client = OpenAI()
+            vector = embed(job_text, openai_client) if job_text else None
+            
+            document = upsert_document(
+                collection,
+                {
+                    "company_name": company_name,
+                    "job_text": job_text,
+                    "ai_letters": ai_letters,
+                    "letter_text": primary_letter,
+                    "vector": vector,  # Firestore stores vector with document
+                },
+                allow_update=False,
+                user_id=user_id,
+            )
+    except ValueError as e:
+        return JsonResponse({"detail": f"letters generated but failed to save: {e}"}, status=500)
     except Exception as exc:  # noqa: BLE001
         return JsonResponse({"detail": f"letters generated but failed to save: {exc}"}, status=500)
 
     return JsonResponse({"status": "ok", "letters": letters, "document": document})
 
 
-@csrf_exempt
 @prevent_duplicate_requests(endpoint_path="extract")
 def extract_view(request: HttpRequest):
     """Extract job metadata from job text. Uses a default vendor (openai) for extraction."""
@@ -237,13 +566,12 @@ def extract_view(request: HttpRequest):
         # Save common session data with extraction metadata
         cv_text = data.get("cv_text")
         if cv_text is None:
-            # Load CV from Firebase personal_data collection
-            try:
-                personal_collection = get_personal_data_collection()
-                cv_doc = personal_collection.document("cv").get()
-                if cv_doc.exists:
-                    cv_data = cv_doc.to_dict()
-                    revisions = cv_data.get("revisions", [])
+            # Load CV from user's personal data (cached, loaded once per request)
+            if request.user.is_authenticated:
+                try:
+                    user_id = str(request.user.id)
+                    user_data = get_user_data(user_id, use_cache=True)
+                    revisions = user_data.get("cv_revisions", [])
                     if revisions:
                         # Get the latest revision by comparing timestamps
                         def get_datetime(rev):
@@ -265,9 +593,9 @@ def extract_view(request: HttpRequest):
                         cv_text = latest.get("content", "")
                     else:
                         cv_text = ""
-                else:
+                except Exception:
                     cv_text = ""
-            except Exception:
+            else:
                 cv_text = ""
         
         # Save common data with extraction metadata (common to all vendors)
@@ -290,7 +618,6 @@ def extract_view(request: HttpRequest):
     )
 
 
-@csrf_exempt
 def init_session_view(request: HttpRequest):
     """Initialize a new session. Called when page loads or user first interacts.
     
@@ -358,7 +685,6 @@ def init_session_view(request: HttpRequest):
         return JsonResponse({"detail": str(exc)}, status=500)
 
 
-@csrf_exempt
 def restore_session_view(request: HttpRequest):
     """Restore session data from client.
     
@@ -397,7 +723,6 @@ def restore_session_view(request: HttpRequest):
         return JsonResponse({"detail": str(exc)}, status=500)
 
 
-@csrf_exempt
 def get_session_state_view(request: HttpRequest):
     """Get full session state for restoring frontend UI.
     
@@ -433,7 +758,6 @@ def get_session_state_view(request: HttpRequest):
         return JsonResponse({"detail": str(exc)}, status=500)
 
 
-@csrf_exempt
 def clear_session_view(request: HttpRequest):
     """Clear all session data.
     
@@ -462,7 +786,6 @@ def clear_session_view(request: HttpRequest):
         return JsonResponse({"detail": str(exc)}, status=500)
 
 
-@csrf_exempt
 @prevent_duplicate_requests(endpoint_path="phases/session")
 def update_session_common_data_view(request: HttpRequest):
     """Update common session data. Called when 'start phases' is clicked if user modified data.
@@ -489,13 +812,12 @@ def update_session_common_data_view(request: HttpRequest):
     job_text = data.get("job_text")
     cv_text = data.get("cv_text")
     if cv_text is None:
-        # Load CV from Firebase personal_data collection
-        try:
-            personal_collection = get_personal_data_collection()
-            cv_doc = personal_collection.document("cv").get()
-            if cv_doc.exists:
-                cv_data = cv_doc.to_dict()
-                revisions = cv_data.get("revisions", [])
+        # Load CV from user's personal data (cached, loaded once per request)
+        if request.user.is_authenticated:
+            try:
+                user_id = str(request.user.id)
+                user_data = get_user_data(user_id, use_cache=True)
+                revisions = user_data.get("cv_revisions", [])
                 if revisions:
                     # Get the latest revision by comparing timestamps
                     def get_datetime(rev):
@@ -517,9 +839,9 @@ def update_session_common_data_view(request: HttpRequest):
                     cv_text = latest.get("content", "")
                 else:
                     cv_text = ""
-            else:
+            except Exception:
                 cv_text = ""
-        except Exception:
+        else:
             cv_text = ""
 
     try:
@@ -562,7 +884,6 @@ def update_session_common_data_view(request: HttpRequest):
         return JsonResponse({"detail": str(exc)}, status=500)
 
 
-@csrf_exempt
 @prevent_duplicate_requests(endpoint_path="phases/background", use_vendor_in_key=True, replace_timeout=30.0)
 def background_phase_view(request: HttpRequest, vendor: str):
     if request.method != "POST":
@@ -637,7 +958,6 @@ def background_phase_view(request: HttpRequest, vendor: str):
         return JsonResponse({"detail": str(exc)}, status=500)
 
 
-@csrf_exempt
 @prevent_duplicate_requests(endpoint_path="phases/refine", use_vendor_in_key=True, replace_timeout=30.0)
 def refinement_phase_view(request: HttpRequest, vendor: str):
     if request.method != "POST":
@@ -702,7 +1022,6 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
     )
 
 
-@csrf_exempt
 @prevent_duplicate_requests(endpoint_path="phases/draft", use_vendor_in_key=True, replace_timeout=30.0)
 def draft_phase_view(request: HttpRequest, vendor: str):
     if request.method != "POST":
@@ -759,7 +1078,6 @@ def draft_phase_view(request: HttpRequest, vendor: str):
     )
 
 
-@csrf_exempt
 def vendors_view(request: HttpRequest):
     if request.method != "GET":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
@@ -767,7 +1085,6 @@ def vendors_view(request: HttpRequest):
     return JsonResponse({"vendors": vendors})
 
 
-@csrf_exempt
 def style_instructions_view(request: HttpRequest):
     if request.method == "GET":
         # Return current style instructions
@@ -800,7 +1117,6 @@ def style_instructions_view(request: HttpRequest):
         return JsonResponse({"detail": "Method not allowed"}, status=405)
 
 
-@csrf_exempt
 @prevent_duplicate_requests(endpoint_path="translate")
 def translate_view(request: HttpRequest):
     """Translate text between English and German."""
@@ -846,20 +1162,21 @@ def _require_json_body(request: HttpRequest) -> Dict[str, Any] | None:
         return None
 
 
-@csrf_exempt
 def documents_view(request: HttpRequest):
+    # Require authentication
+    user_id, error_response = require_auth_user(request)
+    if error_response:
+        return error_response
+    
     collection = get_collection()
 
     if request.method == "GET":
         params = request.GET
         docs = list_documents(
             collection,
+            user_id=user_id,  # Filter by user_id for security
             company_name=params.get("company_name"),
             role=params.get("role"),
-            status=params.get("status"),
-            vendor=params.get("vendor"),
-            model=params.get("model"),
-            tags=params.getlist("tags") if hasattr(params, "getlist") else None,
             limit=int(params.get("limit", 50)),
             skip=int(params.get("skip", 0)),
         )
@@ -883,24 +1200,45 @@ def documents_view(request: HttpRequest):
     
     # Persist document with vector (Firestore stores everything together)
     data["vector"] = vector
-    document = upsert_document(collection, data, allow_update=False)
+    try:
+        document = upsert_document(collection, data, allow_update=False, user_id=user_id)
+    except ValueError as e:
+        return _json_error(str(e), status=400)
 
     return JsonResponse({"document": document}, status=201)
 
 
-@csrf_exempt
 def document_detail_view(request: HttpRequest, document_id: str):
+    # Require authentication
+    user_id, error_response = require_auth_user(request)
+    if error_response:
+        return error_response
+    
     collection = get_collection()
-    existing = get_document(collection, document_id)
+    
     if request.method == "GET":
-        if not existing:
-            return _json_error("Not found", status=404)
-        return JsonResponse({"document": existing})
+        try:
+            existing = get_document(collection, document_id, user_id=user_id)
+            if not existing:
+                return _json_error("Not found", status=404)
+            return JsonResponse({"document": existing})
+        except PermissionError:
+            return _json_error("Not found", status=404)  # Don't leak existence of other users' documents
+        except ValueError as e:
+            return _json_error(str(e), status=400)
 
     if request.method == "DELETE":
-        if existing is None:
-            return _json_error("Not found", status=404)
+        try:
+            existing = get_document(collection, document_id, user_id=user_id)
+            if existing is None:
+                return _json_error("Not found", status=404)
+        except PermissionError:
+            return _json_error("Not found", status=404)  # Don't leak existence of other users' documents
+        except ValueError as e:
+            return _json_error(str(e), status=400)
+        
         # Firestore: delete document (vector is stored with document, so deleted together)
+        # Note: delete_documents doesn't check user_id, but we've verified ownership above
         delete_documents(collection, [document_id])
         return JsonResponse({"status": "deleted"})
 
@@ -911,16 +1249,31 @@ def document_detail_view(request: HttpRequest, document_id: str):
     if data is None:
         return _json_error("Invalid JSON")
 
-    if existing is None:
-        return _json_error("Not found", status=404)
+    try:
+        existing = get_document(collection, document_id, user_id=user_id)
+        if existing is None:
+            return _json_error("Not found", status=404)
+    except PermissionError:
+        return _json_error("Not found", status=404)  # Don't leak existence of other users' documents
+    except ValueError as e:
+        return _json_error(str(e), status=400)
 
     data["id"] = document_id
-    updated = upsert_document(collection, data, allow_update=True)
-    return JsonResponse({"document": updated})
+    try:
+        updated = upsert_document(collection, data, allow_update=True, user_id=user_id)
+        return JsonResponse({"document": updated})
+    except PermissionError:
+        return _json_error("Not found", status=404)  # Don't leak existence of other users' documents
+    except ValueError as e:
+        return _json_error(str(e), status=400)
 
 
-@csrf_exempt
 def document_negatives_view(request: HttpRequest, document_id: str):
+    # Require authentication
+    user_id, error_response = require_auth_user(request)
+    if error_response:
+        return error_response
+    
     if request.method != "POST":
         return _json_error("Method not allowed", status=405)
 
@@ -930,22 +1283,37 @@ def document_negatives_view(request: HttpRequest, document_id: str):
     negatives = data.get("negatives") or []
 
     collection = get_collection()
-    updated = append_negatives(collection, document_id, negatives)
-    if updated is None:
-        return _json_error("Not found", status=404)
-    return JsonResponse({"document": updated})
+    try:
+        updated = append_negatives(collection, document_id, negatives, user_id=user_id)
+        if updated is None:
+            return _json_error("Not found", status=404)
+        return JsonResponse({"document": updated})
+    except PermissionError:
+        return _json_error("Not found", status=404)  # Don't leak existence of other users' documents
+    except ValueError as e:
+        return _json_error(str(e), status=400)
 
 
-@csrf_exempt
 @prevent_duplicate_requests(endpoint_path="documents/reembed")
 def document_reembed_view(request: HttpRequest, document_id: str):
+    # Require authentication
+    user_id, error_response = require_auth_user(request)
+    if error_response:
+        return error_response
+    
     if request.method != "POST":
         return _json_error("Method not allowed", status=405)
 
     collection = get_collection()
-    doc = get_document(collection, document_id)
-    if not doc:
-        return _json_error("Not found", status=404)
+    try:
+        doc = get_document(collection, document_id, user_id=user_id)
+        if not doc:
+            return _json_error("Not found", status=404)
+    except PermissionError:
+        return _json_error("Not found", status=404)  # Don't leak existence of other users' documents
+    except ValueError as e:
+        return _json_error(str(e), status=400)
+    
     if not doc.get("job_text"):
         return _json_error("Document is missing job_text", status=400)
 
@@ -1002,31 +1370,53 @@ def _extract_text_from_file(file_content: bytes, filename: str) -> str:
         raise ValueError(f"Unsupported file type: {filename}. Supported: .txt, .md, .pdf")
 
 
-@csrf_exempt
 def personal_data_cv_view(request: HttpRequest):
-    """Get or update CV from personal_data collection."""
-    personal_collection = get_personal_data_collection()
-    cv_doc_ref = personal_collection.document("cv")
+    """Get or update CV from personal_data collection.
+    
+    Uses user_id as document ID: personal_data/{user_id}
+    Document structure:
+    {
+        "cv_revisions": [...],
+        "default_languages": [...],
+        "style_instructions": "...",
+        "updated_at": timestamp,
+    }
+    
+    This uses get_user_data() which can be cached in memory for the request duration.
+    """
+    # Require authentication
+    user_id, error_response = require_auth_user(request)
+    if error_response:
+        return error_response
     
     if request.method == "GET":
-        cv_doc = cv_doc_ref.get()
-        if not cv_doc.exists:
-            return JsonResponse({
-                "cv": None,
-                "revisions": [],
-            })
+        # Get user data (cached for request duration)
+        # On first access, migrate old personal_data/cv if it exists
+        # Note: user_id is already Google UID from require_auth_user()
+        user_data = get_user_data(user_id, use_cache=True)
         
-        cv_data = cv_doc.to_dict()
-        revisions = cv_data.get("revisions", [])
+        # If user document doesn't exist, check for old structure and migrate
+        if not user_data:
+            migrated = _migrate_old_cv_data(user_id)
+            if migrated:
+                # Clear cache and reload after migration
+                clear_user_data_cache(user_id)
+                user_data = get_user_data(user_id, use_cache=False)
+            else:
+                user_data = {}  # No old data to migrate
+        
+        revisions = user_data.get("cv_revisions", [])
         
         # Convert Firestore Timestamps to ISO strings and find latest
         latest_content = ""
         if revisions:
             # Convert timestamps to datetime objects for comparison, then to ISO strings
+            response_revisions = []
             revision_datetimes = []
             for rev in revisions:
-                if "created_at" in rev:
-                    ts = rev["created_at"]
+                rev_copy = dict(rev)
+                if "created_at" in rev_copy:
+                    ts = rev_copy["created_at"]
                     # Convert to datetime if it's a Firestore Timestamp
                     if hasattr(ts, "timestamp"):  # Firestore Timestamp
                         dt = datetime.fromtimestamp(ts.timestamp())
@@ -1040,19 +1430,24 @@ def personal_data_cv_view(request: HttpRequest):
                             dt = datetime.min
                     else:
                         dt = datetime.min
-                    rev["created_at"] = dt.isoformat()
-                    revision_datetimes.append((dt, rev))
+                    rev_copy["created_at"] = dt.isoformat()
+                    revision_datetimes.append((dt, rev_copy))
                 else:
-                    revision_datetimes.append((datetime.min, rev))
+                    revision_datetimes.append((datetime.min, rev_copy))
             
             # Find latest revision by datetime
             if revision_datetimes:
                 latest_dt, latest = max(revision_datetimes, key=lambda x: x[0])
                 latest_content = latest.get("content", "")
+                response_revisions = [rev for _, rev in sorted(revision_datetimes, key=lambda x: x[0], reverse=True)]
+            else:
+                response_revisions = []
+        else:
+            response_revisions = []
         
         return JsonResponse({
             "cv": latest_content,
-            "revisions": revisions,
+            "revisions": response_revisions,
         })
     
     if request.method == "POST":
@@ -1091,10 +1486,11 @@ def personal_data_cv_view(request: HttpRequest):
                 return JsonResponse({"detail": "content is required"}, status=400)
             source = data.get("source", "manual_edit")
         
-        # Get existing document
-        cv_doc = cv_doc_ref.get()
-        existing_data = cv_doc.to_dict() if cv_doc.exists else {}
-        revisions = existing_data.get("revisions", [])
+        # Get existing user document (using user_id as document ID)
+        user_doc_ref = get_personal_data_document(user_id)
+        user_doc = user_doc_ref.get()
+        existing_data = user_doc.to_dict() if user_doc.exists else {}
+        revisions = existing_data.get("cv_revisions", [])
         
         # Create new revision
         now = datetime.utcnow()
@@ -1107,11 +1503,15 @@ def personal_data_cv_view(request: HttpRequest):
         
         revisions.append(new_revision)
         
-        # Update document
-        cv_doc_ref.set({
-            "revisions": revisions,
+        # Update user document (merge with existing fields like default_languages, style_instructions)
+        user_doc_ref = get_personal_data_document(user_id)
+        user_doc_ref.set({
+            "cv_revisions": revisions,
             "updated_at": now,
         }, merge=True)
+        
+        # Clear cache after update
+        clear_user_data_cache(user_id)
         
         # Convert timestamps for response
         response_revisions = []
@@ -1123,6 +1523,9 @@ def personal_data_cv_view(request: HttpRequest):
                     rev_copy["created_at"] = ts.isoformat()
                 elif isinstance(ts, datetime):
                     rev_copy["created_at"] = ts.isoformat()
+                elif hasattr(ts, "timestamp"):  # Firestore Timestamp
+                    dt = datetime.fromtimestamp(ts.timestamp())
+                    rev_copy["created_at"] = dt.isoformat()
             response_revisions.append(rev_copy)
         
         return JsonResponse({
@@ -1139,7 +1542,6 @@ def personal_data_cv_view(request: HttpRequest):
 # ---------------------------------------------------------------------------
 
 
-@csrf_exempt
 def debug_in_flight_requests_view(request: HttpRequest):
     """Debug endpoint to inspect in-flight requests."""
     if request.method != "GET":
@@ -1152,7 +1554,6 @@ def debug_in_flight_requests_view(request: HttpRequest):
     })
 
 
-@csrf_exempt
 def debug_clear_in_flight_requests_view(request: HttpRequest):
     """Debug endpoint to clear all in-flight requests."""
     if request.method != "POST":

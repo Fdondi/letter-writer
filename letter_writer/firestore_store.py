@@ -26,9 +26,96 @@ def get_collection():
 
 
 def get_personal_data_collection():
-    """Return the Firestore collection reference for personal data."""
+    """Return the Firestore collection reference for personal data.
+    
+    Uses a flat structure where user_id is the document ID:
+    - personal_data/{user_id} contains all user's personal data (CV, settings, etc.)
+    """
     client = get_firestore_client()
     return client.collection("personal_data")
+
+
+def get_personal_data_document(user_id: str):
+    """Get the personal data document reference for a specific user.
+    
+    Document ID = user_id. Document structure:
+    {
+        "cv_revisions": [{"content": str, "source": str, "created_at": timestamp, ...}, ...],
+        "default_languages": [str, ...],
+        "style_instructions": str,
+        "updated_at": timestamp,
+    }
+    
+    Args:
+        user_id: User ID (document ID = user_id)
+    
+    Returns:
+        Firestore document reference: personal_data/{user_id}
+    """
+    if not user_id:
+        raise ValueError("user_id is required for Firestore personal_data operations")
+    return get_personal_data_collection().document(str(user_id))
+
+
+def get_user_data(user_id: str, use_cache: bool = True) -> dict:
+    """Get user's personal data (CV, settings, etc.) with optional caching.
+    
+    This retrieves the entire user document once and can be cached for the request duration.
+    Document ID = user_id, so it's a direct lookup without queries.
+    
+    Args:
+        user_id: User ID (document ID = user_id)
+        use_cache: If True, cache result for request duration (default: True)
+    
+    Returns:
+        dict with keys: cv_revisions, default_languages, style_instructions, etc.
+        Empty dict if document doesn't exist
+    
+    Raises:
+        ValueError: If user_id is not provided
+    """
+    if not user_id:
+        raise ValueError("user_id is required for Firestore personal_data operations")
+    
+    # Request-scoped cache (thread-local would be better, but simple dict works for single-threaded requests)
+    # In production, consider using request-local storage or a proper cache
+    cache_key = f"user_data_{user_id}"
+    if use_cache and hasattr(get_user_data, "_cache"):
+        cache = getattr(get_user_data, "_cache", {})
+        if cache_key in cache:
+            return cache[cache_key]
+    else:
+        if not hasattr(get_user_data, "_cache"):
+            setattr(get_user_data, "_cache", {})
+    
+    doc_ref = get_personal_data_document(user_id)
+    doc = doc_ref.get()
+    
+    if not doc.exists:
+        user_data = {}
+    else:
+        user_data = doc.to_dict() or {}
+    
+    # Cache result for request duration
+    if use_cache:
+        getattr(get_user_data, "_cache")[cache_key] = user_data
+    
+    return user_data
+
+
+def clear_user_data_cache(user_id: str = None):
+    """Clear cached user data (call after updates).
+    
+    Args:
+        user_id: Specific user ID to clear, or None to clear all
+    """
+    if hasattr(get_user_data, "_cache"):
+        cache = getattr(get_user_data, "_cache", {})
+        if user_id:
+            cache_key = f"user_data_{user_id}"
+            cache.pop(cache_key, None)
+        else:
+            cache.clear()
 
 
 def _prepare_ai_letters(ai_letters: Optional[List[dict]]) -> List[dict]:
@@ -69,14 +156,21 @@ def serialize_document(doc_dict: dict, doc_id: str) -> dict:
     return result
 
 
-def upsert_document(collection, data: dict, *, allow_update: bool = True) -> dict:
+def upsert_document(collection, data: dict, *, allow_update: bool = True, user_id: Optional[str] = None) -> dict:
     """Insert or update a document. Returns the stored document.
     
     Args:
         collection: Firestore collection reference
         data: Document data dict
         allow_update: If True, update existing document; if False, only insert
+        user_id: User ID to scope the document (required for multi-user security)
+    
+    Raises:
+        ValueError: If user_id is not provided
     """
+    if not user_id:
+        raise ValueError("user_id is required for Firestore document operations")
+    
     now = datetime.utcnow()
     doc_id = data.get("id") or data.get("document_id") or data.get("_id") or str(uuid4())
     company_name_raw = data.get("company_name") or data.get("company")
@@ -100,6 +194,10 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True) -> dic
         existing_doc = doc_ref.get()
         existing_data = existing_doc.to_dict() if existing_doc.exists else None
         
+        # Security check: ensure user_id matches on update
+        if existing_data and existing_data.get("user_id") != user_id:
+            raise PermissionError(f"Document {doc_id} belongs to a different user")
+        
         if existing_data:
             # Update existing document
             version = int(existing_data.get("version", 1))
@@ -114,6 +212,7 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True) -> dic
         version = 1
     
     base = {
+        "user_id": user_id,  # Always store user_id
         "company_name": company_name,
         "company_name_original": data.get("company_name") or data.get("company"),  # Store original for display
         "role": role,
@@ -122,15 +221,11 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True) -> dic
         "salary": data.get("salary"),
         "requirements": requirements_value,
         "date_applied": data.get("date_applied"),
-        "status": data.get("status"),
-        "vendor": data.get("vendor"),
-        "model": data.get("model"),
         "job_text": (data.get("job_text") or "").strip(),
         "letter_text": (data.get("letter_text") or "").strip(),
         "negative_letter_text": (data.get("negative_letter_text") or "").strip() if data.get("negative_letter_text") else None,
         "blocks": data.get("blocks") or [],
         "ai_letters": ai_letters,
-        "tags": data.get("tags") or [],
         "notes": data.get("notes"),
         "version": version,
         "updated_at": now,
@@ -157,29 +252,67 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True) -> dic
     return serialize_document(stored_dict, doc_id)
 
 
-def get_document(collection, doc_id: str) -> dict | None:
-    """Get a document by ID."""
+def get_document(collection, doc_id: str, user_id: Optional[str] = None) -> dict | None:
+    """Get a document by ID.
+    
+    Args:
+        collection: Firestore collection reference
+        doc_id: Document ID
+        user_id: User ID to verify ownership (required for security)
+    
+    Returns:
+        Document dict if found and owned by user, None otherwise
+    
+    Raises:
+        ValueError: If user_id is not provided
+        PermissionError: If document exists but belongs to a different user
+    """
+    if not user_id:
+        raise ValueError("user_id is required for Firestore document operations")
+    
     doc_ref = collection.document(doc_id)
     doc = doc_ref.get()
     if not doc.exists:
         return None
-    return serialize_document(doc.to_dict(), doc_id)
+    
+    doc_data = doc.to_dict()
+    # Security check: ensure document belongs to the requesting user
+    if doc_data.get("user_id") != user_id:
+        raise PermissionError(f"Document {doc_id} belongs to a different user")
+    
+    return serialize_document(doc_data, doc_id)
 
 
 def list_documents(
     collection,
     *,
+    user_id: Optional[str] = None,
     company_name: Optional[str] = None,
     role: Optional[str] = None,
-    status: Optional[str] = None,
-    vendor: Optional[str] = None,
-    model: Optional[str] = None,
-    tags: Optional[Iterable[str]] = None,
     limit: int = 50,
     skip: int = 0,
 ) -> List[dict]:
-    """List documents with optional filters."""
-    query = collection
+    """List documents with optional filters.
+    
+    Args:
+        collection: Firestore collection reference
+        user_id: User ID to filter documents (required for security)
+        company_name: Filter by company name (prefix match)
+        role: Filter by role (prefix match)
+        limit: Maximum number of documents to return
+        skip: Number of documents to skip
+    
+    Returns:
+        List of document dicts belonging to the user
+    
+    Raises:
+        ValueError: If user_id is not provided
+    """
+    if not user_id:
+        raise ValueError("user_id is required for Firestore document operations")
+    
+    # Always filter by user_id first (required for security)
+    query = collection.where("user_id", "==", user_id)
     
     # Apply filters - note: Firestore doesn't support regex, so we use exact match or prefix
     # Store company_name lowercase for consistent queries
@@ -195,24 +328,6 @@ def list_documents(
         role_normalized = role.lower().strip()
         query = query.where("role", ">=", role_normalized)
         query = query.where("role", "<=", role_normalized + "\uf8ff")
-    
-    if status:
-        query = query.where("status", "==", status)
-    
-    if vendor:
-        query = query.where("vendor", "==", vendor)
-    
-    if model:
-        query = query.where("model", "==", model)
-    
-    if tags:
-        # Firestore supports array-contains for each tag (need to use array-contains-any or multiple filters)
-        # For array-contains-all, we need to chain array-contains filters
-        tags_list = list(tags)
-        if tags_list:
-            # Firestore doesn't have array-contains-all, so filter client-side or use multiple array-contains
-            # For now, use array-contains-any which requires at least one tag
-            query = query.where("tags", "array-contains-any", tags_list)
     
     # Order by updated_at descending
     query = query.order_by("updated_at", direction=firestore.Query.DESCENDING)
@@ -231,10 +346,27 @@ def list_documents(
     return result
 
 
-def append_negatives(collection, doc_id: str, negatives: List[dict]) -> dict | None:
-    """Append negatives to ai_letters array."""
+def append_negatives(collection, doc_id: str, negatives: List[dict], user_id: Optional[str] = None) -> dict | None:
+    """Append negatives to ai_letters array.
+    
+    Args:
+        collection: Firestore collection reference
+        doc_id: Document ID
+        negatives: List of negative letter dicts to append
+        user_id: User ID to verify ownership (required for security)
+    
+    Returns:
+        Updated document dict if found and owned by user, None otherwise
+    
+    Raises:
+        ValueError: If user_id is not provided
+        PermissionError: If document belongs to a different user
+    """
+    if not user_id:
+        raise ValueError("user_id is required for Firestore document operations")
+    
     if not negatives:
-        return get_document(collection, doc_id)
+        return get_document(collection, doc_id, user_id=user_id)
     
     now = datetime.utcnow()
     prepared = _prepare_ai_letters(negatives)
@@ -247,6 +379,10 @@ def append_negatives(collection, doc_id: str, negatives: List[dict]) -> dict | N
         return None
     
     current_data = current_doc.to_dict()
+    # Security check: ensure document belongs to the requesting user
+    if current_data.get("user_id") != user_id:
+        raise PermissionError(f"Document {doc_id} belongs to a different user")
+    
     current_ai_letters = current_data.get("ai_letters", [])
     updated_ai_letters = current_ai_letters + prepared
     
@@ -256,11 +392,26 @@ def append_negatives(collection, doc_id: str, negatives: List[dict]) -> dict | N
         "updated_at": now,
     })
     
-    return get_document(collection, doc_id)
+    return get_document(collection, doc_id, user_id=user_id)
 
 
-def documents_by_ids(collection, ids: List[str]) -> List[dict]:
-    """Get multiple documents by IDs."""
+def documents_by_ids(collection, ids: List[str], user_id: Optional[str] = None) -> List[dict]:
+    """Get multiple documents by IDs.
+    
+    Args:
+        collection: Firestore collection reference
+        ids: List of document IDs
+        user_id: User ID to filter documents (required for security)
+    
+    Returns:
+        List of document dicts belonging to the user
+    
+    Raises:
+        ValueError: If user_id is not provided
+    """
+    if not user_id:
+        raise ValueError("user_id is required for Firestore document operations")
+    
     if not ids:
         return []
     
@@ -271,6 +422,9 @@ def documents_by_ids(collection, ids: List[str]) -> List[dict]:
     result = []
     for doc in docs:
         if doc.exists:
-            result.append(serialize_document(doc.to_dict(), doc.id))
+            doc_data = doc.to_dict()
+            # Security check: only return documents belonging to the requesting user
+            if doc_data.get("user_id") == user_id:
+                result.append(serialize_document(doc_data, doc.id))
     
     return result

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { fetchWithHeartbeat } from "../utils/apiHelpers";
 
 export default function PersonalDataPage() {
   const [cv, setCv] = useState("");
@@ -39,18 +40,14 @@ export default function PersonalDataPage() {
     try {
       setSaving(true);
       setError(null);
-      const res = await fetch("/api/personal-data/cv/", {
+      const result = await fetchWithHeartbeat("/api/personal-data/cv/", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify({
           content: editedCv,
           source: "manual_edit",
         }),
       });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
+      const data = result.data;
       setCv(data.cv || "");
       setRevisions(data.revisions || []);
       setIsEditing(false);
@@ -85,12 +82,11 @@ export default function PersonalDataPage() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const res = await fetch("/api/personal-data/cv/", {
+      const result = await fetchWithHeartbeat("/api/personal-data/cv/", {
         method: "POST",
         body: formData,
       });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
+      const data = result.data;
       setCv(data.cv || "");
       setRevisions(data.revisions || []);
       // Clear file input

@@ -11,4 +11,9 @@ pytest>=8.4.0
 pytest-xdist[psutil] >=3.8.0
 Django>=4.2
 tdqm
-PyPDF2>=3.0.0 
+PyPDF2>=3.0.0
+django-allauth>=0.57.0
+django-cors-headers>=4.3.1
+PyJWT>=2.0.0  # Required by django-allauth for OAuth providers
+cryptography>=3.0.0  # Required by django-allauth for OAuth providers
+requests-oauthlib>=1.0.0  # Required by django-allauth for OAuth providers 

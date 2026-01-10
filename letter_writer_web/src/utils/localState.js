@@ -215,19 +215,13 @@ export async function syncStateToServer(state) {
     });
     
     // Restore session on server
-    const response = await fetch("/api/phases/restore/", {
+    const { fetchWithHeartbeat } = await import("./apiHelpers.js");
+    const result_obj = await fetchWithHeartbeat("/api/phases/restore/", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(sessionData),
     });
     
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Failed to sync state to server session:", errorText);
-      return false;
-    }
-    
-    const result = await response.json();
+    const result = result_obj.data;
     console.log("[RESTORE] Session restored successfully:", result);
     return true;
   } catch (e) {

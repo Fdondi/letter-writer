@@ -35,6 +35,10 @@ services:
       # This overrides the CV_PATH from .env file, so local .env can keep Windows paths
       # The CV directory is mounted at /app/cv-external
       - CV_PATH=cv-external/Experience.md
+      # Google OAuth credentials (explicitly set to ensure they're loaded)
+      - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}
+      - GOOGLE_OAUTH_SECRET=${GOOGLE_OAUTH_SECRET}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
     env_file:
       - .env
     command: python letter_writer_server/manage.py runserver 0.0.0.0:8000

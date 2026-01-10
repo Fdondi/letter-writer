@@ -7,8 +7,9 @@ import DocumentsPage from "./components/DocumentsPage";
 import PersonalDataPage from "./components/PersonalDataPage";
 import LanguageConfig from "./components/LanguageConfig";
 import LanguageSelector from "./components/LanguageSelector";
+import AuthButton from "./components/AuthButton";
 import { splitIntoParagraphs } from "./utils/split";
-import { fetchWithHeartbeat, retryApiCall } from "./utils/apiHelpers";
+import { fetchWithHeartbeat, retryApiCall, initializeCsrfToken, getCsrfToken } from "./utils/apiHelpers";
 import { phases as phaseModules } from "./components/phases";
 import { translateText } from "./utils/translate";
 import { useLanguages } from "./contexts/LanguageContext";
@@ -25,6 +26,12 @@ function generateColors(vendors) {
 }
 
 export default function App() {
+  // ALL hooks must be declared before any conditional returns (React rules)
+  // Authentication state
+  const [isAuthenticated, setIsAuthenticated] = useState(null); // null = checking, true = authenticated, false = not authenticated
+  const [checkingAuth, setCheckingAuth] = useState(true); // Start checking on mount
+  
+  // All other state hooks (must be before conditional returns)
   const [vendors, setVendors] = useState([]);
   const [vendorColors, setVendorColors] = useState({});
   const [vendorParagraphs, setVendorParagraphs] = useState({});
@@ -67,6 +74,47 @@ export default function App() {
   // Registry of phase objects from PhaseFlow
   const phaseRegistryRef = React.useRef(null);
   const [, setPhaseRegistryTrigger] = useState(0); // For re-rendering when registry changes
+  
+  // Check authentication status on mount
+  useEffect(() => {
+    // Check authentication status immediately
+    fetch("/api/auth/status/", {
+      credentials: "include",
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.authenticated) {
+          setIsAuthenticated(true);
+          // Initialize CSRF token after authentication is confirmed
+          // This ensures the token is available for subsequent API calls
+          initializeCsrfToken().catch((e) => {
+            console.warn("Failed to initialize CSRF token after auth:", e);
+          });
+        } else {
+          // Not authenticated - redirect to Google OAuth login
+          const returnUrl = window.location.pathname + window.location.search;
+          if (returnUrl && returnUrl !== "/accounts/google/login/") {
+            sessionStorage.setItem("authReturnUrl", returnUrl);
+          }
+          window.location.href = "/accounts/google/login/";
+          setIsAuthenticated(false);
+        }
+        setCheckingAuth(false);
+      })
+      .catch((e) => {
+        console.error("Failed to check auth status:", e);
+        // On error, redirect to Google OAuth login
+        const returnUrl = window.location.pathname + window.location.search;
+        if (returnUrl && returnUrl !== "/accounts/google/login/") {
+          sessionStorage.setItem("authReturnUrl", returnUrl);
+        }
+        window.location.href = "/accounts/google/login/";
+        setIsAuthenticated(false);
+        setCheckingAuth(false);
+      });
+  }, []);
+  
+
 
   // Helper function to get current state for session restoration
   const getStateForRestore = React.useCallback(() => {
@@ -148,18 +196,22 @@ export default function App() {
     }
   };
 
-  // Initialize session when component mounts
+  // Initialize CSRF token and session when component mounts
   useEffect(() => {
+    // Initialize CSRF token first
+    initializeCsrfToken().catch((e) => {
+      console.warn("Failed to initialize CSRF token:", e);
+    });
+    
     const sessionId =
       typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
         : Math.random().toString(36).slice(2);
     setPhaseSessionId(sessionId);
     
-    // Initialize session on backend
-    fetch("/api/phases/init/", {
+    // Initialize session on backend (with CSRF token)
+    fetchWithHeartbeat("/api/phases/init/", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: sessionId }),
     }).catch((e) => {
       console.error("Failed to initialize session:", e);
@@ -167,9 +219,11 @@ export default function App() {
     });
   }, []);
 
-  // Fetch vendors on mount
+  // Fetch vendors on mount (GET request, no CSRF header needed)
   useEffect(() => {
-    fetch("/api/vendors/")
+    fetch("/api/vendors/", {
+      credentials: 'include', // Include cookies for session
+    })
       .then((res) => res.json())
       .then((data) => {
         const vendorList = data.vendors || [];
@@ -179,6 +233,88 @@ export default function App() {
       })
       .catch((e) => setError(String(e)));
   }, []);
+
+  // NOW we can do conditional returns (after all hooks are declared)
+  
+  // While checking authentication or if not authenticated, show loading/login
+  // Only render main app content if authenticated
+  if (checkingAuth) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          minHeight: "100vh",
+          backgroundColor: "var(--bg-color)",
+          color: "var(--text-color)",
+        }}
+      >
+        <div>Checking authentication...</div>
+      </div>
+    );
+  }
+  
+  if (!isAuthenticated) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          minHeight: "100vh",
+          backgroundColor: "var(--bg-color)",
+          color: "var(--text-color)",
+          padding: "20px",
+        }}
+      >
+        <div
+          style={{
+            maxWidth: "400px",
+            width: "100%",
+            padding: "40px",
+            backgroundColor: "var(--panel-bg)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "8px",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+            textAlign: "center",
+          }}
+        >
+          <h1 style={{ marginTop: 0, marginBottom: "10px", fontSize: "24px", fontWeight: 600 }}>
+            Letter Writer
+          </h1>
+          <p style={{ marginBottom: "30px", color: "var(--text-color)", opacity: 0.8 }}>
+            Sign in to continue
+          </p>
+          <button
+            onClick={() => {
+              window.location.href = "/accounts/google/login/";
+            }}
+            style={{
+              width: "100%",
+              padding: "12px 24px",
+              fontSize: "16px",
+              fontWeight: 600,
+              backgroundColor: "#4285f4",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor: "pointer",
+              transition: "background-color 0.2s",
+            }}
+            onMouseOver={(e) => {
+              e.target.style.backgroundColor = "#357ae8";
+            }}
+            onMouseOut={(e) => {
+              e.target.style.backgroundColor = "#4285f4";
+            }}
+          >
+            Sign in with Google
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const toggleVendor = (vendor, checked) => {
     setSelectedVendors((prev) => {
@@ -208,19 +344,14 @@ export default function App() {
     setPhaseSessionId(sessionId);
     
     try {
-      const res = await fetch("/api/extract/", {
+      const result = await fetchWithHeartbeat("/api/extract/", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           job_text: jobText,
           session_id: sessionId,
         }),
       });
-      if (!res.ok) {
-        const detail = await res.text();
-        throw new Error(detail || "Failed to extract data");
-      }
-      const data = await res.json();
+      const data = result.data;
       const extracted = data.extraction || {};
       if (extracted.company_name) setCompanyName(extracted.company_name);
       if (extracted.job_title) setJobTitle(extracted.job_title);
@@ -314,13 +445,11 @@ export default function App() {
     const method = documentId ? "PUT" : "POST";
     try {
       setSavingFinal(true);
-      const res = await fetch(url, {
+      const result = await fetchWithHeartbeat(url, {
         method,
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
+      const data = result.data;
       if (!documentId && data.document?.id) {
         setDocumentId(data.document.id);
       }
@@ -408,9 +537,8 @@ export default function App() {
     try {
       // If extraction was edited, save it to session first
       if (extractionEdited) {
-        await fetch("/api/phases/session/", {
+        await fetchWithHeartbeat("/api/phases/session/", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             session_id: phaseSessionId,
             job_text: jobText,
@@ -492,9 +620,8 @@ export default function App() {
       setPhaseSessionId(initialSessionId);
       // Initialize session if not already done
       try {
-        await fetch("/api/phases/init/", {
+        await fetchWithHeartbeat("/api/phases/init/", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ session_id: initialSessionId }),
         });
       } catch (e) {
@@ -543,9 +670,8 @@ export default function App() {
           requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
         };
         
-        await fetch("/api/phases/session/", {
+        await fetchWithHeartbeat("/api/phases/session/", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(sessionPayload),
         });
       } catch (e) {
@@ -1206,7 +1332,7 @@ export default function App() {
           }}
         >
           <h1 style={{ margin: 0, color: "var(--text-color)" }}>Letter Writer</h1>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <button
               onClick={() => setActiveTab("compose")}
               style={{
@@ -1265,6 +1391,7 @@ export default function App() {
             >
               ⚙️ Style
             </button>
+            <AuthButton />
           </div>
         </div>
 
