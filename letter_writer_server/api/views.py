@@ -226,6 +226,7 @@ def google_oauth_redirect(request):
     This constructs the OAuth URL manually using django-allauth's OAuth2Client and adapter class attributes.
     """
     try:
+        import os
         from allauth.socialaccount.providers.google.views import GoogleOAuth2Adapter
         from allauth.socialaccount.models import SocialApp
         from allauth.socialaccount.providers.oauth2.client import OAuth2Client

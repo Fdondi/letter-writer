@@ -611,6 +611,8 @@ export default function App() {
     
     const vendorList = Array.from(selectedVendors);
     // Session should already be initialized on mount, but ensure it exists
+    // Track if we're creating a new session (phaseSessionId was null)
+    const isNewSession = !phaseSessionId;
     const initialSessionId = phaseSessionId || (
       typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
@@ -649,13 +651,15 @@ export default function App() {
       extractedData.job_text !== currentData.job_text;
 
     // Update common session data if:
+    // - This is a new session (e.g., after clicking "Back to Input"), OR
     // - No extraction was called (extractedData is null), OR
     // - User modified data after extraction
     // Wait for it to complete before starting background phases
     // Call session endpoint if:
-    // 1. Data was modified after extraction, OR
-    // 2. No extraction was called (user manually input data)
-    const shouldUpdateSession = dataModified || !extractedData;
+    // 1. This is a new session (needs to be populated with data), OR
+    // 2. Data was modified after extraction, OR
+    // 3. No extraction was called (user manually input data)
+    const shouldUpdateSession = isNewSession || dataModified || !extractedData;
     if (shouldUpdateSession) {
       try {
         // Send individual fields that the user sees in the webpage
