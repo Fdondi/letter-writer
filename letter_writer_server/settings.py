@@ -286,11 +286,27 @@ if AUTHENTICATION_AVAILABLE:
     SOCIALACCOUNT_LOGIN_ON_GET = True  # Skip intermediate consent page, redirect directly to OAuth provider on GET request
     
     # Google OAuth configuration
-    # Note: django-allauth uses SocialApplication model in database for credentials
-    # Create via Django admin or shell, not via settings
-    # Settings here are only for provider-specific options
+    # Credentials are read ONLY from environment variables (never stored in database)
+    # django-allauth supports both database (SocialApp model) and settings.py configuration
+    # We use settings.py exclusively - no database storage of OAuth secrets
+    google_client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
+    google_secret = os.environ.get("GOOGLE_OAUTH_SECRET", "")
+    
+    # Log OAuth configuration status (without exposing secrets)
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"[OAuth Config] Client ID present: {bool(google_client_id)}, Secret present: {bool(google_secret)}")
+    if google_client_id:
+        logger.debug(f"[OAuth Config] Client ID (first 10 chars): {google_client_id[:10]}...")
+    if not google_secret:
+        logger.warning("[OAuth Config] GOOGLE_OAUTH_SECRET not set - OAuth callbacks will fail!")
+    
     SOCIALACCOUNT_PROVIDERS = {
         "google": {
+            "APP": {
+                "client_id": google_client_id,
+                "secret": google_secret,
+            },
             "SCOPE": [
                 "profile",
                 "email",
@@ -299,8 +315,6 @@ if AUTHENTICATION_AVAILABLE:
                 "access_type": "online",
                 "prompt": "select_account",  # Force account selection screen
             },
-            # APP credentials come from SocialApplication model in database, not from settings
-            # Use Django admin or shell to create/update: SocialApp(provider='google', ...)
         }
     }
 else:
@@ -337,4 +351,53 @@ CSRF_COOKIE_HTTPONLY = False  # Allow JavaScript to read CSRF token (required fo
 CSRF_COOKIE_SECURE = os.environ.get("DJANGO_CSRF_COOKIE_SECURE", "false").lower() in ("1", "true", "yes")  # HTTPS only in production
 CSRF_COOKIE_SAMESITE = "Lax"  # CSRF protection
 CSRF_USE_SESSIONS = False  # Use cookies, not sessions (default)
-CSRF_COOKIE_NAME = "csrftoken"  # Standard Django CSRF cookie name 
+CSRF_COOKIE_NAME = "csrftoken"  # Standard Django CSRF cookie name
+
+# Logging configuration
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "{levelname} {asctime} {module} {message}",
+            "style": "{",
+        },
+        "simple": {
+            "format": "{levelname} {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",
+    },
+    "loggers": {
+        "letter_writer_server.api.views": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "letter_writer_server.api.signals": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "letter_writer_server.settings": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        # Log OAuth-related messages from django-allauth
+        "allauth": {
+            "handlers": ["console"],
+            "level": "WARNING",  # Change to INFO for more verbose OAuth logging
+            "propagate": False,
+        },
+    },
+} 

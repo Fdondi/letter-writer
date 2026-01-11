@@ -10,7 +10,10 @@ Site domain instead of the request hostname.
 """
 
 from django.contrib.sites.models import Site
+import logging
 from django.utils.deprecation import MiddlewareMixin
+
+logger = logging.getLogger(__name__)
 
 
 class OAuthHostFixMiddleware(MiddlewareMixin):
@@ -18,6 +21,12 @@ class OAuthHostFixMiddleware(MiddlewareMixin):
     
     def process_request(self, request):
         """Override request hostname for OAuth-related paths."""
+        # Log OAuth callback requests for debugging (without sensitive data)
+        if request.path == "/accounts/google/login/callback/":
+            # Redact sensitive authorization code from logs
+            safe_params = {k: ("REDACTED" if k == "code" else v) for k, v in request.GET.items()}
+            logger.info(f"[OAuth Callback] Incoming callback request: method={request.method}, query_params={safe_params}")
+        
         # Only fix OAuth-related paths
         if not request.path.startswith('/accounts/'):
             return None
@@ -57,8 +66,6 @@ class OAuthHostFixMiddleware(MiddlewareMixin):
             pass
         except Exception as e:
             # Log error but don't break the request
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Failed to fix OAuth Host header: {e}")
+            logger.warning(f"[OAuth Middleware] Failed to fix OAuth Host header: {e}")
         
         return None

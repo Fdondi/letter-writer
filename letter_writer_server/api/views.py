@@ -1,6 +1,7 @@
 import html
 import json
 import os
+import logging
 from pathlib import Path
 from typing import Any, Dict, List
 import urllib.error
@@ -16,6 +17,8 @@ from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_http_methods
 
 from .spam_prevention import prevent_duplicate_requests, get_in_flight_requests, clear_in_flight_requests
+
+logger = logging.getLogger(__name__)
 
 
 def require_auth_user(request: HttpRequest):
@@ -223,41 +226,41 @@ def google_oauth_redirect(request):
     Instead of showing the intermediate consent page ("You are about to sign in..."),
     it redirects directly to Google's OAuth endpoint.
     
-    This constructs the OAuth URL manually using django-allauth's OAuth2Client and adapter class attributes.
+    This constructs the OAuth URL manually using credentials from settings.py (environment variables).
     """
     try:
         import os
-        from allauth.socialaccount.providers.google.views import GoogleOAuth2Adapter
-        from allauth.socialaccount.models import SocialApp
-        from allauth.socialaccount.providers.oauth2.client import OAuth2Client
-        from django.contrib.sites.models import Site
-        from django.http import HttpResponseRedirect
+        from django.contrib.sites.shortcuts import get_current_site
+        from django.conf import settings
+        from django.http import HttpResponseRedirect, HttpResponse
         from urllib.parse import urlencode
         
-        # Get the current site
-        site = Site.objects.get_current(request)
+        logger.info("[OAuth] Starting Google OAuth redirect")
         
-        # Get Google SocialApp (prefer one associated with current site)
-        app = SocialApp.objects.filter(provider='google', sites__id=site.id).first()
-        if not app:
-            app = SocialApp.objects.filter(provider='google').first()
+        # Get OAuth credentials from settings (which reads from environment variables)
+        socialaccount_providers = getattr(settings, 'SOCIALACCOUNT_PROVIDERS', {})
+        google_provider = socialaccount_providers.get('google', {})
+        app_config = google_provider.get('APP', {})
+        client_id = app_config.get('client_id', '')
+        secret_present = bool(app_config.get('secret', ''))
         
-        if not app:
-            from django.http import HttpResponse
+        logger.info(f"[OAuth] Client ID present: {bool(client_id)}, Secret present: {secret_present}")
+        logger.debug(f"[OAuth] Client ID (first 10 chars): {client_id[:10] if client_id else 'MISSING'}...")
+        
+        if not client_id:
+            logger.error("[OAuth] Client ID missing - OAuth not configured")
             return HttpResponse(
-                "Google OAuth is not configured. Please run: python manage.py setup_google_oauth",
+                "Google OAuth is not configured. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_SECRET environment variables.",
                 status=500
             )
         
+        if not secret_present:
+            logger.error("[OAuth] Client secret missing - token exchange will fail")
+        
         # Use Google's standard OAuth URLs (these are constants)
-        # These match django-allauth's GoogleOAuth2Adapter defaults
         authorize_url = 'https://accounts.google.com/o/oauth2/v2/auth'
-        access_token_url = 'https://oauth2.googleapis.com/token'
         
         # Build callback URL (same as django-allauth would use)
-        from django.contrib.sites.shortcuts import get_current_site
-        from django.conf import settings
-        
         current_site = get_current_site(request)
         site_domain = current_site.domain
         
@@ -275,19 +278,15 @@ def google_oauth_redirect(request):
         # Build callback URL - django-allauth uses this pattern
         callback_url = f"{protocol}://{site_domain}/accounts/google/login/callback/"
         
+        logger.info(f"[OAuth] Callback URL: {callback_url}")
+        
         # Get OAuth scope and params from settings or use defaults
-        socialaccount_providers = getattr(settings, 'SOCIALACCOUNT_PROVIDERS', {})
-        google_provider = socialaccount_providers.get('google', {})
         scope = google_provider.get('SCOPE', ['profile', 'email'])
         auth_params = google_provider.get('AUTH_PARAMS', {'access_type': 'online'})
         
-        # Manually construct Google OAuth authorization URL
-        # OAuth2Client.get_redirect_url() seems to return relative URLs, so build it manually
-        from urllib.parse import urlencode
-        
         # Build query parameters for Google OAuth
         params = {
-            'client_id': app.client_id,
+            'client_id': client_id,
             'redirect_uri': callback_url,
             'scope': ' '.join(scope),
             'response_type': 'code',
@@ -296,6 +295,8 @@ def google_oauth_redirect(request):
         
         # Build the full Google OAuth authorization URL
         auth_url = f"{authorize_url}?{urlencode(params)}"
+        
+        logger.info(f"[OAuth] Redirecting to Google OAuth: {authorize_url} (client_id present: {bool(client_id)})")
         
         return HttpResponseRedirect(auth_url)
         
@@ -307,11 +308,14 @@ def google_oauth_redirect(request):
             status=500
         )
     except Exception as e:
+        logger.exception("[OAuth] Error in google_oauth_redirect")
         # On error, fall back to django-allauth's default behavior
         # Use django-allauth's OAuth2LoginView normally (will show consent page, but better than 500)
         try:
             from allauth.socialaccount.providers.google.views import GoogleOAuth2Adapter
             from allauth.socialaccount.providers.oauth2.views import OAuth2LoginView
+            
+            logger.info("[OAuth] Falling back to django-allauth default OAuth2LoginView")
             
             # Create a view class that uses GoogleOAuth2Adapter
             class FallbackGoogleLoginView(OAuth2LoginView):
@@ -322,6 +326,7 @@ def google_oauth_redirect(request):
             return view(request)
         except Exception as inner_e:
             # If even that fails, just show the error
+            logger.exception("[OAuth] Fallback also failed")
             from django.http import HttpResponse
             import traceback
             return HttpResponse(

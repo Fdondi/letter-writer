@@ -6,6 +6,7 @@ their data from the old structure (personal_data/cv) to the new structure
 (personal_data/{google_uid}).
 """
 
+import logging
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from letter_writer.firestore_store import (
@@ -15,6 +16,8 @@ from letter_writer.firestore_store import (
     get_firestore_client,
 )
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 def migrate_user_data_on_first_login(google_uid: str) -> bool:
@@ -59,16 +62,20 @@ def migrate_user_data_on_first_login(google_uid: str) -> bool:
 
 def handle_socialaccount_created(sender, instance, created, **kwargs):
     """Trigger data migration when a Google SocialAccount is first created."""
+    logger.info(f"[OAuth] SocialAccount signal: provider={instance.provider}, created={created}, uid={instance.uid}")
+    
     # Only process if this is a SocialAccount from allauth
     if instance.provider != 'google':
         return  # Only handle Google OAuth
     
     # Only migrate on first creation
     if not created:
+        logger.debug("[OAuth] SocialAccount not newly created, skipping migration")
         return
     
     # Use Google's UID as the document ID
     google_uid = instance.uid
+    logger.info(f"[OAuth] New Google OAuth account created: uid={google_uid}")
     
     # Migrate old data structure to this user's Google UID
     migrated = migrate_user_data_on_first_login(google_uid)
@@ -100,6 +107,30 @@ def handle_socialaccount_created(sender, instance, created, **kwargs):
             if batch_count > 0:
                 batch.commit()
 
+
+# Register signal handlers for OAuth errors (catch OAuth callback failures)
+try:
+    from allauth.socialaccount.signals import (
+        pre_social_login,
+        social_account_updated,
+    )
+    
+    @receiver(pre_social_login)
+    def log_social_login_attempt(sender, request, sociallogin, **kwargs):
+        """Log OAuth login attempts."""
+        provider = sociallogin.account.provider if hasattr(sociallogin, 'account') else 'unknown'
+        logger.info(f"[OAuth] Social login attempt: provider={provider}")
+    
+    @receiver(social_account_updated)
+    def log_social_account_updated(sender, request, sociallogin, **kwargs):
+        """Log OAuth account updates."""
+        logger.info(f"[OAuth] Social account updated: provider={sociallogin.account.provider}")
+        
+except ImportError:
+    # allauth signals not available
+    pass
+except Exception as e:
+    logger.warning(f"[OAuth] Failed to register OAuth signal handlers: {e}")
 
 # Register the signal with the correct sender (only if allauth is available)
 try:
