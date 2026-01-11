@@ -8,3 +8,4 @@ letter_writer/__pycache__/*
 cv-external/
 qdrant_test.py
 gcloud-credentials.json
+db.sqlite3
