@@ -611,13 +611,16 @@ function VendorCardWrapper({
   // The card is purely a consumer of phaseObj.cardData[vendor].
   
   // Status logic:
+  // - "error" if we have an error (takes priority)
   // - "success" if we have data (already processed)
   // - "loading" only if previous phase is approved AND we don't have data (triggers API call)
   // - "idle" otherwise (waiting for previous phase or no data)
   // Note: When navigating back from assembly, data should already be in shelf, so status will be "success"
-  const status = currentPhaseData 
-    ? "success" 
-    : (previousPhaseApproved ? "loading" : "idle");
+  const status = error
+    ? "error"
+    : currentPhaseData 
+      ? "success" 
+      : (previousPhaseApproved ? "loading" : "idle");
 
   return (
     <VendorCard
@@ -764,6 +767,9 @@ function VendorCard({
       newStatus = CardStatus.APPROVED;
     } else if (status === "loading") {
       newStatus = CardStatus.PENDING;
+    } else if (status === "error") {
+      // Errors are treated as pending - user needs to retry
+      newStatus = CardStatus.PENDING;
     } else if (status === "success" && hasData) {
       newStatus = CardStatus.READY;
     }
@@ -866,7 +872,7 @@ function VendorCard({
   // Phase-agnostic check: show loading UI when loading and no data yet
   // When re-running, old data is cleared so we go back to loading state
   const hasPhaseData = cardPhase && data !== null && Object.keys(data).length > 0;
-  const isLoadingWithoutData = isLoading && !hasPhaseData && !approved;
+  const isLoadingWithoutData = status === "loading" && !hasPhaseData && !approved;
   
   // Compute ready state - use phase module function
   const readyForApproval = React.useMemo(() => {
@@ -1025,6 +1031,11 @@ function VendorCard({
               // This is a safety check against double-clicks if the button isn't disabled fast enough.
               if (approved && !thisPhaseDirty) return;
 
+              // Clear any previous error when retrying
+              if (error) {
+                setError(null);
+              }
+              
               // When re-running (has data but dirty), clear data and set loading
               if (hasPhaseData && thisPhaseDirty) {
                 setStatus("loading");
@@ -1059,7 +1070,7 @@ function VendorCard({
                 }
               } catch (e) {
                 setError(e.message || String(e));
-                setStatus("error");
+                // Status is computed by wrapper based on error state
                 setApproved(false); // Revert approval on error
               }
             }}
