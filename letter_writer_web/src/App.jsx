@@ -43,6 +43,12 @@ export default function App() {
   const [language, setLanguage] = useState("");
   const [salary, setSalary] = useState("");
   const [requirements, setRequirements] = useState([]);
+  const [pointOfContact, setPointOfContact] = useState({
+    name: "",
+    role: "",
+    contact_details: "",
+    notes: "",
+  });
   const [extracting, setExtracting] = useState(false);
   const [extractionError, setExtractionError] = useState(null);
   const [documentId, setDocumentId] = useState(null);
@@ -364,7 +370,19 @@ export default function App() {
           : [extracted.requirements];
         setRequirements(reqs.filter(Boolean));
       }
+      // Only update point of contact if extraction found it, otherwise preserve manual input
+      if (extracted.point_of_contact) {
+        setPointOfContact({
+          name: extracted.point_of_contact.name || "",
+          role: extracted.point_of_contact.role || "",
+          contact_details: extracted.point_of_contact.contact_details || "",
+          notes: extracted.point_of_contact.notes || "",
+        });
+      }
+      // If no point_of_contact in extraction, keep existing manual input (don't clear it)
       // Store extracted data to detect if user modified it later
+      // For point_of_contact, use extracted value if present, otherwise use current state (preserves manual input)
+      const currentPoc = (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes) ? pointOfContact : null;
       setExtractedData({
         company_name: extracted.company_name || companyName,
         job_title: extracted.job_title || jobTitle,
@@ -372,6 +390,7 @@ export default function App() {
         language: extracted.language || language,
         salary: extracted.salary || salary,
         requirements: extracted.requirements || requirements,
+        point_of_contact: extracted.point_of_contact || currentPoc,
         job_text: jobText,
       });
     } catch (e) {
@@ -522,6 +541,7 @@ export default function App() {
       language: language,
       salary: salary,
       requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
+      point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes) ? pointOfContact : null,
     };
     const extractionEdited = extractedData && (
       extractedData.company_name !== currentExtraction.company_name ||
@@ -529,7 +549,8 @@ export default function App() {
       extractedData.location !== currentExtraction.location ||
       extractedData.language !== currentExtraction.language ||
       extractedData.salary !== currentExtraction.salary ||
-      JSON.stringify(extractedData.requirements) !== JSON.stringify(currentExtraction.requirements)
+      JSON.stringify(extractedData.requirements) !== JSON.stringify(currentExtraction.requirements) ||
+      JSON.stringify(extractedData.point_of_contact || null) !== JSON.stringify(currentExtraction.point_of_contact)
     );
 
     setError(null);
@@ -548,6 +569,7 @@ export default function App() {
             language: language,
             salary: salary,
             requirements: currentExtraction.requirements,
+            point_of_contact: currentExtraction.point_of_contact,
           }),
         });
       }
@@ -640,6 +662,7 @@ export default function App() {
       salary: salary,
       requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
       job_text: jobText,
+      point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes) ? pointOfContact : null,
     };
     const dataModified = !extractedData || 
       extractedData.company_name !== currentData.company_name ||
@@ -648,7 +671,8 @@ export default function App() {
       extractedData.language !== currentData.language ||
       extractedData.salary !== currentData.salary ||
       JSON.stringify(extractedData.requirements) !== JSON.stringify(currentData.requirements) ||
-      extractedData.job_text !== currentData.job_text;
+      extractedData.job_text !== currentData.job_text ||
+      JSON.stringify(extractedData.point_of_contact || null) !== JSON.stringify(currentData.point_of_contact);
 
     // Update common session data if:
     // - This is a new session (e.g., after clicking "Back to Input"), OR
@@ -672,6 +696,7 @@ export default function App() {
           language: language,
           salary: salary,
           requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
+          point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes) ? pointOfContact : null,
         };
         
         await fetchWithHeartbeat("/api/phases/session/", {
@@ -989,122 +1014,214 @@ export default function App() {
           </div>
           
           <div style={{ marginTop: 20, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div>
-              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                Company Name *
-              </label>
-              <input
-                type="text"
-                value={companyName}
-                onChange={(e) => setCompanyName(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: 8,
-                  backgroundColor: "var(--input-bg)",
-                  color: "var(--text-color)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "4px",
-                }}
-                placeholder="Company name"
-              />
+            {/* Left Column */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div>
+                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                  Company Name *
+                </label>
+                <input
+                  type="text"
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: 8,
+                    backgroundColor: "var(--input-bg)",
+                    color: "var(--text-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                  }}
+                  placeholder="Company name"
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                  Location
+                </label>
+                <input
+                  type="text"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: 8,
+                    backgroundColor: "var(--input-bg)",
+                    color: "var(--text-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                  }}
+                  placeholder="Location"
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                  Language
+                </label>
+                <input
+                  type="text"
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: 8,
+                    backgroundColor: "var(--input-bg)",
+                    color: "var(--text-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                  }}
+                  placeholder="Language"
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                  Salary
+                </label>
+                <input
+                  type="text"
+                  value={salary}
+                  onChange={(e) => setSalary(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: 8,
+                    backgroundColor: "var(--input-bg)",
+                    color: "var(--text-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                  }}
+                  placeholder="Salary range"
+                />
+              </div>
             </div>
-            <div>
-              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                Job Title *
-              </label>
-              <input
-                type="text"
-                value={jobTitle}
-                onChange={(e) => setJobTitle(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: 8,
-                  backgroundColor: "var(--input-bg)",
-                  color: "var(--text-color)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "4px",
-                }}
-                placeholder="Job title"
-              />
+            {/* Right Column */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, height: "100%" }}>
+              <div>
+                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                  Job Title *
+                </label>
+                <input
+                  type="text"
+                  value={jobTitle}
+                  onChange={(e) => setJobTitle(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: 8,
+                    backgroundColor: "var(--input-bg)",
+                    color: "var(--text-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                  }}
+                  placeholder="Job title"
+                />
+              </div>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                  Requirements
+                </label>
+                <textarea
+                  value={Array.isArray(requirements) ? requirements.join("\n") : requirements}
+                  onChange={(e) => {
+                    const lines = e.target.value.split("\n").map((l) => l.trim()).filter(Boolean);
+                    setRequirements(lines);
+                  }}
+                  style={{
+                    width: "100%",
+                    flex: 1,
+                    padding: 8,
+                    backgroundColor: "var(--input-bg)",
+                    color: "var(--text-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                    resize: "vertical",
+                  }}
+                  placeholder="One requirement per line"
+                />
+              </div>
             </div>
-            <div>
-              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                Location
-              </label>
-              <input
-                type="text"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: 8,
-                  backgroundColor: "var(--input-bg)",
-                  color: "var(--text-color)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "4px",
-                }}
-                placeholder="Location"
-              />
-            </div>
-            <div>
-              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                Language
-              </label>
-              <input
-                type="text"
-                value={language}
-                onChange={(e) => setLanguage(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: 8,
-                  backgroundColor: "var(--input-bg)",
-                  color: "var(--text-color)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "4px",
-                }}
-                placeholder="Language"
-              />
-            </div>
-            <div>
-              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                Salary
-              </label>
-              <input
-                type="text"
-                value={salary}
-                onChange={(e) => setSalary(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: 8,
-                  backgroundColor: "var(--input-bg)",
-                  color: "var(--text-color)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "4px",
-                }}
-                placeholder="Salary range"
-              />
-            </div>
-            <div>
-              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                Requirements
-              </label>
-              <textarea
-                value={Array.isArray(requirements) ? requirements.join("\n") : requirements}
-                onChange={(e) => {
-                  const lines = e.target.value.split("\n").map((l) => l.trim()).filter(Boolean);
-                  setRequirements(lines);
-                }}
-                style={{
-                  width: "100%",
-                  height: 80,
-                  padding: 8,
-                  backgroundColor: "var(--input-bg)",
-                  color: "var(--text-color)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "4px",
-                }}
-                placeholder="One requirement per line"
-              />
+          </div>
+
+          {/* Point of Contact Section - Always visible */}
+          <div style={{ marginTop: 20, padding: 15, backgroundColor: "var(--input-bg)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+            <h3 style={{ marginTop: 0, marginBottom: 12, fontSize: "16px", fontWeight: 600 }}>
+              Point of Contact
+            </h3>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div>
+                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                  Name
+                </label>
+                <input
+                  type="text"
+                  value={pointOfContact.name}
+                  onChange={(e) => setPointOfContact({ ...pointOfContact, name: e.target.value })}
+                  style={{
+                    width: "100%",
+                    padding: 8,
+                    backgroundColor: "var(--input-bg)",
+                    color: "var(--text-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                  }}
+                  placeholder="Contact name"
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                  Role
+                </label>
+                <input
+                  type="text"
+                  value={pointOfContact.role}
+                  onChange={(e) => setPointOfContact({ ...pointOfContact, role: e.target.value })}
+                  style={{
+                    width: "100%",
+                    padding: 8,
+                    backgroundColor: "var(--input-bg)",
+                    color: "var(--text-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                  }}
+                  placeholder="Role in company"
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                  Contact Details
+                </label>
+                <input
+                  type="text"
+                  value={pointOfContact.contact_details}
+                  onChange={(e) => setPointOfContact({ ...pointOfContact, contact_details: e.target.value })}
+                  style={{
+                    width: "100%",
+                    padding: 8,
+                    backgroundColor: "var(--input-bg)",
+                    color: "var(--text-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                  }}
+                  placeholder="Email, phone, etc."
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                  Notes
+                </label>
+                <textarea
+                  value={pointOfContact.notes}
+                  onChange={(e) => setPointOfContact({ ...pointOfContact, notes: e.target.value })}
+                  style={{
+                    width: "100%",
+                    height: 60,
+                    padding: 8,
+                    backgroundColor: "var(--input-bg)",
+                    color: "var(--text-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                  }}
+                  placeholder="Notes about contact or how to reach them"
+                />
+              </div>
             </div>
           </div>
           

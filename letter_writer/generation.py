@@ -66,15 +66,17 @@ def extract_job_metadata(
     """
     system = (
         "You are an assistant that extracts a concise job summary from a job description. "
-        "Return strict JSON with these keys: company_name, job_title, location, language, salary, requirements. "
+        "Return strict JSON with these keys: company_name, job_title, location, language, salary, requirements, point_of_contact. "
         "Use null for unknown values. Keep requirements as a short bullet-style list (array of strings). "
+        "For point_of_contact, extract if present: name, role (their role in the company), contact_details (email, phone, etc.), and notes (any note about them or how to contact them). "
+        "If no point of contact is found, set point_of_contact to null. "
         "Do not add any additional keys or prose."
     )
     prompt = (
         "Job description:\n"
         f"{job_text}\n\n"
         "Respond with JSON only. Example format:\n"
-        '{"company_name":"Acme","job_title":"Senior Engineer","location":"Remote","language":"English","salary":"€80-100k","requirements":["Python","AWS"]}'
+        '{"company_name":"Acme","job_title":"Senior Engineer","location":"Remote","language":"English","salary":"€80-100k","requirements":["Python","AWS"],"point_of_contact":{"name":"John Doe","role":"HR Manager","contact_details":"john.doe@acme.com","notes":"Please contact via email"}}'
     )
 
     raw = client.call(ModelSize.TINY, system, [prompt])
@@ -110,6 +112,20 @@ def extract_job_metadata(
     else:
         req_list = []
 
+    # Extract point of contact if present
+    poc_data = data.get("point_of_contact")
+    point_of_contact = None
+    if poc_data and isinstance(poc_data, dict):
+        point_of_contact = {
+            "name": _clean(poc_data.get("name")),
+            "role": _clean(poc_data.get("role")),
+            "contact_details": _clean(poc_data.get("contact_details")),
+            "notes": _clean(poc_data.get("notes")),
+        }
+        # Only include if at least name or contact_details is present
+        if not point_of_contact["name"] and not point_of_contact["contact_details"]:
+            point_of_contact = None
+
     return {
         "company_name": _clean(data.get("company_name")),
         "job_title": _clean(data.get("job_title")),
@@ -117,6 +133,7 @@ def extract_job_metadata(
         "language": _clean(data.get("language")),
         "salary": _clean(data.get("salary")),
         "requirements": req_list,
+        "point_of_contact": point_of_contact,
     }
 
 def get_style_instructions() -> str:

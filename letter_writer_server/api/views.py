@@ -798,7 +798,7 @@ def update_session_common_data_view(request: HttpRequest):
     
     Accepts individual fields that the user sees in the webpage:
     - job_text, cv_text
-    - company_name, job_title, location, language, salary, requirements
+    - company_name, job_title, location, language, salary, requirements, point_of_contact
     
     These fields are saved as common metadata (together with job_text and cv_text).
     Qdrant connection is a server-side constant (from environment variables), not user-facing.
@@ -872,6 +872,8 @@ def update_session_common_data_view(request: HttpRequest):
             common_metadata["salary"] = data["salary"]
         if "requirements" in data:
             common_metadata["requirements"] = data["requirements"]
+        if "point_of_contact" in data:
+            common_metadata["point_of_contact"] = data["point_of_contact"]
         
         # Save updated metadata
         existing_metadata["common"] = common_metadata

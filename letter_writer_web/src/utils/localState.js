@@ -33,6 +33,7 @@ export function getFullState(state) {
     language: state.language || "",
     salary: state.salary || "",
     requirements: state.requirements || [],
+    pointOfContact: state.pointOfContact || { name: "", role: "", contact_details: "", notes: "" },
     
     // Extracted data
     extractedData: state.extractedData || null,
@@ -148,6 +149,7 @@ export function restoreStateFromLocal(stateSetters) {
   if (savedState.language !== undefined) stateSetters.setLanguage(savedState.language);
   if (savedState.salary !== undefined) stateSetters.setSalary(savedState.salary);
   if (savedState.requirements !== undefined) stateSetters.setRequirements(savedState.requirements);
+  if (savedState.pointOfContact !== undefined) stateSetters.setPointOfContact(savedState.pointOfContact);
   if (savedState.extractedData !== undefined) stateSetters.setExtractedData(savedState.extractedData);
   if (savedState.uiStage !== undefined) stateSetters.setUiStage(savedState.uiStage);
   if (savedState.activeTab !== undefined) stateSetters.setActiveTab(savedState.activeTab);
