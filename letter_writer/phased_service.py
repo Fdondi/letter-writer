@@ -144,6 +144,14 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
     metadata = common_data["metadata"]
     search_result = common_data.get("search_result", [])
     
+    # Extract point of contact from metadata (common or vendor-local)
+    point_of_contact = None
+    common_metadata = metadata.get("common", {})
+    if "point_of_contact" in common_metadata and common_metadata["point_of_contact"]:
+        point_of_contact = common_metadata["point_of_contact"]
+    elif vendor.value in metadata and "point_of_contact" in metadata[vendor.value]:
+        point_of_contact = metadata[vendor.value]["point_of_contact"]
+    
     # Get search results if not already cached (read-only, don't save)
     if not search_result:
         # Firestore collection connection
@@ -164,7 +172,7 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
     print(f"[PHASE] background -> {vendor.value} :: select_top_documents")
     top_docs = select_top_documents(search_result, job_text, ai_client, trace_dir)
     print(f"[PHASE] background -> {vendor.value} :: company_research")
-    company_report = company_research(company_name, job_text, ai_client, trace_dir)
+    company_report = company_research(company_name, job_text, ai_client, trace_dir, point_of_contact=point_of_contact)
 
     state = VendorPhaseState(
         top_docs=top_docs,

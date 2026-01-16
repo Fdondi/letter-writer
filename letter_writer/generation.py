@@ -154,14 +154,37 @@ def get_style_instructions() -> str:
         )
 
 
-def company_research(company_name: str, job_text: str, client: BaseClient, trace_dir: Path) -> str:
-    """Research company information using OpenAI."""
+def company_research(company_name: str, job_text: str, client: BaseClient, trace_dir: Path, point_of_contact: dict = None) -> str:
+    """Research company information using OpenAI.
+    
+    Args:
+        company_name: Name of the company
+        job_text: Job description text
+        client: AI client for research
+        trace_dir: Directory for tracing
+        point_of_contact: Optional dict with name, role, contact_details, notes
+    """
     system = "You are an expert in searching the internet for information about companies."
+    
+    contact_context = ""
+    if point_of_contact and (point_of_contact.get("name") or point_of_contact.get("role")):
+        contact_name = point_of_contact.get("name", "")
+        contact_role = point_of_contact.get("role", "")
+        contact_context = (
+            f"\n\nIMPORTANT: The cover letter will be addressed to {contact_name if contact_name else 'a contact'} "
+            f"who is {contact_role if contact_role else 'a point of contact'} at the company.\n"
+            f"In your research, also consider:\n"
+            f"- What someone in this role likely knows or cares about\n"
+            f"- How to personalize the letter for this specific contact\n"
+            f"- Information that would help make the letter resonate with {contact_name if contact_name else 'this person'}\n"
+        )
+    
     prompt = (
         f"Search the internet and write a short, opinionated company report about {company_name}\n"
         f"To disambiguiate, here is how they present themselves: {job_text[:500]}...\n"
         "Focus on what makes the company appealing and unique. Keep it concise but informative. "
         "Do NOT include any links, only plain text."
+        + contact_context
     )
     result = client.call(ModelSize.LARGE, system, [prompt], search=True)
     (trace_dir / "company_research.txt").write_text(result, encoding="utf-8")
