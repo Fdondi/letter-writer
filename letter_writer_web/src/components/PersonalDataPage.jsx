@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
+import { useLanguages } from "../contexts/LanguageContext";
+import LanguageConfig from "./LanguageConfig";
 
 // Extract headers from markdown text
 const extractHeaders = (markdown) => {
@@ -61,12 +63,15 @@ export default function PersonalDataPage() {
   const [error, setError] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedCv, setEditedCv] = useState("");
+  const { languages, saveDefaults, setLanguages } = useLanguages();
+  const [savingLanguages, setSavingLanguages] = useState(false);
 
   const fetchCv = async () => {
     try {
       setLoading(true);
       setError(null);
-      const res = await fetch("/api/personal-data/cv/");
+      // Updated endpoint path
+      const res = await fetch("/api/personal-data/");
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setCv(data.cv || "");
@@ -232,7 +237,7 @@ export default function PersonalDataPage() {
     try {
       setSaving(true);
       setError(null);
-      const result = await fetchWithHeartbeat("/api/personal-data/cv/", {
+      const result = await fetchWithHeartbeat("/api/personal-data/", {
         method: "POST",
         body: JSON.stringify({
           content: editedCv,
@@ -274,7 +279,7 @@ export default function PersonalDataPage() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const result = await fetchWithHeartbeat("/api/personal-data/cv/", {
+      const result = await fetchWithHeartbeat("/api/personal-data/", {
         method: "POST",
         body: formData,
       });
@@ -326,6 +331,18 @@ export default function PersonalDataPage() {
     }
   };
 
+  const handleSaveLanguages = async () => {
+    try {
+        setSavingLanguages(true);
+        await saveDefaults();
+        // Maybe show success message?
+    } catch (e) {
+        setError("Failed to save language defaults");
+    } finally {
+        setSavingLanguages(false);
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ padding: 20, textAlign: "center" }}>
@@ -336,6 +353,33 @@ export default function PersonalDataPage() {
 
   return (
     <div style={{ padding: 20 }}>
+      {/* Default Languages Section */}
+      <div style={{ marginBottom: 30, padding: 20, backgroundColor: "var(--bg-color)", border: "1px solid var(--border-color)", borderRadius: "4px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 15 }}>
+            <h3 style={{ margin: 0, color: "var(--text-color)" }}>Default Translation Languages</h3>
+            <button
+                onClick={handleSaveLanguages}
+                disabled={savingLanguages}
+                style={{
+                    padding: "6px 12px",
+                    backgroundColor: "#3b82f6",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "4px",
+                    cursor: savingLanguages ? "not-allowed" : "pointer",
+                    opacity: savingLanguages ? 0.7 : 1,
+                    fontSize: "14px"
+                }}
+            >
+                {savingLanguages ? "Saving..." : "Save Defaults"}
+            </button>
+        </div>
+        <p style={{ marginTop: 0, marginBottom: 15, fontSize: "14px", color: "var(--secondary-text-color)" }}>
+            Configure the languages available for translation. These defaults will be loaded when you start a new session.
+        </p>
+        <LanguageConfig />
+      </div>
+
       <div
         style={{
           display: "flex",

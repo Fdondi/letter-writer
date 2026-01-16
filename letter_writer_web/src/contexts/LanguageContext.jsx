@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { DEFAULT_LANGUAGES } from "../utils/useTranslation";
+import { fetchWithHeartbeat } from "../utils/apiHelpers";
 
 const LanguageContext = createContext();
 
@@ -8,32 +9,29 @@ const LanguageContext = createContext();
  * Manages the list of available languages for translation across the app
  */
 export function LanguageProvider({ children }) {
-  // Load from localStorage or use defaults
-  const [languages, setLanguages] = useState(() => {
-    try {
-      const saved = localStorage.getItem("translationLanguages");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        // Ensure all languages have the enabled property (migration for old data)
-        return parsed.map((lang) => ({
-          ...lang,
-          enabled: lang.enabled !== undefined ? lang.enabled : true,
-        }));
-      }
-    } catch (e) {
-      console.error("Failed to load languages from localStorage:", e);
-    }
-    return DEFAULT_LANGUAGES;
-  });
+  // Load from backend on mount, fallback to defaults
+  const [languages, setLanguages] = useState(DEFAULT_LANGUAGES);
+  const [loading, setLoading] = useState(true);
 
-  // Save to localStorage whenever languages change
+  // Fetch defaults from backend
   useEffect(() => {
-    try {
-      localStorage.setItem("translationLanguages", JSON.stringify(languages));
-    } catch (e) {
-      console.error("Failed to save languages to localStorage:", e);
-    }
-  }, [languages]);
+    const fetchDefaults = async () => {
+      try {
+        const res = await fetch("/api/personal-data/");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.default_languages && Array.isArray(data.default_languages) && data.default_languages.length > 0) {
+            setLanguages(data.default_languages);
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to load default languages from backend:", e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchDefaults();
+  }, []);
 
   const addLanguage = (code, label = null, color = null) => {
     const normalizedCode = code.trim().toLowerCase();
@@ -78,6 +76,30 @@ export function LanguageProvider({ children }) {
       )
     );
   };
+  
+  // Save current languages as defaults to backend
+  const saveDefaults = async (newLanguages) => {
+    try {
+      // Use provided languages or current state
+      const languagesToSave = newLanguages || languages;
+      
+      await fetchWithHeartbeat("/api/personal-data/", {
+        method: "POST",
+        body: JSON.stringify({
+          default_languages: languagesToSave,
+        }),
+      });
+      
+      // Update local state if new languages provided
+      if (newLanguages) {
+        setLanguages(newLanguages);
+      }
+      return true;
+    } catch (e) {
+      console.error("Failed to save default languages:", e);
+      return false;
+    }
+  };
 
   const getEnabledLanguages = () => languages.filter((lang) => lang.enabled);
 
@@ -91,6 +113,8 @@ export function LanguageProvider({ children }) {
         toggleLanguage,
         updateLanguage,
         setLanguages,
+        saveDefaults,
+        loading,
       }}
     >
       {children}

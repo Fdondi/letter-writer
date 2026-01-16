@@ -5,8 +5,6 @@ import { useLanguages } from "../contexts/LanguageContext";
 export const DEFAULT_LANGUAGES = [
   { code: "de", label: "DE", color: "#3b82f6", enabled: true },
   { code: "en", label: "EN", color: "#6366f1", enabled: true },
-  { code: "it", label: "IT", color: "#f97316", enabled: true },
-  { code: "fr", label: "FR", color: "#8b5cf6", enabled: true },
 ];
 
 /**

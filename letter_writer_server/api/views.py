@@ -1411,8 +1411,8 @@ def _extract_text_from_file(file_content: bytes, filename: str) -> str:
         raise ValueError(f"Unsupported file type: {filename}. Supported: .txt, .md, .pdf")
 
 
-def personal_data_cv_view(request: HttpRequest):
-    """Get or update CV from personal_data collection.
+def personal_data_view(request: HttpRequest):
+    """Get or update personal data (CV, languages, etc) from personal_data collection.
     
     Uses user_id as document ID: personal_data/{user_id}
     Document structure:
@@ -1447,6 +1447,7 @@ def personal_data_cv_view(request: HttpRequest):
                 user_data = {}  # No old data to migrate
         
         revisions = user_data.get("cv_revisions", [])
+        default_languages = user_data.get("default_languages", [])
         
         # Convert Firestore Timestamps to ISO strings and find latest
         latest_content = ""
@@ -1489,14 +1490,23 @@ def personal_data_cv_view(request: HttpRequest):
         return JsonResponse({
             "cv": latest_content,
             "revisions": response_revisions,
+            "default_languages": default_languages,
         })
     
     if request.method == "POST":
         # Handle file upload or text update
         content_type = request.content_type or ""
         
+        # Get existing user document (using user_id as document ID)
+        user_doc_ref = get_personal_data_document(user_id)
+        user_doc = user_doc_ref.get()
+        existing_data = user_doc.to_dict() if user_doc.exists else {}
+        revisions = existing_data.get("cv_revisions", [])
+        now = datetime.utcnow()
+        updates = {"updated_at": now}
+        
         if "multipart/form-data" in content_type:
-            # File upload
+            # File upload - Update CV
             if "file" not in request.FILES:
                 return JsonResponse({"detail": "No file provided"}, status=400)
             
@@ -1515,65 +1525,84 @@ def personal_data_cv_view(request: HttpRequest):
             
             content = extracted_text
             source = f"upload:{filename}"
+            
+            # Create new revision
+            new_revision = {
+                "content": content,
+                "source": source,
+                "created_at": now,
+                "revision_number": len(revisions) + 1,
+            }
+            revisions.append(new_revision)
+            updates["cv_revisions"] = revisions
+            
         else:
-            # JSON text update
+            # JSON update (CV or Settings)
             try:
                 data = json.loads(request.body or "{}")
             except json.JSONDecodeError:
                 return JsonResponse({"detail": "Invalid JSON"}, status=400)
             
-            content = data.get("content", "")
-            if not content:
-                return JsonResponse({"detail": "content is required"}, status=400)
-            source = data.get("source", "manual_edit")
+            # Check if updating default_languages
+            if "default_languages" in data:
+                languages = data["default_languages"]
+                if not isinstance(languages, list):
+                    return JsonResponse({"detail": "default_languages must be a list"}, status=400)
+                updates["default_languages"] = languages
+                
+            # Check if updating CV content
+            elif "content" in data:
+                content = data.get("content", "")
+                if not content:
+                    return JsonResponse({"detail": "content is required"}, status=400)
+                source = data.get("source", "manual_edit")
+                
+                # Create new revision
+                new_revision = {
+                    "content": content,
+                    "source": source,
+                    "created_at": now,
+                    "revision_number": len(revisions) + 1,
+                }
+                revisions.append(new_revision)
+                updates["cv_revisions"] = revisions
+            else:
+                 return JsonResponse({"detail": "No valid data provided for update"}, status=400)
         
-        # Get existing user document (using user_id as document ID)
-        user_doc_ref = get_personal_data_document(user_id)
-        user_doc = user_doc_ref.get()
-        existing_data = user_doc.to_dict() if user_doc.exists else {}
-        revisions = existing_data.get("cv_revisions", [])
-        
-        # Create new revision
-        now = datetime.utcnow()
-        new_revision = {
-            "content": content,
-            "source": source,
-            "created_at": now,
-            "revision_number": len(revisions) + 1,
-        }
-        
-        revisions.append(new_revision)
-        
-        # Update user document (merge with existing fields like default_languages, style_instructions)
-        user_doc_ref = get_personal_data_document(user_id)
-        user_doc_ref.set({
-            "cv_revisions": revisions,
-            "updated_at": now,
-        }, merge=True)
+        # Update user document (merge with existing fields)
+        user_doc_ref.set(updates, merge=True)
         
         # Clear cache after update
         clear_user_data_cache(user_id)
         
-        # Convert timestamps for response
-        response_revisions = []
-        for rev in revisions:
-            rev_copy = dict(rev)
-            if "created_at" in rev_copy:
-                ts = rev_copy["created_at"]
-                if hasattr(ts, "isoformat"):
-                    rev_copy["created_at"] = ts.isoformat()
-                elif isinstance(ts, datetime):
-                    rev_copy["created_at"] = ts.isoformat()
-                elif hasattr(ts, "timestamp"):  # Firestore Timestamp
-                    dt = datetime.fromtimestamp(ts.timestamp())
-                    rev_copy["created_at"] = dt.isoformat()
-            response_revisions.append(rev_copy)
+        # Prepare response
+        response_data = {"status": "ok"}
         
-        return JsonResponse({
-            "status": "ok",
-            "cv": content,
-            "revisions": response_revisions,
-        }, status=201)
+        if "cv_revisions" in updates:
+            # Convert timestamps for response
+            response_revisions = []
+            for rev in revisions:
+                rev_copy = dict(rev)
+                if "created_at" in rev_copy:
+                    ts = rev_copy["created_at"]
+                    if hasattr(ts, "isoformat"):
+                        rev_copy["created_at"] = ts.isoformat()
+                    elif isinstance(ts, datetime):
+                        rev_copy["created_at"] = ts.isoformat()
+                    elif hasattr(ts, "timestamp"):  # Firestore Timestamp
+                        dt = datetime.fromtimestamp(ts.timestamp())
+                        rev_copy["created_at"] = dt.isoformat()
+                response_revisions.append(rev_copy)
+            
+            response_data["revisions"] = response_revisions
+            # Also return the latest content if it was a CV update
+            if "content" in locals():
+                response_data["cv"] = content
+
+        if "default_languages" in updates:
+            response_data["default_languages"] = updates["default_languages"]
+        
+        return JsonResponse(response_data, status=201)
     
     return JsonResponse({"detail": "Method not allowed"}, status=405)
 
