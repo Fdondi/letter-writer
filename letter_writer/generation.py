@@ -171,9 +171,9 @@ def company_research(company_name: str, job_text: str, client: BaseClient, trace
         contact_name = point_of_contact.get("name", "")
         contact_role = point_of_contact.get("role", "")
         contact_context = (
-            f"\n\nIMPORTANT: The cover letter will be addressed to {contact_name if contact_name else 'a contact'} "
+            f"\n\nIMPORTANT: We are especially interested in talking with {contact_name if contact_name else 'a contact'} "
             f"who is {contact_role if contact_role else 'a point of contact'} at the company.\n"
-            f"In your research, also consider:\n"
+            f"Also research this person's background and expertise, in particular:\n"
             f"- What someone in this role likely knows or cares about\n"
             f"- How to personalize the letter for this specific contact\n"
             f"- Information that would help make the letter resonate with {contact_name if contact_name else 'this person'}\n"
@@ -182,8 +182,12 @@ def company_research(company_name: str, job_text: str, client: BaseClient, trace
     prompt = (
         f"Search the internet and write a short, opinionated company report about {company_name}\n"
         f"To disambiguiate, here is how they present themselves: {job_text[:500]}...\n"
-        "Focus on what makes the company appealing and unique. Keep it concise but informative. "
-        "Do NOT include any links, only plain text."
+        "Focus on what distinguishes the company, in the good and bad. Keep it concise but informative.\n"
+        "Do NOT include any links, only plain text.\n"
+        "Do NOT just repeat the ads the company puts out. Do report what they say about themsleves, but make it clear it's reporting "
+        "on how they like to present themselves, not the objective truth. Be inquisiteive, almost cynical, read between the lines. "
+        "If we are writing to a company that likes to present themselves as trailblazing but is actually quite boring, "
+        "or viceversa likes to underpromise but is actually exceprional, we need to consider both aspects.\n"
         + contact_context
     )
     result = client.call(ModelSize.LARGE, system, [prompt], search=True)
