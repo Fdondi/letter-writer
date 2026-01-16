@@ -132,10 +132,10 @@ def save_session(session, collection=None) -> None:
     )
     
     # Save common data
+    # NOTE: cv_text is never saved to Django session - it's loaded from Firestore when needed
     save_session_common_data(
         request=request,
         job_text=session.job_text,
-        cv_text=session.cv_text,
         metadata=session.metadata,
         search_result=session.search_result,
     )

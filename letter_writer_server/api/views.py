@@ -569,48 +569,25 @@ def extract_view(request: HttpRequest):
         trace_dir = Path("trace", "extraction.openai")
         extraction = extract_job_metadata(job_text, ai_client, trace_dir=trace_dir)
         
-        # Save common session data with extraction metadata
-        cv_text = data.get("cv_text")
-        if cv_text is None:
-            # Load CV from user's personal data (cached, loaded once per request)
-            if request.user.is_authenticated:
-                try:
-                    user_id = str(request.user.id)
-                    user_data = get_user_data(user_id, use_cache=True)
-                    revisions = user_data.get("cv_revisions", [])
-                    if revisions:
-                        # Get the latest revision by comparing timestamps
-                        def get_datetime(rev):
-                            ts = rev.get("created_at")
-                            if ts is None:
-                                return datetime.min
-                            if hasattr(ts, "timestamp"):  # Firestore Timestamp
-                                return datetime.fromtimestamp(ts.timestamp())
-                            elif isinstance(ts, datetime):
-                                return ts
-                            elif isinstance(ts, str):
-                                try:
-                                    return datetime.fromisoformat(ts.replace('Z', '+00:00'))
-                                except:
-                                    return datetime.min
-                            return datetime.min
-                        
-                        latest = max(revisions, key=get_datetime)
-                        cv_text = latest.get("content", "")
-                    else:
-                        cv_text = ""
-                except Exception:
-                    cv_text = ""
-            else:
-                cv_text = ""
-        
         # Save common data with extraction metadata (common to all vendors)
+        # CV should already be loaded in session by init_session_view
+        import logging
+        logger = logging.getLogger(__name__)
         save_session_common_data(
             request=request,
             job_text=job_text,
-            cv_text=cv_text,
             metadata={"common": extraction},  # Store extraction as common metadata
+            load_cv=False,  # Don't reload CV - rely on init loading
         )
+        
+        # Verify CV is in session (just for logging/debugging)
+        cv_in_session = request.session.get("cv_text")
+        if cv_in_session:
+            logger.info(f"extract_view: CV present in session, length={len(cv_in_session)}")
+        else:
+            logger.warning("extract_view: CV NOT present in session (should have been loaded by init)")
+            from letter_writer.generation import MissingCVError
+            raise MissingCVError("CV text is missing or empty - cannot proceed with extraction")
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         return JsonResponse({"detail": str(exc)}, status=500)
@@ -646,9 +623,9 @@ def init_session_view(request: HttpRequest):
     )
     
     # Check if this is a recovery request (client sending full session data)
+    # NOTE: cv_text is never sent from frontend, so we don't check for it
     is_recovery = bool(
         data.get("job_text") or
-        data.get("cv_text") or
         data.get("metadata") or
         data.get("vendors")
     )
@@ -659,10 +636,10 @@ def init_session_view(request: HttpRequest):
     try:
         if is_recovery and not session_exists:
             # Server lost session, client is restoring it
+            # NOTE: cv_text is never sent from client, always loaded from Firestore
             session_id = restore_session_data(
                 request=request,
                 job_text=data.get("job_text", ""),
-                cv_text=data.get("cv_text", ""),
                 metadata=data.get("metadata", {}),
                 search_result=data.get("search_result"),
                 vendors=data.get("vendors", {}),
@@ -674,13 +651,58 @@ def init_session_view(request: HttpRequest):
                 "message": "Session restored from client data",
             })
         else:
-            # Normal initialization
-            save_session_common_data(
-                request=request,
-                job_text=data.get("job_text", ""),
-                cv_text=data.get("cv_text", ""),
-                metadata=data.get("metadata", {}),
+            # Normal initialization - only update if data is provided
+            # When clicking back, session might exist but no data is sent,
+            # so we should preserve existing session data
+            # NOTE: cv_text is never sent from frontend, always loaded from Firestore
+            job_text = data.get("job_text")
+            metadata = data.get("metadata")
+            
+            # ALWAYS check if CV is missing and load it if needed
+            # This is critical - CV must be in session before background phases start
+            # This handles the case when clicking back (no API call) then starting phases
+            import logging
+            logger = logging.getLogger(__name__)
+            
+            cv_in_session = request.session.get("cv_text")
+            cv_missing = not cv_in_session or not str(cv_in_session).strip()
+            needs_cv_load = not session_exists or cv_missing
+            
+            logger.info(
+                f"init_session: session_exists={session_exists}, cv_missing={cv_missing}, "
+                f"needs_cv_load={needs_cv_load}, has_cv_in_session={bool(cv_in_session)}"
             )
+            
+            # Determine if we need to save session data
+            has_new_data = job_text is not None or metadata is not None
+            needs_save = has_new_data or not session_exists or needs_cv_load
+            
+            # ALWAYS load CV if needed, regardless of other conditions
+            # This ensures CV is in session before any background phases start
+            if needs_cv_load:
+                logger.info("Loading CV from Firestore into session")
+                save_session_common_data(
+                    request=request,
+                    job_text=job_text if job_text is not None else "",
+                    metadata=metadata if metadata is not None else {},
+                    load_cv=True,  # Always load CV if needed
+                )
+            elif needs_save:
+                # Save other data but don't reload CV (already present)
+                save_session_common_data(
+                    request=request,
+                    job_text=job_text if job_text is not None else "",
+                    metadata=metadata if metadata is not None else {},
+                    load_cv=False,  # CV already present, don't reload
+                )
+            
+            # Verify CV is now in session after loading
+            cv_after = request.session.get("cv_text")
+            if not cv_after or not str(cv_after).strip():
+                logger.error(f"init_session: CV still missing after load attempt! session_exists={session_exists}")
+            else:
+                logger.info(f"init_session: CV loaded successfully, length={len(cv_after)}")
+            
             return JsonResponse({
                 "status": "ok",
                 "session_id": session_id,
@@ -695,8 +717,9 @@ def restore_session_view(request: HttpRequest):
     """Restore session data from client.
     
     Called when server restarts and loses in-memory sessions.
-    Client sends all session data (job_text, cv_text, metadata, vendors, etc.)
+    Client sends session data (job_text, metadata, vendors, etc.)
     and server restores it to the current session.
+    NOTE: cv_text is NEVER restored from client - it's always loaded from Firestore.
     """
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
@@ -710,10 +733,10 @@ def restore_session_view(request: HttpRequest):
         from .session_helpers import restore_session_data, get_session_id
         
         # Restore full session from client data
+        # NOTE: cv_text is never restored from client - always loaded from Firestore
         session_id = restore_session_data(
             request=request,
             job_text=data.get("job_text", ""),
-            cv_text=data.get("cv_text", ""),
             metadata=data.get("metadata", {}),
             search_result=data.get("search_result"),
             vendors=data.get("vendors", {}),
@@ -731,9 +754,11 @@ def restore_session_view(request: HttpRequest):
 
 def get_session_state_view(request: HttpRequest):
     """Get full session state for restoring frontend UI.
-    
+
     Called on page load to restore user's work if they navigated away.
-    Returns all session data (job_text, cv_text, metadata, vendors, etc.)
+    Returns all session data (job_text, metadata, vendors, etc.)
+    NOTE: cv_text is NOT included - it's never sent to frontend in compose mode.
+    CV is only sent to frontend in the personal data tab.
     """
     if request.method != "GET":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
@@ -816,44 +841,24 @@ def update_session_common_data_view(request: HttpRequest):
     session_id = get_session_id(request)
 
     job_text = data.get("job_text")
-    cv_text = data.get("cv_text")
-    if cv_text is None:
-        # Load CV from user's personal data (cached, loaded once per request)
-        if request.user.is_authenticated:
-            try:
-                user_id = str(request.user.id)
-                user_data = get_user_data(user_id, use_cache=True)
-                revisions = user_data.get("cv_revisions", [])
-                if revisions:
-                    # Get the latest revision by comparing timestamps
-                    def get_datetime(rev):
-                        ts = rev.get("created_at")
-                        if ts is None:
-                            return datetime.min
-                        if hasattr(ts, "timestamp"):  # Firestore Timestamp
-                            return datetime.fromtimestamp(ts.timestamp())
-                        elif isinstance(ts, datetime):
-                            return ts
-                        elif isinstance(ts, str):
-                            try:
-                                return datetime.fromisoformat(ts.replace('Z', '+00:00'))
-                            except:
-                                return datetime.min
-                        return datetime.min
-                    
-                    latest = max(revisions, key=get_datetime)
-                    cv_text = latest.get("content", "")
-                else:
-                    cv_text = ""
-            except Exception:
-                cv_text = ""
-        else:
-            cv_text = ""
+    # NOTE: cv_text is never saved to session - it's loaded from Firestore when needed via load_session_common_data()
 
     try:
         # Load existing session to preserve other fields
+        # This also loads CV from Firestore if missing (emergency restore)
         existing = load_session_common_data(request)
         existing_metadata = existing["metadata"] if existing else {}
+        
+        # Check if CV is missing and needs to be loaded
+        # This is critical - CV must be in session before background phases start
+        cv_in_session = request.session.get("cv_text")
+        cv_missing = not cv_in_session or not str(cv_in_session).strip()
+        needs_cv_load = cv_missing
+        
+        import logging
+        logger = logging.getLogger(__name__)
+        if needs_cv_load:
+            logger.info("update_session_common_data: CV missing, will load from Firestore")
         
         # Build common metadata from individual fields (if provided)
         # These are the fields the user sees in the webpage
@@ -878,13 +883,22 @@ def update_session_common_data_view(request: HttpRequest):
         # Save updated metadata
         existing_metadata["common"] = common_metadata
         
-        # Save common data (job_text, cv_text, and metadata)
+        # Save common data (job_text and metadata)
+        # Load CV if missing - this ensures CV is always in session
+        # NOTE: cv_text is never saved to session from client - it's loaded from Firestore
         save_session_common_data(
             request=request,
             job_text=job_text,
-            cv_text=cv_text,
             metadata=existing_metadata,
+            load_cv=needs_cv_load,  # Load CV if missing
         )
+        
+        # Verify CV is now in session
+        cv_after = request.session.get("cv_text")
+        if not cv_after or not str(cv_after).strip():
+            logger.error("update_session_common_data: CV still missing after load attempt!")
+        else:
+            logger.info(f"update_session_common_data: CV loaded successfully, length={len(cv_after)}")
         
         return JsonResponse({"status": "ok", "session_id": session_id})
     except Exception as exc:  # noqa: BLE001
@@ -945,6 +959,25 @@ def background_phase_view(request: HttpRequest, vendor: str):
         # Metadata must exist in common store (created by extraction phase or session call)
         if "common" not in common_data["metadata"]:
             raise ValueError(f"Metadata not found in session. Please run extraction first or provide extraction data via /api/phases/session/")
+        
+        # Fail fast: validate cv_text and job_text before starting background phase
+        # This catches empty cv_text immediately, before any expensive operations
+        cv_text = common_data.get("cv_text", "")
+        job_text = common_data.get("job_text", "")
+        if not cv_text or not str(cv_text).strip():
+            from letter_writer.generation import MissingCVError
+            import logging
+            logger = logging.getLogger(__name__)
+            error_msg = f"CV text is missing or empty in session - cannot proceed with background phase"
+            logger.error(error_msg, extra={"session_id": session_id, "vendor": vendor, "cv_text": cv_text})
+            raise MissingCVError(error_msg)
+        if not job_text or not str(job_text).strip():
+            return JsonResponse({
+                "status": "error",
+                "detail": "Job text is missing or empty in session. Please provide job description.",
+                "session_id": session_id,
+                "error_code": "JOB_TEXT_MISSING",
+            }, status=400)
         
         # Run background phase for this vendor (writes only vendor-specific data)
         # Note: _run_background_phase still expects session_id for compatibility, but we'll update it to use request

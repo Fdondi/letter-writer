@@ -907,7 +907,7 @@ export default function App() {
     await approvePhase("background", vendor, {});
   };
 
-  const resetForm = () => {
+  const resetForm = async () => {
     setShowInput(true);
     setUiStage("input");
     setPhaseSessionId(null);
@@ -929,6 +929,18 @@ export default function App() {
     // setSalary("");
     // setRequirements([]);
     setExtractionError(null);
+    
+    // Initialize session when clicking back to ensure CV is loaded
+    // This ensures CV is in session before starting phases again
+    try {
+      await fetchWithHeartbeat("/api/phases/init/", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+    } catch (e) {
+      console.error("Failed to initialize session when going back:", e);
+      // Continue anyway - session will be initialized when starting phases
+    }
   };
 
   const vendorsList = Array.from(selectedVendors);

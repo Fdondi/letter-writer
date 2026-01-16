@@ -144,6 +144,15 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
     metadata = common_data["metadata"]
     search_result = common_data.get("search_result", [])
     
+    # Fail fast: validate critical data before doing any work
+    from .generation import MissingCVError
+    if cv_text is None or not cv_text or not str(cv_text).strip():
+        error_msg = f"CV text is missing or empty in session {session_id} - cannot proceed with background phase"
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(error_msg, extra={"session_id": session_id, "vendor": vendor.value, "cv_text": cv_text, "cv_text_type": type(cv_text).__name__})
+        raise MissingCVError(error_msg)
+    
     # Extract point of contact from metadata (common or vendor-local)
     point_of_contact = None
     common_metadata = metadata.get("common", {})

@@ -19,17 +19,85 @@ def get_session_id(request: HttpRequest) -> str:
     return request.session.session_key
 
 
+def _load_cv_from_firestore(request: HttpRequest) -> str:
+    """Load CV from Firestore user data. Returns empty string if not available."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    if not request.user.is_authenticated:
+        logger.warning("Cannot load CV: user not authenticated")
+        return ""
+    
+    try:
+        from letter_writer.firestore_store import get_user_data
+        from datetime import datetime
+        
+        # Determine user_id: prefer Google UID if available (same logic as require_auth_user)
+        user_id = None
+        try:
+            from allauth.socialaccount.models import SocialAccount
+            social_account = SocialAccount.objects.filter(user=request.user, provider='google').first()
+            if social_account:
+                user_id = social_account.uid
+                logger.info(f"Using Google UID for Firestore lookup: {user_id}")
+        except (ImportError, Exception):
+            pass
+        
+        if not user_id:
+            user_id = str(request.user.id)
+            logger.info(f"Using Django User ID for Firestore lookup: {user_id}")
+
+        logger.info(f"Loading CV from Firestore for user {user_id} (cache disabled)")
+        # Disable cache to ensure we get the latest CV even if updated in another process
+        user_data = get_user_data(user_id, use_cache=False)
+        revisions = user_data.get("cv_revisions", [])
+        logger.info(f"Found {len(revisions)} CV revisions for user {user_id}")
+        if not revisions:
+            logger.warning(f"No CV revisions found for user {user_id}")
+            return ""
+        
+        # Get the latest revision by comparing timestamps
+        def get_datetime(rev):
+            ts = rev.get("created_at")
+            if ts is None:
+                return datetime.min
+            if hasattr(ts, "timestamp"):  # Firestore Timestamp
+                return datetime.fromtimestamp(ts.timestamp())
+            elif isinstance(ts, datetime):
+                return ts
+            elif isinstance(ts, str):
+                try:
+                    return datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                except:
+                    return datetime.min
+            return datetime.min
+        
+        latest = max(revisions, key=get_datetime)
+        cv_text = latest.get("content", "")
+        if cv_text:
+            logger.info(f"Successfully loaded CV from Firestore for user {user_id} ({len(cv_text)} chars)")
+        else:
+            logger.warning(f"CV revision found but content is empty for user {user_id}")
+        return cv_text
+    except Exception as e:
+        # Log but don't fail - let the calling code handle missing CV
+        logger.error(f"Failed to load CV from Firestore for user {request.user.id}: {e}", exc_info=True)
+        return ""
+
+
 def save_session_common_data(
     request: HttpRequest,
     job_text: str = "",
-    cv_text: str = "",
     metadata: Optional[Dict[str, Any]] = None,
     search_result: Optional[list] = None,
+    load_cv: bool = False,
 ) -> None:
-    """Save common session data to Django cookie session.
+    """Save common session data to in-memory Django session.
     
-    This replaces the Firestore-based save_session_common_data.
-    Data is stored in request.session and automatically saved to cookie.
+    Data is stored in request.session (in-memory, not cookies).
+    
+    Args:
+        load_cv: If True, load CV from Firestore and save to session (used during init/restore)
     """
     # Initialize session if needed
     if not request.session.session_key:
@@ -47,9 +115,36 @@ def save_session_common_data(
             # If not dicts, just use new metadata
             metadata = metadata
     
-    # Update session data
-    request.session["job_text"] = job_text
-    request.session["cv_text"] = cv_text
+    # Preserve existing job_text if new value is empty
+    # This prevents overwriting session data when clicking back without sending data
+    # BUT: if old values are empty and new values are provided, restore from new values
+    existing_job_text = request.session.get("job_text", "")
+    
+    # Determine final job_text: use new if non-empty, otherwise keep existing if it exists, otherwise empty
+    if job_text and job_text.strip():
+        request.session["job_text"] = job_text  # New value provided and non-empty
+    elif existing_job_text and existing_job_text.strip():
+        # Keep existing non-empty value if new value not provided or empty
+        pass  # Don't change existing
+    else:
+        # Both empty - set to empty (either explicit empty or None becomes empty string)
+        request.session["job_text"] = job_text if job_text is not None else ""
+    
+    # Load CV from Firestore if requested (during init/restore)
+    # Always load if requested, even if session already has CV (ensures fresh CV)
+    if load_cv:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Loading CV into session (session_key={request.session.session_key})")
+        cv_text = _load_cv_from_firestore(request)
+        if cv_text:
+            request.session["cv_text"] = cv_text
+            logger.info(f"CV saved to session ({len(cv_text)} chars)")
+        else:
+            # If no CV found, set empty string so we know CV was checked
+            request.session["cv_text"] = ""
+            logger.warning("CV not found in Firestore, set empty string in session")
+    
     request.session["metadata"] = metadata or {}
     if search_result is not None:
         request.session["search_result"] = search_result
@@ -59,10 +154,13 @@ def save_session_common_data(
 
 
 def load_session_common_data(request: HttpRequest) -> Optional[Dict[str, Any]]:
-    """Load common session data from Django cookie session.
+    """Load common session data from in-memory Django session.
     
     Returns None if session doesn't exist or is empty.
     Compatible with Firestore-based load_session_common_data interface.
+    
+    cv_text is read from in-memory session (loaded once during init/restore).
+    Only loads from Firestore if missing from session (emergency restore).
     """
     if not request.session.session_key:
         return None
@@ -71,10 +169,22 @@ def load_session_common_data(request: HttpRequest) -> Optional[Dict[str, Any]]:
     if not any(key in request.session for key in ["job_text", "cv_text", "metadata"]):
         return None
     
+    job_text = request.session.get("job_text", "")
+    cv_text = request.session.get("cv_text", "")
+    
+    # If cv_text is missing from session, load from Firestore (emergency restore)
+    # This should only happen if session was lost or CV wasn't loaded during init
+    if not cv_text or not cv_text.strip():
+        cv_text = _load_cv_from_firestore(request)
+        # Save to session for future requests (emergency restore)
+        if cv_text:
+            request.session["cv_text"] = cv_text
+            request.session.modified = True
+    
     return {
         "session_id": request.session.session_key,
-        "job_text": request.session.get("job_text", ""),
-        "cv_text": request.session.get("cv_text", ""),
+        "job_text": job_text,
+        "cv_text": cv_text,
         "search_result": request.session.get("search_result", []),
         "metadata": request.session.get("metadata", {}),
     }
@@ -131,7 +241,6 @@ def load_all_vendor_data(request: HttpRequest) -> Dict[str, Dict[str, Any]]:
 def restore_session_data(
     request: HttpRequest,
     job_text: str = "",
-    cv_text: str = "",
     metadata: Optional[Dict[str, Any]] = None,
     search_result: Optional[list] = None,
     vendors: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -139,7 +248,10 @@ def restore_session_data(
     """Restore full session data from client.
     
     Used when server restarts and loses in-memory sessions.
-    Client sends all session data, server restores it.
+    Client sends session data, server restores it.
+    
+    NOTE: cv_text is NEVER restored from client - it's loaded from Firestore
+    and saved to in-memory session during restore.
     
     Returns the session_id (may be new if session was lost).
     """
@@ -147,11 +259,9 @@ def restore_session_data(
     if not request.session.session_key:
         request.session.create()
     
-    # Restore all session data
+    # Restore session data
     if job_text:
         request.session["job_text"] = job_text
-    if cv_text:
-        request.session["cv_text"] = cv_text
     if metadata:
         request.session["metadata"] = metadata
     if search_result is not None:
@@ -173,6 +283,12 @@ def restore_session_data(
                     "cost": vendor_data.get("cost", 0.0),
                 }
         print(f"[RESTORE] Restored {len(vendors)} vendors: {list(vendors.keys())}")
+    
+    # Load CV from Firestore and save to in-memory session (one-time during restore)
+    # This ensures CV is available in session for subsequent requests
+    cv_text = _load_cv_from_firestore(request)
+    if cv_text:
+        request.session["cv_text"] = cv_text
     
     request.session.modified = True
     return request.session.session_key
@@ -212,10 +328,11 @@ def get_full_session_state(request: HttpRequest) -> Optional[Dict[str, Any]]:
     vendors_data = load_all_vendor_data(request)
     
     # Combine into full state
+    # NOTE: cv_text is NOT included - it's never sent to frontend in compose mode
+    # CV is only sent to frontend in the personal data tab
     return {
         "session_id": request.session.session_key,
         "job_text": common_data.get("job_text", ""),
-        "cv_text": common_data.get("cv_text", ""),
         "metadata": common_data.get("metadata", {}),
         "search_result": common_data.get("search_result", []),
         "vendors": vendors_data,

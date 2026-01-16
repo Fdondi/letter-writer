@@ -1,10 +1,18 @@
 import json
+import logging
 from typing import Dict, List
 from pathlib import Path
 from openai import OpenAI
 
 from .config import TRACE_DIR
 from .clients.base import BaseClient, ModelSize
+
+logger = logging.getLogger(__name__)
+
+
+class MissingCVError(Exception):
+    """Catastrophic error: CV text is missing or empty when it should be present."""
+    pass
 
 REQUIRED_SUFFIXES = ("NO COMMENT", "PLEASE FIX")
 
@@ -196,6 +204,12 @@ def company_research(company_name: str, job_text: str, client: BaseClient, trace
 
 def generate_letter(cv_text: str, examples: List[dict], company_report: str, job_text: str, client: BaseClient, trace_dir: Path) -> str:
     """Generate a personalized cover letter based on CV, examples, company report, and job description."""
+    # Validate CV text is present
+    if cv_text is None or not cv_text or not str(cv_text).strip():
+        error_msg = "CV text is missing or empty - cannot generate cover letter"
+        logger.error(error_msg, extra={"cv_text": cv_text, "cv_text_type": type(cv_text).__name__})
+        raise MissingCVError(error_msg)
+    
     examples_formatted = "\n\n".join(
         f"---- Example #{i+1} [estimated relevance: {ex['score']}/10] - {ex['company_name']} ----\n"
         f"Job Description:\n{ex['job_text']}\n\n"
