@@ -32,7 +32,12 @@ export default function Paragraph({
   onFragmentSplit,
   onDelete,
   dropZoneRef = null,
-  languages = []
+  languages = [],
+  // Controlled mode props
+  translations: externalTranslations,
+  viewLanguage: externalViewLanguage,
+  onTranslationLoaded,
+  onViewLanguageChange
 }) {
   const ref = useRef(null);
   const textRef = useRef(null);
@@ -40,11 +45,18 @@ export default function Paragraph({
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(paragraph.text);
   const [isCopyMode, setIsCopyMode] = useState(false);
-  const [viewLanguage, setViewLanguage] = useState("source"); // "source" or target code
-  const [translations, setTranslations] = useState({});
+  
+  // Local state (used if not controlled)
+  const [localViewLanguage, setLocalViewLanguage] = useState("source");
+  const [localTranslations, setLocalTranslations] = useState({});
   const [isTranslating, setIsTranslating] = useState(false);
   const [translationError, setTranslationError] = useState(null);
   const [lastTranslatedSource, setLastTranslatedSource] = useState(paragraph.text);
+
+  // Determine effective state (controlled vs local)
+  const translations = externalTranslations || localTranslations;
+  const viewLanguage = externalViewLanguage || localViewLanguage;
+  const isControlled = externalTranslations !== undefined;
 
   // Drop zone for reordering within final column
   const [, drop] = useDrop(() => ({
@@ -160,11 +172,16 @@ export default function Paragraph({
   useEffect(() => {
     // Reset translation cache when the underlying paragraph changes
     if (paragraph.text !== lastTranslatedSource) {
-      setTranslations({});
+      if (!isControlled) {
+        setLocalTranslations({});
+        setLocalViewLanguage("source");
+      } else if (onViewLanguageChange) {
+        // If controlled, we can't force reset parent state easily here, 
+        // but parent should handle it (e.g. in updateParagraphText)
+      }
       setLastTranslatedSource(paragraph.text);
-      setViewLanguage("source");
     }
-  }, [paragraph.text, lastTranslatedSource]);
+  }, [paragraph.text, lastTranslatedSource, isControlled, onViewLanguageChange]);
 
   const displayText = (() => {
     if (viewLanguage !== "source" && translations[viewLanguage] && !isEditing) {
@@ -175,8 +192,14 @@ export default function Paragraph({
 
   const requestTranslation = async (targetLanguage) => {
     if (isTranslating) return;
+    
+    // Check cache
     if (translations[targetLanguage] && lastTranslatedSource === paragraph.text) {
-      setViewLanguage(targetLanguage);
+      if (isControlled && onViewLanguageChange) {
+        onViewLanguageChange(targetLanguage);
+      } else {
+        setLocalViewLanguage(targetLanguage);
+      }
       return;
     }
 
@@ -184,9 +207,18 @@ export default function Paragraph({
     setTranslationError(null);
     try {
       const translated = await translateText(paragraph.text, targetLanguage, null);
-      setTranslations((prev) => ({ ...prev, [targetLanguage]: translated }));
+      
+      if (isControlled && onTranslationLoaded) {
+        onTranslationLoaded(targetLanguage, translated);
+        if (onViewLanguageChange) {
+            onViewLanguageChange(targetLanguage);
+        }
+      } else {
+        setLocalTranslations((prev) => ({ ...prev, [targetLanguage]: translated }));
+        setLocalViewLanguage(targetLanguage);
+      }
+      
       setLastTranslatedSource(paragraph.text);
-      setViewLanguage(targetLanguage);
     } catch (err) {
       setTranslationError(err.message || "Translation failed");
     } finally {
@@ -214,7 +246,11 @@ export default function Paragraph({
         viewLanguage={viewLanguage}
         onLanguageChange={(code) => {
           if (code === "source") {
-            setViewLanguage("source");
+            if (isControlled && onViewLanguageChange) {
+              onViewLanguageChange("source");
+            } else {
+              setLocalViewLanguage("source");
+            }
           } else {
             requestTranslation(code);
           }
@@ -353,6 +389,11 @@ export default function Paragraph({
               onClick={(e) => {
                 e.stopPropagation();
                 setIsEditing(true);
+                // If we are viewing a translation, populate edit text with the translation
+                // so the user edits what they see. This effectively "switches the original".
+                if (displayText !== paragraph.text) {
+                    setEditText(displayText);
+                }
               }}
               style={{
                 whiteSpace: "pre-wrap",
@@ -362,7 +403,7 @@ export default function Paragraph({
                 userSelect: "text"
               }}
             >
-              {paragraph.text || "Click to edit..."}
+              {displayText || "Click to edit..."}
             </div>
           )
         ) : (

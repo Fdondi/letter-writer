@@ -25,6 +25,7 @@ export default function LetterTabs({
   const [collapsed, setCollapsed] = useState([]);
   const [finalLetter, setFinalLetter] = useState("");
   const [originalLetter, setOriginalLetter] = useState(originalText || "");
+  const [translationStates, setTranslationStates] = useState({}); // { [id]: { translations: {}, viewLanguage: 'source' } }
   const finalColumnRef = useRef(null);
   
   // Use shared language context instead of local state
@@ -271,6 +272,16 @@ export default function LetterTabs({
           return prev;
         }
         const copy = [...prev];
+        const id = copy[index].id;
+        
+        // Reset translation state for this paragraph since text changed
+        setTranslationStates(prev => {
+            if (!prev[id]) return prev;
+            const next = { ...prev };
+            delete next[id];
+            return next;
+        });
+
         copy[index] = { ...copy[index], text: newText };
         return copy;
       } catch (error) {
@@ -281,7 +292,14 @@ export default function LetterTabs({
   };
 
   const copyFinalText = async () => {
-    const fullText = finalParagraphs.map(p => p.text).join('\n\n');
+    const fullText = finalParagraphs.map(p => {
+        const state = translationStates[p.id];
+        if (state && state.viewLanguage !== 'source' && state.translations[state.viewLanguage]) {
+            return state.translations[state.viewLanguage];
+        }
+        return p.text;
+    }).join('\n\n');
+
     try {
       await navigator.clipboard.writeText(fullText);
       if (onCopyFinal) {
@@ -484,6 +502,9 @@ export default function LetterTabs({
             const paragraphVendor = p.vendor;
             const paragraphColor = paragraphVendor ? (vendorColors[paragraphVendor] || "var(--header-bg)") : "var(--bg-color)";
             
+            // Get translation state for this paragraph
+            const tState = translationStates[p.id] || { viewLanguage: 'source', translations: {} };
+
             return (
               <div key={p.id || `paragraph-${idx}`}>
                 <div data-paragraph-index={idx}>
@@ -493,6 +514,30 @@ export default function LetterTabs({
                     moveParagraph={moveFinalParagraph}
                     color={paragraphColor}
                     editable
+                    // Controlled translation props
+                    translations={tState.translations}
+                    viewLanguage={tState.viewLanguage}
+                    onTranslationLoaded={(lang, text) => {
+                        setTranslationStates(prev => ({
+                            ...prev,
+                            [p.id]: {
+                                ...prev[p.id],
+                                translations: {
+                                    ...(prev[p.id]?.translations || {}),
+                                    [lang]: text
+                                }
+                            }
+                        }));
+                    }}
+                    onViewLanguageChange={(lang) => {
+                        setTranslationStates(prev => ({
+                            ...prev,
+                            [p.id]: {
+                                ...prev[p.id],
+                                viewLanguage: lang
+                            }
+                        }));
+                    }}
                     onTextChange={(txt) => updateParagraphText(idx, txt)}
                     onFragmentSplit={(index, fragments) => {
                       try {
