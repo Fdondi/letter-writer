@@ -192,17 +192,17 @@ def serialize_document(doc_dict: dict, doc_id: str) -> dict:
     result["id"] = doc_id
     result["ai_letters"] = doc_dict.get("ai_letters") or []
     # Convert Firestore Timestamps to ISO format strings
+    # After migration, all dates are stored as Firestore Timestamps
     for ts_field in ("created_at", "updated_at"):
         if ts_field in doc_dict:
             ts = doc_dict[ts_field]
-            # Firestore Timestamp (stored as Timestamp after migration)
-            if hasattr(ts, "timestamp") and hasattr(ts, "seconds"):
-                ts = ts.to_datetime() if hasattr(ts, "to_datetime") else datetime.fromtimestamp(ts.timestamp(), tz=timezone.utc)
-            result[ts_field] = ts.isoformat()
+            # Firestore Timestamp - convert to ISO string
+            dt = ts.to_datetime() if hasattr(ts, "to_datetime") else datetime.fromtimestamp(ts.timestamp(), tz=timezone.utc)
+            result[ts_field] = dt.isoformat()
     return result
 
 
-def upsert_document(collection, data: dict, *, allow_update: bool = True, user_id: Optional[str] = None) -> dict:
+def upsert_document(collection, data: dict, *, allow_update: bool = True, user_id: str) -> dict:
     """Insert or update a document. Returns the stored document.
     
     Args:
@@ -214,8 +214,6 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
     Raises:
         ValueError: If user_id is not provided
     """
-    if not user_id:
-        raise ValueError("user_id is required for Firestore document operations")
     
     now = datetime.now(timezone.utc)
     doc_id = data.get("id") or data.get("document_id") or data.get("_id") or str(uuid4())
@@ -366,36 +364,72 @@ def list_documents(
     # Always filter by user_id first (required for security)
     query = collection.where("user_id", "==", user_id)
     
-    # Apply filters - note: Firestore doesn't support regex, so we use exact match or prefix
-    # Store company_name lowercase for consistent queries
+    # Track if we need to filter in memory (Firestore doesn't support substring/contains search)
+    has_filters = company_name or role
+    company_filter_value = None
+    role_filter_value = None
+    
+    # Store filter values for in-memory filtering (case-insensitive substring matching)
     if company_name:
-        # Use prefix matching with lowercase
-        company_lower = company_name.lower().strip()
-        query = query.where("company_name", ">=", company_lower)
-        query = query.where("company_name", "<=", company_lower + "\uf8ff")
-    
+        company_filter_value = company_name.strip()
     if role:
-        # For role, we can do exact match or prefix (no regex support)
-        # Assuming users will type exact role names
-        role_normalized = role.lower().strip()
-        query = query.where("role", ">=", role_normalized)
-        query = query.where("role", "<=", role_normalized + "\uf8ff")
+        role_filter_value = role.strip()
     
-    # Order by updated_at descending
-    query = query.order_by("updated_at", direction=firestore.Query.DESCENDING)
-    
-    # Apply pagination
-    if skip > 0:
-        query = query.offset(skip)
-    query = query.limit(limit)
-    
-    # Execute query
-    docs = query.stream()
-    result = []
-    for doc in docs:
-        result.append(serialize_document(doc.to_dict(), doc.id))
-    
-    return result
+    # Apply filters in memory (case-insensitive substring matching)
+    if has_filters:
+        # Fetch all matching documents (filtered by user_id)
+        docs = query.stream()
+        result = []
+        for doc in docs:
+            result.append(serialize_document(doc.to_dict(), doc.id))
+        
+        # Apply company_name filter (case-insensitive contains match)
+        if company_filter_value:
+            company_lower = company_filter_value.lower()
+            result = [d for d in result if company_lower in (d.get("company_name_original") or d.get("company_name") or "").lower()]
+        
+        # Apply role filter (case-insensitive contains match)
+        if role_filter_value:
+            role_lower = role_filter_value.lower()
+            result = [d for d in result if role_lower in (d.get("role") or "").lower()]
+        
+        # Sort by updated_at descending (most recent first)
+        # serialize_document returns ISO strings for dates
+        def get_sort_key(doc):
+            updated_at = doc.get("updated_at")
+            if not updated_at:
+                return 0
+            try:
+                dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                return dt.timestamp()
+            except (ValueError, AttributeError):
+                return 0
+        
+        result.sort(key=get_sort_key, reverse=True)
+        
+        # Apply pagination
+        if skip > 0:
+            result = result[skip:]
+        if len(result) > limit:
+            result = result[:limit]
+        
+        return result
+    else:
+        # No filters - can use order_by directly
+        query = query.order_by("updated_at", direction=firestore.Query.DESCENDING)
+        
+        # Apply pagination
+        if skip > 0:
+            query = query.offset(skip)
+        query = query.limit(limit)
+        
+        # Execute query
+        docs = query.stream()
+        result = []
+        for doc in docs:
+            result.append(serialize_document(doc.to_dict(), doc.id))
+        
+        return result
 
 
 def append_negatives(collection, doc_id: str, negatives: List[dict], user_id: Optional[str] = None) -> dict | None:
