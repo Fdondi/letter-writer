@@ -174,6 +174,11 @@ export default function LetterTabs({
           return prev;
         }
         
+        // Preserve original text from the paragraph being split
+        const paragraphOriginalText = originalParagraph.originalText !== undefined
+          ? originalParagraph.originalText
+          : (originalParagraph.text || "");
+        
         // Create fragments for the parts that match original text
         const processedFragments = [];
         
@@ -188,7 +193,8 @@ export default function LetterTabs({
             processedFragments.push({
               ...fragment,
               vendor: originalParagraph.vendor,
-              sourceId: originalParagraph.sourceId || originalParagraph.id
+              sourceId: originalParagraph.sourceId || originalParagraph.id,
+              originalText: fragment.originalText || paragraphOriginalText
             });
           } else {
             // This is new user text - make it unconnected (white)
@@ -196,7 +202,8 @@ export default function LetterTabs({
               ...fragment,
               vendor: null, // No vendor means white background
               sourceId: null,
-              isUserText: true
+              isUserText: true,
+              originalText: "" // New user text has no original
             });
           }
         });
@@ -232,7 +239,8 @@ export default function LetterTabs({
       ...paragraph,
       id: uuidv4(), // Give it a new ID for the final column
       sourceId: paragraph.sourceId || paragraph.id, // Track original source
-      vendor: paragraph.vendor || null // Ensure vendor is never undefined
+      vendor: paragraph.vendor || null, // Ensure vendor is never undefined
+      originalText: paragraph.text || "" // Track original text for edit tracking
     };
     
     console.log('📝 Created new paragraph:', { 
@@ -277,7 +285,8 @@ export default function LetterTabs({
       text: "",
       vendor: null, // No vendor = white background
       sourceId: null,
-      isUserText: true
+      isUserText: true,
+      originalText: "" // Track original text (empty for new paragraphs)
     };
     
     setFinalParagraphs((prev) => {
@@ -320,6 +329,7 @@ export default function LetterTabs({
         }
         const copy = [...prev];
         const id = copy[index].id;
+        const paragraph = copy[index];
         
         // Reset translation state for this paragraph since text changed
         setTranslationStates(prev => {
@@ -329,7 +339,17 @@ export default function LetterTabs({
             return next;
         });
 
-        copy[index] = { ...copy[index], text: newText };
+        // Track original text if not already set (first time this paragraph is added)
+        const originalText = paragraph.originalText !== undefined 
+          ? paragraph.originalText 
+          : (paragraph.text || "");
+        
+        // Update paragraph with new text and preserve originalText
+        copy[index] = { 
+          ...paragraph, 
+          text: newText,
+          originalText: originalText
+        };
         return copy;
       } catch (error) {
         console.error('Error updating paragraph text:', error, { index, arrayLength: prev.length });

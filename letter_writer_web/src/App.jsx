@@ -13,6 +13,7 @@ import { fetchWithHeartbeat, retryApiCall, initializeCsrfToken, getCsrfToken } f
 import { phases as phaseModules } from "./components/phases";
 import { translateText } from "./utils/translate";
 import { useLanguages } from "./contexts/LanguageContext";
+import { createTextDiff } from "./utils/diff";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
@@ -445,6 +446,25 @@ export default function App() {
   const persistFinalLetter = async (finalText) => {
     if (!finalText || !companyName || !jobText) return;
     const requirementsList = Array.isArray(requirements) ? requirements : requirements ? [requirements] : [];
+    
+    // Collect user corrections (compact diff format) grouped by vendor
+    const correctionsByVendor = {};
+    finalParagraphs.forEach((p) => {
+      // Only track corrections for paragraphs that have a vendor (AI-generated)
+      // and have been edited (text differs from originalText)
+      if (p.vendor && p.originalText !== undefined && p.text !== p.originalText) {
+        if (!correctionsByVendor[p.vendor]) {
+          correctionsByVendor[p.vendor] = [];
+        }
+        // Create compact diff (returns array of changes, empty if no changes)
+        const diffs = createTextDiff(p.originalText || "", p.text || "");
+        // Flatten array of changes into the vendor's corrections array
+        if (Array.isArray(diffs) && diffs.length > 0) {
+          correctionsByVendor[p.vendor].push(...diffs);
+        }
+      }
+    });
+    
     const aiLetters = Object.entries(letters).map(([vendor, text]) => {
       const feedback = vendorFeedback[vendor] || {};
       // Calculate chunks used from this vendor in the final letter
@@ -456,6 +476,7 @@ export default function App() {
         rating: feedback.rating || null,
         comment: feedback.comment || "",
         chunks_used: chunksUsed,
+        user_corrections: correctionsByVendor[vendor] || [], // Include user corrections
       };
     });
     const payload = {

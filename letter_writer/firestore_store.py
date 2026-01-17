@@ -181,6 +181,7 @@ def _prepare_ai_letters(ai_letters: Optional[List[dict]]) -> List[dict]:
                 "rating": letter.get("rating"),
                 "comment": letter.get("comment"),
                 "chunks_used": letter.get("chunks_used"),
+                "user_corrections": letter.get("user_corrections") or [],  # Git-style edits: [{original, edited}, ...]
                 "created_at": created_at,
             }
         )

@@ -341,6 +341,24 @@ def user_fit_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     )
     return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
+def _format_correction(corr: dict) -> str:
+    """Format a correction diff for display in the review agent prompt."""
+    corr_type = corr.get("type", "full")
+    
+    if corr_type == "diff":
+        # Compact diff format
+        original = corr.get("original", "").strip()
+        edited = corr.get("edited", "").strip()
+        
+        if original or edited:
+            return f"  -{original}+{edited}"
+        return "  (empty correction)"
+    else:
+        # Full paragraph format (when >20% changed)
+        original = corr.get("original", "").strip()
+        edited = corr.get("edited", "").strip()
+        return f"  Original: {original}\n  Edited: {edited}"
+
 def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     """Check the letter for consistency with the instructions."""
     rewritten_examples = [
@@ -362,6 +380,17 @@ def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
             + (f"(Used chunks: {al.get('chunks_used')})\n" if al.get("chunks_used") is not None else "")
             + (f"(Feedback: \"{al.get('comment')}\")\n" if al.get("comment") else "")
             + f"{al.get('text','')}"
+            + (
+                "\n\nUser corrections made to this letter:\n" + "\n".join(
+                    _format_correction(corr)
+                    for corr in (al.get("user_corrections") or [])
+                    if isinstance(corr, dict) and (
+                        (corr.get("type") == "full" and corr.get("original") is not None and corr.get("edited") is not None) or
+                        (corr.get("type") == "diff" and (corr.get("original") is not None or corr.get("edited") is not None))
+                    )
+                )
+                if al.get("user_corrections") else ""
+            )
             for j, al in enumerate(ex["ai_letters"])
             if isinstance(al, dict) and al.get("text")
         )
@@ -373,7 +402,9 @@ def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
         "You are an expert in noticing the patterns behind edits. You will receive a list of examples of job descriptions and corresponding cover letters; "
         "first the cover letter how it was initially written, then the cover letter how a reviewer rewrote it. "
         "The reviewer might have copied parts of the initial letter, or rewrote it from scratch. Either way, pay attention to what was changed. "
-        "You might also see ratings, chunk usage counts, and explicit feedback comments on the initial letters. Use these to understand what the reviewer liked or disliked.\n"
+        "You might also see ratings, chunk usage counts, explicit feedback comments, and user corrections (compact diffs showing changed portions, or full paragraphs if >20% changed) on the initial letters. "
+        "The corrections use a compact format: -original text+edited text for small changes, or full original/edited paragraphs for larger changes. "
+        "Use these to understand what the reviewer liked or disliked, and pay special attention to the user corrections as they show exactly what the reviewer changed.\n"
         "Once you noticed what changes tend to be made, flag if in the final, new letter anything looks like a feature than the reviewer would change in the earler examples.\n"
         "Note you should NOT flag elements just for not being in the positive examples, but only if they are present in the initial examples AND usually removed in the revised ones.\n"
         "Be very brief, a couple of sentences is enough. "
