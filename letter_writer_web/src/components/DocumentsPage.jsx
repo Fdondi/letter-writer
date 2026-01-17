@@ -1,4 +1,14 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
+
+function formatDate(dateString) {
+  if (!dateString) return "-";
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return "-";
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = String(date.getFullYear()).slice(-2);
+  return `${day}/${month}/${year}`;
+}
 
 export default function DocumentsPage() {
   const [documents, setDocuments] = useState([]);
@@ -8,21 +18,39 @@ export default function DocumentsPage() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState(null);
+  const [companySearch, setCompanySearch] = useState("");
+  const [roleSearch, setRoleSearch] = useState("");
 
-  const fetchList = async () => {
+  const fetchList = useCallback(async () => {
     try {
       setLoadingList(true);
       setError(null);
-      const res = await fetch("/api/documents/");
+      const params = new URLSearchParams();
+      if (companySearch.trim()) {
+        params.append("company_name", companySearch.trim());
+      }
+      if (roleSearch.trim()) {
+        params.append("role", roleSearch.trim());
+      }
+      const queryString = params.toString();
+      const url = `/api/documents${queryString ? `?${queryString}` : ""}`;
+      const res = await fetch(url);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      setDocuments(data.documents || []);
+      // Sort by updated_at descending (most recent first)
+      // Parse dates to ensure proper numeric comparison, not string comparison
+      const sortedDocs = (data.documents || []).sort((a, b) => {
+        const dateA = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+        const dateB = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+        return dateB - dateA; // Descending order (most recent first)
+      });
+      setDocuments(sortedDocs);
     } catch (e) {
       setError(`Failed to load documents: ${e.message || e}`);
     } finally {
       setLoadingList(false);
     }
-  };
+  }, [companySearch, roleSearch]);
 
   const fetchDetail = async (id) => {
     if (!id) return;
@@ -42,7 +70,7 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     fetchList();
-  }, []);
+  }, [fetchList]);
 
   useEffect(() => {
     if (selectedId) {
@@ -82,7 +110,7 @@ export default function DocumentsPage() {
         }}
       >
         <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border-color)" }}>
-          {doc.company_name || "-"}
+          {doc.company_name_original || doc.company_name || "-"}
         </td>
         <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border-color)" }}>
           {doc.role || "-"}
@@ -91,7 +119,7 @@ export default function DocumentsPage() {
           {doc.status || "-"}
         </td>
         <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border-color)" }}>
-          {doc.updated_at ? new Date(doc.updated_at).toLocaleString() : "-"}
+          {formatDate(doc.updated_at)}
         </td>
       </tr>
     );
@@ -116,6 +144,39 @@ export default function DocumentsPage() {
           >
             {loadingList ? "Refreshing..." : "Refresh"}
           </button>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <input
+            type="text"
+            placeholder="Search by company..."
+            value={companySearch}
+            onChange={(e) => setCompanySearch(e.target.value)}
+            style={{
+              flex: 1,
+              padding: "6px 8px",
+              border: "1px solid var(--border-color)",
+              borderRadius: 4,
+              background: "var(--input-bg)",
+              color: "var(--text-color)",
+              fontSize: 14,
+            }}
+          />
+          <input
+            type="text"
+            placeholder="Search by role..."
+            value={roleSearch}
+            onChange={(e) => setRoleSearch(e.target.value)}
+            style={{
+              flex: 1,
+              padding: "6px 8px",
+              border: "1px solid var(--border-color)",
+              borderRadius: 4,
+              background: "var(--input-bg)",
+              color: "var(--text-color)",
+              fontSize: 14,
+            }}
+          />
         </div>
 
         {error && (
@@ -183,7 +244,7 @@ export default function DocumentsPage() {
         {selected && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12, color: "var(--text-color)" }}>
             <div>
-              <strong>Company:</strong> {selected.company_name || "-"}
+              <strong>Company:</strong> {selected.company_name_original || selected.company_name || "-"}
             </div>
             <div>
               <strong>Role:</strong> {selected.role || "-"}
@@ -192,7 +253,7 @@ export default function DocumentsPage() {
               <strong>Status:</strong> {selected.status || "-"}
             </div>
             <div>
-              <strong>Updated:</strong> {selected.updated_at ? new Date(selected.updated_at).toLocaleString() : "-"}
+              <strong>Updated:</strong> {formatDate(selected.updated_at)}
             </div>
             <div>
               <strong>Job text:</strong>

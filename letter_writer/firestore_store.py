@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Iterable, List, Optional
 from uuid import uuid4
 
@@ -118,13 +118,59 @@ def clear_user_data_cache(user_id: str = None):
             cache.clear()
 
 
+def _to_utc_datetime(dt_or_str_or_timestamp):
+    """Convert datetime, ISO string, or Firestore Timestamp to timezone-aware UTC datetime.
+    
+    Firestore automatically converts timezone-aware datetime objects to Timestamps.
+    
+    Args:
+        dt_or_str_or_timestamp: datetime, ISO string, or Firestore Timestamp
+    
+    Returns:
+        timezone-aware UTC datetime object or None if conversion fails
+    """
+    if dt_or_str_or_timestamp is None:
+        return None
+    
+    # Firestore Timestamp (from reading existing data)
+    if hasattr(dt_or_str_or_timestamp, 'timestamp') and hasattr(dt_or_str_or_timestamp, 'seconds'):
+        return dt_or_str_or_timestamp.to_datetime() if hasattr(dt_or_str_or_timestamp, 'to_datetime') else datetime.fromtimestamp(dt_or_str_or_timestamp.timestamp(), tz=timezone.utc)
+    
+    # datetime object - ensure it's timezone-aware UTC
+    if isinstance(dt_or_str_or_timestamp, datetime):
+        if dt_or_str_or_timestamp.tzinfo is None:
+            return dt_or_str_or_timestamp.replace(tzinfo=timezone.utc)
+        return dt_or_str_or_timestamp.astimezone(timezone.utc)
+    
+    # ISO string (from migration or API input)
+    if isinstance(dt_or_str_or_timestamp, str):
+        try:
+            dt_str = dt_or_str_or_timestamp.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(dt_str)
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except (ValueError, AttributeError):
+            pass
+    
+    return None
+
+
 def _prepare_ai_letters(ai_letters: Optional[List[dict]]) -> List[dict]:
     """Normalize AI/negative letters for storage."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     prepared: List[dict] = []
     for letter in ai_letters or []:
         if not isinstance(letter, dict):
             continue
+        created_at = letter.get("created_at") or now
+        # Convert to timezone-aware UTC datetime (Firestore will convert to Timestamp automatically)
+        if not isinstance(created_at, datetime):
+            created_at = _to_utc_datetime(created_at) or now
+        elif created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        else:
+            created_at = created_at.astimezone(timezone.utc)
         prepared.append(
             {
                 "id": letter.get("id") or str(uuid4()),
@@ -132,7 +178,7 @@ def _prepare_ai_letters(ai_letters: Optional[List[dict]]) -> List[dict]:
                 "model": letter.get("model"),
                 "text": (letter.get("text") or "").strip(),
                 "cost": letter.get("cost"),
-                "created_at": letter.get("created_at") or now,
+                "created_at": created_at,
             }
         )
     return prepared
@@ -149,10 +195,10 @@ def serialize_document(doc_dict: dict, doc_id: str) -> dict:
     for ts_field in ("created_at", "updated_at"):
         if ts_field in doc_dict:
             ts = doc_dict[ts_field]
-            if hasattr(ts, "isoformat"):
-                result[ts_field] = ts.isoformat()
-            elif isinstance(ts, datetime):
-                result[ts_field] = ts.isoformat()
+            # Firestore Timestamp (stored as Timestamp after migration)
+            if hasattr(ts, "timestamp") and hasattr(ts, "seconds"):
+                ts = ts.to_datetime() if hasattr(ts, "to_datetime") else datetime.fromtimestamp(ts.timestamp(), tz=timezone.utc)
+            result[ts_field] = ts.isoformat()
     return result
 
 
@@ -171,7 +217,7 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
     if not user_id:
         raise ValueError("user_id is required for Firestore document operations")
     
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     doc_id = data.get("id") or data.get("document_id") or data.get("_id") or str(uuid4())
     company_name_raw = data.get("company_name") or data.get("company")
     # Normalize company_name by stripping whitespace and lowercasing
@@ -211,6 +257,18 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
         existing_data = None
         version = 1
     
+    # Use timezone-aware UTC datetime - Firestore will automatically convert to Timestamp
+    updated_at_dt = now
+    
+    # Handle created_at
+    if not existing_data:
+        created_at = data.get("created_at") or now
+        created_at_dt = _to_utc_datetime(created_at) or now
+    else:
+        # Preserve existing created_at, but convert if it's a string
+        existing_created_at = existing_data.get("created_at", now)
+        created_at_dt = _to_utc_datetime(existing_created_at) or now
+    
     base = {
         "user_id": user_id,  # Always store user_id
         "company_name": company_name,
@@ -228,15 +286,9 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
         "ai_letters": ai_letters,
         "notes": data.get("notes"),
         "version": version,
-        "updated_at": now,
+        "updated_at": updated_at_dt,
+        "created_at": created_at_dt,
     }
-    
-    # Set created_at only on insert
-    if not existing_data:
-        base["created_at"] = data.get("created_at") or now
-    else:
-        # Preserve existing created_at
-        base["created_at"] = existing_data.get("created_at", now)
     
     # Store vector if provided (for vector search)
     if "vector" in data:
@@ -368,7 +420,7 @@ def append_negatives(collection, doc_id: str, negatives: List[dict], user_id: Op
     if not negatives:
         return get_document(collection, doc_id, user_id=user_id)
     
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     prepared = _prepare_ai_letters(negatives)
     
     doc_ref = collection.document(doc_id)
@@ -386,10 +438,13 @@ def append_negatives(collection, doc_id: str, negatives: List[dict], user_id: Op
     current_ai_letters = current_data.get("ai_letters", [])
     updated_ai_letters = current_ai_letters + prepared
     
+    # Use timezone-aware UTC datetime - Firestore will automatically convert to Timestamp
+    updated_at_dt = now
+    
     # Update document
     doc_ref.update({
         "ai_letters": updated_ai_letters,
-        "updated_at": now,
+        "updated_at": updated_at_dt,
     })
     
     return get_document(collection, doc_id, user_id=user_id)
