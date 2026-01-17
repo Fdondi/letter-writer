@@ -41,10 +41,12 @@ export default function Paragraph({
 }) {
   const ref = useRef(null);
   const textRef = useRef(null);
+  const textareaRef = useRef(null);
   const { hoverId, setHoverId } = React.useContext(HoverContext);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(paragraph.text);
   const [isCopyMode, setIsCopyMode] = useState(false);
+  const [cursorPosition, setCursorPosition] = useState(null);
   
   // Local state (used if not controlled)
   const [localViewLanguage, setLocalViewLanguage] = useState("source");
@@ -127,6 +129,7 @@ export default function Paragraph({
 
   const handleBlur = () => {
     setIsEditing(false);
+    setCursorPosition(null);
     handleTextChange(editText);
   };
 
@@ -137,6 +140,68 @@ export default function Paragraph({
     if (e.key === 'Escape') {
       setEditText(paragraph.text);
       setIsEditing(false);
+      setCursorPosition(null);
+    }
+  };
+
+  // Calculate cursor position from click coordinates
+  const getCursorPositionFromClick = (e, element) => {
+    if (!element) return 0;
+    
+    try {
+      // Use caretRangeFromPoint if available (most modern browsers)
+      if (document.caretRangeFromPoint) {
+        const range = document.caretRangeFromPoint(e.clientX, e.clientY);
+        if (range) {
+          // Create a temporary range to measure from start of element
+          const tempRange = document.createRange();
+          tempRange.selectNodeContents(element);
+          tempRange.setEnd(range.endContainer, range.endOffset);
+          return tempRange.toString().length;
+        }
+      }
+      
+      // Fallback: use caretPositionFromPoint (Firefox)
+      if (document.caretPositionFromPoint) {
+        const caretPos = document.caretPositionFromPoint(e.clientX, e.clientY);
+        if (caretPos) {
+          const range = document.createRange();
+          range.setStart(element, 0);
+          range.setEnd(caretPos.offsetNode, caretPos.offset);
+          return range.toString().length;
+        }
+      }
+      
+      // Fallback: approximate based on text content and click position
+      const rect = element.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      
+      // Get computed styles to match textarea
+      const styles = window.getComputedStyle(element);
+      const font = `${styles.fontSize} ${styles.fontFamily}`;
+      const lineHeight = parseFloat(styles.lineHeight) || parseFloat(styles.fontSize) * 1.2;
+      
+      // Approximate: assume each line has similar width
+      // This is a rough estimate, but better than always starting at 0
+      const text = element.textContent || element.innerText || '';
+      const lines = text.split('\n');
+      const lineIndex = Math.floor(y / lineHeight);
+      const targetLine = lines[Math.min(lineIndex, lines.length - 1)] || '';
+      
+      // Estimate character position on the line based on x position
+      // This is approximate - font metrics would be needed for accuracy
+      const avgCharWidth = 8; // Rough estimate
+      const charPosOnLine = Math.max(0, Math.floor(x / avgCharWidth));
+      const position = Math.min(
+        text.length,
+        lines.slice(0, lineIndex).join('\n').length + (lineIndex > 0 ? 1 : 0) + charPosOnLine
+      );
+      
+      return position;
+    } catch (err) {
+      console.warn('Error calculating cursor position:', err);
+      return 0;
     }
   };
 
@@ -212,6 +277,20 @@ export default function Paragraph({
   useEffect(() => {
     setEditText(paragraph.text);
   }, [paragraph.text]);
+
+  // Set cursor position in textarea after it's mounted
+  useEffect(() => {
+    if (isEditing && textareaRef.current && cursorPosition !== null) {
+      // Use setTimeout to ensure the textarea is fully rendered
+      setTimeout(() => {
+        if (textareaRef.current) {
+          const position = Math.min(cursorPosition, textareaRef.current.value.length);
+          textareaRef.current.setSelectionRange(position, position);
+          textareaRef.current.focus();
+        }
+      }, 0);
+    }
+  }, [isEditing, cursorPosition]);
 
   useEffect(() => {
     // Reset translation cache when the underlying paragraph changes
@@ -408,6 +487,7 @@ export default function Paragraph({
         {editable ? (
           isEditing ? (
             <textarea
+              ref={textareaRef}
               value={editText}
               onChange={(e) => setEditText(e.target.value)}
               onBlur={handleBlur}
@@ -432,6 +512,9 @@ export default function Paragraph({
               ref={textRef}
               onClick={(e) => {
                 e.stopPropagation();
+                // Calculate cursor position from click
+                const position = getCursorPositionFromClick(e, textRef.current);
+                setCursorPosition(position);
                 setIsEditing(true);
                 // If we are viewing a translation, populate edit text with the translation
                 // so the user edits what they see. This effectively "switches the original".
@@ -561,6 +644,7 @@ export default function Paragraph({
       {editable ? (
         isEditing ? (
           <textarea
+            ref={textareaRef}
             value={editText}
             onChange={(e) => setEditText(e.target.value)}
             onBlur={handleBlur}
@@ -585,6 +669,9 @@ export default function Paragraph({
             ref={textRef}
             onClick={(e) => {
               e.stopPropagation();
+              // Calculate cursor position from click
+              const position = getCursorPositionFromClick(e, textRef.current);
+              setCursorPosition(position);
               setIsEditing(true);
             }}
             style={{
