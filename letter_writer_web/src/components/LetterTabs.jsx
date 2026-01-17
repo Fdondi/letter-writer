@@ -7,6 +7,51 @@ import { HoverProvider } from "../contexts/HoverContext";
 import { v4 as uuidv4 } from "uuid";
 import { useLanguages } from "../contexts/LanguageContext";
 
+const FeedbackForm = ({ rating, comment, onChange }) => {
+  return (
+    <div style={{ marginTop: 8, padding: "8px", borderTop: "1px solid var(--border-color)", background: "var(--panel-bg)" }}>
+      <div style={{ marginBottom: 4, display: "flex", gap: 4, alignItems: "center" }}>
+        <span style={{ fontSize: "12px", fontWeight: 600 }}>Rating:</span>
+        <div style={{ display: "flex" }}>
+          {[1, 2, 3, 4, 5].map((star) => (
+            <span
+              key={star}
+              onClick={() => onChange({ rating: star, comment })}
+              style={{
+                cursor: "pointer",
+                fontSize: "16px",
+                color: star <= (rating || 0) ? "#f59e0b" : "var(--border-color)",
+                transition: "color 0.1s"
+              }}
+              title={`${star} stars`}
+            >
+              ★
+            </span>
+          ))}
+        </div>
+      </div>
+      <textarea
+        value={comment || ""}
+        onChange={(e) => onChange({ rating, comment: e.target.value })}
+        placeholder="Feedback on this vendor's output..."
+        style={{
+          width: "100%",
+          padding: "6px",
+          fontSize: "12px",
+          border: "1px solid var(--border-color)",
+          borderRadius: "4px",
+          minHeight: "50px",
+          resize: "vertical",
+          background: "var(--input-bg)",
+          color: "var(--text-color)",
+          fontFamily: "inherit",
+          boxSizing: "border-box"
+        }}
+      />
+    </div>
+  );
+};
+
 export default function LetterTabs({ 
   vendorsList, 
   vendorParagraphs, 
@@ -21,6 +66,8 @@ export default function LetterTabs({
   onAddParagraph,
   onCopyFinal,
   savingFinal = false,
+  vendorFeedback = {},
+  setVendorFeedback = () => {},
 }) {
   const [collapsed, setCollapsed] = useState([]);
   const [finalLetter, setFinalLetter] = useState("");
@@ -413,9 +460,9 @@ export default function LetterTabs({
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        height: "100%", // Take full height of parent
         backgroundColor: 'var(--card-bg)',
-        border: '1px solid var(--border-color)'
+        border: '1px solid var(--border-color)',
+        height: "100%"
       }}
     >
       <div style={{
@@ -466,13 +513,13 @@ export default function LetterTabs({
         }}
         style={{ 
           flex: 1,
-          overflowY: "auto",
           padding: "8px",
-          minHeight: 0, // Allow flex item to shrink
           background: isContentOver ? "var(--header-bg)" : "transparent",
           border: isContentOver ? "2px dashed #007acc" : "2px solid transparent",
           borderRadius: "4px",
-          transition: "all 0.2s ease"
+          transition: "all 0.2s ease",
+          overflowY: "auto",
+          minHeight: 0
         }}
       >
         <PlusButton onClick={() => addNewParagraph(0)} />
@@ -600,7 +647,7 @@ export default function LetterTabs({
   return (
     <HoverProvider>
       <div style={{ 
-        height: "calc(100vh - 200px)", 
+        height: "calc(100vh - 20px)", 
         marginTop: 20,
         display: "flex",
         flexDirection: "column",
@@ -730,25 +777,23 @@ export default function LetterTabs({
         
         <div style={{ 
           display: "flex", 
-          gap: 10, 
+          gap: 10,
           flex: 1,
           minHeight: 0
         }}>
           {visibleVendors.map((v) => (
-            <div key={v} style={{ width: columnWidth, overflowY: "auto", position: "relative", background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
+            <div key={v} style={{ width: columnWidth, display: "flex", flexDirection: "column", position: "relative", background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', height: "100%" }}>
               <h4 style={{ 
                 textTransform: "capitalize", 
                 margin: 0, 
                 background: vendorColors?.[v] || "var(--header-bg)",
                 padding: "8px 12px",
                 borderRadius: "4px 4px 0 0",
-                position: "sticky",
-                top: 0,
-                zIndex: 10,
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                color: 'var(--text-color)'
+                color: 'var(--text-color)',
+                flexShrink: 0
               }}>
                 <span>{v}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -766,7 +811,7 @@ export default function LetterTabs({
                 </div>
               </h4>
               
-              <div style={{ padding: "8px" }}>
+              <div style={{ padding: "8px", flex: 1, overflowY: "auto" }}>
                 {failedVendors[v] ? (
                   <div style={{
                     padding: "16px",
@@ -806,6 +851,16 @@ export default function LetterTabs({
                   ))
                 )}
               </div>
+              <FeedbackForm
+                rating={vendorFeedback[v]?.rating}
+                comment={vendorFeedback[v]?.comment}
+                onChange={(newFeedback) => {
+                  setVendorFeedback(prev => ({
+                    ...prev,
+                    [v]: { ...prev[v], ...newFeedback }
+                  }));
+                }}
+              />
             </div>
           ))}
           

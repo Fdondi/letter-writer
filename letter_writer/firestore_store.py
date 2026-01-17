@@ -178,6 +178,9 @@ def _prepare_ai_letters(ai_letters: Optional[List[dict]]) -> List[dict]:
                 "model": letter.get("model"),
                 "text": (letter.get("text") or "").strip(),
                 "cost": letter.get("cost"),
+                "rating": letter.get("rating"),
+                "comment": letter.get("comment"),
+                "chunks_used": letter.get("chunks_used"),
                 "created_at": created_at,
             }
         )

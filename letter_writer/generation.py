@@ -75,6 +75,7 @@ def extract_job_metadata(
     system = (
         "You are an assistant that extracts a concise job summary from a job description. "
         "Return strict JSON with these keys: company_name, job_title, location, language, salary, requirements, point_of_contact. "
+        "Stick to one language unless it's really mixed. A few english words don't make english a language used."
         "Use null for unknown values. Keep requirements as a short bullet-style list (array of strings). "
         "For point_of_contact, extract if present: name, role (their role in the company), contact_details (email, phone, etc.), and notes (any note about them or how to contact them). "
         "If no point of contact is found, set point_of_contact to null. "
@@ -350,7 +351,11 @@ def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
         f"---- Example #{i+1} - {ex['company_name']} ----\n"
         "Initial cover letters:\n"
         + "\n\n".join(
-            f"[attempt {j+1}]:\n{al.get('text','')}"
+            f"[attempt {j+1}]:\n"
+            + (f"(Rating: {al.get('rating')}/5)\n" if al.get("rating") else "")
+            + (f"(Used chunks: {al.get('chunks_used')})\n" if al.get("chunks_used") is not None else "")
+            + (f"(Feedback: \"{al.get('comment')}\")\n" if al.get("comment") else "")
+            + f"{al.get('text','')}"
             for j, al in enumerate(ex["ai_letters"])
             if isinstance(al, dict) and al.get("text")
         )
@@ -362,6 +367,7 @@ def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
         "You are an expert in noticing the patterns behind edits. You will receive a list of examples of job descriptions and corresponding cover letters; "
         "first the cover letter how it was initially written, then the cover letter how a reviewer rewrote it. "
         "The reviewer might have copied parts of the initial letter, or rewrote it from scratch. Either way, pay attention to what was changed. "
+        "You might also see ratings, chunk usage counts, and explicit feedback comments on the initial letters. Use these to understand what the reviewer liked or disliked.\n"
         "Once you noticed what changes tend to be made, flag if in the final, new letter anything looks like a feature than the reviewer would change in the earler examples.\n"
         "Note you should NOT flag elements just for not being in the positive examples, but only if they are present in the initial examples AND usually removed in the revised ones.\n"
         "Be very brief, a couple of sentences is enough. "

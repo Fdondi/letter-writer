@@ -60,6 +60,8 @@ export default function LetterCard({ title, text, loading = false, error = null,
     <div
       style={{
         width,
+        height: "100%", // Ensure card takes full height of parent
+        boxSizing: "border-box", // Include padding/border in height calculation
         border: "1px solid var(--border-color)",
         borderRadius: 4,
         padding: 10,

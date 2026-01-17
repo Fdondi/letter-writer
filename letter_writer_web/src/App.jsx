@@ -68,6 +68,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("compose"); // "compose" | "documents" | "personal-data"
   const [assemblyVisible, setAssemblyVisible] = useState(true); // when in assembly stage, show assembly or phases
   const [extractedData, setExtractedData] = useState(null); // Track extracted data to detect modifications
+  const [vendorFeedback, setVendorFeedback] = useState({}); // vendor -> { rating, comment }
   
   // Translation state for job text
   const { enabledLanguages } = useLanguages();
@@ -444,11 +445,19 @@ export default function App() {
   const persistFinalLetter = async (finalText) => {
     if (!finalText || !companyName || !jobText) return;
     const requirementsList = Array.isArray(requirements) ? requirements : requirements ? [requirements] : [];
-    const aiLetters = Object.entries(letters).map(([vendor, text]) => ({
-      vendor,
-      text: text || "",
-      cost: vendorCosts[vendor] ?? null,
-    }));
+    const aiLetters = Object.entries(letters).map(([vendor, text]) => {
+      const feedback = vendorFeedback[vendor] || {};
+      // Calculate chunks used from this vendor in the final letter
+      const chunksUsed = finalParagraphs.filter(p => p.vendor === vendor).length;
+      return {
+        vendor,
+        text: text || "",
+        cost: vendorCosts[vendor] ?? null,
+        rating: feedback.rating || null,
+        comment: feedback.comment || "",
+        chunks_used: chunksUsed,
+      };
+    });
     const payload = {
       company_name: companyName,
       role: jobTitle || "",
@@ -1313,29 +1322,29 @@ export default function App() {
       )}
       {error && <p style={{ color: "var(--error-text)" }}>{error}</p>}
 
-      {!showInput && uiStage !== "assembly" && (
-        <PhaseFlow
-          vendorsList={vendorsList}
-          onEditChange={updatePhaseEdit}
-          onApprove={approvePhase}
-          onApproveAll={approveAllPhase}
-          onRerunFromBackground={rerunFromBackground}
-          sessionId={phaseSessionId}
-          onRegisterPhases={(phases) => {
-            phaseRegistryRef.current = phases;
-          }}
-          onPhaseComplete={(vendor, phase, data) => {
-            // Handle phase completion - update parent state if needed
-            if (phase === "refine" && data?.final_letter) {
-              // Already handled in approvePhase
-            }
-          }}
-        />
-      )}
-
-      {!showInput && uiStage === "assembly" && (
+      {!showInput && (
         <>
-          {assemblyVisible ? (
+          <div style={{ display: (uiStage === "assembly" && assemblyVisible) ? "none" : "block" }}>
+            <PhaseFlow
+              vendorsList={vendorsList}
+              onEditChange={updatePhaseEdit}
+              onApprove={approvePhase}
+              onApproveAll={approveAllPhase}
+              onRerunFromBackground={rerunFromBackground}
+              sessionId={phaseSessionId}
+              onRegisterPhases={(phases) => {
+                phaseRegistryRef.current = phases;
+              }}
+              onPhaseComplete={(vendor, phase, data) => {
+                // Handle phase completion - update parent state if needed
+                if (phase === "refine" && data?.final_letter) {
+                  // Already handled in approvePhase
+                }
+              }}
+            />
+          </div>
+
+          {uiStage === "assembly" && assemblyVisible && (
             <div style={{ position: "relative", paddingTop: 4 }}>
               <LetterTabs
                 vendorsList={vendorsList}
@@ -1366,28 +1375,10 @@ export default function App() {
                 onAddParagraph={onAddParagraph}
                 onCopyFinal={persistFinalLetter}
                 savingFinal={savingFinal}
+                vendorFeedback={vendorFeedback}
+                setVendorFeedback={setVendorFeedback}
               />
             </div>
-          ) : (
-            <>
-              <PhaseFlow
-                vendorsList={vendorsList}
-                onEditChange={updatePhaseEdit}
-                onApprove={approvePhase}
-                onApproveAll={approveAllPhase}
-                onRerunFromBackground={rerunFromBackground}
-                sessionId={phaseSessionId}
-                onRegisterPhases={(phases) => {
-                  phaseRegistryRef.current = phases;
-                }}
-                onPhaseComplete={(vendor, phase, data) => {
-                  // Handle phase completion - update parent state if needed
-                  if (phase === "refine" && data?.final_letter) {
-                    // Already handled in approvePhase
-                  }
-                }}
-              />
-            </>
           )}
         </>
       )}
