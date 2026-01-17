@@ -46,6 +46,7 @@ class SessionState:
     job_text: str
     cv_text: str
     search_result: List[dict]  # Changed from List[ScoredPoint] to List[dict] for Firestore
+    style_instructions: str = ""
     vendors: Dict[str, VendorPhaseState] = field(default_factory=dict)
     metadata: Dict[str, Dict[str, str]] = field(default_factory=dict)  # vendor -> extraction
     # vendors_list is deprecated - derive from vendors.keys() or metadata.keys() instead
@@ -202,6 +203,7 @@ def advance_to_draft(
     vendor: ModelVendor,
     company_report_override: Optional[str] = None,
     top_docs_override: Optional[List[dict]] = None,
+    style_instructions: str = "",
 ) -> VendorPhaseState:
     # Force reload from MongoDB to ensure we have the latest session state
     # This is important because the session might have been updated by background phase
@@ -280,6 +282,10 @@ def advance_to_draft(
     company_report = company_report_override or state.company_report or ""
     job_text = session.job_text
     cv_text = session.cv_text
+    
+    # Use provided instructions or fall back to session
+    if not style_instructions:
+        style_instructions = session.style_instructions
 
     state.company_report = company_report
     state.top_docs = top_docs
@@ -287,12 +293,12 @@ def advance_to_draft(
     try:
         print(f"[PHASE] draft -> {vendor.value} :: generate_letter (XLARGE)")
         draft_letter = generate_letter(
-            cv_text, top_docs, company_report, job_text, ai_client, trace_dir
+            cv_text, top_docs, company_report, job_text, ai_client, trace_dir, style_instructions
         )
         # Run checks on the draft so the user can review/override feedback before refinement
         print(f"[PHASE] draft -> {vendor.value} :: running checks (TINY)")
         with ThreadPoolExecutor(max_workers=5) as executor:
-            instruction_future = executor.submit(instruction_check, draft_letter, ai_client)
+            instruction_future = executor.submit(instruction_check, draft_letter, ai_client, style_instructions)
             accuracy_future = executor.submit(accuracy_check, draft_letter, cv_text, ai_client)
             precision_future = executor.submit(
                 precision_check, draft_letter, company_report, job_text, ai_client

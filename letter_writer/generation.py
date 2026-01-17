@@ -203,7 +203,7 @@ def company_research(company_name: str, job_text: str, client: BaseClient, trace
     (trace_dir / "company_research.txt").write_text(result, encoding="utf-8")
     return result
 
-def generate_letter(cv_text: str, examples: List[dict], company_report: str, job_text: str, client: BaseClient, trace_dir: Path) -> str:
+def generate_letter(cv_text: str, examples: List[dict], company_report: str, job_text: str, client: BaseClient, trace_dir: Path, style_instructions: str = "") -> str:
     """Generate a personalized cover letter based on CV, examples, company report, and job description."""
     # Validate CV text is present
     if cv_text is None or not cv_text or not str(cv_text).strip():
@@ -211,6 +211,9 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
         logger.error(error_msg, extra={"cv_text": cv_text, "cv_text_type": type(cv_text).__name__})
         raise MissingCVError(error_msg)
     
+    if not style_instructions:
+        style_instructions = get_style_instructions()
+
     examples_formatted = "\n\n".join(
         f"---- Example #{i+1} [estimated relevance: {ex['score']}/10] - {ex['company_name']} ----\n"
         f"Job Description:\n{ex['job_text']}\n\n"
@@ -223,7 +226,7 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
         "produce a personalized cover letter in the same style as the examples. Keep it concise (max 1 page).\n"
         "Remember to use the language of THE TARGET JOB DESCRIPTION, even if some or all of the examples might be in a different language. "
         "Use the examples at a higher level: look at style, structure, what is paid attention to, etc.\n"
-        + get_style_instructions() +
+        + style_instructions +
         "\n\n"
     )
     prompt = (
@@ -235,15 +238,18 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
     (trace_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
     return client.call(ModelSize.XLARGE, system, [prompt])
 
-def instruction_check(letter: str, client: BaseClient) -> str:
+def instruction_check(letter: str, client: BaseClient, style_instructions: str = "") -> str:
     """Check the letter for consistency with the instructions."""
+    if not style_instructions:
+        style_instructions = get_style_instructions()
+
     system = (
         "You are an expert in style and tone. Check the letter for consistency with the style instructions."
         "Be very brief, a couple of sentences is enough. It is likely the instructions were already follwed. "
         "If at any point you see that there is no strong negative feedback, output NO COMMENT and end the answer. \n"
     )
     prompt = (
-        "========== Style Instructions:\n" + get_style_instructions() + "\n==========\n\n" +
+        "========== Style Instructions:\n" + style_instructions + "\n==========\n\n" +
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
         "Please catch any strong inconsitency with the instructions, or output NO COMMENT"
     )

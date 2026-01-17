@@ -494,6 +494,13 @@ def process_job_view(request: HttpRequest):
 
     try:
         kwargs = _build_kwargs(data, param_types)
+        
+        # Add style_instructions from session or default
+        instructions = request.session.get("style_instructions", "")
+        if not instructions:
+             instructions = get_style_instructions()
+        kwargs["style_instructions"] = instructions
+        
         letters = write_cover_letter(**kwargs, logger=print)
     except Exception as exc:  # noqa: BLE001
         return JsonResponse({"detail": str(exc)}, status=500)
@@ -1097,11 +1104,17 @@ def draft_phase_view(request: HttpRequest, vendor: str):
         # Set request in thread-local so session_store can use Django sessions
         set_current_request(request)
         
+        # Get instructions from session
+        instructions = request.session.get("style_instructions", "")
+        if not instructions:
+             instructions = get_style_instructions()
+             
         state = advance_to_draft(
             session_id=session_id,
             vendor=vendor_enum,
             company_report_override=data.get("company_report"),
             top_docs_override=data.get("top_docs"),
+            style_instructions=instructions,
         )
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
@@ -1127,16 +1140,49 @@ def vendors_view(request: HttpRequest):
 
 
 def style_instructions_view(request: HttpRequest):
-    if request.method == "GET":
-        # Return current style instructions
+    # Determine user_id if authenticated
+    user_id = None
+    if request.user.is_authenticated:
         try:
-            instructions = get_style_instructions()
+            from allauth.socialaccount.models import SocialAccount
+            social_account = SocialAccount.objects.filter(user=request.user, provider='google').first()
+            if social_account:
+                user_id = social_account.uid
+        except (ImportError, Exception):
+            pass
+        if not user_id:
+            user_id = str(request.user.id)
+
+    if request.method == "GET":
+        try:
+            instructions = ""
+            
+            # 1. Check Session (fastest)
+            if request.session.session_key:
+                instructions = request.session.get("style_instructions", "")
+            
+            # 2. Check Firestore (if authenticated and not in session)
+            if not instructions and user_id:
+                user_data = get_user_data(user_id, use_cache=True)
+                instructions = user_data.get("style_instructions", "")
+                
+                # Save to session if found
+                if instructions and request.session.session_key:
+                    request.session["style_instructions"] = instructions
+            
+            # 3. Fallback to File (default)
+            if not instructions:
+                instructions = get_style_instructions()
+                
             return JsonResponse({"instructions": instructions})
         except Exception as exc:
             return JsonResponse({"detail": str(exc)}, status=500)
     
     elif request.method == "POST":
         # Update style instructions
+        if not user_id:
+             return JsonResponse({"detail": "Authentication required to save instructions"}, status=401)
+
         try:
             data = json.loads(request.body or "{}")
             instructions = data.get("instructions", "")
@@ -1144,9 +1190,22 @@ def style_instructions_view(request: HttpRequest):
             if not instructions:
                 return JsonResponse({"detail": "Instructions cannot be empty"}, status=400)
             
-            # Write to the style instructions file
-            style_file = Path(__file__).parent.parent.parent / "letter_writer" / "style_instructions.txt"
-            style_file.write_text(instructions, encoding="utf-8")
+            # 1. Update Firestore
+            user_doc_ref = get_personal_data_document(user_id)
+            user_doc_ref.set({
+                "style_instructions": instructions, 
+                "updated_at": datetime.utcnow()
+            }, merge=True)
+            
+            # Clear cache
+            clear_user_data_cache(user_id)
+            
+            # 2. Update Session
+            if not request.session.session_key:
+                request.session.create()
+            request.session["style_instructions"] = instructions
+            
+            # 3. NO LONGER write to file (avoids 403 and persists per user)
             
             return JsonResponse({"status": "ok", "instructions": instructions})
         except json.JSONDecodeError:
@@ -1549,6 +1608,10 @@ def personal_data_view(request: HttpRequest):
                 if not isinstance(languages, list):
                     return JsonResponse({"detail": "default_languages must be a list"}, status=400)
                 updates["default_languages"] = languages
+
+            # Check if updating style_instructions
+            elif "style_instructions" in data:
+                updates["style_instructions"] = data["style_instructions"]
                 
             # Check if updating CV content
             elif "content" in data:
@@ -1601,6 +1664,9 @@ def personal_data_view(request: HttpRequest):
 
         if "default_languages" in updates:
             response_data["default_languages"] = updates["default_languages"]
+
+        if "style_instructions" in updates:
+            response_data["style_instructions"] = updates["style_instructions"]
         
         return JsonResponse(response_data, status=201)
     

@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
+import { getCsrfToken } from "../utils/apiHelpers";
 
 function formatDate(dateString) {
   if (!dateString) return "-";
@@ -14,9 +15,12 @@ export default function DocumentsPage() {
   const [documents, setDocuments] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [editedLetter, setEditedLetter] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
   const [loadingList, setLoadingList] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [companySearch, setCompanySearch] = useState("");
   const [roleSearch, setRoleSearch] = useState("");
@@ -37,11 +41,11 @@ export default function DocumentsPage() {
       const res = await fetch(url);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      // Sort by updated_at descending (most recent first)
+      // Sort by created_at descending (most recent first)
       // Parse dates to ensure proper numeric comparison, not string comparison
       const sortedDocs = (data.documents || []).sort((a, b) => {
-        const dateA = a.updated_at ? new Date(a.updated_at).getTime() : 0;
-        const dateB = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+        const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
         return dateB - dateA; // Descending order (most recent first)
       });
       setDocuments(sortedDocs);
@@ -80,6 +84,42 @@ export default function DocumentsPage() {
     }
   }, [selectedId]);
 
+  useEffect(() => {
+    if (selected) {
+      setEditedLetter(selected.letter_text || "");
+      setIsEditing(false);
+    } else {
+      setEditedLetter("");
+      setIsEditing(false);
+    }
+  }, [selected]);
+
+  const saveDocument = async () => {
+    if (!selectedId) return;
+    try {
+      setSaving(true);
+      setError(null);
+      const csrfToken = await getCsrfToken();
+      const res = await fetch(`/api/documents/${selectedId}/`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+        },
+        body: JSON.stringify({ ...selected, letter_text: editedLetter }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setSelected(data.document);
+      setIsEditing(false);
+      await fetchList();
+    } catch (e) {
+      setError(`Failed to save document: ${e.message || e}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const deleteSelected = async () => {
     if (!selectedId) return;
     const confirmed = window.confirm("Delete this document? This cannot be undone.");
@@ -87,7 +127,13 @@ export default function DocumentsPage() {
     try {
       setDeleting(true);
       setError(null);
-      const res = await fetch(`/api/documents/${selectedId}/`, { method: "DELETE" });
+      const csrfToken = await getCsrfToken();
+      const res = await fetch(`/api/documents/${selectedId}/`, {
+        method: "DELETE",
+        headers: {
+          "X-CSRFToken": csrfToken,
+        },
+      });
       if (!res.ok) throw new Error(await res.text());
       setSelectedId(null);
       setSelected(null);
@@ -119,7 +165,7 @@ export default function DocumentsPage() {
           {doc.status || "-"}
         </td>
         <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border-color)" }}>
-          {formatDate(doc.updated_at)}
+          {formatDate(doc.created_at)}
         </td>
       </tr>
     );
@@ -201,7 +247,7 @@ export default function DocumentsPage() {
                 <th style={{ textAlign: "left", padding: "6px 8px" }}>Company</th>
                 <th style={{ textAlign: "left", padding: "6px 8px" }}>Role</th>
                 <th style={{ textAlign: "left", padding: "6px 8px" }}>Status</th>
-                <th style={{ textAlign: "left", padding: "6px 8px" }}>Updated</th>
+                <th style={{ textAlign: "left", padding: "6px 8px" }}>Created</th>
               </tr>
             </thead>
             <tbody>
@@ -273,21 +319,99 @@ export default function DocumentsPage() {
               </pre>
             </div>
             <div>
-              <strong>Final letter:</strong>
-              <pre
-                style={{
-                  whiteSpace: "pre-wrap",
-                  background: "var(--pre-bg)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: 4,
-                  padding: 8,
-                  maxHeight: 200,
-                  overflowY: "auto",
-                  marginTop: 4,
-                }}
-              >
-                {selected.letter_text || ""}
-              </pre>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <strong>Final letter:</strong>
+                <div>
+                  {isEditing ? (
+                    <>
+                      <button
+                        onClick={() => {
+                          setIsEditing(false);
+                          setEditedLetter(selected.letter_text || "");
+                        }}
+                        disabled={saving}
+                        style={{
+                          padding: "2px 8px",
+                          fontSize: "12px",
+                          background: "var(--button-bg)",
+                          color: "var(--button-text)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: 4,
+                          cursor: "pointer",
+                          marginRight: 8,
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={saveDocument}
+                        disabled={saving}
+                        style={{
+                          padding: "2px 8px",
+                          fontSize: "12px",
+                          background: saving ? "var(--border-color)" : "var(--button-bg)",
+                          color: saving ? "var(--secondary-text-color)" : "var(--button-text)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: 4,
+                          cursor: saving ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        {saving ? "Saving..." : "Save"}
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => setIsEditing(true)}
+                      style={{
+                        padding: "2px 8px",
+                        fontSize: "12px",
+                        background: "var(--button-bg)",
+                        color: "var(--button-text)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Edit
+                    </button>
+                  )}
+                </div>
+              </div>
+              {isEditing ? (
+                <textarea
+                  value={editedLetter}
+                  onChange={(e) => setEditedLetter(e.target.value)}
+                  style={{
+                    width: "100%",
+                    minHeight: "200px",
+                    whiteSpace: "pre-wrap",
+                    background: "var(--input-bg)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: 4,
+                    padding: 8,
+                    marginTop: 4,
+                    resize: "vertical",
+                    color: "var(--text-color)",
+                    fontFamily: "monospace",
+                    boxSizing: "border-box",
+                  }}
+                />
+              ) : (
+                <pre
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    background: "var(--pre-bg)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: 4,
+                    padding: 8,
+                    maxHeight: 200,
+                    overflowY: "auto",
+                    marginTop: 4,
+                  }}
+                >
+                  {selected.letter_text || ""}
+                </pre>
+              )}
             </div>
             <div>
               <strong>AI letters:</strong>

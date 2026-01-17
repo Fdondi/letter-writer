@@ -185,6 +185,7 @@ def _process_single_vendor(
     search_result: List[dict],  # Changed from List[ScoredPoint] to List[dict]
     refine: bool,
     fancy: bool,
+    style_instructions: str,
     logger=print,
 ) -> dict:
     """Generate the letter for one model vendor and return its text and cost."""
@@ -207,13 +208,13 @@ def _process_single_vendor(
 
     # letter generation
     letter = generate_letter(
-        cv_text, top_docs, company_report, job_text, ai_client, trace_dir
+        cv_text, top_docs, company_report, job_text, ai_client, trace_dir, style_instructions
     )
     (trace_dir / "first_draft.txt").write_text(letter, encoding="utf-8")
 
     if refine:
         with ThreadPoolExecutor(max_workers=5) as executor:
-            instruction_future = executor.submit(instruction_check, letter, ai_client)
+            instruction_future = executor.submit(instruction_check, letter, ai_client, style_instructions)
             accuracy_future = executor.submit(
                 accuracy_check, letter, cv_text, ai_client
             )
@@ -302,6 +303,7 @@ def write_cover_letter(
     model_vendor: Optional[ModelVendor] = None,
     refine: bool = True,
     fancy: bool = False,
+    style_instructions: str = "",
     logger=print,
 ) -> dict[str, dict]:
     """Generate cover letter(s) from text or file and return them.
@@ -367,6 +369,7 @@ def write_cover_letter(
                     search_result,
                     refine,
                     fancy,
+                    style_instructions,
                     logger,
                 ): mv
                 for mv in ModelVendor
@@ -391,6 +394,7 @@ def write_cover_letter(
             search_result,
             refine,
             fancy,
+            style_instructions,
             logger,
         )
 

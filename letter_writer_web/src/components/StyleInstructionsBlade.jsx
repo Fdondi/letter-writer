@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { fetchWithHeartbeat } from '../utils/apiHelpers';
 
 const StyleInstructionsBlade = ({ isOpen, onClose }) => {
   const [instructions, setInstructions] = useState('');
@@ -19,11 +20,7 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/style-instructions/');
-      if (!response.ok) {
-        throw new Error('Failed to load style instructions');
-      }
-      const data = await response.json();
+      const { data } = await fetchWithHeartbeat('/api/style-instructions/');
       setInstructions(data.instructions);
       setOriginalInstructions(data.instructions);
     } catch (err) {
@@ -38,18 +35,10 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
     setError(null);
     setSaveSuccess(false);
     try {
-      const response = await fetch('/api/style-instructions/', {
+      await fetchWithHeartbeat('/api/style-instructions/', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({ instructions }),
       });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to save style instructions');
-      }
       
       setOriginalInstructions(instructions);
       setSaveSuccess(true);

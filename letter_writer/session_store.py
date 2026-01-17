@@ -81,6 +81,7 @@ def _serialize_session(session) -> dict:
         "session_id": session.session_id,
         "job_text": session.job_text,
         "cv_text": session.cv_text,
+        "style_instructions": session.style_instructions,
         "search_result": session.search_result,  # Already List[dict]
         # vendors NOT stored here - stored in session_vendors collection
         "metadata": session.metadata,
@@ -105,6 +106,7 @@ def _deserialize_session(data: dict):
         session_id=data["session_id"],
         job_text=data["job_text"],
         cv_text=data["cv_text"],
+        style_instructions=data.get("style_instructions", ""),
         search_result=data.get("search_result", []),  # Already List[dict]
         vendors={},  # Will be overwritten by session_vendors data in load_session()
         metadata=data.get("metadata", {}),
@@ -136,6 +138,7 @@ def save_session(session, collection=None) -> None:
     save_session_common_data(
         request=request,
         job_text=session.job_text,
+        style_instructions=session.style_instructions,
         metadata=session.metadata,
         search_result=session.search_result,
     )
@@ -150,7 +153,7 @@ def save_session(session, collection=None) -> None:
 
 
 def save_session_common_data(session_id: str, job_text: str, cv_text: str,
-                             metadata: dict, search_result: list = None, collection=None) -> None:
+                             metadata: dict, search_result: list = None, style_instructions: str = "", collection=None) -> None:
     """Save or update common session data. Called by extraction phase or start phased flow.
     
     This is the ONLY place that writes common session data. Uses lock for session creation.
@@ -171,6 +174,7 @@ def save_session_common_data(session_id: str, job_text: str, cv_text: str,
                 "session_id": session_id,
                 "job_text": job_text,
                 "cv_text": cv_text,
+                "style_instructions": style_instructions,
                 "search_result": search_result or [],  # Already List[dict]
                 "metadata": metadata,
                 "created_at": now,
@@ -183,6 +187,7 @@ def save_session_common_data(session_id: str, job_text: str, cv_text: str,
             update_data = {
                 "job_text": job_text,
                 "cv_text": cv_text,
+                "style_instructions": style_instructions,
                 "updated_at": now,
                 "expire_at": now + timedelta(days=SESSION_TTL_DAYS),
             }
@@ -224,6 +229,7 @@ def load_session_common_data(session_id: str, collection=None):
         "session_id": doc_dict["session_id"],
         "job_text": doc_dict.get("job_text", ""),
         "cv_text": doc_dict.get("cv_text", ""),
+        "style_instructions": doc_dict.get("style_instructions", ""),
         "search_result": doc_dict.get("search_result", []),  # Already List[dict]
         "metadata": doc_dict.get("metadata", {}),
         "created_at": created_at,
@@ -360,6 +366,7 @@ def load_session(session_id: str, collection=None, force_reload: bool = False):
         session_id=session_id,
         job_text=common_data.get("job_text", ""),
         cv_text=common_data.get("cv_text", ""),
+        style_instructions=common_data.get("style_instructions", ""),
         search_result=common_data.get("search_result", []),
         metadata=common_data.get("metadata", {}),
         vendors=vendors,

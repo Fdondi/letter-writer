@@ -568,7 +568,7 @@ export default function LetterTabs({
                         setTranslationStates(prev => ({
                             ...prev,
                             [p.id]: {
-                                ...prev[p.id],
+                                ...(prev[p.id] || { viewLanguage: 'source' }),
                                 translations: {
                                     ...(prev[p.id]?.translations || {}),
                                     [lang]: text
@@ -580,7 +580,7 @@ export default function LetterTabs({
                         setTranslationStates(prev => ({
                             ...prev,
                             [p.id]: {
-                                ...prev[p.id],
+                                ...(prev[p.id] || { translations: {} }),
                                 viewLanguage: lang
                             }
                         }));

@@ -396,14 +396,14 @@ def list_documents(
             role_lower = role_filter_value.lower()
             result = [d for d in result if role_lower in (d.get("role") or "").lower()]
         
-        # Sort by updated_at descending (most recent first)
+        # Sort by created_at descending (most recent first)
         # serialize_document returns ISO strings for dates
         def get_sort_key(doc):
-            updated_at = doc.get("updated_at")
-            if not updated_at:
+            created_at = doc.get("created_at")
+            if not created_at:
                 return 0
             try:
-                dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                 return dt.timestamp()
             except (ValueError, AttributeError):
                 return 0
@@ -419,7 +419,7 @@ def list_documents(
         return result
     else:
         # No filters - can use order_by directly
-        query = query.order_by("updated_at", direction=firestore.Query.DESCENDING)
+        query = query.order_by("created_at", direction=firestore.Query.DESCENDING)
         
         # Apply pagination
         if skip > 0:
