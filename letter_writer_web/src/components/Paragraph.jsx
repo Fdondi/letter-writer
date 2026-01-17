@@ -148,9 +148,8 @@ export default function Paragraph({
   };
 
   const handleMouseLeave = () => {
-    if (isCopyMode) {
-      setIsCopyMode(false);
-    }
+    // Don't exit copy mode on mouse leave - allow text selection to work
+    // Copy mode will exit on click outside or Escape key
   };
 
   const handleMouseDown = (e) => {
@@ -162,7 +161,52 @@ export default function Paragraph({
     if (isCopyMode) {
       e.stopPropagation();
     }
+    // If clicking outside the paragraph while in copy mode, exit copy mode
+    if (isCopyMode && ref.current && !ref.current.contains(e.target)) {
+      setIsCopyMode(false);
+    }
   };
+
+  // Exit copy mode on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && isCopyMode) {
+        setIsCopyMode(false);
+      }
+    };
+    
+    if (isCopyMode) {
+      document.addEventListener('keydown', handleKeyDown);
+      return () => {
+        document.removeEventListener('keydown', handleKeyDown);
+      };
+    }
+  }, [isCopyMode]);
+
+  // Exit copy mode when clicking outside the paragraph
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (isCopyMode && ref.current && !ref.current.contains(e.target)) {
+        // Only exit if we're not in the middle of a text selection
+        const selection = window.getSelection();
+        if (!selection || selection.toString().length === 0) {
+          setIsCopyMode(false);
+        }
+      }
+    };
+    
+    if (isCopyMode) {
+      // Use a small delay to allow text selection to complete
+      const timeoutId = setTimeout(() => {
+        document.addEventListener('click', handleClickOutside);
+      }, 100);
+      
+      return () => {
+        clearTimeout(timeoutId);
+        document.removeEventListener('click', handleClickOutside);
+      };
+    }
+  }, [isCopyMode]);
 
   // Update edit text when paragraph changes
   useEffect(() => {
