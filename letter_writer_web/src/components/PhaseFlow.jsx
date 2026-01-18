@@ -210,8 +210,29 @@ function EditableField({ label, value, minHeight = 120, placeholder, onSave, dis
     ? translation.getTranslatedText(fieldId, value || "")
     : (value || placeholder || "");
 
+  // Get field-specific view language
+  const fieldViewLanguage = translation && fieldId
+    ? translation.getFieldViewLanguage(fieldId)
+    : "source";
+
+  // Handle field-specific language change
+  const handleFieldLanguageChange = async (code) => {
+    if (!translation || !fieldId) return;
+    
+    translation.setFieldViewLanguage(fieldId, code);
+    
+    if (code === "source") {
+      return; // No translation needed for source
+    }
+    
+    const sourceText = value || "";
+    if (sourceText) {
+      await translation.translateField(fieldId, sourceText, code);
+    }
+  };
+
   return (
-    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <label style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>{label}</label>
         {!editing && (
@@ -230,7 +251,6 @@ function EditableField({ label, value, minHeight = 120, placeholder, onSave, dis
           </button>
         )}
       </div>
-
       {editing ? (
         <>
           <textarea
@@ -267,19 +287,45 @@ function EditableField({ label, value, minHeight = 120, placeholder, onSave, dis
           </div>
         </>
       ) : (
-        <div
-          style={{
-            width: "100%",
-            minHeight,
-            padding: 8,
-            border: "1px solid #e5e7eb",
-            borderRadius: 4,
-            background: "#f9fafb",
-            whiteSpace: "pre-wrap",
-            fontSize: 13,
-          }}
-        >
-          {displayedText}
+        <div style={{ position: "relative" }}>
+          {translation && fieldId && (
+            <div style={{ 
+              position: "absolute", 
+              right: -1, 
+              top: -10, 
+              zIndex: 10,
+              background: "#f9fafb",
+              border: "1px solid #e5e7eb",
+              borderLeft: "none",
+              borderTopRightRadius: 4,
+              borderBottomRightRadius: 4,
+              padding: "2px 2px 2px 4px",
+            }}>
+              <LanguageSelector
+                languages={translation.languages}
+                viewLanguage={fieldViewLanguage}
+                onLanguageChange={handleFieldLanguageChange}
+                hasTranslation={(code) => translation.hasTranslation(fieldId, code)}
+                disabled={disabled}
+                isTranslating={translation.isTranslating[fieldId] || false}
+                size="tiny"
+              />
+            </div>
+          )}
+          <div
+            style={{
+              width: "100%",
+              minHeight,
+              padding: 8,
+              border: "1px solid #e5e7eb",
+              borderRadius: 4,
+              background: "#f9fafb",
+              whiteSpace: "pre-wrap",
+              fontSize: 13,
+            }}
+          >
+            {displayedText}
+          </div>
         </div>
       )}
     </div>
@@ -319,6 +365,27 @@ function EditableFeedback({
     ? translation.getTranslatedText(fieldId, value || "")
     : (value || placeholder || "");
 
+  // Get field-specific view language
+  const fieldViewLanguage = translation && fieldId
+    ? translation.getFieldViewLanguage(fieldId)
+    : "source";
+
+  // Handle field-specific language change
+  const handleFieldLanguageChange = async (code) => {
+    if (!translation || !fieldId) return;
+    
+    translation.setFieldViewLanguage(fieldId, code);
+    
+    if (code === "source") {
+      return; // No translation needed for source
+    }
+    
+    const sourceText = value || "";
+    if (sourceText) {
+      await translation.translateField(fieldId, sourceText, code);
+    }
+  };
+
   const statusColor = hasContent ? "#2563eb" : "#9ca3af"; // comment presence
   const approveColor = approved ? "#16a34a" : "#9ca3af";
 
@@ -326,7 +393,7 @@ function EditableFeedback({
 
   return (
     <div style={{ marginTop: 8, padding: 10, border: "1px solid #e5e7eb", borderRadius: 6, background: "#f9fafb" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, fontWeight: 600 }}>
           {label}
           <InfoTooltip text={feedbackDescription}>
@@ -351,57 +418,67 @@ function EditableFeedback({
           </InfoTooltip>
         </div>
         {!editing && (
-          <>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             {hasContent && (
               <button 
                 type="button" 
                 onClick={() => onSave("NO COMMENT")} 
                 style={{ 
-                  fontSize: 12, 
-                  padding: "4px 8px",
+                  fontSize: 11, 
+                  padding: "2px 6px",
                   border: "1px solid #dc2626",
                   background: "#fff",
                   color: "#dc2626",
                   cursor: "pointer",
+                  borderRadius: 3,
                 }}
               >
                 Remove
               </button>
             )}
-            <button type="button" onClick={() => setEditing(true)} style={{ fontSize: 12, padding: "4px 8px" }}>
+            <button 
+              type="button" 
+              onClick={() => setEditing(true)} 
+              style={{ 
+                fontSize: 11, 
+                padding: "2px 6px",
+                borderRadius: 3,
+              }}
+            >
               Edit
             </button>
-          </>
-        )}
-        {isModified ? (
-          <span
-            style={{
-              fontSize: 12,
-              padding: "4px 8px",
-              border: "1px solid #fca5a5",
-              background: "#fff1f2",
-              color: "#b91c1c",
-              borderRadius: 4,
-            }}
-          >
-            Edited
-          </span>
-        ) : (
-          <button
-            type="button"
-            onClick={onApprove}
-            style={{
-              fontSize: 12,
-              padding: "4px 8px",
-              border: "1px solid #16a34a",
-              background: approved ? "#dcfce7" : "#fff",
-              color: "#166534",
-              cursor: approved ? "default" : "pointer",
-            }}
-            disabled={approved}
-          >
-            {approved ? "Approved" : "Approve"}
-          </button>
+            {isModified ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  padding: "2px 6px",
+                  border: "1px solid #fca5a5",
+                  background: "#fff1f2",
+                  color: "#b91c1c",
+                  borderRadius: 3,
+                }}
+              >
+                Edited
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={onApprove}
+                style={{
+                  fontSize: 11,
+                  padding: "2px 6px",
+                  border: "1px solid #16a34a",
+                  background: approved ? "#dcfce7" : "#fff",
+                  color: "#166534",
+                  cursor: approved ? "default" : "pointer",
+                  borderRadius: 3,
+                }}
+                disabled={approved}
+              >
+                {approved ? "Approved" : "Approve"}
+              </button>
+            )}
+          </div>
         )}
       </div>
 
@@ -435,21 +512,47 @@ function EditableFeedback({
           </div>
         </>
       ) : (
-        <div
-          style={{
-            width: "100%",
-            minHeight: 80,
-            padding: 8,
-            border: "1px solid #e5e7eb",
-            borderRadius: 4,
-            background: "#fff",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            overflowWrap: "anywhere",
-            fontSize: 13,
-          }}
-        >
-          {displayedText}
+        <div style={{ position: "relative" }}>
+          {translation && fieldId && (
+            <div style={{ 
+              position: "absolute", 
+              right: -1, 
+              top: -10, 
+              zIndex: 10,
+              background: "#fff",
+              border: "1px solid #e5e7eb",
+              borderLeft: "none",
+              borderTopRightRadius: 4,
+              borderBottomRightRadius: 4,
+              padding: "2px 2px 2px 4px",
+            }}>
+              <LanguageSelector
+                languages={translation.languages}
+                viewLanguage={fieldViewLanguage}
+                onLanguageChange={handleFieldLanguageChange}
+                hasTranslation={(code) => translation.hasTranslation(fieldId, code)}
+                disabled={false}
+                isTranslating={translation.isTranslating[fieldId] || false}
+                size="tiny"
+              />
+            </div>
+          )}
+          <div
+            style={{
+              width: "100%",
+              minHeight: 80,
+              padding: 8,
+              border: "1px solid #e5e7eb",
+              borderRadius: 4,
+              background: "#fff",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              overflowWrap: "anywhere",
+              fontSize: 13,
+            }}
+          >
+            {displayedText}
+          </div>
         </div>
       )}
     </div>
@@ -921,17 +1024,29 @@ function VendorCard({
         await translation.translateField("company_report", sourceText, code);
       }
     } else if (cardPhase === "refine") {
+      // Translate draft and all feedback fields independently in parallel
+      const translationPromises = [];
+      
+      // Translate draft independently
       const draftText = cardPhaseEdits.draft_letter ?? cardPhaseData.draft_letter ?? "";
       if (draftText) {
-        await translation.translateField("draft_letter", draftText, code);
+        translationPromises.push(
+          translation.translateField("draft_letter", draftText, code)
+        );
       }
-      // Translate all feedback fields
+      
+      // Translate each feedback field independently
       for (const key of feedbackKeys) {
         const feedbackValue = feedbackOverrides[key] ?? feedback[key] ?? "";
         if (feedbackValue) {
-          await translation.translateField(`feedback_${key}`, feedbackValue, code);
+          translationPromises.push(
+            translation.translateField(`feedback_${key}`, feedbackValue, code)
+          );
         }
       }
+      
+      // Execute all translations in parallel
+      await Promise.all(translationPromises);
     }
   }, [cardPhase, cardPhaseData, cardPhaseEdits, translation, feedbackKeys, feedbackOverrides, feedback]);
 
@@ -953,15 +1068,19 @@ function VendorCard({
             ${phaseCost.toFixed(4)} <span style={{ fontSize: "10px", opacity: 0.8 }}>(Total: ${runningTotal.toFixed(4)})</span>
           </div>
         )}
-        <LanguageSelector
-          languages={translation.languages}
-          viewLanguage={translation.viewLanguage}
-          onLanguageChange={handleLanguageChange}
-          hasTranslation={hasAnyTranslation}
-          disabled={isLoading}
-          isTranslating={translation.isAnyTranslating}
-          size="small"
-        />
+        {/* Only show card-level language selector for phases without per-field selectors */}
+        {/* Background and refine phases have per-field selectors, so hide card-level selector */}
+        {cardPhase !== "refine" && cardPhase !== "background" && (
+          <LanguageSelector
+            languages={translation.languages}
+            viewLanguage={translation.viewLanguage}
+            onLanguageChange={handleLanguageChange}
+            hasTranslation={hasAnyTranslation}
+            disabled={isLoading}
+            isTranslating={translation.isAnyTranslating}
+            size="small"
+          />
+        )}
       </div>
       {/* Translation errors */}
       {Object.keys(translation.translationErrors).length > 0 && (

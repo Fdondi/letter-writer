@@ -23,11 +23,29 @@ export function useTranslation(languages = null) {
   }
   
   const effectiveLanguages = languages || (languageContext?.enabledLanguages || DEFAULT_LANGUAGES);
-  const [viewLanguage, setViewLanguage] = useState("source");
+  const [viewLanguage, setViewLanguage] = useState("source"); // Global view language (for backward compatibility)
+  const [fieldViewLanguages, setFieldViewLanguages] = useState({}); // Map of fieldId -> viewLanguage
   const [translations, setTranslations] = useState({}); // Map of fieldId -> {langCode -> translatedText}
   const [isTranslating, setIsTranslating] = useState({}); // Map of fieldId -> boolean
   const [translationErrors, setTranslationErrors] = useState({}); // Map of fieldId -> error message
   const [sourceSnapshots, setSourceSnapshots] = useState({}); // Map of fieldId -> last source text
+
+  /**
+   * Get view language for a specific field (per-field or global fallback)
+   */
+  const getFieldViewLanguage = useCallback((fieldId) => {
+    return fieldViewLanguages[fieldId] ?? viewLanguage;
+  }, [fieldViewLanguages, viewLanguage]);
+
+  /**
+   * Set view language for a specific field
+   */
+  const setFieldViewLanguage = useCallback((fieldId, language) => {
+    setFieldViewLanguages((prev) => ({
+      ...prev,
+      [fieldId]: language,
+    }));
+  }, []);
 
   /**
    * Reset translation cache for a field when its source text changes
@@ -40,11 +58,14 @@ export function useTranslation(languages = null) {
         return next;
       });
       setSourceSnapshots((prev) => ({ ...prev, [fieldId]: sourceText }));
-      if (viewLanguage !== "source") {
-        setViewLanguage("source");
-      }
+      // Reset field-specific view language to source
+      setFieldViewLanguages((prev) => {
+        const next = { ...prev };
+        next[fieldId] = "source";
+        return next;
+      });
     }
-  }, [viewLanguage, sourceSnapshots]);
+  }, [sourceSnapshots]);
 
   /**
    * Translate a specific text field
@@ -99,18 +120,20 @@ export function useTranslation(languages = null) {
    * Get translated text for a field, or return source if not translated
    */
   const getTranslatedText = useCallback((fieldId, sourceText) => {
-    if (viewLanguage === "source") {
+    const fieldViewLang = getFieldViewLanguage(fieldId);
+    if (fieldViewLang === "source") {
       return sourceText;
     }
-    return translations[fieldId]?.[viewLanguage] || sourceText;
-  }, [viewLanguage, translations]);
+    return translations[fieldId]?.[fieldViewLang] || sourceText;
+  }, [getFieldViewLanguage, translations]);
 
   /**
    * Check if a field has a cached translation for the current language
    */
-  const hasTranslation = useCallback((fieldId) => {
-    return Boolean(translations[fieldId]?.[viewLanguage]);
-  }, [viewLanguage, translations]);
+  const hasTranslation = useCallback((fieldId, language = null) => {
+    const lang = language ?? getFieldViewLanguage(fieldId);
+    return Boolean(translations[fieldId]?.[lang]);
+  }, [getFieldViewLanguage, translations]);
 
   /**
    * Check if any field is currently being translated
@@ -120,6 +143,8 @@ export function useTranslation(languages = null) {
   return {
     viewLanguage,
     setViewLanguage,
+    getFieldViewLanguage,
+    setFieldViewLanguage,
     languages: effectiveLanguages,
     translateField,
     getTranslatedText,
