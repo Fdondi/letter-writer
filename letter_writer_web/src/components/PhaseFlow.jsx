@@ -939,9 +939,24 @@ function VendorCard({
 
   // Check if this card's phase data is dirty (edits differ from data) - phase-agnostic
   const thisPhaseDirty = phaseObj ? Object.keys(cardPhaseEdits).some(key => {
-    const editValue = (cardPhaseEdits[key] ?? '').toString().trim();
-    const dataValue = (cardPhaseData[key] ?? '').toString().trim();
-    return editValue !== dataValue;
+    const editValue = cardPhaseEdits[key];
+    const dataValue = cardPhaseData[key];
+    
+    // Handle objects (like feedback_overrides) - check if they differ in content
+    if (editValue && typeof editValue === 'object') {
+      const editKeys = Object.keys(editValue);
+      const dataKeys = dataValue && typeof dataValue === 'object' ? Object.keys(dataValue) : [];
+      
+      if (editKeys.length === 0 && dataKeys.length === 0) return false;
+      
+      // For simple objects like feedback_overrides, check if values differ
+      if (editKeys.length !== dataKeys.length) return true;
+      return editKeys.some(k => editValue[k] !== dataValue[k]);
+    }
+    
+    const editStr = (editValue ?? '').toString().trim();
+    const dataStr = (dataValue ?? '').toString().trim();
+    return editStr !== dataStr;
   }) : false;
   
   // Check if all phases are done (for "done" state) - use prop
@@ -1204,7 +1219,7 @@ function VendorCard({
               : approved
                 ? thisPhaseDirty
                   ? "Save and restart from here"
-                  : "Edit to restart from here"
+                  : "Approved"
                 : "Approve"}
           </button>
         )}

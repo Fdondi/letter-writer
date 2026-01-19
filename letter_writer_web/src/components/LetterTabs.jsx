@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import Paragraph from "./Paragraph";
 import { ItemTypes } from "../constants";
 import LetterCard from "./LetterCard";
@@ -52,6 +52,248 @@ const FeedbackForm = ({ rating, comment, onChange }) => {
   );
 };
 
+// Job Description Column with resizable/collapsible requirements section
+const JobDescriptionColumn = ({ jobText, requirements = [], width, languages = [] }) => {
+  const [requirementsHeight, setRequirementsHeight] = useState(25); // Percentage of column height
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
+  const containerRef = useRef(null);
+  const resizeStartY = useRef(0);
+  const resizeStartHeight = useRef(25);
+
+  const requirementsList = Array.isArray(requirements) ? requirements : requirements ? [requirements] : [];
+
+  const isResizingRef = useRef(false);
+
+  const handleResizeStart = (e) => {
+    setIsResizing(true);
+    isResizingRef.current = true;
+    resizeStartY.current = e.clientY;
+    resizeStartHeight.current = requirementsHeight;
+    e.preventDefault();
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleResizeMove = (e) => {
+      if (!isResizingRef.current) return;
+      
+      const container = containerRef.current;
+      if (!container) return;
+      
+      const containerRect = container.getBoundingClientRect();
+      const deltaY = resizeStartY.current - e.clientY; // Inverted: dragging up increases height
+      const deltaPercent = (deltaY / containerRect.height) * 100;
+      const newHeight = Math.max(10, Math.min(80, resizeStartHeight.current + deltaPercent));
+      
+      setRequirementsHeight(newHeight);
+    };
+
+    const handleResizeEnd = () => {
+      setIsResizing(false);
+      isResizingRef.current = false;
+    };
+
+    document.addEventListener('mousemove', handleResizeMove);
+    document.addEventListener('mouseup', handleResizeEnd);
+    return () => {
+      document.removeEventListener('mousemove', handleResizeMove);
+      document.removeEventListener('mouseup', handleResizeEnd);
+    };
+  }, [isResizing]);
+
+  const jobDescriptionHeight = isCollapsed ? 100 : (100 - requirementsHeight);
+  const actualRequirementsHeight = isCollapsed ? 0 : requirementsHeight;
+
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        width,
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        border: "1px solid var(--border-color)",
+        borderRadius: 4,
+        background: "var(--card-bg)",
+        overflow: "hidden",
+        position: "relative",
+      }}
+    >
+      {/* Job Description Section */}
+      <div
+        style={{
+          flex: isCollapsed ? 1 : 0,
+          height: isCollapsed ? "100%" : `${jobDescriptionHeight}%`,
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            padding: "8px 12px",
+            background: "var(--header-bg)",
+            borderBottom: "1px solid var(--border-color)",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexShrink: 0,
+          }}
+        >
+          <strong style={{ color: 'var(--text-color)' }}>Job Description</strong>
+        </div>
+        <div
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            padding: 8,
+            minHeight: 0,
+          }}
+        >
+          <pre
+            style={{
+              whiteSpace: "pre-wrap",
+              margin: 0,
+              fontFamily: "monospace",
+              fontSize: "12px",
+              color: 'var(--text-color)',
+              background: "var(--pre-bg)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 2,
+              padding: 8,
+            }}
+          >
+            {jobText || "No job description available"}
+          </pre>
+        </div>
+      </div>
+
+      {/* Resize Handle */}
+      {!isCollapsed && (
+        <div
+          onMouseDown={handleResizeStart}
+          style={{
+            height: "4px",
+            background: isResizing ? "#3b82f6" : "var(--border-color)",
+            cursor: "row-resize",
+            flexShrink: 0,
+            position: "relative",
+            transition: isResizing ? "none" : "background 0.2s",
+          }}
+          title="Drag to resize"
+        >
+          <div
+            style={{
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              width: "40px",
+              height: "2px",
+              background: isResizing ? "#3b82f6" : "var(--secondary-text-color)",
+              borderRadius: 1,
+            }}
+          />
+        </div>
+      )}
+
+      {/* Requirements Section */}
+      <div
+        style={{
+          flex: isCollapsed ? 0 : 0,
+          height: isCollapsed ? "0" : `${actualRequirementsHeight}%`,
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
+          overflow: "hidden",
+          transition: isResizing ? "none" : "height 0.2s ease",
+        }}
+      >
+        <div
+          style={{
+            padding: "8px 12px",
+            background: "var(--header-bg)",
+            borderTop: "1px solid var(--border-color)",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexShrink: 0,
+          }}
+        >
+          <strong style={{ color: 'var(--text-color)', fontSize: "13px" }}>
+            Key Requirements {requirementsList.length > 0 && `(${requirementsList.length})`}
+          </strong>
+          <button
+            onClick={() => setIsCollapsed(!isCollapsed)}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              fontSize: "14px",
+              padding: "2px 6px",
+              color: 'var(--text-color)',
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+            title={isCollapsed ? "Expand requirements" : "Collapse requirements"}
+          >
+            {isCollapsed ? "▲" : "▼"}
+          </button>
+        </div>
+        <div
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            padding: 8,
+            minHeight: 0,
+          }}
+        >
+          {requirementsList.length > 0 ? (
+            <ul
+              style={{
+                margin: 0,
+                paddingLeft: 20,
+                fontSize: "13px",
+                color: 'var(--text-color)',
+                background: "var(--pre-bg)",
+                border: "1px solid var(--border-color)",
+                borderRadius: 2,
+                padding: "12px 12px 12px 28px",
+                listStyleType: "disc",
+              }}
+            >
+              {requirementsList.map((req, idx) => (
+                <li key={idx} style={{ marginBottom: 6 }}>
+                  {req}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div
+              style={{
+                padding: 12,
+                textAlign: "center",
+                color: "var(--secondary-text-color)",
+                fontStyle: "italic",
+                fontSize: "12px",
+                background: "var(--pre-bg)",
+                border: "1px solid var(--border-color)",
+                borderRadius: 2,
+              }}
+            >
+              No requirements extracted
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function LetterTabs({ 
   vendorsList, 
   vendorParagraphs, 
@@ -60,6 +302,7 @@ export default function LetterTabs({
   finalParagraphs, 
   setFinalParagraphs, 
   originalText, 
+  requirements = [], // Extracted key requirements
   failedVendors, 
   onRetry, 
   vendorColors, 
@@ -886,10 +1129,9 @@ export default function LetterTabs({
           
           <FinalColumn />
           
-          <LetterCard 
-            title="Original Letter" 
-            text={originalLetter} 
-            editable={false} 
+          <JobDescriptionColumn
+            jobText={originalLetter}
+            requirements={requirements}
             width={columnWidth}
             languages={languageOptions}
           />

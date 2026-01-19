@@ -821,6 +821,11 @@ export default function App() {
         
         const data = result.data;
         
+        // Update current phase shelf to reset base state (approval "blesses" the edits)
+        const currentBackground = phaseRegistryRef.current?.find(p => p.phase === "background");
+        const currentData = currentBackground?.cardData[vendor] || {};
+        populatePhaseShelf("background", vendor, { ...currentData, ...edits });
+
         // Populate the refine phase shelf in PhaseFlow (this contains the draft and feedback)
         // Check if we already have data to avoid overwriting if a race condition occurs
         // though typically the last write wins.
@@ -867,6 +872,19 @@ export default function App() {
         }
         
         const data = result.data;
+
+        // Update current phase shelf to reset base state (approval "blesses" the edits)
+        const currentRefine = phaseRegistryRef.current?.find(p => p.phase === "refine");
+        const currentData = currentRefine?.cardData[vendor] || {};
+        const updatedRefineData = { ...currentData, ...edits };
+        // If we have feedback overrides, merge them into the base feedback
+        if (edits.feedback_overrides) {
+          updatedRefineData.feedback = {
+            ...(currentData.feedback || {}),
+            ...edits.feedback_overrides
+          };
+        }
+        populatePhaseShelf("refine", vendor, updatedRefineData);
         
         // Update parent state for assembly phase
         const finalText = data.final_letter || edits.draft_letter || "";
@@ -1375,6 +1393,7 @@ export default function App() {
                 finalParagraphs={finalParagraphs}
                 setFinalParagraphs={setFinalParagraphs}
                 originalText={jobText}
+                requirements={requirements}
                 vendorColors={vendorColors}
                 failedVendors={failedVendors}
                 onRetry={async (vendor) => {
@@ -1549,7 +1568,7 @@ export default function App() {
         <div
           style={{
             position: "fixed",
-            bottom: 16,
+            bottom: 0,
             left: toggleX,
             zIndex: 20,
             pointerEvents: "none",
@@ -1562,14 +1581,17 @@ export default function App() {
               setAssemblyVisible(true);
             }}
             style={{
-              padding: "10px 14px",
+              padding: "8px 20px",
               border: "1px solid var(--border-color)",
-              borderRadius: "999px",
+              borderBottom: "none",
+              borderRadius: "12px 12px 0 0",
               backgroundColor: "var(--button-bg)",
               color: "var(--button-text)",
               cursor: "pointer",
-              boxShadow: "0 2px 10px rgba(0,0,0,0.18)",
+              boxShadow: "0 -2px 10px rgba(0,0,0,0.1)",
               pointerEvents: "auto",
+              fontSize: "14px",
+              fontWeight: "500",
             }}
           >
             ↓ To final assembly
@@ -1582,7 +1604,7 @@ export default function App() {
         <div
           style={{
             position: "fixed",
-            bottom: 16,
+            bottom: 0,
             left: toggleX,
             transform: "translateX(-50%)",
             zIndex: 20,
@@ -1592,14 +1614,17 @@ export default function App() {
           <button
             onClick={() => setAssemblyVisible(true)}
             style={{
-              padding: "10px 14px",
+              padding: "8px 20px",
               border: "1px solid var(--border-color)",
-              borderRadius: "999px",
+              borderBottom: "none",
+              borderRadius: "12px 12px 0 0",
               backgroundColor: "var(--button-bg)",
               color: "var(--button-text)",
               cursor: "pointer",
-              boxShadow: "0 2px 10px rgba(0,0,0,0.18)",
+              boxShadow: "0 -2px 10px rgba(0,0,0,0.1)",
               pointerEvents: "auto",
+              fontSize: "14px",
+              fontWeight: "500",
             }}
           >
             ↓ Back to assembly
