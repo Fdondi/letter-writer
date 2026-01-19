@@ -419,7 +419,7 @@ export default function DocumentsPage() {
                 <div style={{ color: "var(--secondary-text-color)" }}>None</div>
               ) : (
                 (selected.ai_letters || []).map((l, idx) => (
-                  <div key={idx} style={{ marginBottom: 8 }}>
+                  <div key={idx} style={{ marginBottom: 16 }}>
                     <div style={{ fontWeight: 600 }}>{l.vendor || "unknown"}</div>
                     <pre
                       style={{
@@ -430,10 +430,39 @@ export default function DocumentsPage() {
                         padding: 8,
                         maxHeight: 160,
                         overflowY: "auto",
+                        marginBottom: 8,
                       }}
                     >
                       {l.text || ""}
                     </pre>
+                    {l.user_corrections && l.user_corrections.length > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <div style={{ fontSize: "12px", fontWeight: 600, marginBottom: 4, color: "var(--secondary-text-color)" }}>
+                          User corrections:
+                        </div>
+                        {l.user_corrections.map((corr, corrIdx) => {
+                          if (corr.type === "full") {
+                            return (
+                              <div key={corrIdx} style={{ marginBottom: 8, fontSize: "12px" }}>
+                                <div style={{ color: "#ef4444", marginBottom: 2 }}>
+                                  <strong>Original:</strong> {corr.original || ""}
+                                </div>
+                                <div style={{ color: "#10b981" }}>
+                                  <strong>Edited:</strong> {corr.edited || ""}
+                                </div>
+                              </div>
+                            );
+                          } else {
+                            return (
+                              <div key={corrIdx} style={{ marginBottom: 4, fontSize: "12px", fontFamily: "monospace" }}>
+                                <span style={{ color: "#ef4444" }}>-{corr.original || ""}</span>
+                                <span style={{ color: "#10b981" }}>+{corr.edited || ""}</span>
+                              </div>
+                            );
+                          }
+                        })}
+                      </div>
+                    )}
                   </div>
                 ))
               )}
