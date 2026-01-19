@@ -1512,19 +1512,18 @@ export default function App() {
               Compose
             </button>
             <button
-              onClick={() => setActiveTab("documents")}
+              onClick={() => setShowStyleBlade(true)}
               style={{
                 padding: "8px 12px",
                 border: "1px solid var(--border-color)",
                 borderRadius: "4px",
-                backgroundColor:
-                  activeTab === "documents" ? "#3b82f6" : "var(--button-bg)",
-                color: activeTab === "documents" ? "white" : "var(--button-text)",
+                backgroundColor: "var(--button-bg)",
+                color: "var(--button-text)",
                 cursor: "pointer",
                 fontSize: "14px",
               }}
             >
-              Documents
+              AI Instructions
             </button>
             <button
               onClick={() => setActiveTab("personal-data")}
@@ -1542,19 +1541,21 @@ export default function App() {
               Your data
             </button>
             <button
-              onClick={() => setShowStyleBlade(true)}
+              onClick={() => setActiveTab("documents")}
               style={{
                 padding: "8px 12px",
                 border: "1px solid var(--border-color)",
                 borderRadius: "4px",
-                backgroundColor: "var(--button-bg)",
-                color: "var(--button-text)",
+                backgroundColor:
+                  activeTab === "documents" ? "#3b82f6" : "var(--button-bg)",
+                color: activeTab === "documents" ? "white" : "var(--button-text)",
                 cursor: "pointer",
                 fontSize: "14px",
               }}
             >
-              ⚙️ Style
+              Previous Examples
             </button>
+
             <AuthButton />
           </div>
         </div>
