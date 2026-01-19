@@ -358,34 +358,6 @@ export default function Paragraph({
   }
   const buttonLanguages = languages.length ? languages : (languageContext?.enabledLanguages || []);
 
-  const TranslationBar = (
-    <div 
-      onClick={(e) => e.stopPropagation()}
-      style={{ display: "flex", justifyContent: "flex-start", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}
-    >
-      {isTranslating && <span style={{ fontSize: "10px", color: "var(--secondary-text-color)" }}>Translating…</span>}
-      <LanguageSelector
-        languages={buttonLanguages}
-        viewLanguage={viewLanguage}
-        onLanguageChange={(code) => {
-          if (code === "source") {
-            if (isControlled && onViewLanguageChange) {
-              onViewLanguageChange("source");
-            } else {
-              setLocalViewLanguage("source");
-            }
-          } else {
-            requestTranslation(code);
-          }
-        }}
-        hasTranslation={(code) => Boolean(translations[code])}
-        disabled={false}
-        isTranslating={isTranslating}
-        size="small"
-      />
-    </div>
-  );
-
   const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   const idleBg = color?.replace(/hsl\(([^)]+)\)/, isDarkMode ? "hsla($1,0.5)" : "hsla($1,0.3)") || "var(--panel-bg)";
   const activeBg = color || "var(--header-bg)";
@@ -396,6 +368,45 @@ export default function Paragraph({
     const userActiveBg = "var(--header-bg)";
     const sourceId = paragraph.sourceId || paragraph.id;
     const isHighlighted = hoverId === paragraph.id || hoverId === sourceId;
+
+    const TranslationBar = (
+      <div 
+        onClick={(e) => e.stopPropagation()}
+        style={{ 
+          position: "absolute",
+          right: -1,
+          top: -10,
+          zIndex: 10,
+          background: isHighlighted ? userActiveBg : userIdleBg,
+          border: "1px solid var(--border-color)",
+          borderLeft: "none",
+          borderTopRightRadius: 4,
+          borderBottomRightRadius: 4,
+          padding: "2px 2px 2px 4px",
+        }}
+      >
+        {isTranslating && <span style={{ fontSize: "9px", color: "var(--secondary-text-color)", marginRight: 4 }}>Translating…</span>}
+        <LanguageSelector
+          languages={buttonLanguages}
+          viewLanguage={viewLanguage}
+          onLanguageChange={(code) => {
+            if (code === "source") {
+              if (isControlled && onViewLanguageChange) {
+                onViewLanguageChange("source");
+              } else {
+                setLocalViewLanguage("source");
+              }
+            } else {
+              requestTranslation(code);
+            }
+          }}
+          hasTranslation={(code) => Boolean(translations[code])}
+          disabled={false}
+          isTranslating={isTranslating}
+          size="tiny"
+        />
+      </div>
+    );
 
     return (
       <div
@@ -552,6 +563,45 @@ export default function Paragraph({
   // Regular AI-generated paragraph
   const sourceId = paragraph.sourceId || paragraph.id;
   const isHighlighted = hoverId === paragraph.id || hoverId === sourceId;
+
+  const TranslationBar = (
+    <div 
+      onClick={(e) => e.stopPropagation()}
+      style={{ 
+        position: "absolute",
+        right: -1,
+        top: -10,
+        zIndex: 10,
+        background: isHighlighted ? activeBg : idleBg,
+        border: paragraph.isFragment ? "1px dashed var(--secondary-text-color)" : "1px solid transparent",
+        borderLeft: "none",
+        borderTopRightRadius: 4,
+        borderBottomRightRadius: 4,
+        padding: "2px 2px 2px 4px",
+      }}
+    >
+      {isTranslating && <span style={{ fontSize: "9px", color: "var(--secondary-text-color)", marginRight: 4 }}>Translating…</span>}
+      <LanguageSelector
+        languages={buttonLanguages}
+        viewLanguage={viewLanguage}
+        onLanguageChange={(code) => {
+          if (code === "source") {
+            if (isControlled && onViewLanguageChange) {
+              onViewLanguageChange("source");
+            } else {
+              setLocalViewLanguage("source");
+            }
+          } else {
+            requestTranslation(code);
+          }
+        }}
+        hasTranslation={(code) => Boolean(translations[code])}
+        disabled={false}
+        isTranslating={isTranslating}
+        size="tiny"
+      />
+    </div>
+  );
 
   return (
     <div
