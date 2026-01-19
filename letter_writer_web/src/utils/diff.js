@@ -58,8 +58,8 @@ export function createTextDiff(original, edited) {
   const totalWords = Math.max(originalWordCount, editedWordCount);
   const changePercentage = totalWords > 0 ? (changedWordCount / totalWords) * 100 : 0;
 
-  // If more than 20% changed, return full paragraph as single diff
-  if (changePercentage > 20) {
+  // If more than 50% changed, return full paragraph as single diff
+  if (changePercentage > 50) {
     return [{ type: 'full', original, edited }];
   }
 
