@@ -119,12 +119,12 @@ const JobDescriptionColumn = ({ jobText, requirements = [], width, languages = [
         background: "var(--card-bg)",
         overflow: "hidden",
         position: "relative",
+        boxSizing: "border-box",
       }}
     >
       {/* Job Description Section */}
       <div
         style={{
-          flex: isCollapsed ? 1 : 0,
           height: isCollapsed ? "100%" : `${jobDescriptionHeight}%`,
           display: "flex",
           flexDirection: "column",
@@ -176,12 +176,15 @@ const JobDescriptionColumn = ({ jobText, requirements = [], width, languages = [
         <div
           onMouseDown={handleResizeStart}
           style={{
-            height: "4px",
-            background: isResizing ? "#3b82f6" : "var(--border-color)",
+            height: "8px", // Increased handle size for better usability
+            background: isResizing ? "#3b82f6" : "var(--header-bg)",
+            borderTop: "1px solid var(--border-color)",
+            borderBottom: "1px solid var(--border-color)",
             cursor: "row-resize",
             flexShrink: 0,
             position: "relative",
             transition: isResizing ? "none" : "background 0.2s",
+            zIndex: 5,
           }}
           title="Drag to resize"
         >
@@ -193,30 +196,31 @@ const JobDescriptionColumn = ({ jobText, requirements = [], width, languages = [
               transform: "translate(-50%, -50%)",
               width: "40px",
               height: "2px",
-              background: isResizing ? "#3b82f6" : "var(--secondary-text-color)",
+              background: isResizing ? "white" : "var(--secondary-text-color)",
               borderRadius: 1,
             }}
           />
         </div>
       )}
 
-      {/* Requirements Section */}
+      {/* Competences Section */}
       <div
         style={{
-          flex: isCollapsed ? 0 : 0,
-          height: isCollapsed ? "0" : `${actualRequirementsHeight}%`,
+          height: isCollapsed ? "30px" : `${actualRequirementsHeight}%`,
           display: "flex",
           flexDirection: "column",
-          minHeight: 0,
+          minHeight: isCollapsed ? "30px" : 0,
           overflow: "hidden",
           transition: isResizing ? "none" : "height 0.2s ease",
+          background: "var(--card-bg)",
         }}
       >
         <div
           style={{
-            padding: "8px 12px",
-            background: "var(--header-bg)",
-            borderTop: "1px solid var(--border-color)",
+            padding: "4px 12px",
+            background: "var(--panel-bg)",
+            borderTop: isCollapsed ? "1px solid var(--border-color)" : "none",
+            borderBottom: isCollapsed ? "none" : "1px solid var(--border-color)",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
@@ -224,7 +228,7 @@ const JobDescriptionColumn = ({ jobText, requirements = [], width, languages = [
           }}
         >
           <strong style={{ color: 'var(--text-color)', fontSize: "13px" }}>
-            Key Requirements {requirementsList.length > 0 && `(${requirementsList.length})`}
+            Key Competences {requirementsList.length > 0 && `(${requirementsList.length})`}
           </strong>
           <button
             onClick={() => setIsCollapsed(!isCollapsed)}
@@ -239,7 +243,7 @@ const JobDescriptionColumn = ({ jobText, requirements = [], width, languages = [
               alignItems: "center",
               gap: 4,
             }}
-            title={isCollapsed ? "Expand requirements" : "Collapse requirements"}
+            title={isCollapsed ? "Expand competences" : "Collapse competences"}
           >
             {isCollapsed ? "▲" : "▼"}
           </button>
@@ -250,6 +254,7 @@ const JobDescriptionColumn = ({ jobText, requirements = [], width, languages = [
             overflowY: "auto",
             padding: 8,
             minHeight: 0,
+            display: isCollapsed ? "none" : "block",
           }}
         >
           {requirementsList.length > 0 ? (
@@ -285,7 +290,7 @@ const JobDescriptionColumn = ({ jobText, requirements = [], width, languages = [
                 borderRadius: 2,
               }}
             >
-              No requirements extracted
+              No competences extracted
             </div>
           )}
         </div>
@@ -315,6 +320,14 @@ export default function LetterTabs({
   const [collapsed, setCollapsed] = useState([]);
   const [finalLetter, setFinalLetter] = useState("");
   const [originalLetter, setOriginalLetter] = useState(originalText || "");
+  
+  // Sync originalLetter when originalText prop changes
+  useEffect(() => {
+    if (originalText !== originalLetter) {
+      setOriginalLetter(originalText || "");
+    }
+  }, [originalText]);
+
   const [translationStates, setTranslationStates] = useState({}); // { [id]: { translations: {}, viewLanguage: 'source' } }
   const finalColumnRef = useRef(null);
   
@@ -1042,7 +1055,9 @@ export default function LetterTabs({
           display: "flex", 
           gap: 10,
           flex: 1,
-          minHeight: 0
+          minHeight: 0,
+          overflowX: "auto",
+          paddingBottom: 10 // Space for scrollbar
         }}>
           {visibleVendors.map((v) => (
             <div key={v} style={{ width: columnWidth, display: "flex", flexDirection: "column", position: "relative", background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', height: "100%" }}>

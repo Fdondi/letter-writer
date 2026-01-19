@@ -1176,7 +1176,7 @@ export default function App() {
               </div>
               <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
                 <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Requirements
+                  Key Competences
                 </label>
                 <textarea
                   value={Array.isArray(requirements) ? requirements.join("\n") : requirements}
@@ -1194,7 +1194,7 @@ export default function App() {
                     borderRadius: "4px",
                     resize: "vertical",
                   }}
-                  placeholder="One requirement per line"
+                  placeholder="One competence per line"
                 />
               </div>
             </div>
