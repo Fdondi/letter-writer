@@ -84,6 +84,21 @@ export default function LetterTabs({
 
   const [translationStates, setTranslationStates] = useState({}); // { [id]: { translations: {}, viewLanguage: 'source' } }
   const finalColumnRef = useRef(null);
+  const scrollPositionRef = useRef(0);
+  
+  // Save scroll position continuously as user scrolls
+  const handleScroll = (e) => {
+    if (e.target === finalColumnRef.current) {
+      scrollPositionRef.current = e.target.scrollTop;
+    }
+  };
+  
+  // Restore scroll position after any state change
+  useEffect(() => {
+    if (finalColumnRef.current && scrollPositionRef.current > 0) {
+      finalColumnRef.current.scrollTop = scrollPositionRef.current;
+    }
+  }, [finalParagraphs, translationStates]);
   
   // Use shared language context instead of local state
   const { enabledLanguages: languageOptions, addLanguage, toggleLanguage } = useLanguages();
@@ -534,6 +549,7 @@ export default function LetterTabs({
           finalColumnRef.current = node;
           contentDrop(node);
         }}
+        onScroll={handleScroll}
         style={{ 
           flex: 1,
           padding: "8px",
