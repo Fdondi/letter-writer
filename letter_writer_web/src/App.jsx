@@ -1416,8 +1416,13 @@ export default function App() {
             />
           </div>
 
-          {uiStage === "assembly" && assemblyVisible && (
-            <div style={{ position: "relative", paddingTop: 4 }}>
+          {/* Keep LetterTabs mounted to preserve translation state */}
+          {(uiStage === "assembly" || uiStage === "final_review") && (
+            <div style={{ 
+              position: "relative", 
+              paddingTop: 4,
+              display: (uiStage === "assembly" && assemblyVisible) ? "block" : "none"
+            }}>
               <LetterTabs
                 vendorsList={vendorsList}
                 vendorParagraphs={vendorParagraphs}
