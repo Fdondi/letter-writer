@@ -374,15 +374,15 @@ export default function Paragraph({
         onClick={(e) => e.stopPropagation()}
         style={{ 
           position: "absolute",
-          right: -1,
+          left: -1,
           top: -10,
           zIndex: 10,
           background: isHighlighted ? userActiveBg : userIdleBg,
           border: "1px solid var(--border-color)",
-          borderLeft: "none",
-          borderTopRightRadius: 4,
-          borderBottomRightRadius: 4,
-          padding: "2px 2px 2px 4px",
+          borderRight: "none",
+          borderTopLeftRadius: 4,
+          borderBottomLeftRadius: 4,
+          padding: "2px 4px 2px 2px",
         }}
       >
         {isTranslating && <span style={{ fontSize: "9px", color: "var(--secondary-text-color)", marginRight: 4 }}>Translating…</span>}
@@ -569,15 +569,15 @@ export default function Paragraph({
       onClick={(e) => e.stopPropagation()}
       style={{ 
         position: "absolute",
-        right: -1,
+        left: -1,
         top: -10,
         zIndex: 10,
         background: isHighlighted ? activeBg : idleBg,
         border: paragraph.isFragment ? "1px dashed var(--secondary-text-color)" : "1px solid transparent",
-        borderLeft: "none",
-        borderTopRightRadius: 4,
-        borderBottomRightRadius: 4,
-        padding: "2px 2px 2px 4px",
+        borderRight: "none",
+        borderTopLeftRadius: 4,
+        borderBottomLeftRadius: 4,
+        padding: "2px 4px 2px 2px",
       }}
     >
       {isTranslating && <span style={{ fontSize: "9px", color: "var(--secondary-text-color)", marginRight: 4 }}>Translating…</span>}

@@ -1363,7 +1363,6 @@ export default function App() {
           >
             ← Back to Input
           </button>
-          <LanguageConfig />
           {uiStage === "assembly" && assemblyVisible && (
             <div
               style={{
@@ -1388,6 +1387,9 @@ export default function App() {
               </button>
             </div>
           )}
+          <div style={{ marginLeft: "auto" }}>
+            <LanguageConfig />
+          </div>
         </div>
       )}
       {error && <p style={{ color: "var(--error-text)" }}>{error}</p>}
