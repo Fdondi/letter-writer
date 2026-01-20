@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import JobDescriptionColumn from "./JobDescriptionColumn";
 import { useLanguages } from "../contexts/LanguageContext";
+import LanguageSelector from "./LanguageSelector";
+import { translateText } from "../utils/translate";
 
 export default function FinalReview({
   initialText,
@@ -13,14 +15,65 @@ export default function FinalReview({
   const [text, setText] = useState(initialText || "");
   const [buttonState, setButtonState] = useState("save_copy"); // "save_copy" | "copy"
   const { enabledLanguages } = useLanguages();
+  
+  // Translation state for the letter
+  const [letterViewLanguage, setLetterViewLanguage] = useState("source");
+  const [letterTranslations, setLetterTranslations] = useState({});
+  const [letterTranslating, setLetterTranslating] = useState(false);
+  const [letterTranslationError, setLetterTranslationError] = useState(null);
+  const [lastLetterSource, setLastLetterSource] = useState(initialText);
 
   useEffect(() => {
     setText(initialText || "");
   }, [initialText]);
+  
+  // Reset translations when source text changes
+  useEffect(() => {
+    if (text !== lastLetterSource) {
+      setLetterTranslations({});
+      setLetterViewLanguage("source");
+      setLastLetterSource(text);
+    }
+  }, [text, lastLetterSource]);
 
   const handleTextChange = (e) => {
     setText(e.target.value);
     setButtonState("save_copy");
+  };
+  
+  // Translate letter
+  const translateLetter = async (targetLanguage) => {
+    if (!text || targetLanguage === "source") {
+      setLetterViewLanguage(targetLanguage);
+      return;
+    }
+    
+    if (letterTranslations[targetLanguage] && lastLetterSource === text) {
+      setLetterViewLanguage(targetLanguage);
+      return;
+    }
+    
+    setLetterTranslating(true);
+    setLetterTranslationError(null);
+    
+    try {
+      const translated = await translateText(text, targetLanguage, null);
+      setLetterTranslations((prev) => ({ ...prev, [targetLanguage]: translated }));
+      setLetterViewLanguage(targetLanguage);
+      setLastLetterSource(text);
+    } catch (err) {
+      setLetterTranslationError(err.message || "Translation failed");
+    } finally {
+      setLetterTranslating(false);
+    }
+  };
+  
+  // Get display text for letter
+  const getLetterDisplayText = () => {
+    if (letterViewLanguage !== "source" && letterTranslations[letterViewLanguage]) {
+      return letterTranslations[letterViewLanguage];
+    }
+    return text;
   };
 
   const handleButtonClick = async () => {
@@ -93,7 +146,22 @@ export default function FinalReview({
             alignItems: "center",
           }}
         >
-          <h2 style={{ margin: 0, fontSize: "18px" }}>Final Review</h2>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <h2 style={{ margin: 0, fontSize: "18px" }}>Final Review</h2>
+            {enabledLanguages.length > 0 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                {letterTranslating && <span style={{ fontSize: "10px", color: "var(--secondary-text-color)" }}>Translating…</span>}
+                <LanguageSelector
+                  languages={enabledLanguages}
+                  viewLanguage={letterViewLanguage}
+                  onLanguageChange={translateLetter}
+                  hasTranslation={(code) => Boolean(letterTranslations[code])}
+                  isTranslating={letterTranslating}
+                  size="extra-small"
+                />
+              </div>
+            )}
+          </div>
           <div style={{ display: "flex", gap: 10 }}>
             <button
               onClick={onBack}
@@ -131,9 +199,24 @@ export default function FinalReview({
           </div>
         </div>
 
+        {/* Translation Error */}
+        {letterTranslationError && (
+          <div style={{ 
+            padding: "6px 12px", 
+            background: "var(--error-bg)", 
+            color: "#ef4444", 
+            fontSize: "11px",
+            borderRadius: "4px",
+            border: "1px solid var(--error-border)"
+          }}>
+            {letterTranslationError}
+          </div>
+        )}
+
         <textarea
-          value={text}
+          value={getLetterDisplayText()}
           onChange={handleTextChange}
+          disabled={letterViewLanguage !== "source"}
           style={{
             flex: 1,
             width: "100%",
@@ -143,9 +226,10 @@ export default function FinalReview({
             border: "1px solid var(--border-color)",
             borderRadius: "4px",
             resize: "none",
-            backgroundColor: "var(--card-bg)",
+            backgroundColor: letterViewLanguage !== "source" ? "var(--panel-bg)" : "var(--card-bg)",
             color: "var(--text-color)",
             fontFamily: "inherit",
+            cursor: letterViewLanguage !== "source" ? "not-allowed" : "text",
           }}
           spellCheck={true}
         />
