@@ -1507,6 +1507,8 @@ def personal_data_view(request: HttpRequest):
         
         revisions = user_data.get("cv_revisions", [])
         default_languages = user_data.get("default_languages", [])
+        default_models = user_data.get("default_models", [])
+        min_column_width = user_data.get("min_column_width")
         
         # Convert Firestore Timestamps to ISO strings and find latest
         latest_content = ""
@@ -1550,6 +1552,8 @@ def personal_data_view(request: HttpRequest):
             "cv": latest_content,
             "revisions": response_revisions,
             "default_languages": default_languages,
+            "default_models": default_models,
+            "min_column_width": min_column_width,
         })
     
     if request.method == "POST":
@@ -1609,12 +1613,40 @@ def personal_data_view(request: HttpRequest):
                     return JsonResponse({"detail": "default_languages must be a list"}, status=400)
                 updates["default_languages"] = languages
 
+            # Check if updating default_models
+            if "default_models" in data:
+                models = data["default_models"]
+                if not isinstance(models, list):
+                    return JsonResponse({"detail": "default_models must be a list"}, status=400)
+                updates["default_models"] = models
+                
+                # Also update current session if it exists (as if user modified in compose tab)
+                # This ensures the change takes effect immediately for active workflows
+                if request.session.session_key:
+                    from .session_helpers import load_session_common_data
+                    existing = load_session_common_data(request)
+                    if existing:
+                        # Update session metadata to reflect selected vendors
+                        if "metadata" not in request.session:
+                            request.session["metadata"] = {}
+                        if "common" not in request.session["metadata"]:
+                            request.session["metadata"]["common"] = {}
+                        request.session["metadata"]["common"]["selected_vendors"] = models
+                        request.session.modified = True
+
+            # Check if updating min_column_width
+            if "min_column_width" in data:
+                width = data["min_column_width"]
+                if not isinstance(width, (int, float)) or width < 0:
+                    return JsonResponse({"detail": "min_column_width must be a positive number"}, status=400)
+                updates["min_column_width"] = int(width)
+
             # Check if updating style_instructions
-            elif "style_instructions" in data:
+            if "style_instructions" in data:
                 updates["style_instructions"] = data["style_instructions"]
                 
-            # Check if updating CV content
-            elif "content" in data:
+            # Check if updating CV content (mutually exclusive with other updates)
+            if "content" in data:
                 content = data.get("content", "")
                 if not content:
                     return JsonResponse({"detail": "content is required"}, status=400)
@@ -1629,8 +1661,10 @@ def personal_data_view(request: HttpRequest):
                 }
                 revisions.append(new_revision)
                 updates["cv_revisions"] = revisions
-            else:
-                 return JsonResponse({"detail": "No valid data provided for update"}, status=400)
+            
+            # If no updates were made, return error
+            if not updates or updates == {"updated_at": now}:
+                return JsonResponse({"detail": "No valid data provided for update"}, status=400)
         
         # Update user document (merge with existing fields)
         user_doc_ref.set(updates, merge=True)

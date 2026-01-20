@@ -101,6 +101,9 @@ export default function LetterTabs({
   const collapsedVendors = vendorKeys.filter((v) => collapsed.includes(v));
   const totalVisible = visibleVendors.length + 2; // +2 for final letter and original letter
   const columnWidth = totalVisible > 0 ? `${100 / totalVisible}%` : "100%";
+  
+  // Get minimum column width from localStorage or use default
+  const minColumnWidth = parseInt(localStorage.getItem("minColumnWidth") || "200", 10);
 
   const moveFinalParagraph = (from, to) => {
     console.log('🔄 moveFinalParagraph called:', { from, to, currentLength: finalParagraphs.length });
@@ -471,7 +474,8 @@ export default function LetterTabs({
   const FinalColumn = () => (
     <div 
       style={{ 
-        width: columnWidth, 
+        width: columnWidth,
+        minWidth: `${minColumnWidth}px`,
         borderRadius: 4,
         position: "relative",
         display: "flex",
@@ -800,7 +804,7 @@ export default function LetterTabs({
           paddingBottom: 10 // Space for scrollbar
         }}>
           {visibleVendors.map((v) => (
-            <div key={v} style={{ width: columnWidth, display: "flex", flexDirection: "column", position: "relative", background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', height: "100%" }}>
+            <div key={v} style={{ width: columnWidth, minWidth: `${minColumnWidth}px`, display: "flex", flexDirection: "column", position: "relative", background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', height: "100%" }}>
               <h4 style={{ 
                 textTransform: "capitalize", 
                 margin: 0, 
@@ -888,6 +892,7 @@ export default function LetterTabs({
             jobText={originalLetter}
             requirements={requirements}
             width={columnWidth}
+            minWidth={`${minColumnWidth}px`}
             languages={languageOptions}
           />
         </div>

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 
 // Job Description Column with resizable/collapsible requirements section
-const JobDescriptionColumn = ({ jobText, requirements = [], width, languages = [] }) => {
+const JobDescriptionColumn = ({ jobText, requirements = [], width, minWidth, languages = [] }) => {
   const [requirementsHeight, setRequirementsHeight] = useState(25); // Percentage of column height
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -59,6 +59,7 @@ const JobDescriptionColumn = ({ jobText, requirements = [], width, languages = [
       ref={containerRef}
       style={{
         width,
+        minWidth: minWidth || "200px",
         height: "100%",
         display: "flex",
         flexDirection: "column",

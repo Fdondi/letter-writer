@@ -6,6 +6,7 @@ import PhaseFlow from "./components/PhaseFlow";
 import FinalReview from "./components/FinalReview";
 import DocumentsPage from "./components/DocumentsPage";
 import PersonalDataPage from "./components/PersonalDataPage";
+import SettingsPage from "./components/SettingsPage";
 import LanguageConfig from "./components/LanguageConfig";
 import LanguageSelector from "./components/LanguageSelector";
 import AuthButton from "./components/AuthButton";
@@ -68,7 +69,7 @@ export default function App() {
   const [phaseSessionId, setPhaseSessionId] = useState(null);
   const [phaseSessions, setPhaseSessions] = useState({}); // vendor -> session_id
   const [savingFinal, setSavingFinal] = useState(false);
-  const [activeTab, setActiveTab] = useState("compose"); // "compose" | "documents" | "personal-data"
+  const [activeTab, setActiveTab] = useState("compose"); // "compose" | "documents" | "personal-data" | "settings"
   const [assemblyVisible, setAssemblyVisible] = useState(true); // when in assembly stage, show assembly or phases
   const [extractedData, setExtractedData] = useState(null); // Track extracted data to detect modifications
   const [vendorFeedback, setVendorFeedback] = useState({}); // vendor -> { rating, comment }
@@ -229,6 +230,39 @@ export default function App() {
     });
   }, []);
 
+  // Helper function to load default models from settings
+  const loadDefaultModels = React.useCallback((vendorList) => {
+    fetch("/api/personal-data/", {
+      credentials: 'include',
+    })
+      .then((res) => res.json())
+      .then((settings) => {
+        if (settings.default_models && Array.isArray(settings.default_models) && settings.default_models.length > 0) {
+          // Only use default models that are actually available
+          const availableDefaults = settings.default_models.filter(v => vendorList.includes(v));
+          if (availableDefaults.length > 0) {
+            setSelectedVendors(new Set(availableDefaults));
+          } else {
+            // If no valid defaults, use all vendors as default
+            setSelectedVendors(new Set(vendorList));
+          }
+        } else {
+          // No defaults saved yet, use all vendors as default
+          setSelectedVendors(new Set(vendorList));
+        }
+        
+        // Load minimum column width
+        if (settings.min_column_width !== undefined) {
+          localStorage.setItem("minColumnWidth", settings.min_column_width.toString());
+        }
+      })
+      .catch((e) => {
+        console.warn("Failed to load default settings:", e);
+        // On error, use all vendors as default
+        setSelectedVendors(new Set(vendorList));
+      });
+  }, []);
+
   // Fetch vendors on mount (GET request, no CSRF header needed)
   useEffect(() => {
     fetch("/api/vendors/", {
@@ -238,11 +272,16 @@ export default function App() {
       .then((data) => {
         const vendorList = data.vendors || [];
         setVendors(vendorList);
-        setSelectedVendors(new Set(vendorList));
         setVendorColors(generateColors(vendorList));
+        
+        // Load default models from backend
+        loadDefaultModels(vendorList);
       })
       .catch((e) => setError(String(e)));
-  }, []);
+  }, [loadDefaultModels]);
+
+  // Note: We no longer need to reload when switching tabs since SettingsPage
+  // now updates the shared state directly when saving
 
   // NOW we can do conditional returns (after all hooks are declared)
   
@@ -1556,7 +1595,7 @@ export default function App() {
                 fontSize: "14px",
               }}
             >
-              Your data
+              Your CV
             </button>
             <button
               onClick={() => setActiveTab("documents")}
@@ -1573,6 +1612,21 @@ export default function App() {
             >
               Previous Examples
             </button>
+            <button
+              onClick={() => setActiveTab("settings")}
+              style={{
+                padding: "8px 12px",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                backgroundColor:
+                  activeTab === "settings" ? "#3b82f6" : "var(--button-bg)",
+                color: activeTab === "settings" ? "white" : "var(--button-text)",
+                cursor: "pointer",
+                fontSize: "14px",
+              }}
+            >
+              Settings
+            </button>
 
             <AuthButton />
           </div>
@@ -1580,7 +1634,17 @@ export default function App() {
 
       </div>
 
-      {activeTab === "compose" ? renderCompose() : activeTab === "documents" ? <DocumentsPage /> : <PersonalDataPage />}
+      {activeTab === "compose"
+        ? renderCompose()
+        : activeTab === "documents"
+        ? <DocumentsPage />
+        : activeTab === "settings"
+        ? <SettingsPage 
+            vendors={vendors} 
+            selectedVendors={selectedVendors}
+            setSelectedVendors={setSelectedVendors}
+          />
+        : <PersonalDataPage />}
 
       {/* Floating toggle to assembly while still in phases (after first refinement ready) */}
       {!showInput && uiStage !== "assembly" && uiStage !== "final_review" && hasAssembly && (
