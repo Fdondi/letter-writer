@@ -230,36 +230,20 @@ export default function App() {
     });
   }, []);
 
-  // Helper function to load default models from settings
-  const loadDefaultModels = React.useCallback((vendorList) => {
+  // Load minimum column width from settings (vendors endpoint handles active/inactive)
+  useEffect(() => {
     fetch("/api/personal-data/", {
       credentials: 'include',
     })
       .then((res) => res.json())
       .then((settings) => {
-        if (settings.default_models && Array.isArray(settings.default_models) && settings.default_models.length > 0) {
-          // Only use default models that are actually available
-          const availableDefaults = settings.default_models.filter(v => vendorList.includes(v));
-          if (availableDefaults.length > 0) {
-            setSelectedVendors(new Set(availableDefaults));
-          } else {
-            // If no valid defaults, use all vendors as default
-            setSelectedVendors(new Set(vendorList));
-          }
-        } else {
-          // No defaults saved yet, use all vendors as default
-          setSelectedVendors(new Set(vendorList));
-        }
-        
         // Load minimum column width
         if (settings.min_column_width !== undefined) {
           localStorage.setItem("minColumnWidth", settings.min_column_width.toString());
         }
       })
       .catch((e) => {
-        console.warn("Failed to load default settings:", e);
-        // On error, use all vendors as default
-        setSelectedVendors(new Set(vendorList));
+        console.warn("Failed to load settings:", e);
       });
   }, []);
 
@@ -270,15 +254,16 @@ export default function App() {
     })
       .then((res) => res.json())
       .then((data) => {
-        const vendorList = data.vendors || [];
-        setVendors(vendorList);
-        setVendorColors(generateColors(vendorList));
+        // API returns active and inactive lists
+        const allVendors = [...(data.active || []), ...(data.inactive || [])];
+        const activeVendors = new Set(data.active || []);
         
-        // Load default models from backend
-        loadDefaultModels(vendorList);
+        setVendors(allVendors);
+        setVendorColors(generateColors(allVendors));
+        setSelectedVendors(activeVendors);
       })
       .catch((e) => setError(String(e)));
-  }, [loadDefaultModels]);
+  }, []);
 
   // Note: We no longer need to reload when switching tabs since SettingsPage
   // now updates the shared state directly when saving

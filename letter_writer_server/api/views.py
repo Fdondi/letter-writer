@@ -1135,8 +1135,47 @@ def draft_phase_view(request: HttpRequest, vendor: str):
 def vendors_view(request: HttpRequest):
     if request.method != "GET":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
+    
     vendors = [v.value for v in ModelVendor]
-    return JsonResponse({"vendors": vendors})
+    
+    # Determine which vendors are active
+    active_vendors = None
+    
+    # First, check session metadata for selected_vendors (if session exists)
+    if request.session.session_key:
+        from .session_helpers import load_session_common_data
+        session_data = load_session_common_data(request)
+        if session_data and session_data.get("metadata"):
+            metadata = session_data["metadata"]
+            common_metadata = metadata.get("common", {})
+            selected_vendors = common_metadata.get("selected_vendors")
+            if selected_vendors and isinstance(selected_vendors, list):
+                active_vendors = set(selected_vendors)
+    
+    # If not in session, check personal data document for default_models
+    # Only check if user is authenticated (vendors endpoint doesn't require auth)
+    if active_vendors is None and request.user.is_authenticated:
+        user_id, error_response = require_auth_user(request)
+        if not error_response:
+            from letter_writer.firestore_store import get_user_data
+            user_data = get_user_data(user_id, use_cache=True)
+            if user_data:
+                default_models = user_data.get("default_models")
+                if default_models and isinstance(default_models, list) and len(default_models) > 0:
+                    active_vendors = set(default_models)
+    
+    # If still no active vendors found, default to all vendors
+    if active_vendors is None:
+        active_vendors = set(vendors)
+    
+    # Split vendors into active and inactive lists
+    active_list = [v for v in vendors if v in active_vendors]
+    inactive_list = [v for v in vendors if v not in active_vendors]
+    
+    return JsonResponse({
+        "active": active_list,
+        "inactive": inactive_list
+    })
 
 
 def style_instructions_view(request: HttpRequest):

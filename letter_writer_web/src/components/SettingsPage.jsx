@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useLanguages } from "../contexts/LanguageContext";
 import LanguageConfig from "./LanguageConfig";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
@@ -13,7 +13,7 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Load settings from backend
+  // Load settings from backend (only on mount or when vendors list changes)
   useEffect(() => {
     const loadSettings = async () => {
       try {
@@ -22,16 +22,18 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
         if (res.ok) {
           const data = await res.json();
           
-          // Load default models - prefer saved defaults, but if user has manually
-          // selected vendors in Compose, use those as the starting point
+          // Load default models - prefer saved defaults from backend
           if (data.default_models && Array.isArray(data.default_models) && data.default_models.length > 0) {
             setDefaultModels(new Set(data.default_models));
+            setHasLoadedFromBackend(true);
           } else if (selectedVendors && selectedVendors.size > 0) {
             // Use current selected vendors from Compose tab if no saved defaults
             setDefaultModels(new Set(selectedVendors));
+            setHasLoadedFromBackend(false);
           } else if (vendors.length > 0) {
             // If no defaults saved and no current selection, use all vendors
             setDefaultModels(new Set(vendors));
+            setHasLoadedFromBackend(false);
           }
           
           // Load minimum column width (default to 200px if not set)
@@ -50,13 +52,17 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
         } else if (vendors.length > 0) {
           setDefaultModels(new Set(vendors));
         }
+        setHasLoadedFromBackend(false);
       } finally {
         setLoading(false);
       }
     };
     
     loadSettings();
-  }, [vendors, selectedVendors]);
+  }, [vendors]); // Only reload when vendors list changes, not when selectedVendors changes
+
+  // Track if we've loaded settings from backend to avoid overwriting with selectedVendors
+  const [hasLoadedFromBackend, setHasLoadedFromBackend] = useState(false);
 
   const handleSaveLanguages = async () => {
     try {
@@ -75,19 +81,23 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
       setSavingModels(true);
       setError(null);
       const modelsArray = Array.from(defaultModels);
+      
+      // Update shared state immediately (as if user modified in compose tab)
+      // Do this BEFORE saving to backend to avoid race conditions
+      if (setSelectedVendors) {
+        setSelectedVendors(new Set(modelsArray));
+      }
+      
       await fetchWithHeartbeat("/api/personal-data/", {
         method: "POST",
         body: JSON.stringify({
           default_models: modelsArray,
         }),
       });
-      
-      // Update shared state immediately (as if user modified in compose tab)
-      if (setSelectedVendors) {
-        setSelectedVendors(new Set(modelsArray));
-      }
     } catch (e) {
       setError("Failed to save default models");
+      // Revert the change if save failed
+      // Note: We could restore previous state here, but for now just show error
     } finally {
       setSavingModels(false);
     }
