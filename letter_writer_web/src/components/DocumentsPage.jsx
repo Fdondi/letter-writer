@@ -463,6 +463,16 @@ export default function DocumentsPage() {
                         })}
                       </div>
                     )}
+                    {l.comment && l.comment.trim() && (
+                      <div style={{ marginTop: 8 }}>
+                        <div style={{ fontSize: "12px", fontWeight: 600, marginBottom: 4, color: "var(--secondary-text-color)" }}>
+                          User comment:
+                        </div>
+                        <div style={{ fontSize: "12px", whiteSpace: "pre-wrap", color: "var(--text-color)" }}>
+                          {l.comment}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))
               )}

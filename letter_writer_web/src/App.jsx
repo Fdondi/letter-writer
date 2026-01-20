@@ -3,6 +3,7 @@ import ModelSelector from "./components/ModelSelector";
 import LetterTabs from "./components/LetterTabs";
 import StyleInstructionsBlade from "./components/StyleInstructionsBlade";
 import PhaseFlow from "./components/PhaseFlow";
+import FinalReview from "./components/FinalReview";
 import DocumentsPage from "./components/DocumentsPage";
 import PersonalDataPage from "./components/PersonalDataPage";
 import LanguageConfig from "./components/LanguageConfig";
@@ -62,7 +63,8 @@ export default function App() {
   const [error, setError] = useState(null);
   const [showInput, setShowInput] = useState(true);
   const [showStyleBlade, setShowStyleBlade] = useState(false);
-  const [uiStage, setUiStage] = useState("input"); // input | phases | assembly
+  const [uiStage, setUiStage] = useState("input"); // input | phases | assembly | final_review
+  const [finalReviewText, setFinalReviewText] = useState("");
   const [phaseSessionId, setPhaseSessionId] = useState(null);
   const [phaseSessions, setPhaseSessions] = useState({}); // vendor -> session_id
   const [savingFinal, setSavingFinal] = useState(false);
@@ -996,6 +998,11 @@ export default function App() {
   // Check if we have any letters (indicates at least one refine phase completed)
   const hasAssembly = vendorsList.some((v) => letters[v]);
 
+  const handleFinalize = (text) => {
+    setFinalReviewText(text);
+    setUiStage("final_review");
+  };
+
   const renderCompose = () => (
     <>
       {showInput ? (
@@ -1363,7 +1370,7 @@ export default function App() {
 
       {!showInput && (
         <>
-          <div style={{ display: (uiStage === "assembly" && assemblyVisible) ? "none" : "block" }}>
+          <div style={{ display: ((uiStage === "assembly" && assemblyVisible) || uiStage === "final_review") ? "none" : "block" }}>
             <PhaseFlow
               vendorsList={vendorsList}
               onEditChange={updatePhaseEdit}
@@ -1413,12 +1420,23 @@ export default function App() {
                   }
                 }}
                 onAddParagraph={onAddParagraph}
-                onCopyFinal={persistFinalLetter}
+                onFinalize={handleFinalize}
                 savingFinal={savingFinal}
                 vendorFeedback={vendorFeedback}
                 setVendorFeedback={setVendorFeedback}
               />
             </div>
+          )}
+
+          {uiStage === "final_review" && (
+             <FinalReview
+                initialText={finalReviewText}
+                jobText={jobText}
+                requirements={requirements}
+                onSaveAndCopy={persistFinalLetter}
+                onBack={() => setUiStage("assembly")}
+                saving={savingFinal}
+             />
           )}
         </>
       )}
@@ -1565,7 +1583,7 @@ export default function App() {
       {activeTab === "compose" ? renderCompose() : activeTab === "documents" ? <DocumentsPage /> : <PersonalDataPage />}
 
       {/* Floating toggle to assembly while still in phases (after first refinement ready) */}
-      {!showInput && uiStage !== "assembly" && hasAssembly && (
+      {!showInput && uiStage !== "assembly" && uiStage !== "final_review" && hasAssembly && (
         <div
           style={{
             position: "fixed",
