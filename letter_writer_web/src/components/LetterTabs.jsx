@@ -333,6 +333,15 @@ export default function LetterTabs({
     });
   };
 
+  // Helper to get the display text for a paragraph (translated or original)
+  const getDisplayText = (paragraph) => {
+    const state = translationStates[paragraph.id];
+    if (state && state.viewLanguage !== 'source' && state.translations[state.viewLanguage]) {
+      return state.translations[state.viewLanguage];
+    }
+    return paragraph.text;
+  };
+
   const updateParagraphText = (index, newText) => {
     setFinalParagraphs((prev) => {
       try {
@@ -372,13 +381,7 @@ export default function LetterTabs({
   };
 
   const copyFinalText = async () => {
-    const fullText = finalParagraphs.map(p => {
-        const state = translationStates[p.id];
-        if (state && state.viewLanguage !== 'source' && state.translations[state.viewLanguage]) {
-            return state.translations[state.viewLanguage];
-        }
-        return p.text;
-    }).join('\n\n');
+    const fullText = finalParagraphs.map(getDisplayText).join('\n\n');
 
     if (onFinalize) {
       onFinalize(fullText);
@@ -588,7 +591,8 @@ export default function LetterTabs({
                         setTranslationStates(prev => ({
                             ...prev,
                             [p.id]: {
-                                ...(prev[p.id] || { viewLanguage: 'source' }),
+                                ...(prev[p.id] || {}),
+                                viewLanguage: lang,
                                 translations: {
                                     ...(prev[p.id]?.translations || {}),
                                     [lang]: text

@@ -332,10 +332,9 @@ export default function Paragraph({
       const translated = await translateText(paragraph.text, targetLanguage, null);
       
       if (isControlled && onTranslationLoaded) {
+        // onTranslationLoaded now sets both translations AND viewLanguage
+        // so we don't need to call onViewLanguageChange separately
         onTranslationLoaded(targetLanguage, translated);
-        if (onViewLanguageChange) {
-            onViewLanguageChange(targetLanguage);
-        }
       } else {
         setLocalTranslations((prev) => ({ ...prev, [targetLanguage]: translated }));
         setLocalViewLanguage(targetLanguage);
@@ -378,8 +377,9 @@ export default function Paragraph({
           top: -10,
           zIndex: 10,
           background: isHighlighted ? userActiveBg : userIdleBg,
-          border: "1px solid var(--border-color)",
-          borderRight: "none",
+          borderTop: "1px solid var(--border-color)",
+          borderBottom: "1px solid var(--border-color)",
+          borderLeft: "1px solid var(--border-color)",
           borderTopLeftRadius: 4,
           borderBottomLeftRadius: 4,
           padding: "2px 4px 2px 2px",
@@ -573,8 +573,9 @@ export default function Paragraph({
         top: -10,
         zIndex: 10,
         background: isHighlighted ? activeBg : idleBg,
-        border: paragraph.isFragment ? "1px dashed var(--secondary-text-color)" : "1px solid transparent",
-        borderRight: "none",
+        borderTop: paragraph.isFragment ? "1px dashed var(--secondary-text-color)" : "1px solid transparent",
+        borderBottom: paragraph.isFragment ? "1px dashed var(--secondary-text-color)" : "1px solid transparent",
+        borderLeft: paragraph.isFragment ? "1px dashed var(--secondary-text-color)" : "1px solid transparent",
         borderTopLeftRadius: 4,
         borderBottomLeftRadius: 4,
         padding: "2px 4px 2px 2px",
@@ -723,6 +724,11 @@ export default function Paragraph({
               const position = getCursorPositionFromClick(e, textRef.current);
               setCursorPosition(position);
               setIsEditing(true);
+              // If we are viewing a translation, populate edit text with the translation
+              // so the user edits what they see.
+              if (displayText !== paragraph.text) {
+                  setEditText(displayText);
+              }
             }}
             style={{
               whiteSpace: "pre-wrap",
@@ -732,7 +738,7 @@ export default function Paragraph({
               userSelect: "text"
             }}
           >
-            {paragraph.text || "Click to edit..."}
+            {displayText || "Click to edit..."}
           </div>
         )
       ) : (

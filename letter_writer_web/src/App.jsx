@@ -238,7 +238,7 @@ export default function App() {
       .then((res) => res.json())
       .then((settings) => {
         // Load minimum column width
-        if (settings.min_column_width !== undefined) {
+        if (settings.min_column_width !== undefined && settings.min_column_width !== null) {
           localStorage.setItem("minColumnWidth", settings.min_column_width.toString());
         }
       })
