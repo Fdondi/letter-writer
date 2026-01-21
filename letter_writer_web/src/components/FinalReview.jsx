@@ -37,8 +37,17 @@ export default function FinalReview({
   }, [text, lastLetterSource]);
 
   const handleTextChange = (e) => {
-    setText(e.target.value);
+    const newText = e.target.value;
+    setText(newText);
     setButtonState("save_copy");
+    
+    // If we were viewing a translation, switch back to source
+    // The new text becomes the source, and we clear translations
+    if (letterViewLanguage !== "source") {
+      setLetterViewLanguage("source");
+      setLetterTranslations({});
+      setLastLetterSource(newText);
+    }
   };
   
   // Translate letter
@@ -212,11 +221,24 @@ export default function FinalReview({
             {letterTranslationError}
           </div>
         )}
+        
+        {/* Translation Edit Notice */}
+        {letterViewLanguage !== "source" && (
+          <div style={{ 
+            padding: "6px 12px", 
+            background: "#dbeafe", 
+            color: "#1e40af", 
+            fontSize: "11px",
+            borderRadius: "4px",
+            border: "1px solid #93c5fd"
+          }}>
+            Viewing translation. Any edits will become the new source text.
+          </div>
+        )}
 
         <textarea
           value={getLetterDisplayText()}
           onChange={handleTextChange}
-          disabled={letterViewLanguage !== "source"}
           style={{
             flex: 1,
             width: "100%",
@@ -229,7 +251,7 @@ export default function FinalReview({
             backgroundColor: letterViewLanguage !== "source" ? "var(--panel-bg)" : "var(--card-bg)",
             color: "var(--text-color)",
             fontFamily: "inherit",
-            cursor: letterViewLanguage !== "source" ? "not-allowed" : "text",
+            cursor: "text",
           }}
           spellCheck={true}
         />
