@@ -990,6 +990,32 @@ def background_phase_view(request: HttpRequest, vendor: str):
         # Note: _run_background_phase still expects session_id for compatibility, but we'll update it to use request
         vendor_state = _run_background_phase(session_id, vendors[0], common_data)
         
+        # Track cost for this API call
+        if vendor_state.cost > 0:
+            from letter_writer.cost_tracker import track_api_cost
+            # Get user_id if authenticated
+            user_id = None
+            if request.user.is_authenticated:
+                try:
+                    from allauth.socialaccount.models import SocialAccount
+                    social_account = SocialAccount.objects.filter(user=request.user, provider='google').first()
+                    if social_account:
+                        user_id = social_account.uid
+                except (ImportError, Exception):
+                    pass
+                if not user_id:
+                    user_id = str(request.user.id)
+            
+            track_api_cost(
+                service=f"background_{vendor}",
+                cost=vendor_state.cost,
+                metadata={
+                    "vendor": vendor,
+                    "phase": "background"
+                },
+                user_id=user_id
+            )
+        
         # Return only data for the requested vendor
         return JsonResponse(
             {
@@ -1055,6 +1081,33 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
             top_docs_override=data.get("top_docs"),
             fancy=fancy,
         )
+        
+        # Track cost for this API call
+        if state.cost > 0:
+            from letter_writer.cost_tracker import track_api_cost
+            # Get user_id if authenticated
+            user_id = None
+            if request.user.is_authenticated:
+                try:
+                    from allauth.socialaccount.models import SocialAccount
+                    social_account = SocialAccount.objects.filter(user=request.user, provider='google').first()
+                    if social_account:
+                        user_id = social_account.uid
+                except (ImportError, Exception):
+                    pass
+                if not user_id:
+                    user_id = str(request.user.id)
+            
+            track_api_cost(
+                service=f"refine_{vendor}",
+                cost=state.cost,
+                metadata={
+                    "vendor": vendor,
+                    "phase": "refine",
+                    "fancy": fancy
+                },
+                user_id=user_id
+            )
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
     except Exception as exc:  # noqa: BLE001
@@ -1116,6 +1169,32 @@ def draft_phase_view(request: HttpRequest, vendor: str):
             top_docs_override=data.get("top_docs"),
             style_instructions=instructions,
         )
+        
+        # Track cost for this API call
+        if state.cost > 0:
+            from letter_writer.cost_tracker import track_api_cost
+            # Get user_id if authenticated
+            user_id = None
+            if request.user.is_authenticated:
+                try:
+                    from allauth.socialaccount.models import SocialAccount
+                    social_account = SocialAccount.objects.filter(user=request.user, provider='google').first()
+                    if social_account:
+                        user_id = social_account.uid
+                except (ImportError, Exception):
+                    pass
+                if not user_id:
+                    user_id = str(request.user.id)
+            
+            track_api_cost(
+                service=f"draft_{vendor}",
+                cost=state.cost,
+                metadata={
+                    "vendor": vendor,
+                    "phase": "draft"
+                },
+                user_id=user_id
+            )
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
     except Exception as exc:  # noqa: BLE001
@@ -1277,12 +1356,49 @@ def translate_view(request: HttpRequest):
     if not target_language:
         return JsonResponse({"detail": "target_language is required"}, status=400)
 
+    # Calculate character count for cost tracking
+    character_count = sum(len(text) for text in texts if text)
+    
+    # Get user_id if authenticated
+    user_id = None
+    if request.user.is_authenticated:
+        try:
+            from allauth.socialaccount.models import SocialAccount
+            social_account = SocialAccount.objects.filter(user=request.user, provider='google').first()
+            if social_account:
+                user_id = social_account.uid
+        except (ImportError, Exception):
+            pass
+        if not user_id:
+            user_id = str(request.user.id)
+
     try:
         translations = _translate_with_google(texts, target_language, source_language)
+        
+        # Track cost: Google Translate charges $20 per million characters
+        from letter_writer.cost_tracker import calculate_translation_cost, track_api_cost
+        cost = calculate_translation_cost(character_count)
+        
+        track_api_cost(
+            service="translate",
+            cost=cost,
+            metadata={
+                "character_count": character_count,
+                "text_count": len(texts),
+                "target_language": target_language,
+                "source_language": source_language,
+            },
+            user_id=user_id
+        )
+        
     except Exception as exc:  # noqa: BLE001
         return JsonResponse({"detail": str(exc)}, status=500)
 
-    return JsonResponse({"translations": translations})
+    return JsonResponse({
+        "translations": translations,
+        "cost": cost,
+        "character_count": character_count
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -1773,3 +1889,22 @@ def debug_clear_in_flight_requests_view(request: HttpRequest):
         "status": "ok",
         "cleared_count": cleared,
     })
+
+
+# ---------------------------------------------------------------------------
+# Cost tracking endpoints
+# ---------------------------------------------------------------------------
+
+
+def cost_summary_view(request: HttpRequest):
+    """Get API cost summary."""
+    if request.method != "GET":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+    
+    from letter_writer.cost_tracker import get_cost_summary
+    
+    try:
+        summary = get_cost_summary()
+        return JsonResponse(summary)
+    except Exception as exc:
+        return JsonResponse({"detail": str(exc)}, status=500)

@@ -31,4 +31,6 @@ urlpatterns = [
     # Debug endpoints for spam prevention
     path("debug/in-flight-requests/", views.debug_in_flight_requests_view, name="debug_in_flight"),
     path("debug/clear-in-flight-requests/", views.debug_clear_in_flight_requests_view, name="debug_clear_in_flight"),
+    # Cost tracking
+    path("costs/summary/", views.cost_summary_view, name="cost_summary"),
 ] 
