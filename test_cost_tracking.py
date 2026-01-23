@@ -4,10 +4,16 @@ Test script for cost tracking functionality.
 
 This script demonstrates:
 1. Calculating translation costs
-2. Tracking API costs
+2. Tracking API costs in Redis/memory
 3. Retrieving cost summaries
+4. Flushing costs to BigQuery
+
+Requirements:
+- Redis server running (optional - falls back to memory)
+- For BigQuery flush tests, set GOOGLE_CLOUD_PROJECT and BIGQUERY_DATASET
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -18,7 +24,10 @@ from letter_writer.cost_tracker import (
     calculate_translation_cost,
     track_api_cost,
     get_cost_summary,
-    get_cost_log_path,
+    flush_costs_to_bigquery,
+    get_user_monthly_cost,
+    get_global_monthly_cost,
+    _get_redis_client,
 )
 
 
@@ -47,13 +56,30 @@ def test_translation_cost_calculation():
     print("\n✓ All translation cost calculations passed!\n")
 
 
-def test_cost_tracking():
-    """Test cost tracking functionality."""
+def test_storage_backend():
+    """Test storage backend detection."""
     print("=" * 60)
-    print("Testing Cost Tracking")
+    print("Testing Storage Backend")
     print("=" * 60)
     
-    print(f"Cost log path: {get_cost_log_path()}\n")
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    print(f"Redis URL: {redis_url}\n")
+    
+    client = _get_redis_client()
+    if client is None:
+        print("ℹ Redis not available - using in-memory fallback")
+        print("  To use Redis: start Redis or set REDIS_URL environment variable\n")
+        return "memory"
+    
+    print("✓ Redis connection successful!\n")
+    return "redis"
+
+
+def test_cost_tracking(storage_type):
+    """Test cost tracking functionality."""
+    print("=" * 60)
+    print(f"Testing Cost Tracking ({storage_type})")
+    print("=" * 60)
     
     # Track some example costs
     examples = [
@@ -98,7 +124,7 @@ def test_cost_tracking():
         },
     ]
     
-    print("Tracking example API costs...\n")
+    print(f"Tracking example API costs ({storage_type})...\n")
     for example in examples:
         track_api_cost(
             service=example["service"],
@@ -114,13 +140,14 @@ def test_cost_tracking():
 def test_cost_summary():
     """Test cost summary retrieval."""
     print("=" * 60)
-    print("Cost Summary")
+    print("Pending Cost Summary")
     print("=" * 60)
     
     summary = get_cost_summary()
     
+    print(f"Storage: {summary.get('storage', 'unknown')}")
     print(f"Total Cost: ${summary['total_cost']:.4f}")
-    print(f"Total Requests: {summary['total_requests']}")
+    print(f"Pending Requests: {summary.get('pending_requests', 0)}")
     print()
     
     if summary.get('by_service'):
@@ -135,11 +162,82 @@ def test_cost_summary():
         print("-" * 60)
         for user_id, user_data in summary['by_user'].items():
             print(f"  {user_id}: ${user_data['total_cost']:.4f}")
-            for service, service_data in user_data['by_service'].items():
+            for service, service_data in user_data.get('by_service', {}).items():
                 print(f"    - {service:28s} ${service_data['total_cost']:>8.4f} ({service_data['request_count']:>4} requests)")
         print()
     
     print("✓ Cost summary retrieved successfully!\n")
+
+
+def test_bigquery_flush(skip_if_no_credentials=True):
+    """Test flushing costs to BigQuery."""
+    print("=" * 60)
+    print("BigQuery Flush Test")
+    print("=" * 60)
+    
+    # Check if BigQuery credentials are available
+    if skip_if_no_credentials:
+        project = os.environ.get("BIGQUERY_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        if not project:
+            print("⚠ Skipping BigQuery flush - no credentials")
+            print("  Set BIGQUERY_PROJECT or GOOGLE_CLOUD_PROJECT to enable\n")
+            return
+    
+    print("Flushing costs to BigQuery...")
+    result = flush_costs_to_bigquery(reset_after_flush=True)
+    
+    print(f"Status: {result.get('status')}")
+    if result.get('status') == 'success':
+        print(f"Rows inserted: {result.get('rows_inserted', 0)}")
+        print(f"Total cost flushed: ${result.get('total_cost_flushed', 0):.4f}")
+    elif result.get('status') == 'skipped':
+        print(f"Reason: {result.get('reason')}")
+    else:
+        print(f"Error: {result.get('error')}")
+        if result.get('rows_pending'):
+            print(f"Rows pending: {result.get('rows_pending')}")
+    
+    print()
+
+
+def test_bigquery_query(skip_if_no_credentials=True):
+    """Test querying costs from BigQuery."""
+    print("=" * 60)
+    print("BigQuery Query Test")
+    print("=" * 60)
+    
+    # Check if BigQuery credentials are available
+    if skip_if_no_credentials:
+        project = os.environ.get("BIGQUERY_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        if not project:
+            print("⚠ Skipping BigQuery query - no credentials")
+            print("  Set BIGQUERY_PROJECT or GOOGLE_CLOUD_PROJECT to enable\n")
+            return
+    
+    print("Querying user costs from BigQuery...")
+    user_result = get_user_monthly_cost("test_user_123", months_back=1)
+    
+    if user_result.get("error"):
+        print(f"  Error: {user_result.get('error')}")
+    else:
+        print(f"  User: {user_result.get('user_id')}")
+        print(f"  Total Cost: ${user_result.get('total_cost', 0):.4f}")
+        print(f"  Total Requests: {user_result.get('total_requests', 0)}")
+    
+    print("\nQuerying global costs from BigQuery...")
+    global_result = get_global_monthly_cost(months_back=1)
+    
+    if global_result.get("error"):
+        print(f"  Error: {global_result.get('error')}")
+    else:
+        print(f"  Total Cost: ${global_result.get('total_cost', 0):.4f}")
+        print(f"  Total Requests: {global_result.get('total_requests', 0)}")
+        if global_result.get("by_service"):
+            print("  By Service:")
+            for service, data in global_result["by_service"].items():
+                print(f"    - {service}: ${data['total_cost']:.4f}")
+    
+    print()
 
 
 def main():
@@ -150,15 +248,31 @@ def main():
     
     try:
         test_translation_cost_calculation()
-        test_cost_tracking()
+        storage_type = test_storage_backend()
+        
+        test_cost_tracking(storage_type)
         test_cost_summary()
+        test_bigquery_flush(skip_if_no_credentials=True)
+        test_bigquery_query(skip_if_no_credentials=True)
         
         print("=" * 60)
-        print("ALL TESTS PASSED! ✓")
+        print("ALL TESTS COMPLETED! ✓")
         print("=" * 60 + "\n")
         
-        print(f"Cost tracking data saved to: {get_cost_log_path()}")
-        print("You can view the cost data by reading this JSON file.\n")
+        if storage_type == "redis":
+            print("Cost tracking is using Redis for fast atomic operations.")
+        else:
+            print("Cost tracking is using in-memory storage (Redis unavailable).")
+        
+        print("Costs are flushed to BigQuery:")
+        print("  - On letter completion")
+        print("  - Every 30 minutes (configurable via COST_FLUSH_INTERVAL_SECONDS)")
+        print("  - On server shutdown")
+        print()
+        print("BigQuery table: {project}.{dataset}.api_costs")
+        print("  - Partitioned by: month (timestamp)")
+        print("  - Clustered by: user_id, service")
+        print()
         
     except Exception as e:
         print(f"\n❌ Test failed: {e}")

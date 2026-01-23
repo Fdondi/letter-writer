@@ -32,5 +32,8 @@ urlpatterns = [
     path("debug/in-flight-requests/", views.debug_in_flight_requests_view, name="debug_in_flight"),
     path("debug/clear-in-flight-requests/", views.debug_clear_in_flight_requests_view, name="debug_clear_in_flight"),
     # Cost tracking
-    path("costs/summary/", views.cost_summary_view, name="cost_summary"),
+    path("costs/pending/", views.cost_summary_view, name="cost_pending"),
+    path("costs/flush/", views.cost_flush_view, name="cost_flush"),
+    path("costs/user/", views.cost_user_view, name="cost_user"),
+    path("costs/global/", views.cost_global_view, name="cost_global"),
 ] 

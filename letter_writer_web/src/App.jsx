@@ -10,6 +10,7 @@ import SettingsPage from "./components/SettingsPage";
 import LanguageConfig from "./components/LanguageConfig";
 import LanguageSelector from "./components/LanguageSelector";
 import AuthButton from "./components/AuthButton";
+import CostDisplay from "./components/CostDisplay";
 import { splitIntoParagraphs } from "./utils/split";
 import { fetchWithHeartbeat, retryApiCall, initializeCsrfToken, getCsrfToken } from "./utils/apiHelpers";
 import { phases as phaseModules } from "./components/phases";
@@ -1620,6 +1621,7 @@ export default function App() {
               Settings
             </button>
 
+            <CostDisplay />
             <AuthButton />
           </div>
         </div>

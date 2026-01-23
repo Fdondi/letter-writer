@@ -577,24 +577,31 @@ def extract_view(request: HttpRequest):
         extraction = extract_job_metadata(job_text, ai_client, trace_dir=trace_dir)
         
         # Save common data with extraction metadata (common to all vendors)
-        # CV should already be loaded in session by init_session_view
+        # Load CV if not already in session
         import logging
         logger = logging.getLogger(__name__)
+        
+        cv_in_session = request.session.get("cv_text")
+        needs_cv_load = not cv_in_session or not str(cv_in_session).strip()
+        
+        if needs_cv_load:
+            logger.info("extract_view: CV not in session, loading from Firestore")
+        
         save_session_common_data(
             request=request,
             job_text=job_text,
             metadata={"common": extraction},  # Store extraction as common metadata
-            load_cv=False,  # Don't reload CV - rely on init loading
+            load_cv=needs_cv_load,  # Load CV if missing
         )
         
-        # Verify CV is in session (just for logging/debugging)
+        # Verify CV is now in session
         cv_in_session = request.session.get("cv_text")
         if cv_in_session:
             logger.info(f"extract_view: CV present in session, length={len(cv_in_session)}")
         else:
-            logger.warning("extract_view: CV NOT present in session (should have been loaded by init)")
+            logger.error("extract_view: CV still missing after load attempt")
             from letter_writer.generation import MissingCVError
-            raise MissingCVError("CV text is missing or empty - cannot proceed with extraction")
+            raise MissingCVError("CV text is missing or empty - please upload your CV in the 'Your CV' tab")
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         return JsonResponse({"detail": str(exc)}, status=500)
@@ -802,6 +809,8 @@ def clear_session_view(request: HttpRequest):
     Called when:
     - User explicitly clicks "clear" button
     - Final data is saved/copied (user is done with this letter)
+    
+    This also triggers a cost flush to Firebase since the user has completed their letter.
     """
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
@@ -813,11 +822,34 @@ def clear_session_view(request: HttpRequest):
         clear_session(request)
         new_session_id = get_session_id(request)
         
+        # Flush costs to BigQuery when letter is completed
+        # This ensures the user's costs are recorded immediately
+        cost_flush_result = None
+        if request.user.is_authenticated:
+            try:
+                # Get user_id
+                user_id = None
+                try:
+                    from allauth.socialaccount.models import SocialAccount
+                    social_account = SocialAccount.objects.filter(user=request.user, provider='google').first()
+                    if social_account:
+                        user_id = social_account.uid
+                except (ImportError, Exception):
+                    pass
+                if not user_id:
+                    user_id = str(request.user.id)
+                
+                from letter_writer.cost_tracker import flush_on_letter_completion
+                cost_flush_result = flush_on_letter_completion(user_id)
+            except Exception as e:
+                logger.warning(f"Cost flush to BigQuery failed on session clear: {e}")
+        
         return JsonResponse({
             "status": "ok",
             "old_session_id": old_session_id,
             "new_session_id": new_session_id,
             "message": "Session cleared successfully",
+            "cost_flush": cost_flush_result,
         })
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
@@ -1897,7 +1929,10 @@ def debug_clear_in_flight_requests_view(request: HttpRequest):
 
 
 def cost_summary_view(request: HttpRequest):
-    """Get API cost summary."""
+    """Get pending API cost summary from Redis/memory.
+    
+    Returns current costs accumulated since last flush to BigQuery.
+    """
     if request.method != "GET":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
     
@@ -1906,5 +1941,79 @@ def cost_summary_view(request: HttpRequest):
     try:
         summary = get_cost_summary()
         return JsonResponse(summary)
+    except Exception as exc:
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+
+def cost_flush_view(request: HttpRequest):
+    """Manually trigger a cost flush to BigQuery.
+    
+    This writes accumulated costs from Redis/memory to BigQuery and resets counters.
+    Useful for admin/debugging purposes.
+    """
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+    
+    from letter_writer.cost_tracker import flush_costs_to_bigquery
+    
+    try:
+        result = flush_costs_to_bigquery(reset_after_flush=True)
+        return JsonResponse(result)
+    except Exception as exc:
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+
+def cost_user_view(request: HttpRequest):
+    """Get user's cost totals from BigQuery + pending costs.
+    
+    Query params:
+        months: Number of months to look back (default: 1)
+    """
+    if request.method != "GET":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+    
+    # Require authentication
+    user_id, error_response = require_auth_user(request)
+    if error_response:
+        return error_response
+    
+    months = int(request.GET.get("months", 1))
+    
+    from letter_writer.cost_tracker import get_user_monthly_cost, get_cost_summary
+    
+    try:
+        # Get historical costs from BigQuery
+        result = get_user_monthly_cost(user_id, months_back=months)
+        
+        # Add pending costs from Redis/memory (not yet flushed)
+        pending = get_cost_summary()
+        pending_user = pending.get("by_user", {}).get(user_id, {})
+        pending_cost = pending_user.get("total_cost", 0)
+        
+        # Combine totals
+        result["total_cost"] = result.get("total_cost", 0) + pending_cost
+        result["pending_cost"] = pending_cost
+        
+        return JsonResponse(result)
+    except Exception as exc:
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+
+def cost_global_view(request: HttpRequest):
+    """Get global cost statistics from BigQuery.
+    
+    Query params:
+        months: Number of months to look back (default: 1)
+    """
+    if request.method != "GET":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+    
+    months = int(request.GET.get("months", 1))
+    
+    from letter_writer.cost_tracker import get_global_monthly_cost
+    
+    try:
+        result = get_global_monthly_cost(months_back=months)
+        return JsonResponse(result)
     except Exception as exc:
         return JsonResponse({"detail": str(exc)}, status=500)

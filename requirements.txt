@@ -16,4 +16,6 @@ django-allauth>=0.57.0
 django-cors-headers>=4.3.1
 PyJWT>=2.0.0  # Required by django-allauth for OAuth providers
 cryptography>=3.0.0  # Required by django-allauth for OAuth providers
-requests-oauthlib>=1.0.0  # Required by django-allauth for OAuth providers 
+requests-oauthlib>=1.0.0  # Required by django-allauth for OAuth providers
+redis>=5.0.0  # For cost tracking with atomic operations
+google-cloud-bigquery>=3.0.0  # For cost analytics and reporting 

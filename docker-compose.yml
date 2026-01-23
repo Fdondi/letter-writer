@@ -39,9 +39,26 @@ services:
       - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}
       - GOOGLE_OAUTH_SECRET=${GOOGLE_OAUTH_SECRET}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
+      # Redis for cost tracking (optional - falls back to in-memory)
+      - REDIS_URL=redis://redis:6379/0
+      # BigQuery for cost analytics (uses same credentials as Firestore)
+      - BIGQUERY_PROJECT=${GOOGLE_CLOUD_PROJECT}
+      - BIGQUERY_DATASET=${BIGQUERY_DATASET:-letter_writer}
+      - BIGQUERY_TABLE=${BIGQUERY_TABLE:-api_costs}
+      # Google Translate API key (for translation costs tracking)
+      - GOOGLE_TRANSLATE_API_KEY=${GOOGLE_TRANSLATE_API_KEY}
     env_file:
       - .env
+    depends_on:
+      - redis
     command: python letter_writer_server/manage.py runserver 0.0.0.0:8000
+
+  redis:
+    image: docker.io/redis:alpine
+    container_name: letter-writer-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
 
   frontend:
     build:
