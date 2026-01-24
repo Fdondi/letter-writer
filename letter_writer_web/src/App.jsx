@@ -11,6 +11,7 @@ import LanguageConfig from "./components/LanguageConfig";
 import LanguageSelector from "./components/LanguageSelector";
 import AuthButton from "./components/AuthButton";
 import CostDisplay from "./components/CostDisplay";
+import CostsPage from "./components/CostsPage";
 import { splitIntoParagraphs } from "./utils/split";
 import { fetchWithHeartbeat, retryApiCall, initializeCsrfToken, getCsrfToken } from "./utils/apiHelpers";
 import { phases as phaseModules } from "./components/phases";
@@ -1642,7 +1643,7 @@ export default function App() {
               Settings
             </button>
 
-            <CostDisplay />
+            <CostDisplay onNavigate={() => setActiveTab("costs")} />
             <AuthButton />
           </div>
         </div>
@@ -1659,6 +1660,8 @@ export default function App() {
             selectedVendors={selectedVendors}
             setSelectedVendors={setSelectedVendors}
           />
+        : activeTab === "costs"
+        ? <CostsPage />
         : <PersonalDataPage />}
 
       {/* Floating toggle to assembly while still in phases (after first refinement ready) */}

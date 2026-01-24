@@ -3,8 +3,10 @@ import React, { useState, useEffect } from "react";
 /**
  * Displays the user's total API cost for the current month.
  * Fetches from BigQuery via /api/costs/user/ endpoint.
+ * 
+ * @param {function} onNavigate - Called when user clicks to view details
  */
-export default function CostDisplay() {
+export default function CostDisplay({ onNavigate }) {
   const [cost, setCost] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -56,6 +58,12 @@ export default function CostDisplay() {
     ? "< $0.01"
     : `$${cost.toFixed(2)}`;
 
+  const handleClick = () => {
+    if (onNavigate) {
+      onNavigate();
+    }
+  };
+
   return (
     <div
       style={{
@@ -68,9 +76,10 @@ export default function CostDisplay() {
         borderRadius: "4px",
         fontSize: "12px",
         color: "var(--secondary-text-color)",
+        cursor: onNavigate ? "pointer" : "default",
       }}
-      title={`Your API usage this month: ${formattedCost}\nClick to refresh`}
-      onClick={fetchCost}
+      title={`Your API usage this month: ${formattedCost}\nClick for details`}
+      onClick={handleClick}
       role="button"
       tabIndex={0}
     >

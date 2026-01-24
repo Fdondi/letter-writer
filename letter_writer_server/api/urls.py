@@ -35,5 +35,6 @@ urlpatterns = [
     path("costs/pending/", views.cost_summary_view, name="cost_pending"),
     path("costs/flush/", views.cost_flush_view, name="cost_flush"),
     path("costs/user/", views.cost_user_view, name="cost_user"),
+    path("costs/daily/", views.cost_daily_view, name="cost_daily"),
     path("costs/global/", views.cost_global_view, name="cost_global"),
 ] 

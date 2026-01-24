@@ -609,6 +609,63 @@ def get_global_monthly_cost(months_back: int = 1) -> Dict[str, Any]:
         return {"error": str(e), "total_cost": 0.0}
 
 
+def get_user_daily_costs(user_id: str, months_back: int = 1) -> Dict[str, Any]:
+    """Get user's daily cost breakdown from BigQuery.
+    
+    Args:
+        user_id: User ID to query
+        months_back: Number of months to look back (default: 1)
+    
+    Returns:
+        Dictionary with daily breakdown
+    """
+    client = _get_bigquery_client()
+    if client is None:
+        return {"error": "BigQuery not available", "days": []}
+    
+    try:
+        from google.cloud import bigquery
+        
+        query = f"""
+        SELECT 
+            DATE(timestamp) as date,
+            SUM(cost) as total_cost,
+            SUM(request_count) as request_count
+        FROM `{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}`
+        WHERE user_id = @user_id
+          AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @months_back MONTH)
+        GROUP BY DATE(timestamp)
+        ORDER BY date DESC
+        """
+        
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("user_id", "STRING", user_id),
+                bigquery.ScalarQueryParameter("months_back", "INT64", months_back),
+            ]
+        )
+        
+        results = client.query(query, job_config=job_config).result()
+        
+        days = []
+        for row in results:
+            days.append({
+                "date": row.date.isoformat() if row.date else None,
+                "total_cost": float(row.total_cost or 0),
+                "request_count": int(row.request_count or 0),
+            })
+        
+        return {
+            "user_id": user_id,
+            "period_months": months_back,
+            "days": days,
+        }
+        
+    except Exception as e:
+        logger.error(f"Error querying BigQuery for daily costs: {e}")
+        return {"error": str(e), "days": []}
+
+
 def _get_pending_requests_from_memory() -> List[Dict[str, Any]]:
     """Get pending requests from memory store."""
     with _memory_lock:
