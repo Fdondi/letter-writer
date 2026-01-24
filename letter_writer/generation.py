@@ -167,11 +167,11 @@ def company_research(company_name: str, job_text: str, client: BaseClient, trace
     """Research company information using OpenAI.
     
     Args:
-        company_name: Name of the company
+        company_name: Name of the company to research (may be an intermediary company if provided in point_of_contact)
         job_text: Job description text
         client: AI client for research
         trace_dir: Directory for tracing
-        point_of_contact: Optional dict with name, role, contact_details, notes
+        point_of_contact: Optional dict with name, role, contact_details, notes, company (intermediary)
     """
     system = "You are an expert in searching the internet for information about companies."
     
@@ -179,9 +179,13 @@ def company_research(company_name: str, job_text: str, client: BaseClient, trace
     if point_of_contact and (point_of_contact.get("name") or point_of_contact.get("role")):
         contact_name = point_of_contact.get("name", "")
         contact_role = point_of_contact.get("role", "")
+        # Check if this is an intermediary company (recruiting agency, etc.)
+        intermediary_note = ""
+        if point_of_contact.get("company") and point_of_contact.get("company") == company_name:
+            intermediary_note = f" Note: {company_name} is an intermediary (e.g., recruiting agency), not the final employer.\n"
         contact_context = (
             f"\n\nIMPORTANT: We are especially interested in talking with {contact_name if contact_name else 'a contact'} "
-            f"who is {contact_role if contact_role else 'a point of contact'} at the company.\n"
+            f"who is {contact_role if contact_role else 'a point of contact'} at the company.{intermediary_note}"
             f"Also research this person's background and expertise, in particular:\n"
             f"- What someone in this role likely knows or cares about\n"
             f"- How to personalize the letter for this specific contact\n"

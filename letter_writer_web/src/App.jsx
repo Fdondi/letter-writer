@@ -52,6 +52,7 @@ export default function App() {
     role: "",
     contact_details: "",
     notes: "",
+    company: "",
   });
   const [extracting, setExtracting] = useState(false);
   const [extractionError, setExtractionError] = useState(null);
@@ -406,12 +407,13 @@ export default function App() {
           role: extracted.point_of_contact.role || "",
           contact_details: extracted.point_of_contact.contact_details || "",
           notes: extracted.point_of_contact.notes || "",
+          company: extracted.point_of_contact.company || "",
         });
       }
       // If no point_of_contact in extraction, keep existing manual input (don't clear it)
       // Store extracted data to detect if user modified it later
       // For point_of_contact, use extracted value if present, otherwise use current state (preserves manual input)
-      const currentPoc = (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes) ? pointOfContact : null;
+      const currentPoc = (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null;
       setExtractedData({
         company_name: extracted.company_name || companyName,
         job_title: extracted.job_title || jobTitle,
@@ -598,7 +600,7 @@ export default function App() {
       language: language,
       salary: salary,
       requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
-      point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes) ? pointOfContact : null,
+      point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
     };
     const extractionEdited = extractedData && (
       extractedData.company_name !== currentExtraction.company_name ||
@@ -670,8 +672,8 @@ export default function App() {
   };
 
   const handleSubmit = async () => {
-    if (!companyName.trim() || !jobTitle.trim()) {
-      setError("Company name and job title are required");
+    if (!jobTitle.trim()) {
+      setError("Job title is required");
       return;
     }
     
@@ -719,7 +721,7 @@ export default function App() {
       salary: salary,
       requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
       job_text: jobText,
-      point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes) ? pointOfContact : null,
+      point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
     };
     const dataModified = !extractedData || 
       extractedData.company_name !== currentData.company_name ||
@@ -753,7 +755,7 @@ export default function App() {
           language: language,
           salary: salary,
           requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
-          point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes) ? pointOfContact : null,
+          point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
         };
         
         await fetchWithHeartbeat("/api/phases/session/", {
@@ -1108,14 +1110,14 @@ export default function App() {
           <div style={{ marginTop: 20, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             {/* Left Column */}
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div>
+            <div>
                 <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Company Name *
+                  Job Title *
                 </label>
                 <input
                   type="text"
-                  value={companyName}
-                  onChange={(e) => setCompanyName(e.target.value)}
+                  value={jobTitle}
+                  onChange={(e) => setJobTitle(e.target.value)}
                   style={{
                     width: "100%",
                     padding: 8,
@@ -1124,7 +1126,7 @@ export default function App() {
                     border: "1px solid var(--border-color)",
                     borderRadius: "4px",
                   }}
-                  placeholder="Company name"
+                  placeholder="Job title"
                 />
               </div>
               <div>
@@ -1189,12 +1191,12 @@ export default function App() {
             <div style={{ display: "flex", flexDirection: "column", gap: 10, height: "100%" }}>
               <div>
                 <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Job Title *
+                  Company Name
                 </label>
                 <input
                   type="text"
-                  value={jobTitle}
-                  onChange={(e) => setJobTitle(e.target.value)}
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
                   style={{
                     width: "100%",
                     padding: 8,
@@ -1203,9 +1205,9 @@ export default function App() {
                     border: "1px solid var(--border-color)",
                     borderRadius: "4px",
                   }}
-                  placeholder="Job title"
+                  placeholder="Company name"
                 />
-              </div>
+              </div>              
               <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
                 <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
                   Key Competences
@@ -1297,23 +1299,42 @@ export default function App() {
               </div>
               <div>
                 <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Notes
+                  Company (if separate intermediary)
                 </label>
-                <textarea
-                  value={pointOfContact.notes}
-                  onChange={(e) => setPointOfContact({ ...pointOfContact, notes: e.target.value })}
+                <input
+                  type="text"
+                  value={pointOfContact.company}
+                  onChange={(e) => setPointOfContact({ ...pointOfContact, company: e.target.value })}
                   style={{
                     width: "100%",
-                    height: 60,
                     padding: 8,
                     backgroundColor: "var(--input-bg)",
                     color: "var(--text-color)",
                     border: "1px solid var(--border-color)",
                     borderRadius: "4px",
                   }}
-                  placeholder="Notes about contact or how to reach them"
+                  placeholder="Intermediary company (e.g., recruiting agency)"
                 />
               </div>
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                Notes
+              </label>
+              <textarea
+                value={pointOfContact.notes}
+                onChange={(e) => setPointOfContact({ ...pointOfContact, notes: e.target.value })}
+                style={{
+                  width: "100%",
+                  height: 60,
+                  padding: 8,
+                  backgroundColor: "var(--input-bg)",
+                  color: "var(--text-color)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                }}
+                placeholder="Notes about contact or how to reach them"
+              />
             </div>
           </div>
           

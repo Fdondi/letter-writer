@@ -1478,8 +1478,8 @@ def documents_view(request: HttpRequest):
 
     company_name = data.get("company_name")
     job_text = data.get("job_text")
-    if not company_name or not job_text:
-        return _json_error("company_name and job_text are required")
+    if not job_text:
+        return _json_error("job_text is required")
 
     # Generate vector embedding
     openai_client = OpenAI()

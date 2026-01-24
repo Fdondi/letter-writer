@@ -570,7 +570,7 @@ function ExtractionCard({
   approved,
 }) {
   const fields = [
-    { key: "company_name", label: "Company", placeholder: "Detected company name (required)" },
+    { key: "company_name", label: "Company", placeholder: "Detected company name" },
     { key: "job_title", label: "Job title", placeholder: "e.g. Senior Backend Engineer" },
     { key: "location", label: "Location", placeholder: "e.g. Remote, Berlin, Hybrid" },
     { key: "language", label: "Language", placeholder: "Primary language" },
