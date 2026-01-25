@@ -31,13 +31,38 @@ from .firestore_store import get_collection
 
 
 @dataclass
+class PhaseCost:
+    """Cost and token tracking for a single phase."""
+    cost: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+@dataclass
 class VendorPhaseState:
     top_docs: List[dict] = field(default_factory=list)
     company_report: Optional[str] = None
     draft_letter: Optional[str] = None
     final_letter: Optional[str] = None
     feedback: Dict[str, str] = field(default_factory=dict)
+    # Legacy aggregate fields (for backward compatibility)
     cost: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    # Per-phase cost tracking
+    phase_costs: Dict[str, PhaseCost] = field(default_factory=dict)
+    
+    def add_phase_cost(self, phase: str, cost: float, input_tokens: int, output_tokens: int):
+        """Add cost for a specific phase."""
+        if phase not in self.phase_costs:
+            self.phase_costs[phase] = PhaseCost()
+        self.phase_costs[phase].cost += cost
+        self.phase_costs[phase].input_tokens += input_tokens
+        self.phase_costs[phase].output_tokens += output_tokens
+        # Also update legacy totals
+        self.cost += cost
+        self.input_tokens += input_tokens
+        self.output_tokens += output_tokens
 
 
 @dataclass
@@ -106,8 +131,35 @@ def set_metadata_field(metadata: dict, vendor: ModelVendor, field: str, value: s
     metadata[vendor.value][field] = value
 
 
-def _update_cost(state: VendorPhaseState, client) -> None:
-    state.cost += float(getattr(client, "total_cost", 0.0) or 0.0)
+def _update_cost(state: VendorPhaseState, client, phase: str = "unknown") -> None:
+    """Update state with cost from client, tracking by phase.
+    
+    Args:
+        state: The vendor phase state to update
+        client: The AI client with cost/token counters
+        phase: The phase name (background, draft, feedback, refine)
+    """
+    cost = float(getattr(client, "total_cost", 0.0) or 0.0)
+    input_tokens = int(getattr(client, "total_input_tokens", 0) or 0)
+    output_tokens = int(getattr(client, "total_output_tokens", 0) or 0)
+    
+    state.add_phase_cost(phase, cost, input_tokens, output_tokens)
+
+
+def _get_client_usage(client) -> tuple:
+    """Get current usage from client (cost, input_tokens, output_tokens)."""
+    return (
+        float(getattr(client, "total_cost", 0.0) or 0.0),
+        int(getattr(client, "total_input_tokens", 0) or 0),
+        int(getattr(client, "total_output_tokens", 0) or 0),
+    )
+
+
+def _reset_client_counters(client) -> None:
+    """Reset client counters after capturing usage."""
+    client.total_cost = 0.0
+    client.total_input_tokens = 0
+    client.total_output_tokens = 0
 
 
 def _create_session(
@@ -194,7 +246,7 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
         top_docs=top_docs,
         company_report=company_report,
     )
-    _update_cost(state, ai_client)
+    _update_cost(state, ai_client, phase="background")
     
     # Save vendor-specific data (lock-free, atomic)
     from .session_store import save_vendor_data
@@ -256,7 +308,7 @@ def advance_to_draft(
                 ai_client = get_client(vendor)
                 try:
                     state.top_docs = select_top_documents(session.search_result, session.job_text, ai_client, trace_dir)
-                    _update_cost(state, ai_client)
+                    _update_cost(state, ai_client, phase="background")
                 except Exception:
                     # If retrieval fails, use empty list (user can proceed with just company_report)
                     state.top_docs = []
@@ -297,10 +349,18 @@ def advance_to_draft(
     state.top_docs = top_docs
 
     try:
+        # Reset counters to track draft generation separately
+        _reset_client_counters(ai_client)
+        
         print(f"[PHASE] draft -> {vendor.value} :: generate_letter (XLARGE)")
         draft_letter = generate_letter(
             cv_text, top_docs, company_report, job_text, ai_client, trace_dir, style_instructions
         )
+        
+        # Capture draft cost before feedback generation
+        _update_cost(state, ai_client, phase="draft")
+        _reset_client_counters(ai_client)
+        
         # Run checks on the draft so the user can review/override feedback before refinement
         print(f"[PHASE] draft -> {vendor.value} :: running checks (TINY)")
         with ThreadPoolExecutor(max_workers=5) as executor:
@@ -323,13 +383,16 @@ def advance_to_draft(
             "user_fit": user_fit_future.result(),
             "human": human_future.result(),
         }
+        
+        # Capture feedback cost separately
+        _update_cost(state, ai_client, phase="feedback")
+        
     except Exception:
         traceback.print_exc()
         raise
 
     state.draft_letter = draft_letter
     state.feedback = feedback
-    _update_cost(state, ai_client)
     
     # Save vendor-specific data to session_vendors collection (lock-free)
     from .session_store import save_vendor_data
@@ -413,7 +476,7 @@ def advance_to_refinement(
     state.draft_letter = draft_letter
     state.final_letter = refined
     state.feedback = feedback
-    _update_cost(state, ai_client)
+    _update_cost(state, ai_client, phase="refine")
     
     # Save vendor-specific data to session_vendors collection (lock-free)
     from .session_store import save_vendor_data

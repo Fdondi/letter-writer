@@ -25,6 +25,8 @@ class ModelSize(Enum):
 class BaseClient:
     def __init__(self):
         self.total_cost = 0.0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
         self._costs_cache: dict | None = None
         self._last_mtime: float = 0.0
 
@@ -104,7 +106,7 @@ class BaseClient:
         }
 
     def track_cost(self, model_name: str, input_tokens: int, output_tokens: int, search_queries: int = 0):
-        """Calculate and accumulate cost for a request."""
+        """Calculate and accumulate cost and token counts for a request."""
         costs = self.get_model_cost(model_name)
 
         # Costs are per 1M tokens
@@ -115,6 +117,8 @@ class BaseClient:
         search_cost = (search_queries / 1_000) * costs["search"]
 
         self.total_cost += input_cost + output_cost + search_cost
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
 
     def call(self, model_size: ModelSize, system: str, messages: List[Dict], search: bool = False) -> str:
         raise NotImplementedError("Subclasses must implement this method")

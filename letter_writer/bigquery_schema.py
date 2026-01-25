@@ -18,8 +18,14 @@ TABLE_CONFIG = {
         "type": "MONTH",
         "field": "timestamp",
     },
-    "clustering": ["user_id", "service"],
+    "clustering": ["user_id", "phase", "vendor"],
 }
+
+# Valid phases for cost tracking
+VALID_PHASES = ["background", "draft", "feedback", "refine", "translate", "extract"]
+
+# Valid vendors
+VALID_VENDORS = ["openai", "anthropic", "gemini", "mistral", "grok", "deepseek", "google_translate"]
 
 # Schema definition
 SCHEMA: List[Dict[str, Any]] = [
@@ -36,10 +42,16 @@ SCHEMA: List[Dict[str, Any]] = [
         "description": "User identifier (Google OAuth UID or 'anonymous')",
     },
     {
-        "name": "service",
+        "name": "phase",
         "type": "STRING",
         "mode": "REQUIRED",
-        "description": "Service name (e.g., translate, background_openai, draft_anthropic)",
+        "description": "Processing phase (background, draft, feedback, refine, translate, extract)",
+    },
+    {
+        "name": "vendor",
+        "type": "STRING",
+        "mode": "REQUIRED",
+        "description": "AI vendor (openai, anthropic, gemini, mistral, grok, deepseek, google_translate)",
     },
     {
         "name": "cost",
@@ -54,16 +66,28 @@ SCHEMA: List[Dict[str, Any]] = [
         "description": "Number of API requests in this record",
     },
     {
+        "name": "input_tokens",
+        "type": "INT64",
+        "mode": "NULLABLE",
+        "description": "Number of input/prompt tokens (for AI services)",
+    },
+    {
+        "name": "output_tokens",
+        "type": "INT64",
+        "mode": "NULLABLE",
+        "description": "Number of output/completion tokens (for AI services)",
+    },
+    {
         "name": "character_count",
         "type": "INT64",
         "mode": "NULLABLE",
-        "description": "Number of characters (for translation service)",
+        "description": "Number of characters (for translation phase)",
     },
     {
         "name": "metadata",
         "type": "JSON",
         "mode": "NULLABLE",
-        "description": "Additional request metadata (vendor, phase, etc.)",
+        "description": "Additional request metadata",
     },
 ]
 

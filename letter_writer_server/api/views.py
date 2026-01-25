@@ -949,6 +949,11 @@ def update_session_common_data_view(request: HttpRequest):
 def background_phase_view(request: HttpRequest, vendor: str):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
+    
+    # Require authentication for cost tracking
+    user_id, error_response = require_auth_user(request)
+    if error_response:
+        return error_response
 
     try:
         data = json.loads(request.body or "{}")
@@ -1022,31 +1027,21 @@ def background_phase_view(request: HttpRequest, vendor: str):
         # Note: _run_background_phase still expects session_id for compatibility, but we'll update it to use request
         vendor_state = _run_background_phase(session_id, vendors[0], common_data)
         
-        # Track cost for this API call
-        if vendor_state.cost > 0:
+        # Track cost for this API call (user_id required - already authenticated via require_auth_user)
+        if vendor_state.cost > 0 and user_id:
             from letter_writer.cost_tracker import track_api_cost
-            # Get user_id if authenticated
-            user_id = None
-            if request.user.is_authenticated:
-                try:
-                    from allauth.socialaccount.models import SocialAccount
-                    social_account = SocialAccount.objects.filter(user=request.user, provider='google').first()
-                    if social_account:
-                        user_id = social_account.uid
-                except (ImportError, Exception):
-                    pass
-                if not user_id:
-                    user_id = str(request.user.id)
             
-            track_api_cost(
-                service=f"background_{vendor}",
-                cost=vendor_state.cost,
-                metadata={
-                    "vendor": vendor,
-                    "phase": "background"
-                },
-                user_id=user_id
-            )
+            # Track costs per phase
+            for phase_name, phase_cost in vendor_state.phase_costs.items():
+                if phase_cost.cost > 0:
+                    track_api_cost(
+                        user_id=user_id,
+                        phase=phase_name,
+                        vendor=vendor,
+                        cost=phase_cost.cost,
+                        input_tokens=phase_cost.input_tokens or None,
+                        output_tokens=phase_cost.output_tokens or None
+                    )
         
         # Return only data for the requested vendor
         return JsonResponse(
@@ -1068,6 +1063,11 @@ def background_phase_view(request: HttpRequest, vendor: str):
 def refinement_phase_view(request: HttpRequest, vendor: str):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
+    
+    # Require authentication for cost tracking
+    user_id, error_response = require_auth_user(request)
+    if error_response:
+        return error_response
 
     try:
         data = json.loads(request.body or "{}")
@@ -1114,32 +1114,22 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
             fancy=fancy,
         )
         
-        # Track cost for this API call
+        # Track cost for this API call (user_id from require_auth_user at start)
         if state.cost > 0:
             from letter_writer.cost_tracker import track_api_cost
-            # Get user_id if authenticated
-            user_id = None
-            if request.user.is_authenticated:
-                try:
-                    from allauth.socialaccount.models import SocialAccount
-                    social_account = SocialAccount.objects.filter(user=request.user, provider='google').first()
-                    if social_account:
-                        user_id = social_account.uid
-                except (ImportError, Exception):
-                    pass
-                if not user_id:
-                    user_id = str(request.user.id)
             
-            track_api_cost(
-                service=f"refine_{vendor}",
-                cost=state.cost,
-                metadata={
-                    "vendor": vendor,
-                    "phase": "refine",
-                    "fancy": fancy
-                },
-                user_id=user_id
-            )
+            # Track costs per phase
+            for phase_name, phase_cost in state.phase_costs.items():
+                if phase_cost.cost > 0:
+                    track_api_cost(
+                        user_id=user_id,
+                        phase=phase_name,
+                        vendor=vendor,
+                        cost=phase_cost.cost,
+                        metadata={"fancy": fancy} if phase_name == "refine" else None,
+                        input_tokens=phase_cost.input_tokens or None,
+                        output_tokens=phase_cost.output_tokens or None
+                    )
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
     except Exception as exc:  # noqa: BLE001
@@ -1159,6 +1149,11 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
 def draft_phase_view(request: HttpRequest, vendor: str):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
+    
+    # Require authentication for cost tracking
+    user_id, error_response = require_auth_user(request)
+    if error_response:
+        return error_response
 
     try:
         data = json.loads(request.body or "{}")
@@ -1202,31 +1197,21 @@ def draft_phase_view(request: HttpRequest, vendor: str):
             style_instructions=instructions,
         )
         
-        # Track cost for this API call
+        # Track cost for this API call (user_id from require_auth_user at start)
         if state.cost > 0:
             from letter_writer.cost_tracker import track_api_cost
-            # Get user_id if authenticated
-            user_id = None
-            if request.user.is_authenticated:
-                try:
-                    from allauth.socialaccount.models import SocialAccount
-                    social_account = SocialAccount.objects.filter(user=request.user, provider='google').first()
-                    if social_account:
-                        user_id = social_account.uid
-                except (ImportError, Exception):
-                    pass
-                if not user_id:
-                    user_id = str(request.user.id)
             
-            track_api_cost(
-                service=f"draft_{vendor}",
-                cost=state.cost,
-                metadata={
-                    "vendor": vendor,
-                    "phase": "draft"
-                },
-                user_id=user_id
-            )
+            # Track costs per phase (draft and feedback are tracked separately)
+            for phase_name, phase_cost in state.phase_costs.items():
+                if phase_cost.cost > 0:
+                    track_api_cost(
+                        user_id=user_id,
+                        phase=phase_name,
+                        vendor=vendor,
+                        cost=phase_cost.cost,
+                        input_tokens=phase_cost.input_tokens or None,
+                        output_tokens=phase_cost.output_tokens or None
+                    )
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
     except Exception as exc:  # noqa: BLE001
@@ -1412,15 +1397,16 @@ def translate_view(request: HttpRequest):
         cost = calculate_translation_cost(character_count)
         
         track_api_cost(
-            service="translate",
+            user_id=user_id,
+            phase="translate",
+            vendor="google_translate",
             cost=cost,
             metadata={
                 "character_count": character_count,
                 "text_count": len(texts),
                 "target_language": target_language,
                 "source_language": source_language,
-            },
-            user_id=user_id
+            }
         )
         
     except Exception as exc:  # noqa: BLE001
@@ -1982,13 +1968,12 @@ def cost_user_view(request: HttpRequest):
     from letter_writer.cost_tracker import get_user_monthly_cost, get_cost_summary
     
     try:
-        # Get historical costs from BigQuery
+        # Get historical costs from BigQuery (aggregated by phase and vendor)
         result = get_user_monthly_cost(user_id, months_back=months)
         
-        # Add pending costs from Redis/memory (not yet flushed)
+        # Add pending costs from Redis/memory (not yet flushed to BigQuery)
         pending = get_cost_summary()
-        pending_user = pending.get("by_user", {}).get(user_id, {})
-        pending_cost = pending_user.get("total_cost", 0)
+        pending_cost = pending.get("pending_by_user", {}).get(user_id, 0)
         
         # Combine totals
         result["total_cost"] = result.get("total_cost", 0) + pending_cost

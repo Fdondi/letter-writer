@@ -252,42 +252,36 @@ def calculate_translation_cost(character_count: int) -> float:
 
 
 def _track_in_memory(
-    service: str,
+    user_id: str,
+    phase: str,
+    vendor: str,
     cost: float,
     metadata: Optional[Dict[str, Any]] = None,
-    user_id: Optional[str] = None
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None
 ) -> None:
-    """Track cost in memory (fallback when Redis unavailable)."""
+    """Track cost in memory (fallback when Redis unavailable).
+    
+    Each request is stored with (user_id, phase, vendor) - aggregation happens in BigQuery.
+    """
     with _memory_lock:
-        # Update global total
+        # Update global total for quick pending cost display
         _memory_store["total"] += cost
         
-        # Update per-service totals
-        if service not in _memory_store["services"]:
-            _memory_store["services"][service] = {"total": 0.0, "count": 0}
-        _memory_store["services"][service]["total"] += cost
-        _memory_store["services"][service]["count"] += 1
-        
-        # Update per-user totals
-        if user_id:
-            if user_id not in _memory_store["users"]:
-                _memory_store["users"][user_id] = {"total": 0.0, "services": {}}
-            _memory_store["users"][user_id]["total"] += cost
-            
-            if service not in _memory_store["users"][user_id]["services"]:
-                _memory_store["users"][user_id]["services"][service] = {"total": 0.0, "count": 0}
-            _memory_store["users"][user_id]["services"][service]["total"] += cost
-            _memory_store["users"][user_id]["services"][service]["count"] += 1
-        
-        # Store request for BigQuery batch insert
+        # Store request for BigQuery batch insert - this is the source of truth
         request_data = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "service": service,
+            "user_id": user_id,
+            "phase": phase,
+            "vendor": vendor,
             "cost": cost,
-            "user_id": user_id or "anonymous",
             "request_count": 1,
             "metadata": metadata
         }
+        if input_tokens:
+            request_data["input_tokens"] = input_tokens
+        if output_tokens:
+            request_data["output_tokens"] = output_tokens
         if metadata and "character_count" in metadata:
             request_data["character_count"] = metadata["character_count"]
         
@@ -296,49 +290,45 @@ def _track_in_memory(
 
 def _track_in_redis(
     redis_client,
-    service: str,
+    user_id: str,
+    phase: str,
+    vendor: str,
     cost: float,
     metadata: Optional[Dict[str, Any]] = None,
-    user_id: Optional[str] = None
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None
 ) -> None:
-    """Track cost in Redis using atomic operations."""
+    """Track cost in Redis using atomic operations.
+    
+    Each request is stored with (user_id, phase, vendor) - aggregation happens in BigQuery.
+    Redis just keeps a running total for quick display and queues requests for batch insert.
+    """
     import json
     
     try:
         pipe = redis_client.pipeline()
         
-        # Increment global total
+        # Increment global total for quick pending cost display
         pipe.incrbyfloat(TOTAL_KEY, cost)
         
-        # Increment per-service totals
-        service_total_key = f"{SERVICE_PREFIX}{service}:total"
-        service_count_key = f"{SERVICE_PREFIX}{service}:count"
-        pipe.incrbyfloat(service_total_key, cost)
-        pipe.incr(service_count_key)
+        # Increment per-user total for quick user cost display
+        pipe.incrbyfloat(f"{USER_PREFIX}{user_id}:total", cost)
+        pipe.sadd(f"{REDIS_PREFIX}users", user_id)
         
-        # Increment per-user totals if user_id provided
-        effective_user_id = user_id or "anonymous"
-        user_total_key = f"{USER_PREFIX}{effective_user_id}:total"
-        user_service_total_key = f"{USER_PREFIX}{effective_user_id}:service:{service}:total"
-        user_service_count_key = f"{USER_PREFIX}{effective_user_id}:service:{service}:count"
-        
-        pipe.incrbyfloat(user_total_key, cost)
-        pipe.incrbyfloat(user_service_total_key, cost)
-        pipe.incr(user_service_count_key)
-        
-        # Track user IDs and services for later flush
-        pipe.sadd(f"{REDIS_PREFIX}users", effective_user_id)
-        pipe.sadd(f"{REDIS_PREFIX}services", service)
-        
-        # Store request for BigQuery batch insert (as JSON in a list)
+        # Store request for BigQuery batch insert - this is the source of truth
         request_data = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "service": service,
+            "user_id": user_id,
+            "phase": phase,
+            "vendor": vendor,
             "cost": cost,
-            "user_id": effective_user_id,
             "request_count": 1,
             "metadata": metadata
         }
+        if input_tokens:
+            request_data["input_tokens"] = input_tokens
+        if output_tokens:
+            request_data["output_tokens"] = output_tokens
         if metadata and "character_count" in metadata:
             request_data["character_count"] = metadata["character_count"]
         
@@ -349,24 +339,30 @@ def _track_in_redis(
     except Exception as e:
         logger.error(f"Error tracking cost in Redis: {e}")
         # Fall back to memory tracking
-        _track_in_memory(service, cost, metadata, user_id)
+        _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens)
 
 
 def track_api_cost(
-    service: str,
+    user_id: str,
+    phase: str,
+    vendor: str,
     cost: float,
     metadata: Optional[Dict[str, Any]] = None,
-    user_id: Optional[str] = None
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None
 ) -> None:
     """Track cost for an API call.
     
     Uses Redis if available, otherwise falls back to in-memory tracking.
     
     Args:
-        service: Name of the service (e.g., "translate", "openai", "anthropic")
+        user_id: User ID (required - all API calls require authentication)
+        phase: Processing phase (background, draft, feedback, refine, translate, extract)
+        vendor: AI vendor (openai, anthropic, gemini, etc.)
         cost: Cost in USD
         metadata: Additional metadata about the request
-        user_id: Optional user ID for per-user tracking
+        input_tokens: Number of input/prompt tokens (for AI services)
+        output_tokens: Number of output/completion tokens (for AI services)
     """
     # Ensure flush thread is running
     _ensure_flush_thread()
@@ -374,85 +370,53 @@ def track_api_cost(
     redis_client = _get_redis_client()
     
     if redis_client is not None:
-        _track_in_redis(redis_client, service, cost, metadata, user_id)
+        _track_in_redis(redis_client, user_id, phase, vendor, cost, metadata, input_tokens, output_tokens)
     else:
-        _track_in_memory(service, cost, metadata, user_id)
+        _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens)
 
 
 def _get_summary_from_memory() -> Dict[str, Any]:
-    """Get cost summary from in-memory store."""
+    """Get pending cost summary from in-memory store.
+    
+    Returns just the pending totals - detailed aggregation happens in BigQuery.
+    """
     with _memory_lock:
-        summary = {
-            "total_cost": _memory_store["total"],
-            "by_service": {},
-            "by_user": {},
+        # Aggregate pending requests by user
+        pending_by_user = {}
+        for req in _memory_store["requests"]:
+            uid = req.get("user_id", "anonymous")
+            if uid not in pending_by_user:
+                pending_by_user[uid] = 0.0
+            pending_by_user[uid] += req.get("cost", 0.0)
+        
+        return {
+            "pending_cost": _memory_store["total"],
             "pending_requests": len(_memory_store["requests"]),
+            "pending_by_user": pending_by_user,
             "storage": "memory"
         }
-        
-        for service, data in _memory_store["services"].items():
-            summary["by_service"][service] = {
-                "total_cost": data["total"],
-                "request_count": data["count"]
-            }
-        
-        for user_id, user_data in _memory_store["users"].items():
-            summary["by_user"][user_id] = {
-                "total_cost": user_data["total"],
-                "by_service": {}
-            }
-            for service, service_data in user_data["services"].items():
-                summary["by_user"][user_id]["by_service"][service] = {
-                    "total_cost": service_data["total"],
-                    "request_count": service_data["count"]
-                }
-        
-        return summary
 
 
 def _get_summary_from_redis(redis_client) -> Dict[str, Any]:
-    """Get cost summary from Redis."""
+    """Get pending cost summary from Redis.
+    
+    Returns just the pending totals - detailed aggregation happens in BigQuery.
+    """
     try:
-        summary = {
-            "total_cost": float(redis_client.get(TOTAL_KEY) or 0),
-            "by_service": {},
-            "by_user": {},
-            "pending_requests": redis_client.llen(f"{REDIS_PREFIX}requests"),
-            "storage": "redis"
-        }
-        
-        # Get all services
-        services = redis_client.smembers(f"{REDIS_PREFIX}services") or set()
-        for service in services:
-            service_total = float(redis_client.get(f"{SERVICE_PREFIX}{service}:total") or 0)
-            service_count = int(redis_client.get(f"{SERVICE_PREFIX}{service}:count") or 0)
-            summary["by_service"][service] = {
-                "total_cost": service_total,
-                "request_count": service_count
-            }
-        
-        # Get all users
+        # Get pending totals by user
         users = redis_client.smembers(f"{REDIS_PREFIX}users") or set()
+        pending_by_user = {}
         for user_id in users:
             user_total = float(redis_client.get(f"{USER_PREFIX}{user_id}:total") or 0)
-            user_services = {}
-            
-            for service in services:
-                user_service_total = float(redis_client.get(f"{USER_PREFIX}{user_id}:service:{service}:total") or 0)
-                user_service_count = int(redis_client.get(f"{USER_PREFIX}{user_id}:service:{service}:count") or 0)
-                if user_service_total > 0 or user_service_count > 0:
-                    user_services[service] = {
-                        "total_cost": user_service_total,
-                        "request_count": user_service_count
-                    }
-            
-            if user_total > 0 or user_services:
-                summary["by_user"][user_id] = {
-                    "total_cost": user_total,
-                    "by_service": user_services
-                }
+            if user_total > 0:
+                pending_by_user[user_id] = user_total
         
-        return summary
+        return {
+            "pending_cost": float(redis_client.get(TOTAL_KEY) or 0),
+            "pending_requests": redis_client.llen(f"{REDIS_PREFIX}requests"),
+            "pending_by_user": pending_by_user,
+            "storage": "redis"
+        }
         
     except Exception as e:
         logger.error(f"Error getting cost summary from Redis: {e}")
@@ -486,28 +450,42 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
         months_back: Number of months to look back (default: 1)
     
     Returns:
-        Dictionary with total_cost, by_service breakdown, and period info
+        Dictionary with total_cost, by_phase, by_vendor breakdown, and period info
     """
     client = _get_bigquery_client()
     if client is None:
         return {"error": "BigQuery not available", "total_cost": 0.0}
     
     try:
-        # Query partitioned table - only scans relevant partitions
-        query = f"""
+        from google.cloud import bigquery
+        
+        # Query for phase breakdown
+        phase_query = f"""
         SELECT 
+            phase,
             SUM(cost) as total_cost,
             SUM(request_count) as total_requests,
-            service,
-            SUM(cost) as service_cost,
-            SUM(request_count) as service_requests
+            SUM(COALESCE(input_tokens, 0)) as input_tokens,
+            SUM(COALESCE(output_tokens, 0)) as output_tokens
         FROM `{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}`
         WHERE user_id = @user_id
           AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @months_back MONTH)
-        GROUP BY service
+        GROUP BY phase
         """
         
-        from google.cloud import bigquery
+        # Query for vendor breakdown
+        vendor_query = f"""
+        SELECT 
+            vendor,
+            SUM(cost) as total_cost,
+            SUM(request_count) as total_requests,
+            SUM(COALESCE(input_tokens, 0)) as input_tokens,
+            SUM(COALESCE(output_tokens, 0)) as output_tokens
+        FROM `{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}`
+        WHERE user_id = @user_id
+          AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @months_back MONTH)
+        GROUP BY vendor
+        """
         
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
@@ -516,20 +494,36 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
             ]
         )
         
-        results = client.query(query, job_config=job_config).result()
+        # Run both queries
+        phase_results = client.query(phase_query, job_config=job_config).result()
+        vendor_results = client.query(vendor_query, job_config=job_config).result()
         
         total_cost = 0.0
         total_requests = 0
-        by_service = {}
+        total_input_tokens = 0
+        total_output_tokens = 0
+        by_phase = {}
+        by_vendor = {}
         
-        for row in results:
-            service_cost = float(row.service_cost or 0)
-            service_requests = int(row.service_requests or 0)
-            total_cost += service_cost
-            total_requests += service_requests
-            by_service[row.service] = {
-                "total_cost": service_cost,
-                "request_count": service_requests
+        for row in phase_results:
+            phase_cost = float(row.total_cost or 0)
+            total_cost += phase_cost
+            total_requests += int(row.total_requests or 0)
+            total_input_tokens += int(row.input_tokens or 0)
+            total_output_tokens += int(row.output_tokens or 0)
+            by_phase[row.phase] = {
+                "total_cost": phase_cost,
+                "request_count": int(row.total_requests or 0),
+                "input_tokens": int(row.input_tokens or 0),
+                "output_tokens": int(row.output_tokens or 0)
+            }
+        
+        for row in vendor_results:
+            by_vendor[row.vendor] = {
+                "total_cost": float(row.total_cost or 0),
+                "request_count": int(row.total_requests or 0),
+                "input_tokens": int(row.input_tokens or 0),
+                "output_tokens": int(row.output_tokens or 0)
             }
         
         return {
@@ -537,7 +531,10 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
             "period_months": months_back,
             "total_cost": total_cost,
             "total_requests": total_requests,
-            "by_service": by_service
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
+            "by_phase": by_phase,
+            "by_vendor": by_vendor
         }
         
     except Exception as e:
