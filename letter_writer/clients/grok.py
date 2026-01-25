@@ -3,6 +3,7 @@ from typing import List
 import os
 import typer
 import xai_sdk
+from xai_sdk.tools import web_search
 
 
 class GrokClient(BaseClient):
@@ -18,9 +19,12 @@ class GrokClient(BaseClient):
     def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
         model = self.get_model_for_size(model_size)
         typer.echo(f"[INFO] using Grok model {model}")
+        
+        # Use Agent Tools API for search (replaces deprecated SearchParameters)
+        tools = [web_search()] if search else None
         chat = self.client.chat.create(
             model=model,
-            search_parameters=xai_sdk.search.SearchParameters(mode="on" if search else "off"),
+            tools=tools,
         )
 
         chat.append(xai_sdk.chat.system(system))
@@ -29,11 +33,14 @@ class GrokClient(BaseClient):
 
         response = chat.sample()
         
-        # Attempt to track cost if usage info is available (structure uncertain)
+        # Track cost using usage info from the response
         if hasattr(response, 'usage') and response.usage:
-            # Assuming standard structure
             input_tokens = getattr(response.usage, 'prompt_tokens', 0)
             output_tokens = getattr(response.usage, 'completion_tokens', 0)
-            self.track_cost(model, input_tokens, output_tokens, search_queries=1 if search else 0)
+            # Count search queries from server_side_tool_usage if available
+            search_queries = 0
+            if search and hasattr(response, 'server_side_tool_usage') and response.server_side_tool_usage:
+                search_queries = response.server_side_tool_usage.get('SERVER_SIDE_TOOL_WEB_SEARCH', 0)
+            self.track_cost(model, input_tokens, output_tokens, search_queries=search_queries)
             
         return response.content.strip()
