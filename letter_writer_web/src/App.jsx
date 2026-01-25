@@ -1423,27 +1423,26 @@ export default function App() {
             </div>
           </div>
           
-          <button
-            onClick={handleSubmit}
-            disabled={loading || !jobText || !companyName.trim() || !jobTitle.trim() || selectedVendors.size === 0}
-            style={{
-              marginTop: 20,
-              padding: "10px 20px",
-              backgroundColor:
-                loading || !jobText || !companyName.trim() || !jobTitle.trim() || selectedVendors.size === 0
-                  ? "var(--header-bg)"
-                  : "#3b82f6",
-              color: "white",
-              border: "none",
-              borderRadius: "4px",
-              cursor:
-                loading || !jobText || !companyName.trim() || !jobTitle.trim() || selectedVendors.size === 0
-                  ? "not-allowed"
-                  : "pointer",
-            }}
-          >
-            {loading ? "Starting..." : "Start phased flow"}
-          </button>
+          {(() => {
+            const isDisabled = loading || !jobText || !jobTitle.trim() || selectedVendors.size === 0;
+            return (
+              <button
+                onClick={handleSubmit}
+                disabled={isDisabled}
+                style={{
+                  marginTop: 20,
+                  padding: "10px 20px",
+                  backgroundColor: isDisabled ? "var(--header-bg)" : "#3b82f6",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "4px",
+                  cursor: isDisabled ? "not-allowed" : "pointer",
+                }}
+              >
+                {loading ? "Starting..." : "Start phased flow"}
+              </button>
+            );
+          })()}
         </>
       ) : (
         <div
