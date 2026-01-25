@@ -233,6 +233,9 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
     if point_of_contact and point_of_contact.get("company"):
         research_company = point_of_contact.get("company")
         print(f"[PHASE] background -> {vendor.value} :: using intermediary company for research: {research_company}")
+    
+    # Get additional company info from metadata (user's extra context about the company)
+    additional_company_info = get_metadata_field(metadata, vendor, "additional_company_info", "")
 
     trace_dir = Path("trace", f"{company_name}.{vendor.value}.background")
     trace_dir.mkdir(parents=True, exist_ok=True)
@@ -240,7 +243,7 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
     print(f"[PHASE] background -> {vendor.value} :: select_top_documents")
     top_docs = select_top_documents(search_result, job_text, ai_client, trace_dir)
     print(f"[PHASE] background -> {vendor.value} :: company_research")
-    company_report = company_research(research_company, job_text, ai_client, trace_dir, point_of_contact=point_of_contact)
+    company_report = company_research(research_company, job_text, ai_client, trace_dir, point_of_contact=point_of_contact, additional_company_info=additional_company_info)
 
     state = VendorPhaseState(
         top_docs=top_docs,
@@ -344,6 +347,9 @@ def advance_to_draft(
     # Use provided instructions or fall back to session
     if not style_instructions:
         style_instructions = session.style_instructions
+    
+    # Get additional user info from metadata (user's info relevant to this position, not in CV)
+    additional_user_info = get_metadata_field(session.metadata, vendor, "additional_user_info", "")
 
     state.company_report = company_report
     state.top_docs = top_docs
@@ -354,7 +360,7 @@ def advance_to_draft(
         
         print(f"[PHASE] draft -> {vendor.value} :: generate_letter (XLARGE)")
         draft_letter = generate_letter(
-            cv_text, top_docs, company_report, job_text, ai_client, trace_dir, style_instructions
+            cv_text, top_docs, company_report, job_text, ai_client, trace_dir, style_instructions, additional_user_info
         )
         
         # Capture draft cost before feedback generation
@@ -365,7 +371,7 @@ def advance_to_draft(
         print(f"[PHASE] draft -> {vendor.value} :: running checks (TINY)")
         with ThreadPoolExecutor(max_workers=5) as executor:
             instruction_future = executor.submit(instruction_check, draft_letter, ai_client, style_instructions)
-            accuracy_future = executor.submit(accuracy_check, draft_letter, cv_text, ai_client)
+            accuracy_future = executor.submit(accuracy_check, draft_letter, cv_text, ai_client, additional_user_info)
             precision_future = executor.submit(
                 precision_check, draft_letter, company_report, job_text, ai_client
             )

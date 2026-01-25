@@ -55,6 +55,9 @@ export default function App() {
     notes: "",
     company: "",
   });
+  const [additionalUserInfo, setAdditionalUserInfo] = useState("");
+  const [additionalCompanyInfo, setAdditionalCompanyInfo] = useState("");
+  const [showAdditionalInfo, setShowAdditionalInfo] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractionError, setExtractionError] = useState(null);
   const [documentId, setDocumentId] = useState(null);
@@ -424,6 +427,8 @@ export default function App() {
         requirements: extracted.requirements || requirements,
         point_of_contact: extracted.point_of_contact || currentPoc,
         job_text: jobText,
+        additional_user_info: additionalUserInfo,
+        additional_company_info: additionalCompanyInfo,
       });
     } catch (e) {
       console.error("Extract error", e);
@@ -723,6 +728,8 @@ export default function App() {
       requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
       job_text: jobText,
       point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
+      additional_user_info: additionalUserInfo || "",
+      additional_company_info: additionalCompanyInfo || "",
     };
     const dataModified = !extractedData || 
       extractedData.company_name !== currentData.company_name ||
@@ -730,6 +737,8 @@ export default function App() {
       extractedData.location !== currentData.location ||
       extractedData.language !== currentData.language ||
       extractedData.salary !== currentData.salary ||
+      extractedData.additional_user_info !== currentData.additional_user_info ||
+      extractedData.additional_company_info !== currentData.additional_company_info ||
       JSON.stringify(extractedData.requirements) !== JSON.stringify(currentData.requirements) ||
       extractedData.job_text !== currentData.job_text ||
       JSON.stringify(extractedData.point_of_contact || null) !== JSON.stringify(currentData.point_of_contact);
@@ -757,6 +766,8 @@ export default function App() {
           salary: salary,
           requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
           point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
+          additional_user_info: additionalUserInfo || "",
+          additional_company_info: additionalCompanyInfo || "",
         };
         
         await fetchWithHeartbeat("/api/phases/session/", {
@@ -1104,6 +1115,79 @@ export default function App() {
             {extractionError && (
               <div style={{ color: "var(--error-text)", padding: "10px 0", fontSize: "14px" }}>
                 {extractionError}
+              </div>
+            )}
+          </div>
+
+          {/* Additional Information - collapsible section */}
+          <div style={{ marginTop: 15, textAlign: "center" }}>
+            <button
+              onClick={() => setShowAdditionalInfo(!showAdditionalInfo)}
+              style={{
+                padding: "6px 16px",
+                fontSize: "13px",
+                backgroundColor: "transparent",
+                color: "var(--text-color)",
+                border: "1px dashed var(--border-color)",
+                borderRadius: "4px",
+                cursor: "pointer",
+                opacity: 0.8,
+              }}
+            >
+              {showAdditionalInfo ? "− Hide additional information" : "+ Anything extra the AI should consider for this?"}
+            </button>
+            {showAdditionalInfo && (
+              <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 15 }}>
+                <div>
+                  <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600, color: "var(--text-color)" }}>
+                    About You (not in CV)
+                  </label>
+                  <textarea
+                    style={{
+                      width: "100%",
+                      height: 80,
+                      backgroundColor: "var(--input-bg)",
+                      color: "var(--text-color)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      padding: 8,
+                      fontSize: "14px",
+                    }}
+                    placeholder={`Info about you relevant to this position that isn't in your CV, e.g.,
+'this certification/project that is rarely relevant might make the difference here',
+'I am a power user of this service they provide', 'my commute would be easy', ...`}
+                    value={additionalUserInfo}
+                    onChange={(e) => setAdditionalUserInfo(e.target.value)}
+                  />
+                  <p style={{ marginTop: 4, fontSize: "11px", color: "var(--text-color)", opacity: 0.7 }}>
+                    Passed to the letter writer and CV accuracy check.
+                  </p>
+                </div>
+                <div>
+                  <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600, color: "var(--text-color)" }}>
+                    About the Company
+                  </label>
+                  <textarea
+                    style={{
+                      width: "100%",
+                      height: 80,
+                      backgroundColor: "var(--input-bg)",
+                      color: "var(--text-color)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      padding: 8,
+                      fontSize: "14px",
+                    }}
+                    placeholder={`Extra info about the company or role, e.g.,
+'I have insider information on what they are like and care about / what they really need for this position',
+'I want to highlight this aspect of their culture or needs on why they might want to hire me', ...`}
+                    value={additionalCompanyInfo}
+                    onChange={(e) => setAdditionalCompanyInfo(e.target.value)}
+                  />
+                  <p style={{ marginTop: 4, fontSize: "11px", color: "var(--text-color)", opacity: 0.7 }}>
+                    Passed to company background research.
+                  </p>
+                </div>
               </div>
             )}
           </div>

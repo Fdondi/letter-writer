@@ -163,7 +163,7 @@ def get_style_instructions() -> str:
         )
 
 
-def company_research(company_name: str, job_text: str, client: BaseClient, trace_dir: Path, point_of_contact: dict = None) -> str:
+def company_research(company_name: str, job_text: str, client: BaseClient, trace_dir: Path, point_of_contact: dict = None, additional_company_info: str = "") -> str:
     """Research company information using OpenAI.
     
     Args:
@@ -172,6 +172,7 @@ def company_research(company_name: str, job_text: str, client: BaseClient, trace
         client: AI client for research
         trace_dir: Directory for tracing
         point_of_contact: Optional dict with name, role, contact_details, notes, company (intermediary)
+        additional_company_info: User-provided additional context about the company or role
     """
     system = "You are an expert in searching the internet for information about companies."
     
@@ -192,6 +193,16 @@ def company_research(company_name: str, job_text: str, client: BaseClient, trace
             f"- Information that would help make the letter resonate with {contact_name if contact_name else 'this person'}\n"
         )
     
+    # Add user-provided company context if available
+    user_company_context = ""
+    if additional_company_info and additional_company_info.strip():
+        user_company_context = (
+            f"\n\nADDITIONAL CONTEXT FROM THE USER:\n"
+            f"The applicant has provided the following additional information about the company or role. "
+            f"Please verify this information and incorporate relevant findings into your report:\n"
+            f"{additional_company_info}\n"
+        )
+    
     prompt = (
         f"Search the internet and write a short, opinionated company report about {company_name}\n"
         f"To disambiguiate, here is how they present themselves: {job_text[:500]}...\n"
@@ -202,13 +213,18 @@ def company_research(company_name: str, job_text: str, client: BaseClient, trace
         "If we are writing to a company that likes to present themselves as trailblazing but is actually quite boring, "
         "or viceversa likes to underpromise but is actually exceprional, we need to consider both aspects.\n"
         + contact_context
+        + user_company_context
     )
     result = client.call(ModelSize.LARGE, system, [prompt], search=True)
     (trace_dir / "company_research.txt").write_text(result, encoding="utf-8")
     return result
 
-def generate_letter(cv_text: str, examples: List[dict], company_report: str, job_text: str, client: BaseClient, trace_dir: Path, style_instructions: str = "") -> str:
-    """Generate a personalized cover letter based on CV, examples, company report, and job description."""
+def generate_letter(cv_text: str, examples: List[dict], company_report: str, job_text: str, client: BaseClient, trace_dir: Path, style_instructions: str = "", additional_user_info: str = "") -> str:
+    """Generate a personalized cover letter based on CV, examples, company report, and job description.
+    
+    Args:
+        additional_user_info: User-provided information about themselves relevant to this position (not in CV).
+    """
     # Validate CV text is present
     if cv_text is None or not cv_text or not str(cv_text).strip():
         error_msg = "CV text is missing or empty - cannot generate cover letter"
@@ -224,13 +240,26 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
         f"Cover Letter:\n{ex['letter_text']}\n\n"
         for i, ex in enumerate(examples) if ex['letter_text']
     )
+    
+    # Build system prompt with optional additional user info
+    additional_context = ""
+    if additional_user_info and additional_user_info.strip():
+        additional_context = (
+            "\n\n--- ADDITIONAL INFORMATION ABOUT THE APPLICANT ---\n"
+            "The user has provided the following additional information about themselves that is relevant to this position "
+            "but may not be fully captured in their CV. Please consider this when writing the letter:\n"
+            f"{additional_user_info}\n"
+            "--- END ADDITIONAL INFORMATION ---\n"
+        )
+    
     system = (
         "You are an expert cover letter writer. Using the user's CV, relevant examples of job descriptions "
         "and their corresponding cover letters, the company report, and the target job description, "
         "produce a personalized cover letter in the same style as the examples. Keep it concise (max 1 page).\n"
         "Remember to use the language of THE TARGET JOB DESCRIPTION, even if some or all of the examples might be in a different language. "
         "Use the examples at a higher level: look at style, structure, what is paid attention to, etc.\n"
-        + style_instructions +
+        + style_instructions
+        + additional_context +
         "\n\n"
     )
     prompt = (
@@ -260,8 +289,22 @@ def instruction_check(letter: str, client: BaseClient, style_instructions: str =
     return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 
-def accuracy_check(letter: str, cv_text: str, client: BaseClient) -> str:
-    """Check the accuracy of the cover letter against the user's CV."""
+def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_user_info: str = "") -> str:
+    """Check the accuracy of the cover letter against the user's CV.
+    
+    Args:
+        additional_user_info: User-provided information about themselves that may explain apparent discrepancies.
+    """
+    # Build additional context section if user provided info
+    additional_context = ""
+    if additional_user_info and additional_user_info.strip():
+        additional_context = (
+            "\n\nIMPORTANT: The user has provided additional information about themselves that is relevant but not in their CV. "
+            "Consider this when evaluating accuracy - if a claim is supported by this additional information (e.g., recent certifications, "
+            "ongoing learning, planned relocation), it may be acceptable:\n"
+            f"User's additional info: {additional_user_info}\n"
+        )
+    
     system = (
         "You are an expert proofreader. Check the cover letter for factual accuracy against the user's CV. "
         "Look for any claims or statements that are not supported by the CV or are inconsistent with it. "
@@ -273,6 +316,7 @@ def accuracy_check(letter: str, cv_text: str, client: BaseClient) -> str:
         "Example: 'Crypto made me a programmer' [it's a claim, it needs to be supported by the CV]\n"
         "Be especially wary of claims of a 'common thread' or 'throughout my carreer' if it's not supported by the CV.\n"
         "Be very brief, a couple of sentences is enough. If at any point you see that there is no strong negative feedback, output NO COMMENT and end the answer. \n"
+        + additional_context
     )
     prompt = (
         "========== User CV:\n" + cv_text + "\n==========\n" +

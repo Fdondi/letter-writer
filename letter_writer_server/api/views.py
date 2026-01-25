@@ -918,6 +918,10 @@ def update_session_common_data_view(request: HttpRequest):
             common_metadata["requirements"] = data["requirements"]
         if "point_of_contact" in data:
             common_metadata["point_of_contact"] = data["point_of_contact"]
+        if "additional_user_info" in data:
+            common_metadata["additional_user_info"] = data["additional_user_info"]
+        if "additional_company_info" in data:
+            common_metadata["additional_company_info"] = data["additional_company_info"]
         
         # Save updated metadata
         existing_metadata["common"] = common_metadata
