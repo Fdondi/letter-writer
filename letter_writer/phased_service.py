@@ -224,15 +224,16 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
     
     # Process vendor-specific work
     # Read metadata: check vendor-local first, then common
+    # Note: it is allowed to be empty now! In case we know the intermediary but not the real one.
     company_name = get_metadata_field(metadata, vendor, "company_name", "")
-    if not company_name:
-        raise ValueError(f"company_name is required in metadata (vendor-local or common) before background")
-
-    # Use intermediary company from point of contact if available, otherwise use main company_name
-    research_company = company_name
-    if point_of_contact and point_of_contact.get("company"):
-        research_company = point_of_contact.get("company")
-        print(f"[PHASE] background -> {vendor.value} :: using intermediary company for research: {research_company}")
+    
+    # Debug: log metadata and company_name
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"_run_background_phase: vendor={vendor.value}")
+    logger.info(f"_run_background_phase: metadata keys: {list(metadata.keys())}")
+    logger.info(f"_run_background_phase: metadata['common']: {metadata.get('common', {})}")
+    logger.info(f"_run_background_phase: company_name from get_metadata_field: '{company_name}'")
     
     # Get additional company info from metadata (user's extra context about the company)
     additional_company_info = get_metadata_field(metadata, vendor, "additional_company_info", "")
@@ -243,7 +244,7 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
     print(f"[PHASE] background -> {vendor.value} :: select_top_documents")
     top_docs = select_top_documents(search_result, job_text, ai_client, trace_dir)
     print(f"[PHASE] background -> {vendor.value} :: company_research")
-    company_report = company_research(research_company, job_text, ai_client, trace_dir, point_of_contact=point_of_contact, additional_company_info=additional_company_info)
+    company_report = company_research(company_name, job_text, ai_client, trace_dir, point_of_contact=point_of_contact, additional_company_info=additional_company_info)
 
     state = VendorPhaseState(
         top_docs=top_docs,

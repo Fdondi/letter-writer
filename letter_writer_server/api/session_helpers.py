@@ -110,20 +110,34 @@ def save_session_common_data(
     Args:
         load_cv: If True, load CV and style instructions from Firestore and save to session (used during init/restore)
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     # Initialize session if needed
     if not request.session.session_key:
         request.session.create()
     
     # Get existing metadata or create new
     existing_metadata = request.session.get("metadata", {})
+    
+    # Debug: log before merge
+    logger.info(f"save_session_common_data: BEFORE MERGE")
+    logger.info(f"  existing_metadata from session: {existing_metadata}")
+    logger.info(f"  metadata parameter: {metadata}")
+    if metadata:
+        logger.info(f"  metadata['common']: {metadata.get('common', {})}")
+    
     if metadata:
         # Merge new metadata with existing
         if isinstance(existing_metadata, dict) and isinstance(metadata, dict):
             merged_metadata = existing_metadata.copy()
             merged_metadata.update(metadata)
+            logger.info(f"save_session_common_data: AFTER MERGE: {merged_metadata}")
+            logger.info(f"  merged_metadata['common']: {merged_metadata.get('common', {})}")
             metadata = merged_metadata
         else:
             # If not dicts, just use new metadata
+            logger.info(f"save_session_common_data: NOT MERGING (not both dicts)")
             metadata = metadata
     
     # Preserve existing job_text if new value is empty
@@ -173,6 +187,12 @@ def save_session_common_data(
     
     # Mark session as modified so it gets saved
     request.session.modified = True
+    
+    # Debug: final verification
+    final_metadata = request.session.get("metadata", {})
+    final_common = final_metadata.get("common", {})
+    logger.info(f"save_session_common_data: FINAL session metadata: {final_metadata}")
+    logger.info(f"save_session_common_data: FINAL company_name in session: {final_common.get('company_name', '<NOT SET>')}")
 
 
 def load_session_common_data(request: HttpRequest) -> Optional[Dict[str, Any]]:

@@ -602,6 +602,10 @@ def extract_view(request: HttpRequest):
             logger.error("extract_view: CV still missing after load attempt")
             from letter_writer.generation import MissingCVError
             raise MissingCVError("CV text is missing or empty - please upload your CV in the 'Your CV' tab")
+        
+        # Force-save session to avoid race condition with subsequent requests
+        request.session.save()
+        logger.info(f"extract_view: session explicitly saved")
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         return JsonResponse({"detail": str(exc)}, status=500)
@@ -658,6 +662,8 @@ def init_session_view(request: HttpRequest):
                 search_result=data.get("search_result"),
                 vendors=data.get("vendors", {}),
             )
+            # Force-save session to avoid race condition with subsequent requests
+            request.session.save()
             return JsonResponse({
                 "status": "ok",
                 "session_id": session_id,
@@ -717,6 +723,11 @@ def init_session_view(request: HttpRequest):
             else:
                 logger.info(f"init_session: CV loaded successfully, length={len(cv_after)}")
             
+            # Force-save session to avoid race condition with subsequent requests
+            if needs_save or needs_cv_load:
+                request.session.save()
+                logger.info(f"init_session: session explicitly saved")
+            
             return JsonResponse({
                 "status": "ok",
                 "session_id": session_id,
@@ -755,6 +766,9 @@ def restore_session_view(request: HttpRequest):
             search_result=data.get("search_result"),
             vendors=data.get("vendors", {}),
         )
+        
+        # Force-save session to avoid race condition with subsequent requests
+        request.session.save()
         
         return JsonResponse({
             "status": "ok",
@@ -896,6 +910,14 @@ def update_session_common_data_view(request: HttpRequest):
         
         import logging
         logger = logging.getLogger(__name__)
+        
+        # Debug: log incoming data and existing metadata
+        logger.info(f"update_session_common_data: received data keys: {list(data.keys())}")
+        logger.info(f"update_session_common_data: company_name in data: {'company_name' in data}, value: {data.get('company_name', '<NOT SET>')}")
+        logger.info(f"update_session_common_data: existing session data is None: {existing is None}")
+        logger.info(f"update_session_common_data: existing_metadata keys: {list(existing_metadata.keys())}")
+        logger.info(f"update_session_common_data: existing common metadata: {existing_metadata.get('common', {})}")
+        
         if needs_cv_load:
             logger.info("update_session_common_data: CV missing, will load from Firestore")
         
@@ -926,6 +948,10 @@ def update_session_common_data_view(request: HttpRequest):
         # Save updated metadata
         existing_metadata["common"] = common_metadata
         
+        # Debug: log metadata being saved
+        logger.info(f"update_session_common_data: saving metadata with common keys: {list(common_metadata.keys())}")
+        logger.info(f"update_session_common_data: company_name being saved: {common_metadata.get('company_name', '<NOT SET>')}")
+        
         # Save common data (job_text and metadata)
         # Load CV if missing - this ensures CV is always in session
         # NOTE: cv_text is never saved to session from client - it's loaded from Firestore
@@ -936,12 +962,25 @@ def update_session_common_data_view(request: HttpRequest):
             load_cv=needs_cv_load,  # Load CV if missing
         )
         
+        # Debug: verify metadata was saved to session
+        saved_metadata = request.session.get("metadata", {})
+        saved_common = saved_metadata.get("common", {})
+        logger.info(f"update_session_common_data: AFTER SAVE - session metadata keys: {list(saved_metadata.keys())}")
+        logger.info(f"update_session_common_data: AFTER SAVE - session common metadata: {saved_common}")
+        logger.info(f"update_session_common_data: AFTER SAVE - company_name in session: {saved_common.get('company_name', '<NOT SET>')}")
+        
         # Verify CV is now in session
         cv_after = request.session.get("cv_text")
         if not cv_after or not str(cv_after).strip():
             logger.error("update_session_common_data: CV still missing after load attempt!")
         else:
             logger.info(f"update_session_common_data: CV loaded successfully, length={len(cv_after)}")
+        
+        # Force-save the session BEFORE returning response to avoid race condition
+        # Django's session middleware normally saves after the response, but if frontend
+        # immediately calls background phase, the session might not be persisted yet
+        request.session.save()
+        logger.info(f"update_session_common_data: session explicitly saved, session_key={session_id}")
         
         return JsonResponse({"status": "ok", "session_id": session_id})
     except Exception as exc:  # noqa: BLE001
@@ -987,14 +1026,32 @@ def background_phase_view(request: HttpRequest, vendor: str):
     # Fields are saved to common store by extraction phase or /api/phases/session/ before this is called
 
     try:
-        from letter_writer.phased_service import _run_background_phase
+        from letter_writer.phased_service import _run_background_phase, get_metadata_field
         from letter_writer.session_store import set_current_request
+        from letter_writer.clients.base import ModelVendor as MV
         
         # Set request in thread-local so session_store can use Django sessions
         set_current_request(request)
         
         # Load common data (read-only - background phase does NOT write common data)
         common_data = load_session_common_data(request)
+        
+        # Debug: log loaded metadata
+        import logging
+        bg_logger = logging.getLogger(__name__)
+        bg_logger.info(f"background_phase: vendor={vendor}, session_id={session_id}")
+        bg_logger.info(f"background_phase: common_data is None: {common_data is None}")
+        if common_data:
+            loaded_metadata = common_data.get("metadata", {})
+            loaded_common = loaded_metadata.get("common", {})
+            bg_logger.info(f"background_phase: loaded metadata keys: {list(loaded_metadata.keys())}")
+            bg_logger.info(f"background_phase: loaded common metadata: {loaded_common}")
+            bg_logger.info(f"background_phase: company_name from common: {loaded_common.get('company_name', '<NOT SET>')}")
+            # Also check what get_metadata_field would return
+            vendor_enum = MV(vendor)
+            company_via_helper = get_metadata_field(loaded_metadata, vendor_enum, "company_name", "<EMPTY DEFAULT>")
+            bg_logger.info(f"background_phase: company_name via get_metadata_field: {company_via_helper}")
+        
         if common_data is None:
             return JsonResponse({
                 "status": "session_lost",

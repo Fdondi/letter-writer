@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 from pathlib import Path
 from openai import OpenAI
 
@@ -163,11 +163,11 @@ def get_style_instructions() -> str:
         )
 
 
-def company_research(company_name: str, job_text: str, client: BaseClient, trace_dir: Path, point_of_contact: dict = None, additional_company_info: str = "") -> str:
+def company_research(company_name: Optional[str], job_text: str, client: BaseClient, trace_dir: Path, point_of_contact: dict = None, additional_company_info: str = "") -> Optional[str]:
     """Research company information using OpenAI.
     
     Args:
-        company_name: Name of the company to research (may be an intermediary company if provided in point_of_contact)
+        company_name: Name of the company to research (may be none if we know the intermediary but not the real one)
         job_text: Job description text
         client: AI client for research
         trace_dir: Directory for tracing
@@ -176,7 +176,7 @@ def company_research(company_name: str, job_text: str, client: BaseClient, trace
     """
     system = "You are an expert in searching the internet for information about companies."
     
-    contact_context = ""
+    contact_prompt = ""
     if point_of_contact and (point_of_contact.get("name") or point_of_contact.get("role")):
         contact_name = point_of_contact.get("name", "")
         contact_role = point_of_contact.get("role", "")
@@ -184,7 +184,7 @@ def company_research(company_name: str, job_text: str, client: BaseClient, trace
         intermediary_note = ""
         if point_of_contact.get("company") and point_of_contact.get("company") == company_name:
             intermediary_note = f" Note: {company_name} is an intermediary (e.g., recruiting agency), not the final employer.\n"
-        contact_context = (
+        contact_prompt = (
             f"\n\nIMPORTANT: We are especially interested in talking with {contact_name if contact_name else 'a contact'} "
             f"who is {contact_role if contact_role else 'a point of contact'} at the company.{intermediary_note}"
             f"Also research this person's background and expertise, in particular:\n"
@@ -193,6 +193,19 @@ def company_research(company_name: str, job_text: str, client: BaseClient, trace
             f"- Information that would help make the letter resonate with {contact_name if contact_name else 'this person'}\n"
         )
     
+    company_prompt = ""
+    if company_name:
+        company_prompt = (
+        f"Search the internet and write a short, opinionated company report about {company_name}\n"
+        f"To disambiguiate, here is how they present themselves: {job_text[:500]}...\n"
+        "Focus on what distinguishes the company, in the good and bad. Keep it concise but informative.\n"
+        "Do NOT include any links, only plain text.\n"
+        "Do NOT just repeat the ads the company puts out. Do report what they say about themsleves, but make it clear it's reporting "
+        "on how they like to present themselves, not the objective truth. Be inquisiteive, almost cynical, read between the lines. "
+        "If we are writing to a company that likes to present themselves as trailblazing but is actually quite boring, "
+        "or viceversa likes to underpromise but is actually exceprional, we need to consider both aspects.\n"
+    )
+
     # Add user-provided company context if available
     user_company_context = ""
     if additional_company_info and additional_company_info.strip():
@@ -202,19 +215,12 @@ def company_research(company_name: str, job_text: str, client: BaseClient, trace
             f"Please verify this information and incorporate relevant findings into your report:\n"
             f"{additional_company_info}\n"
         )
-    
-    prompt = (
-        f"Search the internet and write a short, opinionated company report about {company_name}\n"
-        f"To disambiguiate, here is how they present themselves: {job_text[:500]}...\n"
-        "Focus on what distinguishes the company, in the good and bad. Keep it concise but informative.\n"
-        "Do NOT include any links, only plain text.\n"
-        "Do NOT just repeat the ads the company puts out. Do report what they say about themsleves, but make it clear it's reporting "
-        "on how they like to present themselves, not the objective truth. Be inquisiteive, almost cynical, read between the lines. "
-        "If we are writing to a company that likes to present themselves as trailblazing but is actually quite boring, "
-        "or viceversa likes to underpromise but is actually exceprional, we need to consider both aspects.\n"
-        + contact_context
-        + user_company_context
-    )
+
+    prompt = company_prompt + user_company_context + contact_prompt
+    if len(prompt) == 0:
+        logger.warning("Not enough information to research the company.")
+        return None
+
     result = client.call(ModelSize.LARGE, system, [prompt], search=True)
     (trace_dir / "company_research.txt").write_text(result, encoding="utf-8")
     return result
