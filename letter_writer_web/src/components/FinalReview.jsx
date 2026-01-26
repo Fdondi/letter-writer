@@ -14,6 +14,7 @@ export default function FinalReview({
 }) {
   const [text, setText] = useState(initialText || "");
   const [buttonState, setButtonState] = useState("save_copy"); // "save_copy" | "copy"
+  const [saveError, setSaveError] = useState(null);
   const { enabledLanguages } = useLanguages();
   
   // Translation state for the letter
@@ -40,6 +41,7 @@ export default function FinalReview({
     const newText = e.target.value;
     setText(newText);
     setButtonState("save_copy");
+    setSaveError(null); // Clear any previous save error
     
     // If we were viewing a translation, switch back to source
     // The new text becomes the source, and we clear translations
@@ -108,17 +110,19 @@ export default function FinalReview({
   
   // Let's refine handleButtonClick:
   const handleMainButton = async () => {
+    setSaveError(null);
     try {
       if (buttonState === "save_copy") {
-        // Save first
+        // Save first - will throw if it fails
         await onSaveAndCopy(text);
       }
-      // Always copy
+      // Only copy if save succeeded (or we're just copying)
       await navigator.clipboard.writeText(text);
-      
       setButtonState("copy");
     } catch (err) {
       console.error("Error in Save/Copy:", err);
+      setSaveError(err.message || "Failed to save letter");
+      // Don't change buttonState - keep it as "save_copy" so user can retry
     }
   };
 
@@ -207,6 +211,21 @@ export default function FinalReview({
             </button>
           </div>
         </div>
+
+        {/* Save Error */}
+        {saveError && (
+          <div style={{ 
+            padding: "8px 12px", 
+            background: "var(--error-bg)", 
+            color: "#ef4444", 
+            fontSize: "12px",
+            borderRadius: "4px",
+            border: "1px solid var(--error-border)",
+            fontWeight: 500
+          }}>
+            {saveError}
+          </div>
+        )}
 
         {/* Translation Error */}
         {letterTranslationError && (

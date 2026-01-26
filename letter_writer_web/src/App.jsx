@@ -479,7 +479,13 @@ export default function App() {
   };
 
   const persistFinalLetter = async (finalText) => {
-    if (!finalText || !companyName || !jobText) return;
+    if (!finalText) {
+      const err = new Error("No letter text to save");
+      setError(err.message);
+      throw err;
+    }
+    if (!companyName) console.warn("persistFinalLetter: saving without company name");
+    if (!jobText) console.warn("persistFinalLetter: saving without job text");
     const requirementsList = Array.isArray(requirements) ? requirements : requirements ? [requirements] : [];
     
     // Collect user corrections (compact diff format) grouped by vendor
@@ -538,7 +544,9 @@ export default function App() {
         setDocumentId(data.document.id);
       }
     } catch (e) {
-      setError(`Failed to save letter: ${e.message || e}`);
+      const errorMsg = `Failed to save letter: ${e.message || e}`;
+      setError(errorMsg);
+      throw new Error(errorMsg);
     } finally {
       setSavingFinal(false);
     }
