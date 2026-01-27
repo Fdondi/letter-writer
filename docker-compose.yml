@@ -45,6 +45,7 @@ services:
       - BIGQUERY_PROJECT=${GOOGLE_CLOUD_PROJECT}
       - BIGQUERY_DATASET=${BIGQUERY_DATASET:-letter_writer}
       - BIGQUERY_TABLE=${BIGQUERY_TABLE:-api_costs}
+      - BIGQUERY_LOCATION=${BIGQUERY_LOCATION:-EU}
       # Google Translate API key (for translation costs tracking)
       - GOOGLE_TRANSLATE_API_KEY=${GOOGLE_TRANSLATE_API_KEY}
     env_file:

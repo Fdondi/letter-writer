@@ -108,9 +108,17 @@ def _get_bigquery_client():
     if _bigquery_client is not None:
         return _bigquery_client
     
+    # Skip if no project configured
+    if not BIGQUERY_PROJECT:
+        return None
+    
     with _bigquery_lock:
         if _bigquery_client is not None:
             return _bigquery_client
+        
+        # Re-check inside lock
+        if not BIGQUERY_PROJECT:
+            return None
         
         try:
             from google.cloud import bigquery
@@ -155,9 +163,9 @@ def _ensure_bigquery_table():
             client.get_dataset(dataset_id)
         except Exception:
             dataset = bigquery.Dataset(dataset_id)
-            dataset.location = os.environ.get("BIGQUERY_LOCATION", "US")
+            dataset.location = os.environ.get("BIGQUERY_LOCATION", "EU")
             client.create_dataset(dataset, exists_ok=True)
-            logger.info(f"Created BigQuery dataset: {dataset_id}")
+            logger.info(f"Created BigQuery dataset: {dataset_id} in location {dataset.location}")
         
         # Create table with schema from bigquery_schema.py
         schema = get_bigquery_schema()
@@ -456,6 +464,10 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
     if client is None:
         return {"error": "BigQuery not available", "total_cost": 0.0}
     
+    # Ensure table exists before querying
+    if not _ensure_bigquery_table():
+        return {"error": "BigQuery table not available", "total_cost": 0.0}
+    
     try:
         from google.cloud import bigquery
         
@@ -469,7 +481,7 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
             SUM(COALESCE(output_tokens, 0)) as output_tokens
         FROM `{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}`
         WHERE user_id = @user_id
-          AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @months_back MONTH)
+          AND timestamp >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL @months_back MONTH))
         GROUP BY phase
         """
         
@@ -483,7 +495,7 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
             SUM(COALESCE(output_tokens, 0)) as output_tokens
         FROM `{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}`
         WHERE user_id = @user_id
-          AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @months_back MONTH)
+          AND timestamp >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL @months_back MONTH))
         GROUP BY vendor
         """
         
@@ -555,6 +567,10 @@ def get_global_monthly_cost(months_back: int = 1) -> Dict[str, Any]:
     if client is None:
         return {"error": "BigQuery not available", "total_cost": 0.0}
     
+    # Ensure table exists before querying
+    if not _ensure_bigquery_table():
+        return {"error": "BigQuery table not available", "total_cost": 0.0}
+    
     try:
         from google.cloud import bigquery
         
@@ -566,7 +582,7 @@ def get_global_monthly_cost(months_back: int = 1) -> Dict[str, Any]:
             SUM(request_count) as total_requests,
             COUNT(DISTINCT user_id) as unique_users
         FROM `{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}`
-        WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @months_back MONTH)
+        WHERE timestamp >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL @months_back MONTH))
         GROUP BY service
         ORDER BY total_cost DESC
         """
@@ -620,6 +636,10 @@ def get_user_daily_costs(user_id: str, months_back: int = 1) -> Dict[str, Any]:
     if client is None:
         return {"error": "BigQuery not available", "days": []}
     
+    # Ensure table exists before querying
+    if not _ensure_bigquery_table():
+        return {"error": "BigQuery table not available", "days": []}
+    
     try:
         from google.cloud import bigquery
         
@@ -630,7 +650,7 @@ def get_user_daily_costs(user_id: str, months_back: int = 1) -> Dict[str, Any]:
             SUM(request_count) as request_count
         FROM `{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}`
         WHERE user_id = @user_id
-          AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @months_back MONTH)
+          AND timestamp >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL @months_back MONTH))
         GROUP BY DATE(timestamp)
         ORDER BY date DESC
         """
