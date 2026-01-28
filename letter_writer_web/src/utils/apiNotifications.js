@@ -40,6 +40,31 @@ const updateTitleBadge = () => {
     completedCount > 0 ? `(${completedCount}) Letter Writer` : originalTitle;
 };
 
+const formatNotificationMessage = (url, status) => {
+  // Check if status indicates success (numeric 200-299) or failure (anything else including "error" string)
+  const isSuccess = typeof status === "number" && status >= 200 && status < 300;
+  
+  // Extract endpoint
+  if (url.includes("/api/extract/")) {
+    return isSuccess ? "Extraction completed" : "Extraction failed";
+  }
+  
+  // Phase cards - extract vendor name
+  const phaseMatch = url.match(/\/api\/phases\/(?:background|draft|refine)\/([^/]+)\//);
+  if (phaseMatch) {
+    const vendor = phaseMatch[1];
+    return isSuccess ? `Extraction/${vendor} completed` : `Extraction/${vendor} failed`;
+  }
+  
+  // Fallback for other phase endpoints
+  if (url.includes("/api/phases")) {
+    return isSuccess ? "Extraction completed" : "Extraction failed";
+  }
+  
+  // Default fallback
+  return isSuccess ? "Extraction completed" : "Extraction failed";
+};
+
 const tryNotify = (url, status) => {
   if (typeof window === "undefined" || typeof Notification === "undefined") {
     return;
@@ -47,8 +72,8 @@ const tryNotify = (url, status) => {
 
   const notify = () => {
     try {
-      new Notification("API call finished", {
-        body: `${url} (${status})`,
+      const message = formatNotificationMessage(url, status);
+      new Notification(message, {
         tag: "api-call",
       });
     } catch {
@@ -84,12 +109,13 @@ const bumpCounters = (url, status) => {
     return;
   }
   
-  // Only count successful completions (200-299, excluding 202)
-  if (status >= 200 && status < 300) {
+  // Notify for both success and failure
+  const isSuccess = typeof status === "number" && status >= 200 && status < 300;
+  if (isSuccess) {
     completedCount += 1;
     updateTitleBadge();
-    tryNotify(url, status);
   }
+  tryNotify(url, status);
 };
 
 export function setupApiNotifications() {
