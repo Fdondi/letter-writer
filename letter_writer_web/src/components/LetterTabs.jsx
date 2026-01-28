@@ -64,6 +64,7 @@ export default function LetterTabs({
   requirements = [], // Extracted key requirements
   competences = {}, // { skill: { need, level } } or legacy
   competenceScaleConfig,
+  competenceOverrides,
   failedVendors, 
   onRetry, 
   vendorColors, 
@@ -915,6 +916,7 @@ export default function LetterTabs({
             requirements={requirements}
             competences={competences}
             scaleConfig={competenceScaleConfig}
+            overrides={competenceOverrides}
             width={columnWidth}
             minWidth={`${minColumnWidth}px`}
             languages={languageOptions}

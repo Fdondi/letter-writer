@@ -10,6 +10,7 @@ export default function FinalReview({
   requirements,
   competences = {},
   competenceScaleConfig,
+  competenceOverrides,
   onSaveAndCopy,
   onBack,
   saving,
@@ -143,6 +144,7 @@ export default function FinalReview({
         requirements={requirements}
         competences={competences}
         scaleConfig={competenceScaleConfig}
+        overrides={competenceOverrides}
         width="350px"
         languages={enabledLanguages}
       />

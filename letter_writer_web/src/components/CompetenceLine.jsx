@@ -2,12 +2,12 @@ import React from "react";
 
 /**
  * Single competence line: Importance stars + CV fit stars + text, all on one line.
- * Tooltip shows the text label (e.g. "Senior professional", "critical"); stars show the number.
+ * Tooltip shows the text label; stars show the number. When editable, stars are clickable to change rating.
  * 
  * Props:
  * - text, presence, importance, editable, onChange, onRemove
- * - needLabel: string (e.g. "critical") for tooltip
- * - levelLabel: string (e.g. "Senior professional") for tooltip
+ * - needLabel, levelLabel for tooltips
+ * - onImportanceChange(1-5), onPresenceChange(1-5) when editable
  */
 export default function CompetenceLine({
   text,
@@ -18,32 +18,62 @@ export default function CompetenceLine({
   editable = false,
   onChange,
   onRemove,
+  onImportanceChange,
+  onPresenceChange,
 }) {
-  // Calculate color based on presence (green/red) and importance (intensity)
   const getBackgroundColor = () => {
     if (presence == null || importance == null) return "transparent";
-    
     const presenceNorm = (presence - 1) / 4;
     const importanceNorm = (importance - 1) / 4;
-    
     const red = Math.max(0, Math.min(255, Math.round(255 * (1 - presenceNorm))));
     const green = Math.max(0, Math.min(255, Math.round(255 * presenceNorm)));
     const blue = Math.max(0, Math.min(255, Math.round(255 * 0.2 * Math.min(presenceNorm, 1 - presenceNorm))));
     const alpha = 0.08 + importanceNorm * 0.22;
-    
     return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
   };
 
-  const Stars = ({ rating, title: tooltip }) => {
-    if (rating == null || rating < 1 || rating > 5) return null;
+  const starSize = 52;
+  const starStyle = { flexShrink: 0, fontSize: 10, lineHeight: 1, width: starSize };
+
+  const StarsDisplay = ({ rating, title: tooltip }) => {
+    if (rating == null || rating < 1 || rating > 5) return <span style={starStyle} />;
     return (
-      <span
-        style={{ flexShrink: 0, fontSize: 10, lineHeight: 1, width: 52 }}
-        title={tooltip ?? undefined}
-        aria-hidden
-      >
+      <span style={starStyle} title={tooltip ?? undefined} aria-hidden>
         {"★".repeat(rating)}
         {"☆".repeat(5 - rating)}
+      </span>
+    );
+  };
+
+  const StarsEditable = ({ rating, title: tooltip, onChange: onStarChange }) => {
+    const handleClick = (i) => {
+      const v = Math.max(1, Math.min(5, i));
+      onStarChange?.(v);
+    };
+    const r = rating != null && rating >= 1 && rating <= 5 ? rating : 0;
+    return (
+      <span style={{ ...starStyle, display: "flex", gap: 0 }} title={tooltip ?? undefined}>
+        {[1, 2, 3, 4, 5].map((i) => (
+          <button
+            key={i}
+            type="button"
+            onClick={() => handleClick(i)}
+            aria-label={`Set to ${i}`}
+            style={{
+              padding: 0,
+              margin: 0,
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              fontSize: 10,
+              lineHeight: 1,
+              color: i <= r ? "var(--text-color)" : "var(--secondary-text-color)",
+              opacity: i <= r ? 1 : 0.5,
+            }}
+          >
+            {i <= r ? "★" : "☆"}
+          </button>
+        ))}
       </span>
     );
   };
@@ -92,8 +122,17 @@ export default function CompetenceLine({
           ✕
         </button>
       )}
-      <Stars rating={importance} title={needLabel} />
-      <Stars rating={presence} title={levelLabel} />
+      {editable && (onImportanceChange || onPresenceChange) ? (
+        <>
+          <StarsEditable rating={importance} title={needLabel} onChange={onImportanceChange} />
+          <StarsEditable rating={presence} title={levelLabel} onChange={onPresenceChange} />
+        </>
+      ) : (
+        <>
+          <StarsDisplay rating={importance} title={needLabel} />
+          <StarsDisplay rating={presence} title={levelLabel} />
+        </>
+      )}
       {editable ? (
         <input
           type="text"

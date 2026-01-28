@@ -65,3 +65,16 @@ export function toNumeric(val, scaleConfig) {
   const level = val.level != null ? cfg.level[val.level] : null;
   return { presence: level ?? null, importance: need ?? null };
 }
+
+/**
+ * Effective numeric rating for a skill, merging user overrides.
+ * overrides: { [skill]: { presence?: number, importance?: number } }
+ */
+export function getEffectiveRating(skill, competences, scaleConfig, overrides) {
+  const base = toNumeric(competences[skill], scaleConfig);
+  const o = overrides?.[skill];
+  return {
+    presence: o?.presence != null ? o.presence : base.presence,
+    importance: o?.importance != null ? o.importance : base.importance,
+  };
+}

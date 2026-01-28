@@ -19,7 +19,7 @@ import { phases as phaseModules } from "./components/phases";
 import { translateText } from "./utils/translate";
 import { useLanguages } from "./contexts/LanguageContext";
 import { createTextDiff } from "./utils/diff";
-import { getScaleConfig, toNumeric } from "./utils/competenceScales";
+import { getScaleConfig, toNumeric, getEffectiveRating } from "./utils/competenceScales";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
@@ -51,6 +51,7 @@ export default function App() {
   const [salary, setSalary] = useState("");
   const [requirements, setRequirements] = useState([]);
   const [competences, setCompetences] = useState({}); // { skill: { need, level } } or legacy
+  const [competenceOverrides, setCompetenceOverrides] = useState({}); // { skill: { presence?, importance? } } user-edited ratings
   const [competenceScaleConfig, setCompetenceScaleConfig] = useState(getScaleConfig);
   const competencesScrollRef = useRef(null);
   const [canScrollCompetencesUp, setCanScrollCompetencesUp] = useState(false);
@@ -432,9 +433,10 @@ export default function App() {
       const cfg = getScaleConfig();
       if (comp && typeof comp === "object" && Object.keys(comp).length > 0) {
         setCompetences(comp);
+        setCompetenceOverrides({});
         const keys = Object.keys(comp).sort((a, b) => {
-          const numA = toNumeric(comp[a], cfg);
-          const numB = toNumeric(comp[b], cfg);
+          const numA = getEffectiveRating(a, comp, cfg, {});
+          const numB = getEffectiveRating(b, comp, cfg, {});
           if (numA.presence == null || numA.importance == null) return 1;
           if (numB.presence == null || numB.importance == null) return -1;
           const scoreA = numA.importance * (numA.presence - 2.5);
@@ -451,6 +453,7 @@ export default function App() {
           : [extracted.requirements];
         setRequirements(reqs.filter(Boolean));
         setCompetences({});
+        setCompetenceOverrides({});
       }
       // Only update point of contact if extraction found it, otherwise preserve manual input
       if (extracted.point_of_contact) {
@@ -483,6 +486,7 @@ export default function App() {
       console.error("Extract error", e);
       setExtractionError(e?.message || String(e));
       setCompetences({});
+      setCompetenceOverrides({});
     } finally {
       setExtracting(false);
     }
@@ -1429,7 +1433,7 @@ export default function App() {
                   let totalWeighted = 0;
                   let totalWeight = 0;
                   keys.forEach(key => {
-                    const num = toNumeric(competences[key], competenceScaleConfig);
+                    const num = getEffectiveRating(key, competences, competenceScaleConfig, competenceOverrides);
                     if (num.presence != null && num.importance != null) {
                       totalWeighted += num.presence * num.importance;
                       totalWeight += num.importance;
@@ -1489,6 +1493,8 @@ export default function App() {
                       requirements={requirements}
                       competences={competences}
                       scaleConfig={competenceScaleConfig}
+                      overrides={competenceOverrides}
+                      onOverridesChange={setCompetenceOverrides}
                       editable
                       onRequirementsChange={setRequirements}
                       onCompetencesChange={setCompetences}
@@ -1638,6 +1644,7 @@ export default function App() {
                 requirements={requirements}
                 competences={competences}
                 competenceScaleConfig={competenceScaleConfig}
+                competenceOverrides={competenceOverrides}
                 vendorColors={vendorColors}
                 failedVendors={failedVendors}
                 onRetry={async (vendor) => {
@@ -1672,6 +1679,7 @@ export default function App() {
                 requirements={requirements}
                 competences={competences}
                 competenceScaleConfig={competenceScaleConfig}
+                competenceOverrides={competenceOverrides}
                 onSaveAndCopy={persistFinalLetter}
                 onBack={() => setUiStage("assembly")}
                 saving={savingFinal}

@@ -2,10 +2,10 @@ import React, { useState, useRef, useEffect } from "react";
 import LanguageSelector from "./LanguageSelector";
 import { translateText } from "../utils/translate";
 import CompetencesList from "./CompetencesList";
-import { toNumeric } from "../utils/competenceScales";
+import { getEffectiveRating } from "../utils/competenceScales";
 
 // Job Description Column with resizable/collapsible requirements section
-const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, scaleConfig, width, minWidth, languages = [] }) => {
+const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, scaleConfig, overrides, width, minWidth, languages = [] }) => {
   const [requirementsHeight, setRequirementsHeight] = useState(25); // Percentage of column height
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -318,7 +318,7 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
               let totalWeighted = 0;
               let totalWeight = 0;
               keys.forEach(key => {
-                const num = toNumeric(comp[key], scaleConfig);
+                const num = getEffectiveRating(key, comp, scaleConfig, overrides);
                 if (num.presence != null && num.importance != null) {
                   totalWeighted += num.presence * num.importance;
                   totalWeight += num.importance;
@@ -399,6 +399,7 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
               requirements={requirementsList}
               competences={comp}
               scaleConfig={scaleConfig}
+              overrides={overrides}
               editable={false}
               displayTexts={reqDisplayTexts}
             />

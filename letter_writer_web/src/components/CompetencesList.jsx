@@ -1,18 +1,19 @@
 import React from "react";
 import CompetenceLine from "./CompetenceLine";
-import { toNumeric } from "../utils/competenceScales";
+import { getEffectiveRating } from "../utils/competenceScales";
 
 /**
  * List of competences: each line = stars (level + need) + text. Optional edit/add/remove.
- * - requirements: string[]
- * - competences: { [skill]: { need, level } } or legacy { presence, importance } / int
- * - scaleConfig: { need: {...}, level: {...} } for label → numeric mapping
- * - editable, displayTexts, onRequirementsChange, onCompetencesChange
+ * - requirements, competences, scaleConfig, editable, displayTexts, onRequirementsChange, onCompetencesChange
+ * - overrides: { [skill]: { presence?: number, importance?: number } } for user-edited ratings
+ * - onOverridesChange: (next) => void
  */
 export default function CompetencesList({
   requirements = [],
   competences = {},
   scaleConfig,
+  overrides = {},
+  onOverridesChange,
   editable = false,
   displayTexts = null,
   onRequirementsChange,
@@ -26,8 +27,8 @@ export default function CompetencesList({
 
   const getRating = (skill) => {
     const t = (skill ?? "").trim();
-    if (!t || !(t in comp)) return { presence: null, importance: null };
-    return toNumeric(comp[t], scaleConfig);
+    if (!t) return { presence: null, importance: null };
+    return getEffectiveRating(t, comp, scaleConfig, overrides);
   };
 
   const getLabels = (skill) => {
@@ -81,6 +82,14 @@ export default function CompetencesList({
       if (trimmed) next[trimmed] = rating;
       onCompetencesChange(next);
     }
+    if (onOverridesChange && overrides && oldSkill && oldSkill in overrides) {
+      const o = overrides[oldSkill];
+      const trimmed = (newText ?? "").trim();
+      const next = { ...overrides };
+      delete next[oldSkill];
+      if (trimmed) next[trimmed] = o;
+      onOverridesChange(next);
+    }
   };
 
   const handleRemove = (displayIndex) => {
@@ -95,6 +104,31 @@ export default function CompetencesList({
       delete next[oldSkill];
       onCompetencesChange(next);
     }
+    if (onOverridesChange && overrides && oldSkill && oldSkill in overrides) {
+      const next = { ...overrides };
+      delete next[oldSkill];
+      onOverridesChange(next);
+    }
+  };
+
+  const handleImportanceChange = (displayIndex, value) => {
+    if (!onOverridesChange) return;
+    const actualIndex = sortedIndices[displayIndex];
+    const skill = (list[actualIndex] ?? "").trim();
+    if (!skill) return;
+    const next = { ...(overrides || {}) };
+    next[skill] = { ...(next[skill] || {}), importance: value };
+    onOverridesChange(next);
+  };
+
+  const handlePresenceChange = (displayIndex, value) => {
+    if (!onOverridesChange) return;
+    const actualIndex = sortedIndices[displayIndex];
+    const skill = (list[actualIndex] ?? "").trim();
+    if (!skill) return;
+    const next = { ...(overrides || {}) };
+    next[skill] = { ...(next[skill] || {}), presence: value };
+    onOverridesChange(next);
   };
 
   const handleAdd = () => {
@@ -120,6 +154,8 @@ export default function CompetencesList({
             editable={editable}
             onChange={(val) => handleEdit(displayIndex, val)}
             onRemove={editable ? () => handleRemove(displayIndex) : undefined}
+            onImportanceChange={editable && onOverridesChange ? (v) => handleImportanceChange(displayIndex, v) : undefined}
+            onPresenceChange={editable && onOverridesChange ? (v) => handlePresenceChange(displayIndex, v) : undefined}
           />
         );
       })}
