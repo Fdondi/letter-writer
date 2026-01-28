@@ -49,20 +49,26 @@ const formatNotificationMessage = (url, status) => {
     return isSuccess ? "Extraction completed" : "Extraction failed";
   }
   
-  // Phase cards - extract vendor name
-  const phaseMatch = url.match(/\/api\/phases\/(?:background|draft|refine)\/([^/]+)\//);
+  // Init endpoint
+  if (url.includes("/api/phases/init/")) {
+    return isSuccess ? "init succeeded" : "init failed";
+  }
+  
+  // Phase cards - extract phase name and vendor name
+  const phaseMatch = url.match(/\/api\/phases\/(background|draft|refine)\/([^/]+)\//);
   if (phaseMatch) {
-    const vendor = phaseMatch[1];
-    return isSuccess ? `Extraction/${vendor} completed` : `Extraction/${vendor} failed`;
+    const phaseName = phaseMatch[1];
+    const vendor = phaseMatch[2];
+    return isSuccess ? `${phaseName}/${vendor} completed` : `${phaseName}/${vendor} failed`;
   }
   
   // Fallback for other phase endpoints
-  if (url.includes("/api/phases")) {
-    return isSuccess ? "Extraction completed" : "Extraction failed";
+  if (url.includes("/api/phases/session")) {
+    return isSuccess ? "Session started" : "Session start failed";
   }
   
   // Default fallback
-  return isSuccess ? "Extraction completed" : "Extraction failed";
+  return isSuccess ? "Completed" : "Failed";
 };
 
 const tryNotify = (url, status) => {
