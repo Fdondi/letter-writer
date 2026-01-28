@@ -1,6 +1,7 @@
 import json
 import logging
-from typing import Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional
 from pathlib import Path
 from openai import OpenAI
 
@@ -62,16 +63,233 @@ def _is_no_comment(feedback: str) -> bool:
     return (feedback or "").strip().upper().endswith("NO COMMENT")
 
 
-def extract_job_metadata(
+def _clean_metadata_val(val: Any) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, (int, float)):
+        return str(val)
+    if isinstance(val, list):
+        return ", ".join(str(x).strip() for x in val if str(x).strip())
+    return str(val).strip()
+
+
+def _write_trace(trace_dir: Path | None, system: str, prompt: str, raw: str) -> None:
+    if trace_dir is None:
+        return
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        (trace_dir / "prompt.txt").write_text(f"SYSTEM:\n{system}\n\nPROMPT:\n{prompt}", encoding="utf-8")
+        (trace_dir / "raw.txt").write_text(raw, encoding="utf-8")
+    except Exception:
+        pass
+
+
+def extract_job_metadata_no_requirements(
+    job_text: str,
+    client: BaseClient,
+    trace_dir: Path | None = None,
+) -> Dict[str, Any]:
+    """Extract job metadata except key competences (company, role, location, etc.). No CV needed."""
+    system = (
+        "You are an assistant that extracts a concise job summary from a job description. "
+        "Return strict JSON with these keys only: company_name, job_title, location, language, salary, point_of_contact. "
+        "Stick to one language unless it's really mixed. A few english words don't make english a language used. "
+        "Use null for unknown values. "
+        "For point_of_contact, extract if present: name, role (their role in the company), contact_details (email, phone, etc.), and notes (any note about them or how to contact them). "
+        "If no point of contact is found, set point_of_contact to null. "
+        "Do not add any additional keys or prose."
+    )
+    prompt = (
+        "Job description:\n"
+        f"{job_text}\n\n"
+        "Respond with JSON only. Example format:\n"
+        '{"company_name":"Acme","job_title":"Senior Engineer","location":"Remote","language":"English","salary":"€80-100k","point_of_contact":{"name":"John Doe","role":"HR Manager","contact_details":"john.doe@acme.com","notes":"Please contact via email"}}'
+    )
+    raw = client.call(ModelSize.TINY, system, [prompt])
+    _write_trace(trace_dir, system, prompt, raw)
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        data = {}
+
+    poc_data = data.get("point_of_contact")
+    point_of_contact = None
+    if poc_data and isinstance(poc_data, dict):
+        point_of_contact = {
+            "name": _clean_metadata_val(poc_data.get("name")),
+            "role": _clean_metadata_val(poc_data.get("role")),
+            "contact_details": _clean_metadata_val(poc_data.get("contact_details")),
+            "notes": _clean_metadata_val(poc_data.get("notes")),
+        }
+        if not point_of_contact["name"] and not point_of_contact["contact_details"]:
+            point_of_contact = None
+
+    return {
+        "company_name": _clean_metadata_val(data.get("company_name")),
+        "job_title": _clean_metadata_val(data.get("job_title")),
+        "location": _clean_metadata_val(data.get("location")),
+        "language": _clean_metadata_val(data.get("language")),
+        "salary": _clean_metadata_val(data.get("salary")),
+        "point_of_contact": point_of_contact,
+    }
+
+
+def extract_key_competences(
+    job_text: str,
+    client: BaseClient,
+    trace_dir: Path | None = None,
+) -> Dict[str, List[str]]:
+    """Extract key competences from the job description, grouped by need category.
+    Returns e.g. {"critical": ["C++", "German"], "nice to have": ["English"], "expected": ["git"]}.
+    """
+    system = (
+        "You are an assistant that extracts key competences or requirements from a job description. "
+        "Return strict JSON with keys exactly: critical, nice to have, expected. "
+        "Each value is an array of strings (competences). Use empty arrays [] if none in that category. "
+        "critical = must-have; expected = normal requirements; nice to have = desirable but not required. "
+        "Keep each competence short and specific (e.g. 'C++', 'fluent German', 'git'). "
+        "Do not add any other keys or prose."
+    )
+    prompt = (
+        "Job description:\n"
+        f"{job_text}\n\n"
+        "Respond with JSON only. Example format:\n"
+        '{"critical":["C++","German"],"nice to have":["English"],"expected":["git"]}'
+    )
+    raw = client.call(ModelSize.TINY, system, [prompt])
+    _write_trace(trace_dir, system, prompt, raw)
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        data = {}
+
+    out: Dict[str, List[str]] = {}
+    for key in ("critical", "nice to have", "expected"):
+        val = data.get(key)
+        if isinstance(val, list):
+            out[key] = [str(x).strip() for x in val if str(x).strip()]
+        else:
+            out[key] = []
+    return out
+
+
+def _flatten_competences_by_category(
+    categories: Dict[str, List[str]],
+    category_order: tuple[str, ...] = ("critical", "expected", "nice to have"),
+) -> List[tuple[str, str]]:
+    """Flatten category dict to [(skill, category), ...] in deterministic order."""
+    pairs: List[tuple[str, str]] = []
+    seen: set[str] = set()
+    for cat in category_order:
+        for s in categories.get(cat, []):
+            if s and s not in seen:
+                seen.add(s)
+                pairs.append((s, cat))
+    for cat, skills in categories.items():
+        if cat in category_order:
+            continue
+        for s in skills:
+            if s and s not in seen:
+                seen.add(s)
+                pairs.append((s, cat))
+    return pairs
+
+
+LEVEL_LABELS = ("Newbie", "Amateur", "Brief experience", "Professional", "Senior professional")
+
+
+def grade_competence_cv_match(
+    competences: List[str],
+    cv_text: str,
     job_text: str,
     client: BaseClient,
     trace_dir: Path | None = None,
 ) -> Dict[str, str]:
-    """Extract key job details (company, role, location, etc.) from the posting.
+    """Grade each competence as the candidate's level (from CV). Returns {skill: level_label}."""
+    if not competences:
+        return {}
 
-    If ``trace_dir`` is provided, we dump the prompt and raw model output to disk
-    to help debug empty / malformed responses.
+    level_list = ", ".join(LEVEL_LABELS)
+    system = (
+        "You are an assistant that grades the candidate's level for each competence based on the CV. "
+        "Use exactly one of these labels per competence: " + level_list + ". "
+        "Be strict; reserve 'Professional' and 'Senior professional' for clear, strong evidence. "
+        "Return strict JSON: a single object whose keys are the competences (exactly as given) "
+        "and whose values are the level strings. Do not add any other keys or prose."
+    )
+    prompt = (
+        "Key competences (one per line):\n"
+        + "\n".join(competences)
+        + "\n\n---\n\nCV (excerpt):\n"
+        + (cv_text[:12000] if len(cv_text) > 12000 else cv_text)
+        + "\n\nAssign each competence one of: " + level_list + ".\n\n"
+        "Respond with JSON only. Example format:\n"
+        '{"C++":"Senior professional","German":"Amateur","English":"Professional","git":"Professional"}'
+    )
+    raw = client.call(ModelSize.TINY, system, [prompt])
+    _write_trace(trace_dir, system, prompt, raw)
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        data = {}
+
+    result: Dict[str, str] = {}
+    for c in competences:
+        v = data.get(c)
+        if isinstance(v, str) and v.strip() in LEVEL_LABELS:
+            result[c] = v.strip()
+        else:
+            result[c] = "Brief experience"
+    return result
+
+
+def extract_job_metadata(
+    job_text: str,
+    client: BaseClient,
+    trace_dir: Path | None = None,
+    cv_text: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Extract key job details from the posting.
+
+    If ``cv_text`` is provided, key competences are extracted by category (critical / expected / nice to have),
+    flattened to a list, then graded by candidate level (Newbie → Senior professional) from the CV.
+    ``competences`` is {skill: {need, level}}; ``requirements`` is the flat list of skills.
+
+    If ``trace_dir`` is provided, we dump prompts and raw model output to disk for debugging.
     """
+    if cv_text and str(cv_text).strip():
+        # Parallel: metadata without requirements + competences by category. Then grade levels, join.
+        base_dir = trace_dir
+        no_req_dir = Path(base_dir, "no_requirements") if base_dir else None
+        comp_dir = Path(base_dir, "competences") if base_dir else None
+
+        def run_no_requirements():
+            return extract_job_metadata_no_requirements(job_text, client, no_req_dir)
+
+        def run_competences():
+            return extract_key_competences(job_text, client, comp_dir)
+
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_no = ex.submit(run_no_requirements)
+            f_comp = ex.submit(run_competences)
+            meta = f_no.result()
+            by_category = f_comp.result()
+
+        flat_pairs = _flatten_competences_by_category(by_category)
+        flat_skills = [s for s, _ in flat_pairs]
+        grade_dir = Path(base_dir, "grade_cv_match") if base_dir else None
+        levels = grade_competence_cv_match(flat_skills, cv_text, job_text, client, grade_dir)
+        meta["competences"] = {
+            skill: {"need": need, "level": levels.get(skill, "Brief experience")}
+            for skill, need in flat_pairs
+        }
+        meta["requirements"] = flat_skills
+        return meta
+
+    # Legacy single-call path (no CV): extract everything including requirements, no grading.
     system = (
         "You are an assistant that extracts a concise job summary from a job description. "
         "Return strict JSON with these keys: company_name, job_title, location, language, salary, requirements, point_of_contact. "
@@ -87,31 +305,19 @@ def extract_job_metadata(
         "Respond with JSON only. Example format:\n"
         '{"company_name":"Acme","job_title":"Senior Engineer","location":"Remote","language":"English","salary":"€80-100k","requirements":["Python","AWS"],"point_of_contact":{"name":"John Doe","role":"HR Manager","contact_details":"john.doe@acme.com","notes":"Please contact via email"}}'
     )
-
     raw = client.call(ModelSize.TINY, system, [prompt])
-
     if trace_dir is not None:
         trace_dir.mkdir(parents=True, exist_ok=True)
         try:
             (trace_dir / "prompt.txt").write_text(f"SYSTEM:\n{system}\n\nPROMPT:\n{prompt}", encoding="utf-8")
             (trace_dir / "raw.txt").write_text(raw, encoding="utf-8")
         except Exception:
-            # tracing should not break main flow
             pass
 
     try:
         data = json.loads(raw)
     except Exception:
         data = {}
-
-    def _clean(val):
-        if val is None:
-            return ""
-        if isinstance(val, (int, float)):
-            return str(val)
-        if isinstance(val, list):
-            return ", ".join(str(x).strip() for x in val if str(x).strip())
-        return str(val).strip()
 
     requirements = data.get("requirements")
     if isinstance(requirements, list):
@@ -121,26 +327,24 @@ def extract_job_metadata(
     else:
         req_list = []
 
-    # Extract point of contact if present
     poc_data = data.get("point_of_contact")
     point_of_contact = None
     if poc_data and isinstance(poc_data, dict):
         point_of_contact = {
-            "name": _clean(poc_data.get("name")),
-            "role": _clean(poc_data.get("role")),
-            "contact_details": _clean(poc_data.get("contact_details")),
-            "notes": _clean(poc_data.get("notes")),
+            "name": _clean_metadata_val(poc_data.get("name")),
+            "role": _clean_metadata_val(poc_data.get("role")),
+            "contact_details": _clean_metadata_val(poc_data.get("contact_details")),
+            "notes": _clean_metadata_val(poc_data.get("notes")),
         }
-        # Only include if at least name or contact_details is present
         if not point_of_contact["name"] and not point_of_contact["contact_details"]:
             point_of_contact = None
 
     return {
-        "company_name": _clean(data.get("company_name")),
-        "job_title": _clean(data.get("job_title")),
-        "location": _clean(data.get("location")),
-        "language": _clean(data.get("language")),
-        "salary": _clean(data.get("salary")),
+        "company_name": _clean_metadata_val(data.get("company_name")),
+        "job_title": _clean_metadata_val(data.get("job_title")),
+        "location": _clean_metadata_val(data.get("location")),
+        "language": _clean_metadata_val(data.get("language")),
+        "salary": _clean_metadata_val(data.get("salary")),
         "requirements": req_list,
         "point_of_contact": point_of_contact,
     }

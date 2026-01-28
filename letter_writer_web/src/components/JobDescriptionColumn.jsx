@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect } from "react";
 import LanguageSelector from "./LanguageSelector";
 import { translateText } from "../utils/translate";
+import CompetencesList from "./CompetencesList";
+import { toNumeric } from "../utils/competenceScales";
 
 // Job Description Column with resizable/collapsible requirements section
-const JobDescriptionColumn = ({ jobText, requirements = [], width, minWidth, languages = [] }) => {
+const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, scaleConfig, width, minWidth, languages = [] }) => {
   const [requirementsHeight, setRequirementsHeight] = useState(25); // Percentage of column height
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -113,13 +115,12 @@ const JobDescriptionColumn = ({ jobText, requirements = [], width, minWidth, lan
     return jobText;
   };
   
-  // Get display list for requirements
-  const getReqDisplayList = () => {
-    if (reqViewLanguage !== "source" && reqTranslations[reqViewLanguage]) {
-      return reqTranslations[reqViewLanguage];
-    }
-    return requirementsList;
-  };
+  const comp = typeof competences === "object" && competences !== null ? competences : {};
+  const hasRatings = Object.keys(comp).length > 0;
+  const reqDisplayTexts =
+    reqViewLanguage !== "source" && reqTranslations[reqViewLanguage]
+      ? reqTranslations[reqViewLanguage]
+      : null;
 
   const handleResizeStart = (e) => {
     setIsResizing(true);
@@ -309,7 +310,33 @@ const JobDescriptionColumn = ({ jobText, requirements = [], width, minWidth, lan
           }}
         >
           <strong style={{ color: 'var(--text-color)', fontSize: "13px" }}>
-            Key Competences {requirementsList.length > 0 && `(${requirementsList.length})`}
+            Key Competences
+            {requirementsList.length > 0 && ` (${requirementsList.length})`}
+            {(() => {
+              if (!hasRatings || !scaleConfig) return null;
+              const keys = Object.keys(comp);
+              let totalWeighted = 0;
+              let totalWeight = 0;
+              keys.forEach(key => {
+                const num = toNumeric(comp[key], scaleConfig);
+                if (num.presence != null && num.importance != null) {
+                  totalWeighted += num.presence * num.importance;
+                  totalWeight += num.importance;
+                }
+              });
+              if (totalWeight === 0) return null;
+              const avgPresence = totalWeighted / totalWeight;
+              const avgStars = Math.round(avgPresence);
+              return (
+                <span style={{ fontWeight: 500, color: "var(--secondary-text-color)", marginLeft: 6 }}>
+                  <span style={{ fontSize: 11 }}>
+                    {"★".repeat(avgStars)}
+                    {"☆".repeat(5 - avgStars)}
+                  </span>
+                  {" "}({avgPresence.toFixed(1)})
+                </span>
+              );
+            })()}
           </strong>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {!isCollapsed && languages.length > 0 && (
@@ -362,28 +389,19 @@ const JobDescriptionColumn = ({ jobText, requirements = [], width, minWidth, lan
             padding: 8,
             minHeight: 0,
             display: isCollapsed ? "none" : "block",
+            background: "var(--pre-bg)",
+            border: "1px solid var(--border-color)",
+            borderRadius: 2,
           }}
         >
           {requirementsList.length > 0 ? (
-            <ul
-              style={{
-                margin: 0,
-                paddingLeft: 20,
-                fontSize: "13px",
-                color: 'var(--text-color)',
-                background: "var(--pre-bg)",
-                border: "1px solid var(--border-color)",
-                borderRadius: 2,
-                padding: "12px 12px 12px 28px",
-                listStyleType: "disc",
-              }}
-            >
-              {getReqDisplayList().map((req, idx) => (
-                <li key={idx} style={{ marginBottom: 6 }}>
-                  {req}
-                </li>
-              ))}
-            </ul>
+            <CompetencesList
+              requirements={requirementsList}
+              competences={comp}
+              scaleConfig={scaleConfig}
+              editable={false}
+              displayTexts={reqDisplayTexts}
+            />
           ) : (
             <div
               style={{
@@ -392,9 +410,6 @@ const JobDescriptionColumn = ({ jobText, requirements = [], width, minWidth, lan
                 color: "var(--secondary-text-color)",
                 fontStyle: "italic",
                 fontSize: "12px",
-                background: "var(--pre-bg)",
-                border: "1px solid var(--border-color)",
-                borderRadius: 2,
               }}
             >
               No competences extracted

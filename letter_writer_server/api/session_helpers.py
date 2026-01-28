@@ -95,6 +95,27 @@ def _load_user_data_from_firestore(request: HttpRequest) -> Dict[str, str]:
         return result
 
 
+def ensure_user_data_in_session(request: HttpRequest) -> None:
+    """Load CV and style instructions from Firestore into session if missing or empty."""
+    import logging
+    logger = logging.getLogger(__name__)
+    cv = request.session.get("cv_text") or ""
+    if not str(cv).strip():
+        logger.info("ensure_user_data_in_session: CV not in session, loading from Firestore")
+        user_data = _load_user_data_from_firestore(request)
+        cv_text = user_data.get("cv_text", "")
+        if cv_text:
+            request.session["cv_text"] = cv_text
+            logger.info(f"CV saved to session ({len(cv_text)} chars)")
+        else:
+            request.session["cv_text"] = ""
+            logger.warning("CV not found in Firestore, set empty string in session")
+        instructions = user_data.get("style_instructions", "")
+        if instructions:
+            request.session["style_instructions"] = instructions
+        request.session.modified = True
+
+
 def save_session_common_data(
     request: HttpRequest,
     job_text: str = "",

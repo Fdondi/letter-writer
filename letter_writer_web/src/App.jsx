@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import ModelSelector from "./components/ModelSelector";
 import LetterTabs from "./components/LetterTabs";
 import StyleInstructionsBlade from "./components/StyleInstructionsBlade";
@@ -12,12 +12,14 @@ import LanguageSelector from "./components/LanguageSelector";
 import AuthButton from "./components/AuthButton";
 import CostDisplay from "./components/CostDisplay";
 import CostsPage from "./components/CostsPage";
+import CompetencesList from "./components/CompetencesList";
 import { splitIntoParagraphs } from "./utils/split";
 import { fetchWithHeartbeat, retryApiCall, initializeCsrfToken, getCsrfToken } from "./utils/apiHelpers";
 import { phases as phaseModules } from "./components/phases";
 import { translateText } from "./utils/translate";
 import { useLanguages } from "./contexts/LanguageContext";
 import { createTextDiff } from "./utils/diff";
+import { getScaleConfig, toNumeric } from "./utils/competenceScales";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
@@ -48,6 +50,11 @@ export default function App() {
   const [language, setLanguage] = useState("");
   const [salary, setSalary] = useState("");
   const [requirements, setRequirements] = useState([]);
+  const [competences, setCompetences] = useState({}); // { skill: { need, level } } or legacy
+  const [competenceScaleConfig, setCompetenceScaleConfig] = useState(getScaleConfig);
+  const competencesScrollRef = useRef(null);
+  const [canScrollCompetencesUp, setCanScrollCompetencesUp] = useState(false);
+  const [canScrollCompetencesDown, setCanScrollCompetencesDown] = useState(false);
   const [pointOfContact, setPointOfContact] = useState({
     name: "",
     role: "",
@@ -161,6 +168,29 @@ export default function App() {
       setJobTextViewLanguage("source");
     }
   }, [jobText, lastJobTextSnapshot]);
+
+  const updateCompetencesScrollState = useCallback(() => {
+    const el = competencesScrollRef.current;
+    if (!el) return;
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    setCanScrollCompetencesUp(scrollTop > 0);
+    setCanScrollCompetencesDown(scrollTop < scrollHeight - clientHeight - 2);
+  }, []);
+
+  useEffect(() => {
+    const tick = () => updateCompetencesScrollState();
+    const raf = requestAnimationFrame(tick);
+    const el = competencesScrollRef.current;
+    if (!el) return () => cancelAnimationFrame(raf);
+    el.addEventListener("scroll", tick);
+    const ro = new ResizeObserver(tick);
+    ro.observe(el);
+    return () => {
+      cancelAnimationFrame(raf);
+      el.removeEventListener("scroll", tick);
+      ro.disconnect();
+    };
+  }, [updateCompetencesScrollState, requirements.length, showInput]);
 
   // Get displayed job text (translated or original)
   const displayedJobText = useMemo(() => {
@@ -398,11 +428,29 @@ export default function App() {
       if (extracted.location) setLocation(extracted.location);
       if (extracted.language) setLanguage(extracted.language);
       if (extracted.salary) setSalary(extracted.salary);
-      if (extracted.requirements) {
+      const comp = extracted.competences;
+      const cfg = getScaleConfig();
+      if (comp && typeof comp === "object" && Object.keys(comp).length > 0) {
+        setCompetences(comp);
+        const keys = Object.keys(comp).sort((a, b) => {
+          const numA = toNumeric(comp[a], cfg);
+          const numB = toNumeric(comp[b], cfg);
+          if (numA.presence == null || numA.importance == null) return 1;
+          if (numB.presence == null || numB.importance == null) return -1;
+          const scoreA = numA.importance * (numA.presence - 2.5);
+          const scoreB = numB.importance * (numB.presence - 2.5);
+          const absA = Math.abs(scoreA);
+          const absB = Math.abs(scoreB);
+          if (Math.abs(absB - absA) < 0.01) return scoreB - scoreA;
+          return absB - absA;
+        });
+        setRequirements(keys);
+      } else if (extracted.requirements) {
         const reqs = Array.isArray(extracted.requirements)
           ? extracted.requirements
           : [extracted.requirements];
         setRequirements(reqs.filter(Boolean));
+        setCompetences({});
       }
       // Only update point of contact if extraction found it, otherwise preserve manual input
       if (extracted.point_of_contact) {
@@ -425,6 +473,7 @@ export default function App() {
         language: extracted.language || language,
         salary: extracted.salary || salary,
         requirements: extracted.requirements || requirements,
+        competences: extracted.competences ?? {},
         point_of_contact: extracted.point_of_contact || currentPoc,
         job_text: jobText,
         additional_user_info: additionalUserInfo,
@@ -433,6 +482,7 @@ export default function App() {
     } catch (e) {
       console.error("Extract error", e);
       setExtractionError(e?.message || String(e));
+      setCompetences({});
     } finally {
       setExtracting(false);
     }
@@ -641,7 +691,8 @@ export default function App() {
             location: location,
             language: language,
             salary: salary,
-            requirements: currentExtraction.requirements,
+            requirements: currentExtraction.requirements.filter(Boolean),
+            competences: Object.keys(competences).length > 0 ? competences : undefined,
             point_of_contact: currentExtraction.point_of_contact,
           }),
         });
@@ -772,12 +823,13 @@ export default function App() {
           location: location,
           language: language,
           salary: salary,
-          requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
+          requirements: (Array.isArray(requirements) ? requirements : requirements ? [requirements] : []).filter(Boolean),
           point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
           additional_user_info: additionalUserInfo || "",
           additional_company_info: additionalCompanyInfo || "",
         };
-        
+        if (Object.keys(competences).length > 0) sessionPayload.competences = competences;
+
         await fetchWithHeartbeat("/api/phases/session/", {
           method: "POST",
           body: JSON.stringify(sessionPayload),
@@ -1200,10 +1252,10 @@ export default function App() {
             )}
           </div>
           
-          <div style={{ marginTop: 20, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            {/* Left Column */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div>
+          <div style={{ marginTop: 20, display: "grid", gridTemplateColumns: "minmax(0, 0.38fr) 1fr", gap: 10, minWidth: 0, alignItems: "stretch" }}>
+            {/* Left column: Job Title, Company, Location, Language, Salary, Point of Contact */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, overflow: "hidden" }}>
+              <div style={{ minWidth: 0 }}>
                 <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
                   Job Title *
                 </label>
@@ -1213,6 +1265,8 @@ export default function App() {
                   onChange={(e) => setJobTitle(e.target.value)}
                   style={{
                     width: "100%",
+                    minWidth: 0,
+                    boxSizing: "border-box",
                     padding: 8,
                     backgroundColor: "var(--input-bg)",
                     color: "var(--text-color)",
@@ -1222,67 +1276,7 @@ export default function App() {
                   placeholder="Job title"
                 />
               </div>
-              <div>
-                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Location
-                </label>
-                <input
-                  type="text"
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  style={{
-                    width: "100%",
-                    padding: 8,
-                    backgroundColor: "var(--input-bg)",
-                    color: "var(--text-color)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "4px",
-                  }}
-                  placeholder="Location"
-                />
-              </div>
-              <div>
-                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Language
-                </label>
-                <input
-                  type="text"
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  style={{
-                    width: "100%",
-                    padding: 8,
-                    backgroundColor: "var(--input-bg)",
-                    color: "var(--text-color)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "4px",
-                  }}
-                  placeholder="Language"
-                />
-              </div>
-              <div>
-                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Salary
-                </label>
-                <input
-                  type="text"
-                  value={salary}
-                  onChange={(e) => setSalary(e.target.value)}
-                  style={{
-                    width: "100%",
-                    padding: 8,
-                    backgroundColor: "var(--input-bg)",
-                    color: "var(--text-color)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "4px",
-                  }}
-                  placeholder="Salary range"
-                />
-              </div>
-            </div>
-            {/* Right Column */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, height: "100%" }}>
-              <div>
+              <div style={{ minWidth: 0 }}>
                 <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
                   Company Name
                 </label>
@@ -1292,6 +1286,8 @@ export default function App() {
                   onChange={(e) => setCompanyName(e.target.value)}
                   style={{
                     width: "100%",
+                    minWidth: 0,
+                    boxSizing: "border-box",
                     padding: 8,
                     backgroundColor: "var(--input-bg)",
                     color: "var(--text-color)",
@@ -1300,134 +1296,228 @@ export default function App() {
                   }}
                   placeholder="Company name"
                 />
-              </div>              
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+              </div>
+              <div style={{ minWidth: 0 }}>
                 <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Key Competences
+                  Location
                 </label>
-                <textarea
-                  value={Array.isArray(requirements) ? requirements.join("\n") : requirements}
-                  onChange={(e) => {
-                    const lines = e.target.value.split("\n").map((l) => l.trim()).filter(Boolean);
-                    setRequirements(lines);
-                  }}
+                <input
+                  type="text"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
                   style={{
                     width: "100%",
-                    flex: 1,
+                    minWidth: 0,
+                    boxSizing: "border-box",
                     padding: 8,
                     backgroundColor: "var(--input-bg)",
                     color: "var(--text-color)",
                     border: "1px solid var(--border-color)",
                     borderRadius: "4px",
-                    resize: "vertical",
                   }}
-                  placeholder="One competence per line"
+                  placeholder="Location"
                 />
               </div>
+              <div style={{ minWidth: 0 }}>
+                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                  Language
+                </label>
+                <input
+                  type="text"
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  style={{
+                    width: "100%",
+                    minWidth: 0,
+                    boxSizing: "border-box",
+                    padding: 8,
+                    backgroundColor: "var(--input-bg)",
+                    color: "var(--text-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                  }}
+                  placeholder="Language"
+                />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
+                  Salary
+                </label>
+                <input
+                  type="text"
+                  value={salary}
+                  onChange={(e) => setSalary(e.target.value)}
+                  style={{
+                    width: "100%",
+                    minWidth: 0,
+                    boxSizing: "border-box",
+                    padding: 8,
+                    backgroundColor: "var(--input-bg)",
+                    color: "var(--text-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                  }}
+                  placeholder="Salary range"
+                />
+              </div>
+              {/* Point of Contact — in left column */}
+              <div style={{ padding: 12, backgroundColor: "var(--input-bg)", borderRadius: "8px", border: "1px solid var(--border-color)", minWidth: 0 }}>
+                <h3 style={{ marginTop: 0, marginBottom: 8, fontSize: "14px", fontWeight: 600 }}>
+                  Point of Contact
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Name</label>
+                    <input
+                      type="text"
+                      value={pointOfContact.name}
+                      onChange={(e) => setPointOfContact({ ...pointOfContact, name: e.target.value })}
+                      style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--input-bg)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: "4px", boxSizing: "border-box" }}
+                      placeholder="Contact name"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Role</label>
+                    <input
+                      type="text"
+                      value={pointOfContact.role}
+                      onChange={(e) => setPointOfContact({ ...pointOfContact, role: e.target.value })}
+                      style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--input-bg)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: "4px", boxSizing: "border-box" }}
+                      placeholder="Role in company"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Contact Details</label>
+                    <input
+                      type="text"
+                      value={pointOfContact.contact_details}
+                      onChange={(e) => setPointOfContact({ ...pointOfContact, contact_details: e.target.value })}
+                      style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--input-bg)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: "4px", boxSizing: "border-box" }}
+                      placeholder="Email, phone, etc."
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Company (if intermediary)</label>
+                    <input
+                      type="text"
+                      value={pointOfContact.company}
+                      onChange={(e) => setPointOfContact({ ...pointOfContact, company: e.target.value })}
+                      style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--input-bg)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: "4px", boxSizing: "border-box" }}
+                      placeholder="Intermediary company"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Notes</label>
+                    <textarea
+                      value={pointOfContact.notes}
+                      onChange={(e) => setPointOfContact({ ...pointOfContact, notes: e.target.value })}
+                      style={{ width: "100%", height: 48, padding: 6, fontSize: 13, resize: "vertical", backgroundColor: "var(--input-bg)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: "4px", boxSizing: "border-box" }}
+                      placeholder="Notes about contact"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
 
-          {/* Point of Contact Section - Always visible */}
-          <div style={{ marginTop: 20, padding: 15, backgroundColor: "var(--input-bg)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
-            <h3 style={{ marginTop: 0, marginBottom: 12, fontSize: "16px", fontWeight: 600 }}>
-              Point of Contact
-            </h3>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div>
-                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Name
-                </label>
-                <input
-                  type="text"
-                  value={pointOfContact.name}
-                  onChange={(e) => setPointOfContact({ ...pointOfContact, name: e.target.value })}
-                  style={{
-                    width: "100%",
-                    padding: 8,
-                    backgroundColor: "var(--input-bg)",
-                    color: "var(--text-color)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "4px",
-                  }}
-                  placeholder="Contact name"
-                />
-              </div>
-              <div>
-                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Role
-                </label>
-                <input
-                  type="text"
-                  value={pointOfContact.role}
-                  onChange={(e) => setPointOfContact({ ...pointOfContact, role: e.target.value })}
-                  style={{
-                    width: "100%",
-                    padding: 8,
-                    backgroundColor: "var(--input-bg)",
-                    color: "var(--text-color)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "4px",
-                  }}
-                  placeholder="Role in company"
-                />
-              </div>
-              <div>
-                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Contact Details
-                </label>
-                <input
-                  type="text"
-                  value={pointOfContact.contact_details}
-                  onChange={(e) => setPointOfContact({ ...pointOfContact, contact_details: e.target.value })}
-                  style={{
-                    width: "100%",
-                    padding: 8,
-                    backgroundColor: "var(--input-bg)",
-                    color: "var(--text-color)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "4px",
-                  }}
-                  placeholder="Email, phone, etc."
-                />
-              </div>
-              <div>
-                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Company (if separate intermediary)
-                </label>
-                <input
-                  type="text"
-                  value={pointOfContact.company}
-                  onChange={(e) => setPointOfContact({ ...pointOfContact, company: e.target.value })}
-                  style={{
-                    width: "100%",
-                    padding: 8,
-                    backgroundColor: "var(--input-bg)",
-                    color: "var(--text-color)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "4px",
-                  }}
-                  placeholder="Intermediary company (e.g., recruiting agency)"
-                />
-              </div>
-            </div>
-            <div style={{ marginTop: 10 }}>
-              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                Notes
+            {/* Right column: Key Competences only */}
+            <div style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0 }}>
+              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600, flexShrink: 0 }}>
+                Key Competences
+                {(() => {
+                  const keys = Object.keys(competences);
+                  if (keys.length === 0) return null;
+                  let totalWeighted = 0;
+                  let totalWeight = 0;
+                  keys.forEach(key => {
+                    const num = toNumeric(competences[key], competenceScaleConfig);
+                    if (num.presence != null && num.importance != null) {
+                      totalWeighted += num.presence * num.importance;
+                      totalWeight += num.importance;
+                    }
+                  });
+                  if (totalWeight === 0) return null;
+                  const avgPresence = totalWeighted / totalWeight;
+                  const avgStars = Math.round(avgPresence);
+                  return (
+                    <span style={{ fontWeight: 500, color: "var(--secondary-text-color)", marginLeft: 6 }}>
+                      <span style={{ fontSize: 11 }}>{"★".repeat(avgStars)}{"☆".repeat(5 - avgStars)}</span> ({avgPresence.toFixed(1)})
+                    </span>
+                  );
+                })()}
               </label>
-              <textarea
-                value={pointOfContact.notes}
-                onChange={(e) => setPointOfContact({ ...pointOfContact, notes: e.target.value })}
-                style={{
-                  width: "100%",
-                  height: 60,
-                  padding: 8,
-                  backgroundColor: "var(--input-bg)",
-                  color: "var(--text-color)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "4px",
-                }}
-                placeholder="Notes about contact or how to reach them"
-              />
+              <div style={{ display: "flex", flexDirection: "column", flex: "1 1 0", minHeight: 0 }}>
+                <div
+                  style={{
+                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    marginBottom: 2,
+                    paddingLeft: 2,
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => competencesScrollRef.current?.scrollBy({ top: -80, behavior: "smooth" })}
+                    disabled={!canScrollCompetencesUp}
+                    aria-label="Scroll up"
+                    style={{
+                      width: 24,
+                      padding: 2,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      background: "var(--panel-bg)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: 2,
+                      color: canScrollCompetencesUp ? "var(--text-color)" : "var(--secondary-text-color)",
+                      opacity: canScrollCompetencesUp ? 1 : 0.5,
+                      cursor: canScrollCompetencesUp ? "pointer" : "default",
+                      fontSize: 10,
+                    }}
+                  >
+                    ▲
+                  </button>
+                  <span style={{ width: 52, flexShrink: 0, fontSize: 10, fontWeight: 600, color: "var(--secondary-text-color)" }}>Importance</span>
+                  <span style={{ width: 52, flexShrink: 0, fontSize: 10, fontWeight: 600, color: "var(--secondary-text-color)" }}>CV fit</span>
+                </div>
+                <div
+                  ref={competencesScrollRef}
+                  style={{ flex: "1 1 0", minHeight: 0, overflowY: "auto", paddingLeft: 30 }}
+                >
+                    <CompetencesList
+                      requirements={requirements}
+                      competences={competences}
+                      scaleConfig={competenceScaleConfig}
+                      editable
+                      onRequirementsChange={setRequirements}
+                      onCompetencesChange={setCompetences}
+                    />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => competencesScrollRef.current?.scrollBy({ top: 80, behavior: "smooth" })}
+                  disabled={!canScrollCompetencesDown}
+                  aria-label="Scroll down"
+                  style={{
+                    flexShrink: 0,
+                    padding: 2,
+                    marginTop: 2,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: "var(--panel-bg)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: 2,
+                    color: canScrollCompetencesDown ? "var(--text-color)" : "var(--secondary-text-color)",
+                    opacity: canScrollCompetencesDown ? 1 : 0.5,
+                    cursor: canScrollCompetencesDown ? "pointer" : "default",
+                    fontSize: 10,
+                  }}
+                >
+                  ▼
+                </button>
+              </div>
             </div>
           </div>
           
@@ -1546,6 +1636,8 @@ export default function App() {
                 setFinalParagraphs={setFinalParagraphs}
                 originalText={jobText}
                 requirements={requirements}
+                competences={competences}
+                competenceScaleConfig={competenceScaleConfig}
                 vendorColors={vendorColors}
                 failedVendors={failedVendors}
                 onRetry={async (vendor) => {
@@ -1578,6 +1670,8 @@ export default function App() {
                 initialText={finalReviewText}
                 jobText={jobText}
                 requirements={requirements}
+                competences={competences}
+                competenceScaleConfig={competenceScaleConfig}
                 onSaveAndCopy={persistFinalLetter}
                 onBack={() => setUiStage("assembly")}
                 saving={savingFinal}
@@ -1750,6 +1844,7 @@ export default function App() {
             vendors={vendors} 
             selectedVendors={selectedVendors}
             setSelectedVendors={setSelectedVendors}
+            onCompetenceScalesChange={() => setCompetenceScaleConfig(getScaleConfig())}
           />
         : activeTab === "costs"
         ? <CostsPage />

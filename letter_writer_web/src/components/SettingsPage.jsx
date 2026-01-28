@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLanguages } from "../contexts/LanguageContext";
 import LanguageConfig from "./LanguageConfig";
+import CompetenceScaleSettings from "./CompetenceScaleSettings";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
 
-export default function SettingsPage({ vendors = [], selectedVendors, setSelectedVendors }) {
+export default function SettingsPage({ vendors = [], selectedVendors, setSelectedVendors, onCompetenceScalesChange }) {
   const { languages, saveDefaults, setLanguages } = useLanguages();
   const [savingLanguages, setSavingLanguages] = useState(false);
   const [defaultModels, setDefaultModels] = useState(new Set());
@@ -387,6 +388,12 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
           <span style={{ color: "var(--text-color)" }}>pixels (default: 200)</span>
         </div>
       </div>
+
+      <CompetenceScaleSettings
+        onSaved={() => {
+          onCompetenceScalesChange?.();
+        }}
+      />
     </div>
   );
 }

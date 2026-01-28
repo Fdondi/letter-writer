@@ -561,51 +561,40 @@ def extract_view(request: HttpRequest):
     if not job_text:
         return JsonResponse({"detail": "job_text is required"}, status=400)
 
-    # Session ID comes from Django session cookie, not request body
-    from .session_helpers import get_session_id, save_session_common_data
+    from .session_helpers import ensure_user_data_in_session, get_session_id, save_session_common_data
     session_id = get_session_id(request)
 
-    # Use OpenAI as default for extraction (fast and reliable)
     try:
+        import logging
+        from pathlib import Path
+
         from letter_writer.client import get_client
         from letter_writer.clients.base import ModelVendor
-        from letter_writer.generation import extract_job_metadata
-        from pathlib import Path
+        from letter_writer.generation import MissingCVError, extract_job_metadata
+
+        logger = logging.getLogger(__name__)
+
+        # Load CV first (needed for competence–CV grading). Competence extraction runs in parallel with the rest.
+        ensure_user_data_in_session(request)
+        cv_text = (request.session.get("cv_text") or "").strip()
+        if not cv_text:
+            logger.error("extract_view: CV still missing after load attempt")
+            raise MissingCVError("CV text is missing or empty - please upload your CV in the 'Your CV' tab")
 
         ai_client = get_client(ModelVendor.OPENAI)
         trace_dir = Path("trace", "extraction.openai")
-        extraction = extract_job_metadata(job_text, ai_client, trace_dir=trace_dir)
-        
-        # Save common data with extraction metadata (common to all vendors)
-        # Load CV if not already in session
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        cv_in_session = request.session.get("cv_text")
-        needs_cv_load = not cv_in_session or not str(cv_in_session).strip()
-        
-        if needs_cv_load:
-            logger.info("extract_view: CV not in session, loading from Firestore")
-        
+        extraction = extract_job_metadata(
+            job_text, ai_client, trace_dir=trace_dir, cv_text=cv_text
+        )
+
         save_session_common_data(
             request=request,
             job_text=job_text,
-            metadata={"common": extraction},  # Store extraction as common metadata
-            load_cv=needs_cv_load,  # Load CV if missing
+            metadata={"common": extraction},
+            load_cv=False,
         )
-        
-        # Verify CV is now in session
-        cv_in_session = request.session.get("cv_text")
-        if cv_in_session:
-            logger.info(f"extract_view: CV present in session, length={len(cv_in_session)}")
-        else:
-            logger.error("extract_view: CV still missing after load attempt")
-            from letter_writer.generation import MissingCVError
-            raise MissingCVError("CV text is missing or empty - please upload your CV in the 'Your CV' tab")
-        
-        # Force-save session to avoid race condition with subsequent requests
         request.session.save()
-        logger.info(f"extract_view: session explicitly saved")
+        logger.info("extract_view: session explicitly saved")
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         return JsonResponse({"detail": str(exc)}, status=500)
@@ -938,6 +927,8 @@ def update_session_common_data_view(request: HttpRequest):
             common_metadata["salary"] = data["salary"]
         if "requirements" in data:
             common_metadata["requirements"] = data["requirements"]
+        if "competences" in data and isinstance(data["competences"], dict):
+            common_metadata["competences"] = data["competences"]
         if "point_of_contact" in data:
             common_metadata["point_of_contact"] = data["point_of_contact"]
         if "additional_user_info" in data:

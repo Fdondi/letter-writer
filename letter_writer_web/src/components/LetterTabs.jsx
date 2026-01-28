@@ -62,6 +62,8 @@ export default function LetterTabs({
   setFinalParagraphs, 
   originalText, 
   requirements = [], // Extracted key requirements
+  competences = {}, // { skill: { need, level } } or legacy
+  competenceScaleConfig,
   failedVendors, 
   onRetry, 
   vendorColors, 
@@ -911,6 +913,8 @@ export default function LetterTabs({
           <JobDescriptionColumn
             jobText={originalLetter}
             requirements={requirements}
+            competences={competences}
+            scaleConfig={competenceScaleConfig}
             width={columnWidth}
             minWidth={`${minColumnWidth}px`}
             languages={languageOptions}

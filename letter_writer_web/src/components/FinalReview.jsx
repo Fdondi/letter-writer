@@ -8,6 +8,8 @@ export default function FinalReview({
   initialText,
   jobText,
   requirements,
+  competences = {},
+  competenceScaleConfig,
   onSaveAndCopy,
   onBack,
   saving,
@@ -139,6 +141,8 @@ export default function FinalReview({
       <JobDescriptionColumn
         jobText={jobText}
         requirements={requirements}
+        competences={competences}
+        scaleConfig={competenceScaleConfig}
         width="350px"
         languages={enabledLanguages}
       />

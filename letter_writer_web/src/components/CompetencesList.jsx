@@ -1,0 +1,147 @@
+import React from "react";
+import CompetenceLine from "./CompetenceLine";
+import { toNumeric } from "../utils/competenceScales";
+
+/**
+ * List of competences: each line = stars (level + need) + text. Optional edit/add/remove.
+ * - requirements: string[]
+ * - competences: { [skill]: { need, level } } or legacy { presence, importance } / int
+ * - scaleConfig: { need: {...}, level: {...} } for label → numeric mapping
+ * - editable, displayTexts, onRequirementsChange, onCompetencesChange
+ */
+export default function CompetencesList({
+  requirements = [],
+  competences = {},
+  scaleConfig,
+  editable = false,
+  displayTexts = null,
+  onRequirementsChange,
+  onCompetencesChange,
+}) {
+  const comp = typeof competences === "object" && competences !== null ? competences : {};
+  const list = Array.isArray(requirements) ? requirements : requirements ? [requirements] : [];
+  const texts = Array.isArray(displayTexts) && displayTexts.length === list.length
+    ? displayTexts
+    : list;
+
+  const getRating = (skill) => {
+    const t = (skill ?? "").trim();
+    if (!t || !(t in comp)) return { presence: null, importance: null };
+    return toNumeric(comp[t], scaleConfig);
+  };
+
+  const getLabels = (skill) => {
+    const t = (skill ?? "").trim();
+    if (!t || !(t in comp)) return { needLabel: null, levelLabel: null };
+    const val = comp[t];
+    if (typeof val === "object" && val !== null && "need" in val && "level" in val) {
+      return { needLabel: val.need ?? null, levelLabel: val.level ?? null };
+    }
+    return { needLabel: null, levelLabel: null };
+  };
+
+  // Sort by importance * (presence - 2.5) - prefers important skills that are either very present or very absent
+  const sortedIndices = [...list.keys()].sort((a, b) => {
+    const skillA = (list[a] ?? "").trim();
+    const skillB = (list[b] ?? "").trim();
+    const ratingA = getRating(skillA);
+    const ratingB = getRating(skillB);
+    
+    // If no ratings, keep original order
+    if (ratingA.presence == null || ratingA.importance == null) return 1;
+    if (ratingB.presence == null || ratingB.importance == null) return -1;
+    
+    const scoreA = ratingA.importance * (ratingA.presence - 2.5);
+    const scoreB = ratingB.importance * (ratingB.presence - 2.5);
+    
+    // Sort by absolute value descending (highest deviation first)
+    // If absolute values are equal, prefer positive (high presence) over negative (low presence)
+    const absA = Math.abs(scoreA);
+    const absB = Math.abs(scoreB);
+    if (Math.abs(absB - absA) < 0.01) {
+      // Equal absolute values: prefer positive (high presence)
+      return scoreB - scoreA;
+    }
+    return absB - absA;
+  });
+
+  const handleEdit = (displayIndex, newText) => {
+    if (!editable || !onRequirementsChange) return;
+    const actualIndex = sortedIndices[displayIndex];
+    const oldSkill = (list[actualIndex] ?? "").trim();
+    const nextReqs = list.slice();
+    nextReqs[actualIndex] = newText;
+    onRequirementsChange(nextReqs);
+
+    if (onCompetencesChange && oldSkill && oldSkill in comp) {
+      const rating = comp[oldSkill];
+      const trimmed = (newText ?? "").trim();
+      const next = { ...comp };
+      delete next[oldSkill];
+      if (trimmed) next[trimmed] = rating;
+      onCompetencesChange(next);
+    }
+  };
+
+  const handleRemove = (displayIndex) => {
+    if (!editable || !onRequirementsChange) return;
+    const actualIndex = sortedIndices[displayIndex];
+    const oldSkill = (list[actualIndex] ?? "").trim();
+    const nextReqs = list.filter((_, i) => i !== actualIndex);
+    onRequirementsChange(nextReqs);
+
+    if (onCompetencesChange && oldSkill && oldSkill in comp) {
+      const next = { ...comp };
+      delete next[oldSkill];
+      onCompetencesChange(next);
+    }
+  };
+
+  const handleAdd = () => {
+    if (!editable || !onRequirementsChange) return;
+    onRequirementsChange([...list, ""]);
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+      {sortedIndices.map((actualIndex, displayIndex) => {
+        const skill = list[actualIndex];
+        const text = texts[actualIndex];
+        const rating = getRating(skill);
+        const labels = getLabels(skill);
+        return (
+          <CompetenceLine
+            key={actualIndex}
+            text={text}
+            presence={rating.presence}
+            importance={rating.importance}
+            needLabel={labels.needLabel}
+            levelLabel={labels.levelLabel}
+            editable={editable}
+            onChange={(val) => handleEdit(displayIndex, val)}
+            onRemove={editable ? () => handleRemove(displayIndex) : undefined}
+          />
+        );
+      })}
+      {editable && (
+        <button
+          type="button"
+          onClick={handleAdd}
+          style={{
+            alignSelf: "flex-start",
+            marginTop: 4,
+            padding: "2px 8px",
+            fontSize: 11,
+            background: "var(--panel-bg)",
+            color: "var(--text-color)",
+            border: "1px dashed var(--border-color)",
+            borderRadius: 2,
+            cursor: "pointer",
+          }}
+        >
+          + Add competence
+        </button>
+      )}
+    </div>
+  );
+}
