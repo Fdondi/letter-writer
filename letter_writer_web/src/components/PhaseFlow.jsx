@@ -23,6 +23,7 @@
  *   the shelf is updated.
  */
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { phases as phaseModules } from "./phases";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
 import { useTranslation } from "../utils/useTranslation";
@@ -699,6 +700,10 @@ function VendorCardWrapper({
   onRerunFromBackground,
   onPhaseComplete,
   triggerUpdate,
+  onExpand,
+  isExpanded,
+  onCloseExpand,
+  useOverlayWidth,
 }) {
   // Get previous phase data (to check if we SHOULD be loading)
   const previousPhaseApproved = phaseObj.previous ? phaseObj.previous.approvedVendors.has(vendor) : true;
@@ -778,6 +783,10 @@ function VendorCardWrapper({
       setStatus={() => {}} // No-op, status is computed
       setData={() => {}}   // No-op, data comes from shelf
       setError={setError}
+      onExpand={onExpand}
+      isExpanded={isExpanded}
+      onCloseExpand={onCloseExpand}
+      useOverlayWidth={useOverlayWidth}
     />
   );
 }
@@ -806,6 +815,10 @@ function VendorCard({
   setStatus,
   setData,
   setError,
+  onExpand,
+  isExpanded,
+  onCloseExpand,
+  useOverlayWidth,
 }) {
   // This card knows which phase it belongs to
   const cardPhase = phaseObj?.phase || null;
@@ -1065,10 +1078,50 @@ function VendorCard({
     }
   }, [cardPhase, cardPhaseData, cardPhaseEdits, translation, feedbackKeys, feedbackOverrides, feedback]);
 
+  const effectiveCardStyle = useOverlayWidth
+    ? { ...cardStyle, width: "100%", minWidth: 0, minHeight: 0, flex: "1 1 auto", maxWidth: "none" }
+    : cardStyle;
+
   return (
-    <div style={{ ...cardStyle, opacity: disabled ? 0.6 : 1, pointerEvents: disabled ? "none" : "auto" }}>
+    <div style={{ ...effectiveCardStyle, opacity: disabled ? 0.6 : 1, pointerEvents: disabled ? "none" : "auto" }}>
       <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
         <h4 style={{ margin: 0, flex: 1, textTransform: "capitalize" }}>{vendor}</h4>
+        {onExpand && !isExpanded && (
+          <button
+            type="button"
+            onClick={onExpand}
+            title="Expand to 80% width"
+            style={{
+              fontSize: 12,
+              padding: "2px 8px",
+              background: "var(--panel-bg)",
+              color: "var(--text-color)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 4,
+              cursor: "pointer",
+            }}
+          >
+            Expand
+          </button>
+        )}
+        {isExpanded && onCloseExpand && (
+          <button
+            type="button"
+            onClick={onCloseExpand}
+            title="Close expanded view"
+            style={{
+              fontSize: 12,
+              padding: "2px 8px",
+              background: "var(--panel-bg)",
+              color: "var(--text-color)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 4,
+              cursor: "pointer",
+            }}
+          >
+            × Close
+          </button>
+        )}
         {isDone && (
           <button onClick={() => setCollapsed(!collapsed)} style={{ fontSize: 12, padding: "4px 8px" }}>
             {collapsed ? "Expand" : "Collapse"}
@@ -1350,6 +1403,14 @@ export default function PhaseFlow({
     background: false, // first phase starts open
     refine: true,
   });
+
+  const [expandedCard, setExpandedCard] = useState(null); // { phase, vendor } | null
+  const toggleExpand = useCallback((phase, vendor) => {
+    setExpandedCard((prev) =>
+      prev?.phase === phase && prev?.vendor === vendor ? null : { phase, vendor }
+    );
+  }, []);
+  const closeExpand = useCallback(() => setExpandedCard(null), []);
   
   // Track phase updates to trigger re-renders when status changes
   const [phaseUpdateTrigger, setPhaseUpdateTrigger] = useState(0);
@@ -1405,9 +1466,9 @@ export default function PhaseFlow({
     phases.forEach(phaseObj => {
       const phaseName = phaseObj.phase;
       const phaseModule = phaseModules[phaseName];
-      renderFunctions.set(phaseName, (vendor) => (
+      renderFunctions.set(phaseName, (vendor, overlayMode = false) => (
         <VendorCardWrapper
-          key={`${phaseName}-${vendor}-wrapper`}
+          key={`${phaseName}-${vendor}-wrapper${overlayMode ? "-overlay" : ""}`}
           phaseName={phaseName}
           vendor={vendor}
           phaseObj={phaseObj}
@@ -1419,11 +1480,15 @@ export default function PhaseFlow({
           onRerunFromBackground={onRerunFromBackground}
           onPhaseComplete={onPhaseComplete}
           triggerUpdate={() => setPhaseUpdateTrigger(prev => prev + 1)}
+          onExpand={overlayMode ? undefined : () => toggleExpand(phaseName, vendor)}
+          isExpanded={overlayMode}
+          onCloseExpand={overlayMode ? closeExpand : undefined}
+          useOverlayWidth={overlayMode}
         />
       ));
     });
     return renderFunctions;
-  }, [phases, sessionId, onEditChange, onApprove, onRerunFromBackground, onPhaseComplete, saveFeedbackOverride]);
+  }, [phases, sessionId, onEditChange, onApprove, onRerunFromBackground, onPhaseComplete, saveFeedbackOverride, toggleExpand, closeExpand]);
   
   phases.forEach(phaseObj => {
     const phaseName = phaseObj.phase;
@@ -1446,8 +1511,52 @@ export default function PhaseFlow({
     phaseObj.renderVendor = memoizedRenderVendors.get(phaseName);
   });
 
+  const expandedPhase = expandedCard ? phases.find((p) => p.phase === expandedCard.phase) : null;
+
   return (
-    <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 12 }}>
+    <>
+      {expandedCard && expandedPhase && createPortal(
+        <div
+          role="presentation"
+          onClick={closeExpand}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+            boxSizing: "border-box",
+            background: "rgba(0,0,0,0.2)",
+            backdropFilter: "blur(8px)",
+            WebkitBackdropFilter: "blur(8px)",
+          }}
+        >
+          <div
+            role="dialog"
+            aria-label={`Expanded: ${expandedCard.vendor}`}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "80%",
+              maxWidth: 1200,
+              height: "85vh",
+              maxHeight: "85vh",
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+              background: "var(--card-bg)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 8,
+              boxShadow: "0 12px 40px rgba(0,0,0,0.15)",
+            }}
+          >
+            {expandedPhase.renderVendor(expandedCard.vendor, true)}
+          </div>
+        </div>,
+        document.body
+      )}
+      <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 12 }}>
       {phases.filter((phase) => phase.visible).map((phase) => (
         <PhaseSection
           key={phase.phase}
@@ -1477,10 +1586,13 @@ export default function PhaseFlow({
             setPhaseUpdateTrigger(prev => prev + 1);
           }}
         >
-          {vendorsList.map((vendor) => phase.renderVendor(vendor))}
+          {vendorsList
+            .filter((v) => !(expandedCard?.phase === phase.phase && expandedCard?.vendor === v))
+            .map((vendor) => phase.renderVendor(vendor))}
         </PhaseSection>
       ))}
-    </div>
+      </div>
+    </>
   );
 }
 

@@ -5,7 +5,7 @@ import CompetencesList from "./CompetencesList";
 import { getEffectiveRating } from "../utils/competenceScales";
 
 // Job Description Column with resizable/collapsible requirements section
-const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, scaleConfig, overrides, width, minWidth, languages = [] }) => {
+const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, scaleConfig, overrides, width, minWidth, languages = [], onHeaderClick, isExpanded, onClose }) => {
   const [requirementsHeight, setRequirementsHeight] = useState(25); // Percentage of column height
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -202,19 +202,57 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
           }}
         >
           <strong style={{ color: 'var(--text-color)' }}>Job Description</strong>
-          {languages.length > 0 && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              {jobTranslating && <span style={{ fontSize: "9px", color: "var(--secondary-text-color)" }}>Translating…</span>}
-              <LanguageSelector
-                languages={languages}
-                viewLanguage={jobViewLanguage}
-                onLanguageChange={translateJobDescription}
-                hasTranslation={(code) => Boolean(jobTranslations[code])}
-                isTranslating={jobTranslating}
-                size="tiny"
-              />
-            </div>
-          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {languages.length > 0 && (
+              <>
+                {jobTranslating && <span style={{ fontSize: "9px", color: "var(--secondary-text-color)" }}>Translating…</span>}
+                <LanguageSelector
+                  languages={languages}
+                  viewLanguage={jobViewLanguage}
+                  onLanguageChange={translateJobDescription}
+                  hasTranslation={(code) => Boolean(jobTranslations[code])}
+                  isTranslating={jobTranslating}
+                  size="tiny"
+                />
+              </>
+            )}
+            {onHeaderClick && !isExpanded && (
+              <button
+                type="button"
+                onClick={onHeaderClick}
+                title="Expand to 80% width"
+                style={{
+                  padding: "2px 8px",
+                  fontSize: "12px",
+                  background: "var(--panel-bg)",
+                  color: "var(--text-color)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                Expand
+              </button>
+            )}
+            {isExpanded && onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                title="Close expanded view"
+                style={{
+                  padding: "2px 8px",
+                  fontSize: "12px",
+                  background: "var(--panel-bg)",
+                  color: "var(--text-color)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                × Close
+              </button>
+            )}
+          </div>
         </div>
         {jobTranslationError && (
           <div style={{ 

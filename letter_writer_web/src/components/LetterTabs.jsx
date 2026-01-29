@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import Paragraph from "./Paragraph";
 import { ItemTypes } from "../constants";
 import LetterCard from "./LetterCard";
@@ -77,7 +78,13 @@ export default function LetterTabs({
   const [collapsed, setCollapsed] = useState([]);
   const [finalLetter, setFinalLetter] = useState("");
   const [originalLetter, setOriginalLetter] = useState(originalText || "");
-  
+  const [expandedColumn, setExpandedColumn] = useState(null); // 'vendor:Name' | 'final' | 'job-description' | null
+
+  const toggleExpand = (id) => {
+    setExpandedColumn((prev) => (prev === id ? null : id));
+  };
+  const closeExpand = () => setExpandedColumn(null);
+
   // Sync originalLetter when originalText prop changes
   useEffect(() => {
     if (originalText !== originalLetter) {
@@ -117,9 +124,12 @@ export default function LetterTabs({
   const vendorKeys = Object.keys(vendorParagraphs);
   const visibleVendors = vendorKeys.filter((v) => !collapsed.includes(v));
   const collapsedVendors = vendorKeys.filter((v) => collapsed.includes(v));
-  const totalVisible = visibleVendors.length + 2; // +2 for final letter and original letter
+  const visibleInRowVendors = expandedColumn?.startsWith("vendor:")
+    ? visibleVendors.filter((v) => `vendor:${v}` !== expandedColumn)
+    : visibleVendors;
+  const totalVisible = visibleInRowVendors.length + (expandedColumn === "final" ? 0 : 1) + (expandedColumn === "job-description" ? 0 : 1);
   const columnWidth = totalVisible > 0 ? `${100 / totalVisible}%` : "100%";
-  
+
   // Get minimum column width from localStorage or use default
   const minColumnWidth = parseInt(localStorage.getItem("minColumnWidth") || "200", 10);
 
@@ -492,11 +502,11 @@ export default function LetterTabs({
     setLanguageInput("");
   };
 
-  const FinalColumn = () => (
+  const FinalColumn = ({ onHeaderClick, isExpanded, onClose, useOverlayWidth }) => (
     <div 
       style={{ 
-        width: columnWidth,
-        minWidth: `${minColumnWidth}px`,
+        width: useOverlayWidth ? "100%" : columnWidth,
+        minWidth: useOverlayWidth ? 0 : `${minColumnWidth}px`,
         borderRadius: 4,
         position: "relative",
         display: "flex",
@@ -506,10 +516,7 @@ export default function LetterTabs({
         height: "100%"
       }}
     >
-      <div style={{
-        background: "var(--header-bg)",
-        borderRadius: "4px 4px 0 0"
-      }}>
+      <div style={{ background: "var(--header-bg)", borderRadius: "4px 4px 0 0" }}>
         <h4 style={{ 
           margin: 0, 
           padding: "8px 12px",
@@ -526,23 +533,61 @@ export default function LetterTabs({
               </span>
             )}
           </span>
-          <button
-            id="copy-final-text-btn"
-            onClick={copyFinalText}
-            disabled={finalParagraphs.length === 0 || savingFinal}
-            style={{
-              padding: "4px 8px",
-              fontSize: "12px",
-              background: finalParagraphs.length === 0 || savingFinal ? "var(--border-color)" : "#3b82f6",
-              color: "white",
-              border: "none",
-              borderRadius: 4,
-              cursor: finalParagraphs.length === 0 || savingFinal ? "not-allowed" : "pointer",
-              transition: "background 0.2s ease"
-            }}
-          >
-            {savingFinal ? "Saving..." : "Finalize"}
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {onHeaderClick && !isExpanded && (
+              <button
+                type="button"
+                onClick={onHeaderClick}
+                title="Expand to 80% width"
+                style={{
+                  padding: "2px 8px",
+                  fontSize: "12px",
+                  background: "var(--panel-bg)",
+                  color: "var(--text-color)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                Expand
+              </button>
+            )}
+            {isExpanded && onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                title="Close expanded view"
+                style={{
+                  padding: "2px 8px",
+                  fontSize: "12px",
+                  background: "var(--panel-bg)",
+                  color: "var(--text-color)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                × Close
+              </button>
+            )}
+            <button
+              id="copy-final-text-btn"
+              onClick={copyFinalText}
+              disabled={finalParagraphs.length === 0 || savingFinal}
+              style={{
+                padding: "4px 8px",
+                fontSize: "12px",
+                background: finalParagraphs.length === 0 || savingFinal ? "var(--border-color)" : "#3b82f6",
+                color: "white",
+                border: "none",
+                borderRadius: 4,
+                cursor: finalParagraphs.length === 0 || savingFinal ? "not-allowed" : "pointer",
+                transition: "background 0.2s ease"
+              }}
+            >
+              {savingFinal ? "Saving..." : "Finalize"}
+            </button>
+          </div>
         </h4>
       </div>
       
@@ -687,6 +732,117 @@ export default function LetterTabs({
     </div>
   );
 
+  const ExpandedVendorColumn = ({
+    vendor,
+    vendorParagraphs,
+    vendorColors,
+    vendorCosts,
+    vendorRefineCosts,
+    failedVendors,
+    onRetry,
+    vendorFeedback,
+    setVendorFeedback,
+    languageOptions,
+    onClose,
+  }) => (
+    <div style={{ width: "100%", minWidth: 0, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <div style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        textTransform: "capitalize",
+        margin: 0,
+        background: vendorColors?.[vendor] || "var(--header-bg)",
+        padding: "8px 12px",
+        flexShrink: 0,
+        color: "var(--text-color)",
+      }}>
+        <span style={{ fontWeight: 600 }}>{vendor}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {vendorCosts?.[vendor] !== undefined && vendorCosts[vendor] > 0 && (
+            <div style={{ fontSize: "11px", color: "rgba(255, 255, 255, 0.9)", textAlign: "right" }}>
+              {vendorRefineCosts?.[vendor] !== undefined && vendorRefineCosts[vendor] > 0 && (
+                <div>${vendorRefineCosts[vendor].toFixed(4)}</div>
+              )}
+              <div style={{ fontSize: "10px", opacity: 0.85 }}>Total: ${vendorCosts[vendor].toFixed(4)}</div>
+            </div>
+          )}
+          {failedVendors?.[vendor] && (
+            <span style={{ fontSize: "12px", color: "var(--error-text)" }}>Failed</span>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            title="Close expanded view"
+            style={{
+              padding: "2px 8px",
+              fontSize: "12px",
+              background: "var(--panel-bg)",
+              color: "var(--text-color)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 4,
+              cursor: "pointer",
+            }}
+          >
+            × Close
+          </button>
+        </div>
+      </div>
+      <div style={{ padding: "8px", flex: 1, overflowY: "auto" }}>
+        {failedVendors?.[vendor] ? (
+          <div style={{
+            padding: "16px",
+            color: "var(--error-text)",
+            fontSize: "12px",
+            background: "var(--error-bg)",
+            border: "1px solid var(--error-border)",
+            borderRadius: 4,
+          }}>
+            <div style={{ marginBottom: "8px" }}>{failedVendors[vendor]}</div>
+            <button
+              onClick={() => onRetry(vendor)}
+              style={{
+                padding: "4px 8px",
+                fontSize: "12px",
+                background: "var(--error-text)",
+                color: "white",
+                border: "none",
+                borderRadius: 2,
+                cursor: "pointer",
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        ) : (
+          (vendorParagraphs[vendor] || []).map((p, i) => (
+            <Paragraph
+              key={p.id}
+              paragraph={p}
+              index={i}
+              moveParagraph={() => {}}
+              color={vendorColors?.[vendor]}
+              editable={false}
+              languages={languageOptions}
+            />
+          ))
+        )}
+      </div>
+      <FeedbackForm
+        rating={vendorFeedback[vendor]?.rating}
+        comment={vendorFeedback[vendor]?.comment}
+        onChange={(newFeedback) => {
+          setVendorFeedback((prev) => ({
+            ...prev,
+            [vendor]: { ...prev[vendor], ...newFeedback },
+          }));
+        }}
+      />
+    </div>
+  );
+
+  const expandedVendor = expandedColumn?.startsWith("vendor:") ? expandedColumn.replace(/^vendor:/, "") : null;
+
   return (
     <HoverProvider>
       <div style={{ 
@@ -696,6 +852,79 @@ export default function LetterTabs({
         flexDirection: "column",
         color: 'var(--text-color)'
       }}>
+      {expandedColumn && createPortal(
+        <div
+          role="presentation"
+          onClick={closeExpand}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+            boxSizing: "border-box",
+            background: "rgba(0,0,0,0.2)",
+            backdropFilter: "blur(8px)",
+            WebkitBackdropFilter: "blur(8px)",
+          }}
+        >
+          <div
+            role="dialog"
+            aria-label={`Expanded view: ${expandedVendor || expandedColumn}`}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "80%",
+              maxWidth: 1200,
+              height: "85vh",
+              maxHeight: "85vh",
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+              background: "var(--card-bg)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 8,
+              boxShadow: "0 12px 40px rgba(0,0,0,0.15)",
+            }}
+          >
+            {expandedColumn === "final" && (
+              <FinalColumn isExpanded onClose={closeExpand} useOverlayWidth />
+            )}
+            {expandedColumn === "job-description" && (
+              <JobDescriptionColumn
+                jobText={originalLetter}
+                requirements={requirements}
+                competences={competences}
+                scaleConfig={competenceScaleConfig}
+                overrides={competenceOverrides}
+                width="100%"
+                minWidth="0"
+                languages={languageOptions}
+                onHeaderClick={undefined}
+                isExpanded
+                onClose={closeExpand}
+              />
+            )}
+            {expandedVendor && (
+              <ExpandedVendorColumn
+                vendor={expandedVendor}
+                vendorParagraphs={vendorParagraphs}
+                vendorColors={vendorColors}
+                vendorCosts={vendorCosts}
+                vendorRefineCosts={vendorRefineCosts}
+                failedVendors={failedVendors}
+                onRetry={onRetry}
+                vendorFeedback={vendorFeedback}
+                setVendorFeedback={setVendorFeedback}
+                languageOptions={languageOptions}
+                onClose={closeExpand}
+              />
+            )}
+          </div>
+        </div>,
+        document.body
+      )}
       <div style={{
         marginBottom: 10,
         display: "flex",
@@ -826,20 +1055,22 @@ export default function LetterTabs({
           overflowX: "auto",
           paddingBottom: 10 // Space for scrollbar
         }}>
-          {visibleVendors.map((v) => (
+          {visibleInRowVendors.map((v) => (
             <div key={v} style={{ width: columnWidth, minWidth: `${minColumnWidth}px`, display: "flex", flexDirection: "column", position: "relative", background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', height: "100%" }}>
-              <h4 style={{ 
-                textTransform: "capitalize", 
-                margin: 0, 
-                background: vendorColors?.[v] || "var(--header-bg)",
-                padding: "8px 12px",
-                borderRadius: "4px 4px 0 0",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                color: 'var(--text-color)',
-                flexShrink: 0
-              }}>
+              <h4
+                style={{ 
+                  textTransform: "capitalize", 
+                  margin: 0, 
+                  background: vendorColors?.[v] || "var(--header-bg)",
+                  padding: "8px 12px",
+                  borderRadius: "4px 4px 0 0",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  color: 'var(--text-color)',
+                  flexShrink: 0,
+                }}
+              >
                 <span>{v}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   {vendorCosts && vendorCosts[v] !== undefined && vendorCosts[v] > 0 && (
@@ -853,6 +1084,22 @@ export default function LetterTabs({
                   {failedVendors[v] && (
                     <span style={{ fontSize: "12px", color: "var(--error-text)" }}>Failed</span>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => toggleExpand(`vendor:${v}`)}
+                    title="Expand to 80% width"
+                    style={{
+                      padding: "2px 8px",
+                      fontSize: "12px",
+                      background: "var(--panel-bg)",
+                      color: "var(--text-color)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: 4,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Expand
+                  </button>
                 </div>
               </h4>
               
@@ -909,18 +1156,23 @@ export default function LetterTabs({
             </div>
           ))}
           
-          <FinalColumn />
-          
-          <JobDescriptionColumn
-            jobText={originalLetter}
-            requirements={requirements}
-            competences={competences}
-            scaleConfig={competenceScaleConfig}
-            overrides={competenceOverrides}
-            width={columnWidth}
-            minWidth={`${minColumnWidth}px`}
-            languages={languageOptions}
-          />
+          {expandedColumn !== "final" && (
+            <FinalColumn onHeaderClick={() => toggleExpand("final")} useOverlayWidth={false} />
+          )}
+
+          {expandedColumn !== "job-description" && (
+            <JobDescriptionColumn
+              jobText={originalLetter}
+              requirements={requirements}
+              competences={competences}
+              scaleConfig={competenceScaleConfig}
+              overrides={competenceOverrides}
+              width={columnWidth}
+              minWidth={`${minColumnWidth}px`}
+              languages={languageOptions}
+              onHeaderClick={() => toggleExpand("job-description")}
+            />
+          )}
         </div>
       </div>
     </HoverProvider>
