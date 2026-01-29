@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import LanguageSelector from "./LanguageSelector";
 import { translateText } from "../utils/translate";
 import CompetencesList from "./CompetencesList";
-import { getEffectiveRating } from "../utils/competenceScales";
+import { getEffectiveRating, getEffectiveImportance } from "../utils/competenceScales";
 
 // Job Description Column with resizable/collapsible requirements section
 const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, scaleConfig, overrides, width, minWidth, languages = [], onHeaderClick, isExpanded, onClose }) => {
@@ -357,9 +357,10 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
               let totalWeight = 0;
               keys.forEach(key => {
                 const num = getEffectiveRating(key, comp, scaleConfig, overrides);
-                if (num.presence != null && num.importance != null) {
-                  totalWeighted += num.presence * num.importance;
-                  totalWeight += num.importance;
+                const imp = getEffectiveImportance(key, comp, scaleConfig, overrides);
+                if (num.presence != null && imp != null) {
+                  totalWeighted += num.presence * imp;
+                  totalWeight += imp;
                 }
               });
               if (totalWeight === 0) return null;

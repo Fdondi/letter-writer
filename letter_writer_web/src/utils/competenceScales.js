@@ -22,16 +22,70 @@ export const DEFAULT_LEVEL = {
   "Senior professional": 5,
 };
 
+/** Per need label: "linear" or "log" for scoring. Default "expected" → "log", others → "linear". */
+export const DEFAULT_NEED_SCALE = {
+  critical: "linear",
+  "nice to have": "linear",
+  expected: "log",
+  useful: "linear",
+  necessary: "linear",
+  "marginally useful": "linear",
+};
+
+/** Short semantic descriptions for each need category, used in extraction prompts. */
+export const DEFAULT_NEED_SEMANTICS = {
+  critical: "central to the job",
+  expected: "necessary, but not specific to the job",
+  "nice to have": "desirable but not required",
+  useful: "useful but not central",
+  necessary: "required for the role",
+  "marginally useful": "optional, slight plus",
+};
+
+function mergeNeedScale(need, stored) {
+  const out = {};
+  for (const k of Object.keys(need)) {
+    if (stored && (stored[k] === "log" || stored[k] === "linear")) out[k] = stored[k];
+    else if (DEFAULT_NEED_SCALE[k]) out[k] = DEFAULT_NEED_SCALE[k];
+    else out[k] = "linear";
+  }
+  return out;
+}
+
+function mergeNeedSemantics(need, stored) {
+  const out = {};
+  for (const k of Object.keys(need)) {
+    if (stored && k in stored && typeof stored[k] === "string") out[k] = stored[k].trim();
+    else if (DEFAULT_NEED_SEMANTICS[k]) out[k] = DEFAULT_NEED_SEMANTICS[k];
+    else out[k] = "";
+  }
+  return out;
+}
+
 export function getScaleConfig() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { need: { ...DEFAULT_NEED }, level: { ...DEFAULT_LEVEL } };
+    if (!raw) {
+      return {
+        need: { ...DEFAULT_NEED },
+        level: { ...DEFAULT_LEVEL },
+        needScale: { ...DEFAULT_NEED_SCALE },
+        needSemantics: { ...DEFAULT_NEED_SEMANTICS },
+      };
+    }
     const parsed = JSON.parse(raw);
     const need = parsed.need && Object.keys(parsed.need).length ? parsed.need : { ...DEFAULT_NEED };
     const level = parsed.level && Object.keys(parsed.level).length ? parsed.level : { ...DEFAULT_LEVEL };
-    return { need, level };
+    const needScale = mergeNeedScale(need, parsed.needScale);
+    const needSemantics = mergeNeedSemantics(need, parsed.needSemantics);
+    return { need, level, needScale, needSemantics };
   } catch {
-    return { need: { ...DEFAULT_NEED }, level: { ...DEFAULT_LEVEL } };
+    return {
+      need: { ...DEFAULT_NEED },
+      level: { ...DEFAULT_LEVEL },
+      needScale: { ...DEFAULT_NEED_SCALE },
+      needSemantics: { ...DEFAULT_NEED_SEMANTICS },
+    };
   }
 }
 
@@ -77,4 +131,30 @@ export function getEffectiveRating(skill, competences, scaleConfig, overrides) {
     presence: o?.presence != null ? o.presence : base.presence,
     importance: o?.importance != null ? o.importance : base.importance,
   };
+}
+
+/** Map x in [1,5] to [1,5] via log(1+x). Used for "expected" importance. */
+function logScaleImportance(x) {
+  if (x == null || x < 1 || x > 5) return x;
+  const ln = Math.log;
+  const a = 4 / ln(3);
+  const b = 1 - a * ln(2);
+  const y = a * ln(1 + x) + b;
+  return Math.max(1, Math.min(5, y));
+}
+
+/**
+ * Importance for scoring (sort, weighted avg). Uses needScale: "log" → logarithmic, else linear.
+ * Uses raw need label from competences[skill]; overrides only change the numeric value.
+ */
+export function getEffectiveImportance(skill, competences, scaleConfig, overrides) {
+  const val = competences[skill];
+  const needLabel = typeof val === "object" && val != null && "need" in val ? val.need : null;
+  const { importance } = getEffectiveRating(skill, competences, scaleConfig, overrides);
+  if (importance == null) return null;
+  const scale = scaleConfig?.needScale?.[needLabel];
+  if (scale === "log") {
+    return logScaleImportance(importance);
+  }
+  return importance;
 }

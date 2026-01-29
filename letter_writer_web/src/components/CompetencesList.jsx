@@ -1,6 +1,6 @@
 import React from "react";
 import CompetenceLine from "./CompetenceLine";
-import { getEffectiveRating } from "../utils/competenceScales";
+import { getEffectiveRating, getEffectiveImportance } from "../utils/competenceScales";
 
 /**
  * List of competences: each line = stars (level + need) + text. Optional edit/add/remove.
@@ -41,28 +41,23 @@ export default function CompetencesList({
     return { needLabel: null, levelLabel: null };
   };
 
-  // Sort by importance * (presence - 2.5) - prefers important skills that are either very present or very absent
+  // Sort by importance * (presence - 2.5). "expected" uses log-scaled importance.
   const sortedIndices = [...list.keys()].sort((a, b) => {
     const skillA = (list[a] ?? "").trim();
     const skillB = (list[b] ?? "").trim();
     const ratingA = getRating(skillA);
     const ratingB = getRating(skillB);
-    
-    // If no ratings, keep original order
-    if (ratingA.presence == null || ratingA.importance == null) return 1;
-    if (ratingB.presence == null || ratingB.importance == null) return -1;
-    
-    const scoreA = ratingA.importance * (ratingA.presence - 2.5);
-    const scoreB = ratingB.importance * (ratingB.presence - 2.5);
-    
-    // Sort by absolute value descending (highest deviation first)
-    // If absolute values are equal, prefer positive (high presence) over negative (low presence)
+    const impA = getEffectiveImportance(skillA, comp, scaleConfig, overrides);
+    const impB = getEffectiveImportance(skillB, comp, scaleConfig, overrides);
+
+    if (ratingA.presence == null || impA == null) return 1;
+    if (ratingB.presence == null || impB == null) return -1;
+
+    const scoreA = impA * (ratingA.presence - 2.5);
+    const scoreB = impB * (ratingB.presence - 2.5);
     const absA = Math.abs(scoreA);
     const absB = Math.abs(scoreB);
-    if (Math.abs(absB - absA) < 0.01) {
-      // Equal absolute values: prefer positive (high presence)
-      return scoreB - scoreA;
-    }
+    if (Math.abs(absB - absA) < 0.01) return scoreB - scoreA;
     return absB - absA;
   });
 

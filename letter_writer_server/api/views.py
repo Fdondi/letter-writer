@@ -561,6 +561,8 @@ def extract_view(request: HttpRequest):
     if not job_text:
         return JsonResponse({"detail": "job_text is required"}, status=400)
 
+    scale_config = data.get("scale_config")
+
     from .session_helpers import ensure_user_data_in_session, get_session_id, save_session_common_data
     session_id = get_session_id(request)
 
@@ -584,7 +586,7 @@ def extract_view(request: HttpRequest):
         ai_client = get_client(ModelVendor.OPENAI)
         trace_dir = Path("trace", "extraction.openai")
         extraction = extract_job_metadata(
-            job_text, ai_client, trace_dir=trace_dir, cv_text=cv_text
+            job_text, ai_client, trace_dir=trace_dir, cv_text=cv_text, scale_config=scale_config
         )
 
         save_session_common_data(

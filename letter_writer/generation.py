@@ -135,27 +135,55 @@ def extract_job_metadata_no_requirements(
     }
 
 
+LEVEL_LABELS = ("Newbie", "Amateur", "Brief experience", "Professional", "Senior professional")
+
+DEFAULT_NEED_SEMANTICS: Dict[str, str] = {
+    "critical": "central to the job",
+    "expected": "necessary, but not specific to the job",
+    "nice to have": "desirable but not required",
+    "useful": "useful but not central",
+    "necessary": "required for the role",
+    "marginally useful": "optional, slight plus",
+}
+
+
 def extract_key_competences(
     job_text: str,
     client: BaseClient,
     trace_dir: Path | None = None,
+    need_categories: tuple[str, ...] | None = None,
+    need_semantics: Optional[Dict[str, str]] = None,
 ) -> Dict[str, List[str]]:
     """Extract key competences from the job description, grouped by need category.
     Returns e.g. {"critical": ["C++", "German"], "nice to have": ["English"], "expected": ["git"]}.
+    ``need_categories``: JSON keys to use; order preserved. Default DEFAULT_NEED_SEMANTICS.keys().
+    ``need_semantics``: {category: "short description"} for prompt; merged over DEFAULT_NEED_SEMANTICS.
     """
+    cats = need_categories or tuple(DEFAULT_NEED_SEMANTICS.keys())  
+    semantics = {**DEFAULT_NEED_SEMANTICS, **(need_semantics or {})}
+    keys_str = ", ".join(cats)
+    example = json.dumps({k: ["C++", "git"] if k == cats[0] else [] for k in cats}, separators=(",", ":"))
+    parts = [
+        f"{c} = {str(semantics[c]).strip()}"
+        for c in cats
+        if semantics.get(c) and str(semantics[c]).strip()
+    ]
+    semantic = (" " + "; ".join(parts) + ". ") if parts else ""
     system = (
         "You are an assistant that extracts key competences or requirements from a job description. "
-        "Return strict JSON with keys exactly: critical, nice to have, expected. "
+        f"Return strict JSON with keys exactly: {keys_str}. "
         "Each value is an array of strings (competences). Use empty arrays [] if none in that category. "
-        "critical = must-have; expected = normal requirements; nice to have = desirable but not required. "
+        f"Assign each competence to the most appropriate category.{semantic}"
         "Keep each competence short and specific (e.g. 'C++', 'fluent German', 'git'). "
+        "Pay attention to separate competences that are ANDed. 'Good German and English' is ['Good German', 'Good English']. "
+        "'Object oriented languages like C++ or Java' is a single competence, 'Object oriented programming'. "
         "Do not add any other keys or prose."
     )
     prompt = (
         "Job description:\n"
         f"{job_text}\n\n"
         "Respond with JSON only. Example format:\n"
-        '{"critical":["C++","German"],"nice to have":["English"],"expected":["git"]}'
+        f"{example}"
     )
     raw = client.call(ModelSize.TINY, system, [prompt])
     _write_trace(trace_dir, system, prompt, raw)
@@ -166,7 +194,7 @@ def extract_key_competences(
         data = {}
 
     out: Dict[str, List[str]] = {}
-    for key in ("critical", "nice to have", "expected"):
+    for key in cats:
         val = data.get(key)
         if isinstance(val, list):
             out[key] = [str(x).strip() for x in val if str(x).strip()]
@@ -197,25 +225,35 @@ def _flatten_competences_by_category(
     return pairs
 
 
-LEVEL_LABELS = ("Newbie", "Amateur", "Brief experience", "Professional", "Senior professional")
-
-
 def grade_competence_cv_match(
     competences: List[str],
     cv_text: str,
     job_text: str,
     client: BaseClient,
     trace_dir: Path | None = None,
+    level_labels: tuple[str, ...] | None = None,
 ) -> Dict[str, str]:
-    """Grade each competence as the candidate's level (from CV). Returns {skill: level_label}."""
+    """Grade each competence as the candidate's level (from CV). Returns {skill: level_label}.
+    ``level_labels``: allowed labels; used in prompt and for validation. Default LEVEL_LABELS.
+    """
     if not competences:
         return {}
+    labels = level_labels or LEVEL_LABELS
+    default_label = "Brief experience" if "Brief experience" in labels else labels[len(labels) // 2]
 
-    level_list = ", ".join(LEVEL_LABELS)
+    level_list = ", ".join(labels)
+    n = len(labels)
+    example_vals = (
+        [labels[-1], labels[1], labels[-2], labels[-2]]
+        if n >= 3
+        else [labels[0]] * 4
+    )
+    example = dict(zip(["C++", "German", "English", "git"], example_vals[:4]))
+    example_str = json.dumps(example, separators=(",", ":"))
     system = (
         "You are an assistant that grades the candidate's level for each competence based on the CV. "
         "Use exactly one of these labels per competence: " + level_list + ". "
-        "Be strict; reserve 'Professional' and 'Senior professional' for clear, strong evidence. "
+        "Be strict; reserve higher-level labels for clear, strong evidence. "
         "Return strict JSON: a single object whose keys are the competences (exactly as given) "
         "and whose values are the level strings. Do not add any other keys or prose."
     )
@@ -226,7 +264,7 @@ def grade_competence_cv_match(
         + (cv_text[:12000] if len(cv_text) > 12000 else cv_text)
         + "\n\nAssign each competence one of: " + level_list + ".\n\n"
         "Respond with JSON only. Example format:\n"
-        '{"C++":"Senior professional","German":"Amateur","English":"Professional","git":"Professional"}'
+        f"{example_str}"
     )
     raw = client.call(ModelSize.TINY, system, [prompt])
     _write_trace(trace_dir, system, prompt, raw)
@@ -236,13 +274,14 @@ def grade_competence_cv_match(
     except Exception:
         data = {}
 
+    label_set = frozenset(labels)
     result: Dict[str, str] = {}
     for c in competences:
         v = data.get(c)
-        if isinstance(v, str) and v.strip() in LEVEL_LABELS:
+        if isinstance(v, str) and v.strip() in label_set:
             result[c] = v.strip()
         else:
-            result[c] = "Brief experience"
+            result[c] = default_label
     return result
 
 
@@ -251,17 +290,26 @@ def extract_job_metadata(
     client: BaseClient,
     trace_dir: Path | None = None,
     cv_text: Optional[str] = None,
+    scale_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Extract key job details from the posting.
 
-    If ``cv_text`` is provided, key competences are extracted by category (critical / expected / nice to have),
-    flattened to a list, then graded by candidate level (Newbie → Senior professional) from the CV.
+    If ``cv_text`` is provided, key competences are extracted by category, flattened, then graded
+    by candidate level from the CV. Categories and level labels come from ``scale_config`` when
+    provided: ``scale_config["need"]`` and ``scale_config["level"]`` (keys used as labels).
     ``competences`` is {skill: {need, level}}; ``requirements`` is the flat list of skills.
 
     If ``trace_dir`` is provided, we dump prompts and raw model output to disk for debugging.
     """
+    need_semantics = {**DEFAULT_NEED_SEMANTICS, **(scale_config.get("needSemantics") or {})} if scale_config else dict(DEFAULT_NEED_SEMANTICS)
+    need_labels = tuple(need_semantics.keys())
+    level_labels: tuple[str, ...] = LEVEL_LABELS
+    if scale_config:
+        level_cfg = scale_config.get("level") or {}
+        if level_cfg:
+            level_labels = tuple(level_cfg.keys())
+
     if cv_text and str(cv_text).strip():
-        # Parallel: metadata without requirements + competences by category. Then grade levels, join.
         base_dir = trace_dir
         no_req_dir = Path(base_dir, "no_requirements") if base_dir else None
         comp_dir = Path(base_dir, "competences") if base_dir else None
@@ -270,7 +318,13 @@ def extract_job_metadata(
             return extract_job_metadata_no_requirements(job_text, client, no_req_dir)
 
         def run_competences():
-            return extract_key_competences(job_text, client, comp_dir)
+            return extract_key_competences(
+                job_text,
+                client,
+                comp_dir,
+                need_categories=need_labels,
+                need_semantics=need_semantics,
+            )
 
         with ThreadPoolExecutor(max_workers=2) as ex:
             f_no = ex.submit(run_no_requirements)
@@ -278,12 +332,17 @@ def extract_job_metadata(
             meta = f_no.result()
             by_category = f_comp.result()
 
-        flat_pairs = _flatten_competences_by_category(by_category)
+        flat_pairs = _flatten_competences_by_category(
+            by_category, category_order=need_labels
+        )
         flat_skills = [s for s, _ in flat_pairs]
         grade_dir = Path(base_dir, "grade_cv_match") if base_dir else None
-        levels = grade_competence_cv_match(flat_skills, cv_text, job_text, client, grade_dir)
+        levels = grade_competence_cv_match(
+            flat_skills, cv_text, job_text, client, grade_dir, level_labels=level_labels
+        )
+        default_lvl = "Brief experience" if "Brief experience" in level_labels else level_labels[len(level_labels) // 2]
         meta["competences"] = {
-            skill: {"need": need, "level": levels.get(skill, "Brief experience")}
+            skill: {"need": need, "level": levels.get(skill, default_lvl)}
             for skill, need in flat_pairs
         }
         meta["requirements"] = flat_skills
