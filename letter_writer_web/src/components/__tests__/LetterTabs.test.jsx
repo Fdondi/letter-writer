@@ -87,14 +87,15 @@ describe('LetterTabs Component', () => {
       expect(screen.getByText('Drop here to add to bottom')).toBeInTheDocument();
     });
 
-    test('shows paragraph count when final paragraphs exist', () => {
+    test('shows Final Letter column when final paragraphs exist', () => {
       const finalParagraphs = [
         { id: 'f1', text: 'Final paragraph 1', vendor: 'openai' }
       ];
       
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
       
-      expect(screen.getByText('(1 paragraphs)')).toBeInTheDocument();
+      expect(screen.getByText('Final Letter')).toBeInTheDocument();
+      expect(screen.getByText('Final paragraph 1')).toBeInTheDocument();
     });
   });
 

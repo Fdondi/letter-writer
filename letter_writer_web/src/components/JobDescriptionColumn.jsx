@@ -190,68 +190,98 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
           overflow: "hidden",
         }}
       >
-        <div
-          style={{
-            padding: "8px 12px",
-            background: "var(--header-bg)",
-            borderBottom: "1px solid var(--border-color)",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            flexShrink: 0,
-          }}
-        >
-          <strong style={{ color: 'var(--text-color)' }}>Job Description</strong>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {languages.length > 0 && (
-              <>
-                {jobTranslating && <span style={{ fontSize: "9px", color: "var(--secondary-text-color)" }}>Translating…</span>}
-                <LanguageSelector
-                  languages={languages}
-                  viewLanguage={jobViewLanguage}
-                  onLanguageChange={translateJobDescription}
-                  hasTranslation={(code) => Boolean(jobTranslations[code])}
-                  isTranslating={jobTranslating}
-                  size="tiny"
-                />
-              </>
-            )}
-            {onHeaderClick && !isExpanded && (
-              <button
-                type="button"
-                onClick={onHeaderClick}
-                title="Expand to 80% width"
-                style={{
-                  padding: "2px 8px",
-                  fontSize: "12px",
-                  background: "var(--panel-bg)",
-                  color: "var(--text-color)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: 4,
-                  cursor: "pointer",
-                }}
-              >
-                Expand
-              </button>
-            )}
-            {isExpanded && onClose && (
-              <button
-                type="button"
-                onClick={onClose}
-                title="Close expanded view"
-                style={{
-                  padding: "2px 8px",
-                  fontSize: "12px",
-                  background: "var(--panel-bg)",
-                  color: "var(--text-color)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: 4,
-                  cursor: "pointer",
-                }}
-              >
-                × Close
-              </button>
-            )}
+        <div style={{ background: "var(--header-bg)", borderBottom: "1px solid var(--border-color)", flexShrink: 0 }}>
+          {/* Line 1: Title + Expand */}
+          <div
+            style={{
+              padding: "8px 12px",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <strong style={{ color: 'var(--text-color)' }}>Job Description</strong>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {onHeaderClick && !isExpanded && (
+                <button
+                  type="button"
+                  onClick={onHeaderClick}
+                  title="Expand to 80% width"
+                  style={{
+                    padding: "2px 8px",
+                    fontSize: "12px",
+                    background: "var(--panel-bg)",
+                    color: "var(--text-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                  }}
+                >
+                  Expand
+                </button>
+              )}
+              {isExpanded && onClose && (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  title="Close expanded view"
+                  style={{
+                    padding: "2px 8px",
+                    fontSize: "12px",
+                    background: "var(--panel-bg)",
+                    color: "var(--text-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                  }}
+                >
+                  × Close
+                </button>
+              )}
+            </div>
+          </div>
+          {/* Line 2: Translate + Copy */}
+          <div
+            style={{
+              padding: "6px 12px 8px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+              flexWrap: "wrap",
+              borderTop: "1px solid var(--border-color)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              {languages.length > 0 && (
+                <>
+                  {jobTranslating && <span style={{ fontSize: "9px", color: "var(--secondary-text-color)" }}>Translating…</span>}
+                  <LanguageSelector
+                    languages={languages}
+                    viewLanguage={jobViewLanguage}
+                    onLanguageChange={translateJobDescription}
+                    hasTranslation={(code) => Boolean(jobTranslations[code])}
+                    isTranslating={jobTranslating}
+                    size="tiny"
+                  />
+                </>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => navigator.clipboard.writeText(getJobDisplayText() || "").catch(() => {})}
+              style={{
+                padding: "4px 8px",
+                fontSize: "12px",
+                background: "#3b82f6",
+                color: "white",
+                border: "none",
+                borderRadius: 4,
+                cursor: "pointer",
+              }}
+            >
+              Copy
+            </button>
           </div>
         </div>
         {jobTranslationError && (
@@ -349,7 +379,6 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
         >
           <strong style={{ color: 'var(--text-color)', fontSize: "13px" }}>
             Key Competences
-            {requirementsList.length > 0 && ` (${requirementsList.length})`}
             {(() => {
               if (!hasRatings || !scaleConfig) return null;
               const keys = Object.keys(comp);
@@ -378,19 +407,6 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
             })()}
           </strong>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {!isCollapsed && languages.length > 0 && (
-              <>
-                {reqTranslating && <span style={{ fontSize: "9px", color: "var(--secondary-text-color)" }}>Translating…</span>}
-                <LanguageSelector
-                  languages={languages}
-                  viewLanguage={reqViewLanguage}
-                  onLanguageChange={translateRequirements}
-                  hasTranslation={(code) => Boolean(reqTranslations[code])}
-                  isTranslating={reqTranslating}
-                  size="tiny"
-                />
-              </>
-            )}
             <button
               onClick={() => setIsCollapsed(!isCollapsed)}
               style={{

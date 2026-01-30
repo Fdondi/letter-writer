@@ -8,6 +8,8 @@ import { HoverProvider } from "../contexts/HoverContext";
 import { v4 as uuidv4 } from "uuid";
 import { useLanguages } from "../contexts/LanguageContext";
 import JobDescriptionColumn from "./JobDescriptionColumn";
+import LanguageSelector from "./LanguageSelector";
+import { translateText } from "../utils/translate";
 
 const FeedbackForm = ({ rating, comment, onChange }) => {
   return (
@@ -70,12 +72,14 @@ export default function LetterTabs({
   onRetry, 
   vendorColors, 
   onAddParagraph,
-  onFinalize,
+  onSaveAndCopy,
   savingFinal = false,
   vendorFeedback = {},
   setVendorFeedback = () => {},
 }) {
   const [collapsed, setCollapsed] = useState([]);
+  const [savedState, setSavedState] = useState("save_copy"); // "save_copy" | "copy"
+  const [saveError, setSaveError] = useState(null);
   const [finalLetter, setFinalLetter] = useState("");
   const [originalLetter, setOriginalLetter] = useState(originalText || "");
   const [expandedColumn, setExpandedColumn] = useState(null); // 'vendor:Name' | 'final' | 'job-description' | null
@@ -92,7 +96,14 @@ export default function LetterTabs({
     }
   }, [originalText]);
 
+  useEffect(() => {
+    setSavedState("save_copy");
+    setSaveError(null);
+  }, [finalParagraphs]);
+
   const [translationStates, setTranslationStates] = useState({}); // { [id]: { translations: {}, viewLanguage: 'source' } }
+  const [translateAllViewLanguage, setTranslateAllViewLanguage] = useState("source");
+  const [translateAllInProgress, setTranslateAllInProgress] = useState(false);
   const finalColumnRef = useRef(null);
   const scrollPositionRef = useRef(0);
   
@@ -408,11 +419,58 @@ export default function LetterTabs({
     });
   };
 
-  const copyFinalText = async () => {
+  const handleSaveAndCopy = async () => {
     const fullText = finalParagraphs.map(getDisplayText).join('\n\n');
+    setSaveError(null);
+    try {
+      if (savedState === "save_copy" && onSaveAndCopy) {
+        await onSaveAndCopy(fullText);
+        setSavedState("copy");
+      }
+      await navigator.clipboard.writeText(fullText);
+    } catch (e) {
+      setSaveError(e.message || "Failed to save letter");
+    }
+  };
 
-    if (onFinalize) {
-      onFinalize(fullText);
+  // Translate all final paragraphs to the same language (column-wide)
+  const translateAllParagraphsTo = async (targetLanguage) => {
+    if (finalParagraphs.length === 0 || targetLanguage === "source") {
+      setTranslationStates((prev) => {
+        const next = { ...prev };
+        Object.keys(next).forEach((id) => {
+          next[id] = { ...next[id], viewLanguage: "source" };
+        });
+        return next;
+      });
+      setTranslateAllViewLanguage("source");
+      return;
+    }
+    setTranslateAllInProgress(true);
+    setSaveError(null);
+    try {
+      const updates = {};
+      for (let i = 0; i < finalParagraphs.length; i++) {
+        const p = finalParagraphs[i];
+        if (!p?.text) continue;
+        const translated = await translateText(p.text, targetLanguage, null);
+        updates[p.id] = {
+          viewLanguage: targetLanguage,
+          translations: { [targetLanguage]: translated },
+        };
+      }
+      setTranslationStates((prev) => {
+        const next = { ...prev };
+        Object.entries(updates).forEach(([id, state]) => {
+          next[id] = { ...(next[id] || {}), ...state, translations: { ...(next[id]?.translations || {}), ...state.translations } };
+        });
+        return next;
+      });
+      setTranslateAllViewLanguage(targetLanguage);
+    } catch (e) {
+      setSaveError(e.message || "Translation failed");
+    } finally {
+      setTranslateAllInProgress(false);
     }
   };
 
@@ -517,6 +575,7 @@ export default function LetterTabs({
       }}
     >
       <div style={{ background: "var(--header-bg)", borderRadius: "4px 4px 0 0" }}>
+        {/* Line 1: Title + Expand */}
         <h4 style={{ 
           margin: 0, 
           padding: "8px 12px",
@@ -525,14 +584,7 @@ export default function LetterTabs({
           alignItems: "center",
           color: 'var(--text-color)'
         }}>
-          <span>
-            Final Letter
-            {finalParagraphs.length > 0 && (
-              <span style={{ fontSize: "12px", fontWeight: "normal", marginLeft: "8px", color: 'var(--secondary-text-color)' }}>
-                ({finalParagraphs.length} paragraphs)
-              </span>
-            )}
-          </span>
+          <span>Final Letter</span>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {onHeaderClick && !isExpanded && (
               <button
@@ -570,27 +622,58 @@ export default function LetterTabs({
                 × Close
               </button>
             )}
-            <button
-              id="copy-final-text-btn"
-              onClick={copyFinalText}
-              disabled={finalParagraphs.length === 0 || savingFinal}
-              style={{
-                padding: "4px 8px",
-                fontSize: "12px",
-                background: finalParagraphs.length === 0 || savingFinal ? "var(--border-color)" : "#3b82f6",
-                color: "white",
-                border: "none",
-                borderRadius: 4,
-                cursor: finalParagraphs.length === 0 || savingFinal ? "not-allowed" : "pointer",
-                transition: "background 0.2s ease"
-              }}
-            >
-              {savingFinal ? "Saving..." : "Finalize"}
-            </button>
           </div>
         </h4>
+        {/* Line 2: language selector + Save & Copy (under Expand) */}
+        <div
+          style={{
+            padding: "6px 12px 8px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            flexWrap: "wrap",
+            borderTop: "1px solid var(--border-color)",
+          }}
+        >
+          <LanguageSelector
+            languages={languageOptions}
+            viewLanguage={translateAllViewLanguage}
+            onLanguageChange={translateAllParagraphsTo}
+            hasTranslation={(code) => translateAllViewLanguage === code}
+            isTranslating={translateAllInProgress}
+            size="tiny"
+          />
+          <button
+            id="save-copy-btn"
+            onClick={handleSaveAndCopy}
+            disabled={finalParagraphs.length === 0 || savingFinal}
+            style={{
+              padding: "4px 8px",
+              fontSize: "12px",
+              background: finalParagraphs.length === 0 || savingFinal ? "var(--border-color)" : savedState === "copy" ? "#10b981" : "#3b82f6",
+              color: "white",
+              border: "none",
+              borderRadius: 4,
+              cursor: finalParagraphs.length === 0 || savingFinal ? "not-allowed" : "pointer",
+              transition: "background 0.2s ease"
+            }}
+          >
+            {savingFinal ? "Saving..." : savedState === "save_copy" ? "Save & Copy" : "Copy"}
+          </button>
+        </div>
       </div>
-      
+      {saveError && (
+        <div style={{
+          padding: "4px 12px",
+          fontSize: "12px",
+          background: "var(--error-bg)",
+          color: "var(--error-text)",
+          borderBottom: "1px solid var(--border-color)"
+        }}>
+          {saveError}
+        </div>
+      )}
       {/* Scrollable content area */}
       <div 
         ref={(node) => {
@@ -1171,6 +1254,8 @@ export default function LetterTabs({
               minWidth={`${minColumnWidth}px`}
               languages={languageOptions}
               onHeaderClick={() => toggleExpand("job-description")}
+              isExpanded={expandedColumn === "job-description"}
+              onClose={closeExpand}
             />
           )}
         </div>
