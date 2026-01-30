@@ -1243,6 +1243,10 @@ function VendorCard({
                   if (onPhaseComplete) {
                     onPhaseComplete(vendor, cardPhase, null);
                   }
+                  // Switch to next card immediately (don't wait for API) so the slow call doesn't block UX
+                  if (onAfterApproveInExpanded) {
+                    onAfterApproveInExpanded();
+                  }
 
                   const nextPhaseData = await onApprove(cardPhase, vendor, cardPhaseEdits);
                   // Handle 202 heartbeat response - request is still processing
@@ -1256,9 +1260,6 @@ function VendorCard({
                   // The next phase card will pick this up and stop its own loading state
                   if (onPhaseComplete && nextPhaseData) {
                     onPhaseComplete(vendor, cardPhase, nextPhaseData);
-                  }
-                  if (onAfterApproveInExpanded) {
-                    onAfterApproveInExpanded();
                   }
                 }
               } catch (e) {
