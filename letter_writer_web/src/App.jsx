@@ -19,7 +19,7 @@ import { phases as phaseModules } from "./components/phases";
 import { translateText } from "./utils/translate";
 import { useLanguages } from "./contexts/LanguageContext";
 import { createTextDiff } from "./utils/diff";
-import { getScaleConfig, toNumeric, getEffectiveRating } from "./utils/competenceScales";
+import { getScaleConfig, getEffectiveRating, getEffectiveImportance } from "./utils/competenceScales";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
@@ -415,11 +415,17 @@ export default function App() {
     setPhaseSessionId(sessionId);
     
     try {
+      const scaleConfig = getScaleConfig();
       const result = await fetchWithHeartbeat("/api/extract/", {
         method: "POST",
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           job_text: jobText,
           session_id: sessionId,
+          scale_config: {
+            need: scaleConfig.need,
+            level: scaleConfig.level,
+            needSemantics: scaleConfig.needSemantics || {},
+          },
         }),
       });
       const data = result.data;
@@ -437,10 +443,12 @@ export default function App() {
         const keys = Object.keys(comp).sort((a, b) => {
           const numA = getEffectiveRating(a, comp, cfg, {});
           const numB = getEffectiveRating(b, comp, cfg, {});
-          if (numA.presence == null || numA.importance == null) return 1;
-          if (numB.presence == null || numB.importance == null) return -1;
-          const scoreA = numA.importance * (numA.presence - 2.5);
-          const scoreB = numB.importance * (numB.presence - 2.5);
+          const impA = getEffectiveImportance(a, comp, cfg, {});
+          const impB = getEffectiveImportance(b, comp, cfg, {});
+          if (numA.presence == null || impA == null) return 1;
+          if (numB.presence == null || impB == null) return -1;
+          const scoreA = impA * (numA.presence - 2.5);
+          const scoreB = impB * (numB.presence - 2.5);
           const absA = Math.abs(scoreA);
           const absB = Math.abs(scoreB);
           if (Math.abs(absB - absA) < 0.01) return scoreB - scoreA;
@@ -1434,9 +1442,10 @@ export default function App() {
                   let totalWeight = 0;
                   keys.forEach(key => {
                     const num = getEffectiveRating(key, competences, competenceScaleConfig, competenceOverrides);
-                    if (num.presence != null && num.importance != null) {
-                      totalWeighted += num.presence * num.importance;
-                      totalWeight += num.importance;
+                    const imp = getEffectiveImportance(key, competences, competenceScaleConfig, competenceOverrides);
+                    if (num.presence != null && imp != null) {
+                      totalWeighted += num.presence * imp;
+                      totalWeight += imp;
                     }
                   });
                   if (totalWeight === 0) return null;

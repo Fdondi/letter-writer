@@ -704,6 +704,7 @@ function VendorCardWrapper({
   isExpanded,
   onCloseExpand,
   useOverlayWidth,
+  onAfterApproveInExpanded,
 }) {
   // Get previous phase data (to check if we SHOULD be loading)
   const previousPhaseApproved = phaseObj.previous ? phaseObj.previous.approvedVendors.has(vendor) : true;
@@ -787,6 +788,7 @@ function VendorCardWrapper({
       isExpanded={isExpanded}
       onCloseExpand={onCloseExpand}
       useOverlayWidth={useOverlayWidth}
+      onAfterApproveInExpanded={onAfterApproveInExpanded}
     />
   );
 }
@@ -819,6 +821,7 @@ function VendorCard({
   isExpanded,
   onCloseExpand,
   useOverlayWidth,
+  onAfterApproveInExpanded,
 }) {
   // This card knows which phase it belongs to
   const cardPhase = phaseObj?.phase || null;
@@ -1254,6 +1257,9 @@ function VendorCard({
                   if (onPhaseComplete && nextPhaseData) {
                     onPhaseComplete(vendor, cardPhase, nextPhaseData);
                   }
+                  if (onAfterApproveInExpanded) {
+                    onAfterApproveInExpanded();
+                  }
                 }
               } catch (e) {
                 setError(e.message || String(e));
@@ -1451,6 +1457,64 @@ export default function PhaseFlow({
     }
   }, [phaseCounters]);
 
+  const expandedPhase = expandedCard ? phases.find((p) => p.phase === expandedCard.phase) : null;
+  const vendorIdx = expandedCard ? vendorsList.indexOf(expandedCard.vendor) : -1;
+  const isFirstVendor = vendorIdx <= 0;
+  const isLastVendor = vendorIdx >= vendorsList.length - 1;
+  const nextPhase = expandedPhase?.next ?? null;
+  const hasNextPhase = !!nextPhase;
+
+  const goLeft = useCallback(() => {
+    if (!expandedCard || isFirstVendor) return;
+    const idx = vendorsList.indexOf(expandedCard.vendor);
+    if (idx <= 0) return;
+    setExpandedCard({ phase: expandedCard.phase, vendor: vendorsList[idx - 1] });
+  }, [expandedCard, vendorsList, isFirstVendor]);
+
+  const goRight = useCallback(() => {
+    if (!expandedCard) return;
+    const idx = vendorsList.indexOf(expandedCard.vendor);
+    if (idx < 0) return;
+    if (idx < vendorsList.length - 1) {
+      setExpandedCard({ phase: expandedCard.phase, vendor: vendorsList[idx + 1] });
+      return;
+    }
+    if (nextPhase) {
+      setExpandedCard({ phase: nextPhase.phase, vendor: vendorsList[0] });
+    }
+  }, [expandedCard, vendorsList, nextPhase]);
+
+  const onAfterApproveInExpanded = useCallback(() => {
+    if (!expandedCard) return;
+    const idx = vendorsList.indexOf(expandedCard.vendor);
+    if (idx < 0) return;
+    if (idx < vendorsList.length - 1) {
+      setExpandedCard({ phase: expandedCard.phase, vendor: vendorsList[idx + 1] });
+      return;
+    }
+    if (nextPhase) {
+      setExpandedCard({ phase: nextPhase.phase, vendor: vendorsList[0] });
+    }
+  }, [expandedCard, vendorsList, nextPhase]);
+
+  useEffect(() => {
+    if (!expandedCard) return;
+    const handler = (e) => {
+      const tag = e.target?.tagName?.toLowerCase();
+      const ce = e.target?.getAttribute?.("contenteditable") === "true";
+      if (tag === "input" || tag === "textarea" || tag === "select" || ce) return;
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        goLeft();
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        goRight();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [expandedCard, goLeft, goRight]);
+
   // Stabilize saveFeedbackOverride with useCallback
   const saveFeedbackOverride = useCallback((vendor, key, val) => {
     if (!vendor || !key) return;
@@ -1484,11 +1548,12 @@ export default function PhaseFlow({
           isExpanded={overlayMode}
           onCloseExpand={overlayMode ? closeExpand : undefined}
           useOverlayWidth={overlayMode}
+          onAfterApproveInExpanded={overlayMode ? onAfterApproveInExpanded : undefined}
         />
       ));
     });
     return renderFunctions;
-  }, [phases, sessionId, onEditChange, onApprove, onRerunFromBackground, onPhaseComplete, saveFeedbackOverride, toggleExpand, closeExpand]);
+  }, [phases, sessionId, onEditChange, onApprove, onRerunFromBackground, onPhaseComplete, saveFeedbackOverride, toggleExpand, closeExpand, onAfterApproveInExpanded]);
   
   phases.forEach(phaseObj => {
     const phaseName = phaseObj.phase;
@@ -1511,8 +1576,6 @@ export default function PhaseFlow({
     phaseObj.renderVendor = memoizedRenderVendors.get(phaseName);
   });
 
-  const expandedPhase = expandedCard ? phases.find((p) => p.phase === expandedCard.phase) : null;
-
   return (
     <>
       {expandedCard && expandedPhase && createPortal(
@@ -1526,6 +1589,7 @@ export default function PhaseFlow({
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
+            gap: 12,
             padding: 24,
             boxSizing: "border-box",
             background: "rgba(0,0,0,0.2)",
@@ -1533,12 +1597,36 @@ export default function PhaseFlow({
             WebkitBackdropFilter: "blur(8px)",
           }}
         >
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); goLeft(); }}
+            disabled={isFirstVendor}
+            title="Previous (←)"
+            style={{
+              flexShrink: 0,
+              width: 44,
+              height: 44,
+              borderRadius: "50%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "rgba(0,0,0,0.25)",
+              color: "rgba(255,255,255,0.9)",
+              border: "none",
+              cursor: isFirstVendor ? "not-allowed" : "pointer",
+              opacity: isFirstVendor ? 0.4 : 1,
+              fontSize: "22px",
+            }}
+          >
+            ‹
+          </button>
           <div
             role="dialog"
             aria-label={`Expanded: ${expandedCard.vendor}`}
             onClick={(e) => e.stopPropagation()}
             style={{
-              width: "80%",
+              flex: "1 1 0",
+              minWidth: 0,
               maxWidth: 1200,
               height: "85vh",
               maxHeight: "85vh",
@@ -1553,6 +1641,29 @@ export default function PhaseFlow({
           >
             {expandedPhase.renderVendor(expandedCard.vendor, true)}
           </div>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); goRight(); }}
+            disabled={isLastVendor && !hasNextPhase}
+            title="Next (→)"
+            style={{
+              flexShrink: 0,
+              width: 44,
+              height: 44,
+              borderRadius: "50%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "rgba(0,0,0,0.25)",
+              color: "rgba(255,255,255,0.9)",
+              border: "none",
+              cursor: (isLastVendor && !hasNextPhase) ? "not-allowed" : "pointer",
+              opacity: (isLastVendor && !hasNextPhase) ? 0.4 : 1,
+              fontSize: "22px",
+            }}
+          >
+            ›
+          </button>
         </div>,
         document.body
       )}
