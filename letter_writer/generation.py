@@ -175,8 +175,9 @@ def extract_key_competences(
         "Each value is an array of strings (competences). Use empty arrays [] if none in that category. "
         f"Assign each competence to the most appropriate category.{semantic}"
         "Keep each competence short and specific (e.g. 'C++', 'fluent German', 'git'). "
-        "Pay attention to separate competences that are ANDed. 'Good German and English' is ['Good German', 'Good English']. "
-        "'Object oriented languages like C++ or Java' is a single competence, 'Object oriented programming'. "
+        "Pay attention to separate competences that are ANDed. 'German and English' is ['German', 'English'],  "
+        "but 'Object oriented languages like C++ or Java' is a single competence, 'Object oriented programming'. "
+        "Do not include intensity modifiers, like 'Good' or 'Fluent'. That goes into the importance."
         "Do not add any other keys or prose."
     )
     prompt = (
@@ -285,21 +286,28 @@ def grade_competence_cv_match(
     return result
 
 
+def _normalize_skill(s: str) -> str:
+    """Normalize for matching: strip, lower, collapse spaces."""
+    return " ".join((s or "").strip().lower().split())
+
+
 def extract_job_metadata(
     job_text: str,
     client: BaseClient,
     trace_dir: Path | None = None,
     cv_text: Optional[str] = None,
     scale_config: Optional[Dict[str, Any]] = None,
+    existing_competence_ratings: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """Extract key job details from the posting.
 
     If ``cv_text`` is provided, key competences are extracted by category, flattened, then graded
     by candidate level from the CV. Categories and level labels come from ``scale_config`` when
-    provided: ``scale_config["need"]`` and ``scale_config["level"]`` (keys used as labels).
-    ``competences`` is {skill: {need, level}}; ``requirements`` is the flat list of skills.
+    provided. ``competences`` is {skill: {need, level}}; ``requirements`` is the flat list of skills.
 
-    If ``trace_dir`` is provided, we dump prompts and raw model output to disk for debugging.
+    ``existing_competence_ratings``: {skill: cv_fit 1-5} from profile. If an extracted competence
+    matches (strip + case-insensitive), the existing rating is used instead of calling the LLM.
+    If all match, grading is skipped.
     """
     need_semantics = {**DEFAULT_NEED_SEMANTICS, **(scale_config.get("needSemantics") or {})} if scale_config else dict(DEFAULT_NEED_SEMANTICS)
     need_labels = tuple(need_semantics.keys())
@@ -336,11 +344,39 @@ def extract_job_metadata(
             by_category, category_order=need_labels
         )
         flat_skills = [s for s, _ in flat_pairs]
-        grade_dir = Path(base_dir, "grade_cv_match") if base_dir else None
-        levels = grade_competence_cv_match(
-            flat_skills, cv_text, job_text, client, grade_dir, level_labels=level_labels
-        )
         default_lvl = "Brief experience" if "Brief experience" in level_labels else level_labels[len(level_labels) // 2]
+
+        # Build lookup: normalized skill -> (original_key, cv_fit 1-5) from existing profile ratings
+        existing_lookup: Dict[str, tuple[str, int]] = {}
+        if existing_competence_ratings:
+            for orig, val in existing_competence_ratings.items():
+                if isinstance(val, (int, float)) and 1 <= val <= 5:
+                    norm = _normalize_skill(orig)
+                    if norm:
+                        existing_lookup[norm] = (orig, int(round(val)))
+
+        # Split into matched (use existing) and unmatched (call LLM)
+        matched_levels: Dict[str, str] = {}
+        unmatched_skills: List[str] = []
+        for skill, need in flat_pairs:
+            norm = _normalize_skill(skill)
+            if norm and norm in existing_lookup:
+                _, cv_fit = existing_lookup[norm]
+                # Convert numeric 1-5 to level label
+                idx = max(0, min(cv_fit - 1, len(level_labels) - 1))
+                matched_levels[skill] = level_labels[idx]
+            else:
+                unmatched_skills.append(skill)
+
+        levels: Dict[str, str] = dict(matched_levels)
+        if unmatched_skills:
+            grade_dir = Path(base_dir, "grade_cv_match") if base_dir else None
+            llm_levels = grade_competence_cv_match(
+                unmatched_skills, cv_text, job_text, client, grade_dir, level_labels=level_labels
+            )
+            for s in unmatched_skills:
+                levels[s] = llm_levels.get(s, default_lvl)
+
         meta["competences"] = {
             skill: {"need": need, "level": levels.get(skill, default_lvl)}
             for skill, need in flat_pairs

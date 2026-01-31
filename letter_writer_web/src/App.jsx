@@ -18,7 +18,7 @@ import { phases as phaseModules } from "./components/phases";
 import { translateText } from "./utils/translate";
 import { useLanguages } from "./contexts/LanguageContext";
 import { createTextDiff } from "./utils/diff";
-import { getScaleConfig, getEffectiveRating, getEffectiveImportance } from "./utils/competenceScales";
+import { getScaleConfig, getEffectiveRating, getEffectiveImportance, buildCompetenceRatingsForProfile } from "./utils/competenceScales";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
@@ -852,6 +852,20 @@ export default function App() {
       }
     }
 
+    // Save competence ratings to profile (after user modifications) for future extractions and CV appendix
+    const ratingsToSave = buildCompetenceRatingsForProfile(
+      competences,
+      requirements,
+      competenceOverrides,
+      competenceScaleConfig
+    );
+    if (Object.keys(ratingsToSave).length > 0) {
+      fetchWithHeartbeat("/api/personal-data/", {
+        method: "POST",
+        body: JSON.stringify({ competence_ratings: ratingsToSave }),
+      }).catch((e) => console.warn("Failed to save competence ratings to profile:", e));
+    }
+
     // Start background phase for all vendors in parallel
     // Each vendor only needs session_id - they read all data from the session
     vendorList.forEach((vendor) => {
@@ -1426,9 +1440,10 @@ export default function App() {
 
             {/* Right column: Key Competences only */}
             <div style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0 }}>
-              <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600, flexShrink: 0 }}>
-                Key Competences
-                {(() => {
+              <div style={{ marginBottom: 4, flexShrink: 0 }}>
+                <label style={{ display: "block", fontSize: "14px", fontWeight: 600 }}>
+                  How good is your fit? Key competences weighted match:
+                  {(() => {
                   const keys = Object.keys(competences);
                   if (keys.length === 0) return null;
                   let totalWeighted = 0;
@@ -1450,7 +1465,11 @@ export default function App() {
                     </span>
                   );
                 })()}
-              </label>
+                </label>
+                <div style={{ fontSize: 11, color: "var(--secondary-text-color)", marginTop: 2 }}>
+                  CV fit levels can be adjusted. They will be remembered.
+                </div>
+              </div>
               <div style={{ display: "flex", flexDirection: "column", flex: "1 1 0", minHeight: 0 }}>
                 <div
                   style={{

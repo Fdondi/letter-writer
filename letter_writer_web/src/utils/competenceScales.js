@@ -144,6 +144,32 @@ function logScaleImportance(x) {
 }
 
 /**
+ * Build competence_ratings for profile save: { skill: cv_fit 1-5 } with user overrides applied.
+ * Need is job-specific and not stored.
+ */
+export function buildCompetenceRatingsForProfile(competences, requirements, overrides, scaleConfig) {
+  if (!competences || typeof competences !== "object") return {};
+  const cfg = scaleConfig || getScaleConfig();
+  const out = {};
+  const skills = Array.isArray(requirements) ? requirements : Object.keys(competences);
+  for (const skill of skills) {
+    const s = (skill || "").trim();
+    if (!s) continue;
+    const val = competences[s];
+    const o = overrides?.[s];
+    let n;
+    if (o?.presence != null && o.presence >= 1 && o.presence <= 5) {
+      n = Math.round(o.presence);
+    } else {
+      const num = toNumeric(val, cfg);
+      n = num.presence != null ? Math.round(num.presence) : 3;
+    }
+    out[s] = Math.max(1, Math.min(5, n));
+  }
+  return out;
+}
+
+/**
  * Importance for scoring (sort, weighted avg). Uses needScale: "log" → logarithmic, else linear.
  * Uses raw need label from competences[skill]; overrides only change the numeric value.
  */

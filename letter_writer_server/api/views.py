@@ -112,9 +112,17 @@ from letter_writer.firestore_store import (
     get_personal_data_collection,
     get_personal_data_document,
     get_user_data,
-    clear_user_data_cache,
     list_documents,
     upsert_document,
+)
+from .personal_data_sections import (
+    get_competence_ratings,
+    get_cv_revisions,
+    get_models,
+    get_style_instructions,
+    merge_on_conflict,
+    unwrap_for_response,
+    wrap_new_field,
 )
 from letter_writer.vector_store import (
     delete_documents,
@@ -563,7 +571,12 @@ def extract_view(request: HttpRequest):
 
     scale_config = data.get("scale_config")
 
-    from .session_helpers import ensure_user_data_in_session, get_session_id, save_session_common_data
+    from .session_helpers import (
+        ensure_user_data_in_session,
+        get_session_id,
+        save_session_common_data,
+        _load_competence_ratings_from_profile,
+    )
     session_id = get_session_id(request)
 
     try:
@@ -583,10 +596,17 @@ def extract_view(request: HttpRequest):
             logger.error("extract_view: CV still missing after load attempt")
             raise MissingCVError("CV text is missing or empty - please upload your CV in the 'Your CV' tab")
 
+        existing_ratings = _load_competence_ratings_from_profile(request)
+
         ai_client = get_client(ModelVendor.OPENAI)
         trace_dir = Path("trace", "extraction.openai")
         extraction = extract_job_metadata(
-            job_text, ai_client, trace_dir=trace_dir, cv_text=cv_text, scale_config=scale_config
+            job_text,
+            ai_client,
+            trace_dir=trace_dir,
+            cv_text=cv_text,
+            scale_config=scale_config,
+            existing_competence_ratings=existing_ratings or None,
         )
 
         save_session_common_data(
@@ -1310,7 +1330,7 @@ def vendors_view(request: HttpRequest):
             from letter_writer.firestore_store import get_user_data
             user_data = get_user_data(user_id, use_cache=True)
             if user_data:
-                default_models = user_data.get("default_models")
+                default_models = get_models(user_data)
                 if default_models and isinstance(default_models, list) and len(default_models) > 0:
                     active_vendors = set(default_models)
     
@@ -1353,7 +1373,7 @@ def style_instructions_view(request: HttpRequest):
             # 2. Check Firestore (if authenticated and not in session)
             if not instructions and user_id:
                 user_data = get_user_data(user_id, use_cache=True)
-                instructions = user_data.get("style_instructions", "")
+                instructions = get_style_instructions(user_data) or ""
                 
                 # Save to session if found
                 if instructions and request.session.session_key:
@@ -1378,16 +1398,46 @@ def style_instructions_view(request: HttpRequest):
             
             if not instructions:
                 return JsonResponse({"detail": "Instructions cannot be empty"}, status=400)
-            
-            # 1. Update Firestore
+
+            from google.cloud.firestore_v1._helpers import LastUpdateOption
+
+            now = datetime.utcnow()
             user_doc_ref = get_personal_data_document(user_id)
-            user_doc_ref.set({
-                "style_instructions": instructions, 
-                "updated_at": datetime.utcnow()
-            }, merge=True)
-            
-            # Clear cache
-            clear_user_data_cache(user_id)
+            user_doc = user_doc_ref.get()
+            updates = {
+                "style": wrap_new_field("style", instructions, now),
+                "updated_at": now,
+            }
+
+            max_retries = 3
+            for attempt in range(max_retries):
+                if not user_doc.exists:
+                    user_doc_ref.set(updates, merge=True)
+                    break
+                try:
+                    option = LastUpdateOption(user_doc.update_time)
+                    user_doc_ref.update(updates, option=option)
+                    break
+                except Exception as e:
+                    is_precondition = (
+                        getattr(e, "code", None) == 9
+                        or "FAILED_PRECONDITION" in str(getattr(e, "message", ""))
+                        or "precondition" in str(e).lower()
+                    )
+                    if is_precondition and attempt < max_retries - 1:
+                        user_doc = user_doc_ref.get()
+                        existing_data = user_doc.to_dict() if user_doc.exists else {}
+                        merged = merge_on_conflict(updates, existing_data, datetime.utcnow())
+                        updates = {k: merged[k] for k in updates}
+                    else:
+                        raise
+
+            # Update cache (cache is golden; we never invalidate)
+            cache = getattr(get_user_data, "_cache", None)
+            if cache is not None:
+                cache_key = f"user_data_{user_id}"
+                if cache_key in cache and isinstance(cache[cache_key], dict):
+                    cache[cache_key].update(updates)
             
             # 2. Update Session
             if not request.session.session_key:
@@ -1726,15 +1776,14 @@ def personal_data_view(request: HttpRequest):
         if not user_data:
             migrated = _migrate_old_cv_data(user_id)
             if migrated:
-                # Clear cache and reload after migration
-                clear_user_data_cache(user_id)
-                user_data = get_user_data(user_id, use_cache=False)
+                # Reload (cache was empty; fetch will populate it)
+                user_data = get_user_data(user_id, use_cache=True)
             else:
                 user_data = {}  # No old data to migrate
         
-        revisions = user_data.get("cv_revisions", [])
-        default_languages = user_data.get("default_languages", [])
-        default_models = user_data.get("default_models", [])
+        revisions = get_cv_revisions(user_data)
+        default_languages = user_data.get("default_languages") or []
+        default_models = get_models(user_data)
         min_column_width = user_data.get("min_column_width")
         
         # Convert Firestore Timestamps to ISO strings and find latest
@@ -1791,10 +1840,10 @@ def personal_data_view(request: HttpRequest):
         user_doc_ref = get_personal_data_document(user_id)
         user_doc = user_doc_ref.get()
         existing_data = user_doc.to_dict() if user_doc.exists else {}
-        revisions = existing_data.get("cv_revisions", [])
+        revisions = get_cv_revisions(existing_data)
         now = datetime.utcnow()
         updates = {"updated_at": now}
-        
+
         if "multipart/form-data" in content_type:
             # File upload - Update CV
             if "file" not in request.FILES:
@@ -1825,7 +1874,7 @@ def personal_data_view(request: HttpRequest):
             }
             revisions.append(new_revision)
             updates["cv_revisions"] = revisions
-            
+
         else:
             # JSON update (CV or Settings)
             try:
@@ -1833,19 +1882,41 @@ def personal_data_view(request: HttpRequest):
             except json.JSONDecodeError:
                 return JsonResponse({"detail": "Invalid JSON"}, status=400)
             
-            # Check if updating default_languages
+            # Check if updating default_languages (stays old field)
             if "default_languages" in data:
                 languages = data["default_languages"]
                 if not isinstance(languages, list):
                     return JsonResponse({"detail": "default_languages must be a list"}, status=400)
                 updates["default_languages"] = languages
 
-            # Check if updating default_models
+            # Check if updating competence_ratings -> write to new field competences
+            if "competence_ratings" in data:
+                ratings = data["competence_ratings"]
+                if not isinstance(ratings, dict):
+                    return JsonResponse({"detail": "competence_ratings must be an object"}, status=400)
+                sanitized = {}
+                for skill, n in ratings.items():
+                    if not isinstance(skill, str) or not skill.strip():
+                        continue
+                    if isinstance(n, (int, float)) and 1 <= n <= 5:
+                        sanitized[skill.strip()] = int(round(n))
+                existing = get_competence_ratings(existing_data)
+                merged = dict(existing)
+                merged.update(sanitized)
+                updates["competences"] = wrap_new_field("competences", merged, now)
+                # Update session so current workflow sees new ratings without re-reading Firestore
+                if request.session.session_key:
+                    sess_ratings = request.session.get("competence_ratings") or {}
+                    if isinstance(sess_ratings, dict):
+                        request.session["competence_ratings"] = {**sess_ratings, **sanitized}
+                        request.session.modified = True
+
+            # Check if updating default_models -> write to new field models
             if "default_models" in data:
                 models = data["default_models"]
                 if not isinstance(models, list):
                     return JsonResponse({"detail": "default_models must be a list"}, status=400)
-                updates["default_models"] = models
+                updates["models"] = wrap_new_field("models", models, now)
                 
                 # Also update current session if it exists (as if user modified in compose tab)
                 # This ensures the change takes effect immediately for active workflows
@@ -1861,16 +1932,16 @@ def personal_data_view(request: HttpRequest):
                         request.session["metadata"]["common"]["selected_vendors"] = models
                         request.session.modified = True
 
-            # Check if updating min_column_width
+            # Check if updating min_column_width (stays old field)
             if "min_column_width" in data:
                 width = data["min_column_width"]
                 if not isinstance(width, (int, float)) or width < 0:
                     return JsonResponse({"detail": "min_column_width must be a positive number"}, status=400)
                 updates["min_column_width"] = int(width)
 
-            # Check if updating style_instructions
+            # Check if updating style_instructions -> write to new field style
             if "style_instructions" in data:
-                updates["style_instructions"] = data["style_instructions"]
+                updates["style"] = wrap_new_field("style", data["style_instructions"], now)
                 
             # Check if updating CV content (mutually exclusive with other updates)
             if "content" in data:
@@ -1888,16 +1959,43 @@ def personal_data_view(request: HttpRequest):
                 }
                 revisions.append(new_revision)
                 updates["cv_revisions"] = revisions
-            
+
             # If no updates were made, return error
             if not updates or updates == {"updated_at": now}:
                 return JsonResponse({"detail": "No valid data provided for update"}, status=400)
         
-        # Update user document (merge with existing fields)
-        user_doc_ref.set(updates, merge=True)
-        
-        # Clear cache after update
-        clear_user_data_cache(user_id)
+        # Optimistic locking: write with precondition, retry with merge on conflict
+        from google.cloud.firestore_v1._helpers import LastUpdateOption
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            if not user_doc.exists:
+                user_doc_ref.set(updates, merge=True)
+                break
+            try:
+                option = LastUpdateOption(user_doc.update_time)
+                user_doc_ref.update(updates, option=option)
+                break
+            except Exception as e:
+                is_precondition = (
+                    getattr(e, "code", None) == 9  # FAILED_PRECONDITION (gRPC)
+                    or "FAILED_PRECONDITION" in str(getattr(e, "message", ""))
+                    or "precondition" in str(e).lower()
+                )
+                if is_precondition and attempt < max_retries - 1:
+                    user_doc = user_doc_ref.get()
+                    existing_data = user_doc.to_dict() if user_doc.exists else {}
+                    merged = merge_on_conflict(updates, existing_data, datetime.utcnow())
+                    updates = {k: merged[k] for k in updates}
+                else:
+                    raise
+
+        # Update cache (cache is golden; we never invalidate)
+        cache = getattr(get_user_data, "_cache", None)
+        if cache is not None:
+            cache_key = f"user_data_{user_id}"
+            if cache_key in cache and isinstance(cache[cache_key], dict):
+                cache[cache_key].update(updates)
         
         # Prepare response
         response_data = {"status": "ok"}
@@ -1926,8 +2024,11 @@ def personal_data_view(request: HttpRequest):
         if "default_languages" in updates:
             response_data["default_languages"] = updates["default_languages"]
 
-        if "style_instructions" in updates:
-            response_data["style_instructions"] = updates["style_instructions"]
+        if "style" in updates:
+            response_data["style_instructions"] = unwrap_for_response("style", updates["style"])
+
+        if "models" in updates:
+            response_data["default_models"] = unwrap_for_response("models", updates["models"])
         
         return JsonResponse(response_data, status=201)
     

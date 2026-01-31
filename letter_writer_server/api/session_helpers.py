@@ -19,12 +19,34 @@ def get_session_id(request: HttpRequest) -> str:
     return request.session.session_key
 
 
+def _get_user_id_for_firestore(request: HttpRequest):
+    """Return user_id for Firestore lookup, or None if not authenticated."""
+    if not request.user.is_authenticated:
+        return None
+    try:
+        from allauth.socialaccount.models import SocialAccount
+        social_account = SocialAccount.objects.filter(user=request.user, provider='google').first()
+        if social_account:
+            return social_account.uid
+    except (ImportError, Exception):
+        pass
+    return str(request.user.id)
+
+
+def _load_competence_ratings_from_profile(request: HttpRequest) -> Dict[str, Any]:
+    """Get competence_ratings from session (loaded once at init with user document). Returns {} if not available."""
+    ratings = request.session.get("competence_ratings")
+    if isinstance(ratings, dict):
+        return ratings
+    return {}
+
+
 def _load_user_data_from_firestore(request: HttpRequest) -> Dict[str, str]:
     """Load user data (CV, style instructions) from Firestore. Returns dict with empty strings if not available."""
     import logging
     logger = logging.getLogger(__name__)
     
-    result = {"cv_text": "", "style_instructions": ""}
+    result = {"cv_text": "", "style_instructions": "", "competence_ratings": {}}
     
     if not request.user.is_authenticated:
         logger.warning("Cannot load user data: user not authenticated")
@@ -34,31 +56,46 @@ def _load_user_data_from_firestore(request: HttpRequest) -> Dict[str, str]:
         from letter_writer.firestore_store import get_user_data
         from datetime import datetime
         
-        # Determine user_id: prefer Google UID if available (same logic as require_auth_user)
-        user_id = None
-        try:
-            from allauth.socialaccount.models import SocialAccount
-            social_account = SocialAccount.objects.filter(user=request.user, provider='google').first()
-            if social_account:
-                user_id = social_account.uid
-                logger.info(f"Using Google UID for Firestore lookup: {user_id}")
-        except (ImportError, Exception):
-            pass
-        
+        user_id = _get_user_id_for_firestore(request)
         if not user_id:
-            user_id = str(request.user.id)
-            logger.info(f"Using Django User ID for Firestore lookup: {user_id}")
+            return result
+        logger.info(f"Using user_id for Firestore lookup: {user_id}")
 
         logger.info(f"Loading user data from Firestore for user {user_id} (cache disabled)")
         # Disable cache to ensure we get the latest data even if updated in another process
         user_data = get_user_data(user_id, use_cache=False)
-        
-        # Load Style Instructions
-        result["style_instructions"] = user_data.get("style_instructions", "")
-        
+
+        # Log document structure for debugging
+        def _field_summary(val):
+            if val is None:
+                return "null"
+            if isinstance(val, dict):
+                return f"dict({len(val)} keys)"
+            if isinstance(val, list):
+                return f"list({len(val)} items)"
+            t = type(val).__name__
+            if isinstance(val, str):
+                return f"{t}({len(val)} chars)"
+            return t
+
+        fields_info = {k: _field_summary(v) for k, v in user_data.items()}
+        logger.info(f"User document fields: {fields_info}")
+
+        # Load Style Instructions (new field 'style' first, fallback to old 'style_instructions')
+        from .personal_data_sections import get_cv_revisions, get_competence_ratings, get_style_instructions
+        result["style_instructions"] = get_style_instructions(user_data) or ""
+
         # Load CV
-        revisions = user_data.get("cv_revisions", [])
+        revisions = get_cv_revisions(user_data)
         logger.info(f"Found {len(revisions)} CV revisions for user {user_id}")
+
+        cr = get_competence_ratings(user_data)
+        if not isinstance(cr, dict):
+            if cr is not None:
+                logger.warning(f"competence_ratings in document is {type(cr).__name__}, not dict; using empty dict")
+            cr = {}
+        result["competence_ratings"] = cr
+
         if not revisions:
             logger.warning(f"No CV revisions found for user {user_id}")
             return result
@@ -81,8 +118,21 @@ def _load_user_data_from_firestore(request: HttpRequest) -> Dict[str, str]:
         
         latest = max(revisions, key=get_datetime)
         cv_text = latest.get("content", "")
+
+        # Append competence ratings (no new revision) as "competence n/5" for all purposes
+        competence_ratings = result["competence_ratings"]
+        if competence_ratings:
+            lines = []
+            for skill, n in competence_ratings.items():
+                if not isinstance(skill, str) or not skill.strip():
+                    continue
+                num = int(n) if isinstance(n, (int, float)) and 1 <= n <= 5 else 3
+                lines.append(f"{skill.strip()} {num}/5")
+            if lines:
+                cv_text = (cv_text.rstrip() + "\n\nCompetence ratings (self-assessed):\n" + "\n".join(lines)).rstrip()
+
         result["cv_text"] = cv_text
-        
+
         if cv_text:
             logger.info(f"Successfully loaded CV from Firestore for user {user_id} ({len(cv_text)} chars)")
         else:
@@ -100,8 +150,10 @@ def ensure_user_data_in_session(request: HttpRequest) -> None:
     import logging
     logger = logging.getLogger(__name__)
     cv = request.session.get("cv_text") or ""
-    if not str(cv).strip():
-        logger.info("ensure_user_data_in_session: CV not in session, loading from Firestore")
+    ratings_in_session = request.session.get("competence_ratings")
+    needs_load = not str(cv).strip() or not isinstance(ratings_in_session, dict)
+    if needs_load:
+        logger.info("ensure_user_data_in_session: loading from Firestore (cv or competence_ratings missing)")
         user_data = _load_user_data_from_firestore(request)
         cv_text = user_data.get("cv_text", "")
         if cv_text:
@@ -113,6 +165,7 @@ def ensure_user_data_in_session(request: HttpRequest) -> None:
         instructions = user_data.get("style_instructions", "")
         if instructions:
             request.session["style_instructions"] = instructions
+        request.session["competence_ratings"] = user_data.get("competence_ratings") or {}
         request.session.modified = True
 
 
@@ -193,10 +246,9 @@ def save_session_common_data(
             request.session["cv_text"] = cv_text
             logger.info(f"CV saved to session ({len(cv_text)} chars)")
         else:
-            # If no CV found, set empty string so we know CV was checked
             request.session["cv_text"] = ""
             logger.warning("CV not found in Firestore, set empty string in session")
-            
+        request.session["competence_ratings"] = user_data.get("competence_ratings") or {}
         instructions = user_data.get("style_instructions", "")
         if instructions:
             request.session["style_instructions"] = instructions
