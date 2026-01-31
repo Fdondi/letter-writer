@@ -745,7 +745,7 @@ function VendorCardWrapper({
       onEditChange={onEditChange}
       onApprove={onApprove}
       sessionId={sessionId}
-      onStatusChange={(status) => phaseObj.registerStatus?.(vendor, status)}
+      onStatusChange={useOverlayWidth ? undefined : (status) => phaseObj.registerStatus?.(vendor, status)}
       onSaveFeedbackOverride={(key, val) => {
         // Use the onSaveFeedbackOverride prop (which is the saveFeedbackOverride callback from parent)
         if (typeof onSaveFeedbackOverride === 'function') {
