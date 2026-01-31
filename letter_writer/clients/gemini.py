@@ -91,6 +91,8 @@ class GeminiClient(BaseClient):
         search_cost = (search_queries / 1_000) * p["search"]
 
         self.total_cost += input_cost + output_cost + search_cost
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
 
     def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
         if types is None:
