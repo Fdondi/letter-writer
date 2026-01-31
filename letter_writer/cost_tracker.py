@@ -561,7 +561,7 @@ def get_global_monthly_cost(months_back: int = 1) -> Dict[str, Any]:
         months_back: Number of months to look back (default: 1)
     
     Returns:
-        Dictionary with total_cost, by_service, by_user breakdown
+        Dictionary with total_cost, by_vendor, by_user breakdown
     """
     client = _get_bigquery_client()
     if client is None:
@@ -574,16 +574,16 @@ def get_global_monthly_cost(months_back: int = 1) -> Dict[str, Any]:
     try:
         from google.cloud import bigquery
         
-        # Get totals by service
+        # Get totals by vendor
         query = f"""
         SELECT 
-            service,
+            vendor,
             SUM(cost) as total_cost,
             SUM(request_count) as total_requests,
             COUNT(DISTINCT user_id) as unique_users
         FROM `{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}`
         WHERE timestamp >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL @months_back MONTH))
-        GROUP BY service
+        GROUP BY vendor
         ORDER BY total_cost DESC
         """
         
@@ -597,16 +597,16 @@ def get_global_monthly_cost(months_back: int = 1) -> Dict[str, Any]:
         
         total_cost = 0.0
         total_requests = 0
-        by_service = {}
+        by_vendor = {}
         
         for row in results:
-            service_cost = float(row.total_cost or 0)
-            service_requests = int(row.total_requests or 0)
-            total_cost += service_cost
-            total_requests += service_requests
-            by_service[row.service] = {
-                "total_cost": service_cost,
-                "request_count": service_requests,
+            vendor_cost = float(row.total_cost or 0)
+            vendor_requests = int(row.total_requests or 0)
+            total_cost += vendor_cost
+            total_requests += vendor_requests
+            by_vendor[row.vendor] = {
+                "total_cost": vendor_cost,
+                "request_count": vendor_requests,
                 "unique_users": row.unique_users
             }
         
@@ -614,7 +614,7 @@ def get_global_monthly_cost(months_back: int = 1) -> Dict[str, Any]:
             "period_months": months_back,
             "total_cost": total_cost,
             "total_requests": total_requests,
-            "by_service": by_service
+            "by_vendor": by_vendor
         }
         
     except Exception as e:
@@ -786,10 +786,15 @@ def flush_costs_to_bigquery(reset_after_flush: bool = True) -> Dict[str, Any]:
             row = {
                 "timestamp": req["timestamp"],
                 "user_id": req.get("user_id", "anonymous"),
-                "service": req["service"],
+                "phase": req["phase"],
+                "vendor": req["vendor"],
                 "cost": req["cost"],
                 "request_count": req.get("request_count", 1),
             }
+            if "input_tokens" in req:
+                row["input_tokens"] = req["input_tokens"]
+            if "output_tokens" in req:
+                row["output_tokens"] = req["output_tokens"]
             if "character_count" in req:
                 row["character_count"] = req["character_count"]
             if req.get("metadata"):
