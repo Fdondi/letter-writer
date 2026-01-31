@@ -37,4 +37,5 @@ urlpatterns = [
     path("costs/user/", views.cost_user_view, name="cost_user"),
     path("costs/daily/", views.cost_daily_view, name="cost_daily"),
     path("costs/global/", views.cost_global_view, name="cost_global"),
+    path("costs/models/", views.cost_models_view, name="cost_models"),
 ] 

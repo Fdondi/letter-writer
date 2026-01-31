@@ -2161,24 +2161,42 @@ def cost_global_view(request: HttpRequest):
 
 def cost_daily_view(request: HttpRequest):
     """Get user's daily cost breakdown from BigQuery.
-    
+
     Query params:
         months: Number of months to look back (default: 1)
     """
     if request.method != "GET":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
-    
+
     # Require authentication
     user_id, error_response = require_auth_user(request)
     if error_response:
         return error_response
-    
+
     months = int(request.GET.get("months", 1))
-    
+
     from letter_writer.cost_tracker import get_user_daily_costs
-    
+
     try:
         result = get_user_daily_costs(user_id, months_back=months)
+        return JsonResponse(result)
+    except Exception as exc:
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+
+def cost_models_view(request: HttpRequest):
+    """Get model pricing from client JSON files for cost projections.
+
+    Returns vendors and models with input/output prices per 1M tokens.
+    Does not require authentication (pricing is not sensitive).
+    """
+    if request.method != "GET":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+
+    from letter_writer.cost_tracker import get_all_model_pricing
+
+    try:
+        result = get_all_model_pricing()
         return JsonResponse(result)
     except Exception as exc:
         return JsonResponse({"detail": str(exc)}, status=500)

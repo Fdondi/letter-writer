@@ -1,34 +1,5 @@
 import React, { useState, useEffect } from "react";
 
-// Model pricing per 1M tokens (input/output) - used for cost projections
-const MODEL_PRICING = {
-  // OpenAI
-  "gpt-4o": { input: 2.50, output: 10.00, name: "GPT-4o" },
-  "gpt-4o-mini": { input: 0.15, output: 0.60, name: "GPT-4o Mini" },
-  "gpt-4-turbo": { input: 10.00, output: 30.00, name: "GPT-4 Turbo" },
-  "o1": { input: 15.00, output: 60.00, name: "o1" },
-  "o1-mini": { input: 1.10, output: 4.40, name: "o1 Mini" },
-  "o3-mini": { input: 1.10, output: 4.40, name: "o3 Mini" },
-  // Anthropic
-  "claude-sonnet-4": { input: 3.00, output: 15.00, name: "Claude Sonnet 4" },
-  "claude-3.5-sonnet": { input: 3.00, output: 15.00, name: "Claude 3.5 Sonnet" },
-  "claude-3.5-haiku": { input: 0.80, output: 4.00, name: "Claude 3.5 Haiku" },
-  "claude-3-opus": { input: 15.00, output: 75.00, name: "Claude 3 Opus" },
-  // Gemini
-  "gemini-2.0-flash": { input: 0.10, output: 0.40, name: "Gemini 2.0 Flash" },
-  "gemini-1.5-pro": { input: 1.25, output: 5.00, name: "Gemini 1.5 Pro" },
-  "gemini-1.5-flash": { input: 0.075, output: 0.30, name: "Gemini 1.5 Flash" },
-  // DeepSeek
-  "deepseek-chat": { input: 0.14, output: 0.28, name: "DeepSeek V3" },
-  "deepseek-reasoner": { input: 0.55, output: 2.19, name: "DeepSeek R1" },
-  // Mistral
-  "mistral-large": { input: 2.00, output: 6.00, name: "Mistral Large" },
-  "mistral-small": { input: 0.20, output: 0.60, name: "Mistral Small" },
-  // Grok
-  "grok-2": { input: 2.00, output: 10.00, name: "Grok 2" },
-  "grok-3-mini": { input: 0.30, output: 0.50, name: "Grok 3 Mini" },
-};
-
 /**
  * Detailed cost breakdown page showing:
  * - Total cost this month
@@ -42,12 +13,30 @@ export default function CostsPage() {
   const [error, setError] = useState(null);
   const [userCosts, setUserCosts] = useState(null);
   const [dailyCosts, setDailyCosts] = useState(null);
+  const [modelPricing, setModelPricing] = useState(null); // { vendor -> [{id, name, input, output}] }
   const [months, setMonths] = useState(1);
-  const [projectionModel, setProjectionModel] = useState("gpt-4o");
+  const [projectionModel, setProjectionModel] = useState("");
 
   useEffect(() => {
     fetchCosts();
   }, [months]);
+
+  useEffect(() => {
+    fetch("/api/costs/models/", { credentials: "include" })
+      .then((res) => (res.ok ? res.json() : {}))
+      .then((data) => {
+        setModelPricing(data);
+        // Set default projection model to first available
+        if (Object.keys(data).length > 0) {
+          const firstVendor = Object.keys(data)[0];
+          const firstModel = data[firstVendor]?.[0];
+          if (firstModel) {
+            setProjectionModel((prev) => (prev ? prev : firstModel.id));
+          }
+        }
+      })
+      .catch(() => setModelPricing({}));
+  }, []);
 
   const fetchCosts = async () => {
     setLoading(true);
@@ -97,9 +86,21 @@ export default function CostsPage() {
     return tokens.toString();
   };
 
+  // Build flat map modelId -> {input, output, name} from vendor-grouped pricing
+  const modelMap = React.useMemo(() => {
+    if (!modelPricing) return {};
+    const map = {};
+    for (const models of Object.values(modelPricing)) {
+      for (const m of models) {
+        map[m.id] = { input: m.input, output: m.output, name: m.name };
+      }
+    }
+    return map;
+  }, [modelPricing]);
+
   // Calculate what it would cost with a different model
   const calculateProjection = (inputTokens, outputTokens, modelKey) => {
-    const pricing = MODEL_PRICING[modelKey];
+    const pricing = modelMap[modelKey];
     if (!pricing) return 0;
     return (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output;
   };
@@ -284,42 +285,27 @@ export default function CostsPage() {
                 color: "var(--text-color)",
               }}
             >
-              <optgroup label="OpenAI">
-                <option value="gpt-4o">GPT-4o</option>
-                <option value="gpt-4o-mini">GPT-4o Mini</option>
-                <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                <option value="o1">o1</option>
-                <option value="o1-mini">o1 Mini</option>
-              </optgroup>
-              <optgroup label="Anthropic">
-                <option value="claude-sonnet-4">Claude Sonnet 4</option>
-                <option value="claude-3.5-sonnet">Claude 3.5 Sonnet</option>
-                <option value="claude-3.5-haiku">Claude 3.5 Haiku</option>
-                <option value="claude-3-opus">Claude 3 Opus</option>
-              </optgroup>
-              <optgroup label="Google">
-                <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
-                <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-              </optgroup>
-              <optgroup label="DeepSeek">
-                <option value="deepseek-chat">DeepSeek V3</option>
-                <option value="deepseek-reasoner">DeepSeek R1</option>
-              </optgroup>
-              <optgroup label="Mistral">
-                <option value="mistral-large">Mistral Large</option>
-                <option value="mistral-small">Mistral Small</option>
-              </optgroup>
-              <optgroup label="xAI">
-                <option value="grok-2">Grok 2</option>
-                <option value="grok-3-mini">Grok 3 Mini</option>
-              </optgroup>
+              {modelPricing && Object.keys(modelPricing).length > 0 ? (
+                Object.entries(modelPricing).map(([vendor, models]) => (
+                  <optgroup key={vendor} label={vendor}>
+                    {models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))
+              ) : (
+                <option value="">
+                  {modelPricing ? "No models" : "Loading models…"}
+                </option>
+              )}
             </select>
           </div>
           
           <div style={{ fontSize: 14, color: "var(--secondary-text-color)" }}>
             With your token usage ({formatTokens(userCosts.total_input_tokens)} in / {formatTokens(userCosts.total_output_tokens)} out), 
-            using <strong>{MODEL_PRICING[projectionModel]?.name}</strong> exclusively would cost:
+            using <strong>{modelMap[projectionModel]?.name ?? projectionModel ?? "—"}</strong> exclusively would cost:
           </div>
           
           <div style={{ 
@@ -329,18 +315,20 @@ export default function CostsPage() {
             marginTop: 8,
             textAlign: "center"
           }}>
-            {formatCost(calculateProjection(
-              userCosts.total_input_tokens || 0,
-              userCosts.total_output_tokens || 0,
-              projectionModel
-            ))}
+            {projectionModel && modelMap[projectionModel]
+              ? formatCost(calculateProjection(
+                  userCosts.total_input_tokens || 0,
+                  userCosts.total_output_tokens || 0,
+                  projectionModel
+                ))
+              : "—"}
             <span style={{ fontSize: 14, color: "var(--secondary-text-color)", marginLeft: 8 }}>
               (actual: {formatCost(userCosts.total_cost || 0)})
             </span>
           </div>
           
           <div style={{ fontSize: 12, color: "var(--secondary-text-color)", marginTop: 8, textAlign: "center" }}>
-            @ ${MODEL_PRICING[projectionModel]?.input}/1M input, ${MODEL_PRICING[projectionModel]?.output}/1M output
+            @ ${modelMap[projectionModel]?.input ?? "—"}/1M input, ${modelMap[projectionModel]?.output ?? "—"}/1M output
           </div>
         </div>
       )}

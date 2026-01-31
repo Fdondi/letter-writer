@@ -13,10 +13,12 @@ Running totals are read from a materialized view or query.
 """
 
 import atexit
+import json
 import logging
 import os
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
@@ -57,6 +59,71 @@ FLUSH_INTERVAL = int(os.environ.get("COST_FLUSH_INTERVAL_SECONDS", 1800))
 BIGQUERY_PROJECT = os.environ.get("BIGQUERY_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
 BIGQUERY_DATASET = os.environ.get("BIGQUERY_DATASET", "letter_writer")
 BIGQUERY_TABLE = os.environ.get("BIGQUERY_TABLE", "api_costs")
+
+# Mapping from JSON filename (stem) to vendor display name for model pricing API
+_CLIENT_JSON_VENDORS = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "gemini": "Google",
+    "mistral": "Mistral",
+    "grok": "xAI",
+    "deepseeek": "DeepSeek",
+}
+
+
+def _parse_price_field(val: Any) -> float:
+    """Extract a single price (per 1M tokens) from JSON. Handles Gemini tiered format."""
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, dict):
+        # Use "low" tier for projection (typical for smaller contexts)
+        return float(val.get("low", val.get("high", 0.0)) or 0.0)
+    return 0.0
+
+
+def get_all_model_pricing() -> Dict[str, List[Dict[str, Any]]]:
+    """Load model pricing from all client JSON files.
+
+    Returns:
+        Dict mapping vendor display name -> list of {"id", "name", "input", "output"}
+        where input/output are per-1M-token prices in USD.
+    """
+    clients_dir = Path(__file__).resolve().parent / "clients"
+    if not clients_dir.exists():
+        return {}
+
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    for json_path in sorted(clients_dir.glob("*.json")):
+        vendor_key = json_path.stem
+        vendor_label = _CLIENT_JSON_VENDORS.get(vendor_key, vendor_key.replace("_", " ").title())
+        try:
+            cfg = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("Failed to load %s: %s", json_path, e)
+            continue
+        models_cfg = cfg.get("models", {})
+        if not isinstance(models_cfg, dict):
+            continue
+        models = []
+        for model_id, model_cfg in models_cfg.items():
+            if not isinstance(model_cfg, dict):
+                continue
+            input_price = _parse_price_field(model_cfg.get("input", 0.0))
+            output_price = _parse_price_field(model_cfg.get("output", 0.0))
+            if input_price == 0 and output_price == 0:
+                continue
+            # Humanize model id for display: "claude-haiku-4-5" -> "Claude Haiku 4-5"
+            name = model_id.replace("-", " ").title()
+            models.append({
+                "id": model_id,
+                "name": name,
+                "input": round(input_price, 2),
+                "output": round(output_price, 2),
+            })
+        if models:
+            result[vendor_label] = models
+
+    return result
 
 
 def _get_redis_client():

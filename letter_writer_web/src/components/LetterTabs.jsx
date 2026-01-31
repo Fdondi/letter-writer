@@ -106,6 +106,7 @@ export default function LetterTabs({
   const [translateAllInProgress, setTranslateAllInProgress] = useState(false);
   const finalColumnRef = useRef(null);
   const scrollPositionRef = useRef(0);
+  const expandedDialogRef = useRef(null);
   
   // Save scroll position continuously as user scrolls
   const handleScroll = (e) => {
@@ -926,6 +927,15 @@ export default function LetterTabs({
 
   const expandedVendor = expandedColumn?.startsWith("vendor:") ? expandedColumn.replace(/^vendor:/, "") : null;
 
+  // Focus the expanded dialog so browser Find (Ctrl+F) searches inside it
+  useEffect(() => {
+    if (!expandedColumn) return;
+    const frame = requestAnimationFrame(() => {
+      expandedDialogRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [expandedColumn]);
+
   return (
     <HoverProvider>
       <div style={{ 
@@ -954,8 +964,10 @@ export default function LetterTabs({
           }}
         >
           <div
+            ref={expandedDialogRef}
             role="dialog"
             aria-label={`Expanded view: ${expandedVendor || expandedColumn}`}
+            tabIndex={-1}
             onClick={(e) => e.stopPropagation()}
             style={{
               width: "80%",
@@ -969,6 +981,7 @@ export default function LetterTabs({
               border: "1px solid var(--border-color)",
               borderRadius: 8,
               boxShadow: "0 12px 40px rgba(0,0,0,0.15)",
+              outline: "none",
             }}
           >
             {expandedColumn === "final" && (

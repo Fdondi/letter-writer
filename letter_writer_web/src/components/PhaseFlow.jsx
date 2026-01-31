@@ -1430,6 +1430,7 @@ export default function PhaseFlow({
   // Use ref to store stable phase objects - only recreate when vendorsList length changes
   const phasesRef = useRef(null);
   const vendorsListLengthRef = useRef(vendorsList.length);
+  const expandedDialogRef = useRef(null);
   
   if (!phasesRef.current || vendorsListLengthRef.current !== vendorsList.length) {
     phasesRef.current = transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCounters, setPhaseCounters);
@@ -1515,6 +1516,15 @@ export default function PhaseFlow({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [expandedCard, goLeft, goRight]);
+
+  // Focus the expanded dialog so browser Find (Ctrl+F) searches inside it
+  useEffect(() => {
+    if (!expandedCard) return;
+    const frame = requestAnimationFrame(() => {
+      expandedDialogRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [expandedCard]);
 
   // Stabilize saveFeedbackOverride with useCallback
   const saveFeedbackOverride = useCallback((vendor, key, val) => {
@@ -1622,8 +1632,10 @@ export default function PhaseFlow({
             ‹
           </button>
           <div
+            ref={expandedDialogRef}
             role="dialog"
             aria-label={`Expanded: ${expandedCard.vendor}`}
+            tabIndex={-1}
             onClick={(e) => e.stopPropagation()}
             style={{
               flex: "1 1 0",
@@ -1638,6 +1650,7 @@ export default function PhaseFlow({
               border: "1px solid var(--border-color)",
               borderRadius: 8,
               boxShadow: "0 12px 40px rgba(0,0,0,0.15)",
+              outline: "none",
             }}
           >
             {expandedPhase.renderVendor(expandedCard.vendor, true)}
