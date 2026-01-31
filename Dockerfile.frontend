@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:20-alpine AS build
 
 WORKDIR /app
 
@@ -13,9 +13,20 @@ RUN --mount=type=cache,target=/root/.npm \
 # Copy application code
 COPY letter_writer_web/ ./
 
-# Expose Vite port
-EXPOSE 5173
+# Build static assets
+RUN npm run build
 
-# Start development server
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+FROM nginx:1.27-alpine
+
+WORKDIR /usr/share/nginx/html
+
+# Copy build output
+COPY --from=build /app/dist/ /usr/share/nginx/html/
+
+# Nginx config for SPA + API proxy
+COPY letter_writer_web/nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
 
