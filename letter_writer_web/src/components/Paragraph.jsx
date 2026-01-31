@@ -248,6 +248,16 @@ export default function Paragraph({
     }
   }, [isCopyMode]);
 
+  // When in copy mode, force draggable=false so text selection works. React-dnd sets
+  // draggable=true on the ref node and that blocks selection even when canDrag is false.
+  useEffect(() => {
+    if (!ref.current) return;
+    ref.current.draggable = !isCopyMode;
+    return () => {
+      if (ref.current) ref.current.draggable = true;
+    };
+  }, [isCopyMode]);
+
   // Exit copy mode when clicking outside the paragraph
   useEffect(() => {
     const handleClickOutside = (e) => {
