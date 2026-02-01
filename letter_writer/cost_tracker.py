@@ -333,7 +333,8 @@ def _track_in_memory(
     cost: float,
     metadata: Optional[Dict[str, Any]] = None,
     input_tokens: Optional[int] = None,
-    output_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None,
+    search_queries: Optional[int] = None,
 ) -> None:
     """Track cost in memory (fallback when Redis unavailable).
     
@@ -357,6 +358,8 @@ def _track_in_memory(
             request_data["input_tokens"] = input_tokens
         if output_tokens:
             request_data["output_tokens"] = output_tokens
+        if search_queries is not None and search_queries > 0:
+            request_data["search_queries"] = search_queries
         if metadata and "character_count" in metadata:
             request_data["character_count"] = metadata["character_count"]
         
@@ -371,7 +374,8 @@ def _track_in_redis(
     cost: float,
     metadata: Optional[Dict[str, Any]] = None,
     input_tokens: Optional[int] = None,
-    output_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None,
+    search_queries: Optional[int] = None,
 ) -> None:
     """Track cost in Redis using atomic operations.
     
@@ -404,6 +408,8 @@ def _track_in_redis(
             request_data["input_tokens"] = input_tokens
         if output_tokens:
             request_data["output_tokens"] = output_tokens
+        if search_queries is not None and search_queries > 0:
+            request_data["search_queries"] = search_queries
         if metadata and "character_count" in metadata:
             request_data["character_count"] = metadata["character_count"]
         
@@ -414,7 +420,7 @@ def _track_in_redis(
     except Exception as e:
         logger.error(f"Error tracking cost in Redis: {e}")
         # Fall back to memory tracking
-        _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens)
+        _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries)
 
 
 def track_api_cost(
@@ -424,7 +430,8 @@ def track_api_cost(
     cost: float,
     metadata: Optional[Dict[str, Any]] = None,
     input_tokens: Optional[int] = None,
-    output_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None,
+    search_queries: Optional[int] = None,
 ) -> None:
     """Track cost for an API call.
     
@@ -435,9 +442,10 @@ def track_api_cost(
         phase: Processing phase (background, draft, feedback, refine, translate, extract)
         vendor: AI vendor (openai, anthropic, gemini, etc.)
         cost: Cost in USD
-        metadata: Additional metadata about the request
+        metadata: Additional metadata (character_count for translate, etc.)
         input_tokens: Number of input/prompt tokens (for AI services)
         output_tokens: Number of output/completion tokens (for AI services)
+        search_queries: Number of web/grounding search calls (Gemini, Grok)
     """
     # Ensure flush thread is running
     _ensure_flush_thread()
@@ -445,9 +453,9 @@ def track_api_cost(
     redis_client = _get_redis_client()
     
     if redis_client is not None:
-        _track_in_redis(redis_client, user_id, phase, vendor, cost, metadata, input_tokens, output_tokens)
+        _track_in_redis(redis_client, user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries)
     else:
-        _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens)
+        _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries)
 
 
 def _get_summary_from_memory() -> Dict[str, Any]:
@@ -815,13 +823,15 @@ def _reset_redis_counters(redis_client) -> None:
         logger.error(f"Error resetting Redis counters: {e}")
 
 
-def flush_costs_to_bigquery(reset_after_flush: bool = True) -> Dict[str, Any]:
+def flush_costs_to_bigquery(reset_after_flush: bool = True, save_completing_user_id: Optional[str] = None) -> Dict[str, Any]:
     """Flush accumulated costs from Redis/memory to BigQuery.
     
     Inserts individual request rows to the partitioned BigQuery table.
     
     Args:
         reset_after_flush: If True, reset counters after successful flush
+        save_completing_user_id: If set, rows for this user get document_saved=True; others get False.
+                                 Used when flushing on letter completion.
     
     Returns:
         Summary of what was flushed
@@ -864,10 +874,11 @@ def flush_costs_to_bigquery(reset_after_flush: bool = True) -> Dict[str, Any]:
                 row["output_tokens"] = req["output_tokens"]
             if "character_count" in req:
                 row["character_count"] = req["character_count"]
-            if req.get("metadata"):
-                import json
-                row["metadata"] = json.dumps(req["metadata"])
-            
+            if "search_queries" in req and req["search_queries"] is not None:
+                row["search_queries"] = req["search_queries"]
+            if save_completing_user_id is not None:
+                row["document_saved"] = req.get("user_id") == save_completing_user_id
+
             rows_to_insert.append(row)
         
         # Batch insert to BigQuery
@@ -917,4 +928,4 @@ def flush_on_letter_completion(user_id: str) -> Dict[str, Any]:
         Flush result summary
     """
     logger.info(f"Letter completion flush triggered for user {user_id}")
-    return flush_costs_to_bigquery(reset_after_flush=True)
+    return flush_costs_to_bigquery(reset_after_flush=True, save_completing_user_id=user_id)

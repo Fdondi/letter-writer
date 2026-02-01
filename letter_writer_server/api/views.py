@@ -1114,7 +1114,8 @@ def background_phase_view(request: HttpRequest, vendor: str):
                         vendor=vendor,
                         cost=phase_cost.cost,
                         input_tokens=phase_cost.input_tokens or None,
-                        output_tokens=phase_cost.output_tokens or None
+                        output_tokens=phase_cost.output_tokens or None,
+                        search_queries=phase_cost.search_queries or None,
                     )
         
         # Return only data for the requested vendor
@@ -1200,9 +1201,9 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
                         phase=phase_name,
                         vendor=vendor,
                         cost=phase_cost.cost,
-                        metadata={"fancy": fancy} if phase_name == "refine" else None,
                         input_tokens=phase_cost.input_tokens or None,
-                        output_tokens=phase_cost.output_tokens or None
+                        output_tokens=phase_cost.output_tokens or None,
+                        search_queries=phase_cost.search_queries or None,
                     )
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
@@ -1284,7 +1285,8 @@ def draft_phase_view(request: HttpRequest, vendor: str):
                         vendor=vendor,
                         cost=phase_cost.cost,
                         input_tokens=phase_cost.input_tokens or None,
-                        output_tokens=phase_cost.output_tokens or None
+                        output_tokens=phase_cost.output_tokens or None,
+                        search_queries=phase_cost.search_queries or None,
                     )
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)

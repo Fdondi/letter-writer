@@ -84,10 +84,16 @@ SCHEMA: List[Dict[str, Any]] = [
         "description": "Number of characters (for translation phase)",
     },
     {
-        "name": "metadata",
-        "type": "JSON",
+        "name": "search_queries",
+        "type": "INT64",
         "mode": "NULLABLE",
-        "description": "Additional request metadata",
+        "description": "Number of web/grounding search calls (Gemini, Grok)",
+    },
+    {
+        "name": "document_saved",
+        "type": "BOOL",
+        "mode": "NULLABLE",
+        "description": "True if the user saved the document (letter completion), False/null otherwise",
     },
 ]
 

@@ -36,6 +36,7 @@ class PhaseCost:
     cost: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
+    search_queries: int = 0
 
 
 @dataclass
@@ -52,13 +53,14 @@ class VendorPhaseState:
     # Per-phase cost tracking
     phase_costs: Dict[str, PhaseCost] = field(default_factory=dict)
     
-    def add_phase_cost(self, phase: str, cost: float, input_tokens: int, output_tokens: int):
+    def add_phase_cost(self, phase: str, cost: float, input_tokens: int, output_tokens: int, search_queries: int = 0):
         """Add cost for a specific phase."""
         if phase not in self.phase_costs:
             self.phase_costs[phase] = PhaseCost()
         self.phase_costs[phase].cost += cost
         self.phase_costs[phase].input_tokens += input_tokens
         self.phase_costs[phase].output_tokens += output_tokens
+        self.phase_costs[phase].search_queries += search_queries
         # Also update legacy totals
         self.cost += cost
         self.input_tokens += input_tokens
@@ -142,8 +144,9 @@ def _update_cost(state: VendorPhaseState, client, phase: str = "unknown") -> Non
     cost = float(getattr(client, "total_cost", 0.0) or 0.0)
     input_tokens = int(getattr(client, "total_input_tokens", 0) or 0)
     output_tokens = int(getattr(client, "total_output_tokens", 0) or 0)
+    search_queries = int(getattr(client, "total_search_queries", 0) or 0)
     
-    state.add_phase_cost(phase, cost, input_tokens, output_tokens)
+    state.add_phase_cost(phase, cost, input_tokens, output_tokens, search_queries)
 
 
 def _get_client_usage(client) -> tuple:
@@ -160,6 +163,8 @@ def _reset_client_counters(client) -> None:
     client.total_cost = 0.0
     client.total_input_tokens = 0
     client.total_output_tokens = 0
+    if hasattr(client, "total_search_queries"):
+        client.total_search_queries = 0
 
 
 def _create_session(

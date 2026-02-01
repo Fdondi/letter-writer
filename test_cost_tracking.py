@@ -84,55 +84,44 @@ def test_cost_tracking(storage_type):
     # Track some example costs
     examples = [
         {
-            "service": "translate",
+            "phase": "translate",
+            "vendor": "google_translate",
             "cost": 0.02,
-            "metadata": {
-                "character_count": 1000,
-                "text_count": 1,
-                "target_language": "de",
-                "source_language": "en"
-            },
-            "user_id": "test_user_123"
+            "metadata": {"character_count": 1000},
+            "user_id": "test_user_123",
         },
         {
-            "service": "background_openai",
+            "phase": "background",
+            "vendor": "openai",
             "cost": 0.15,
-            "metadata": {
-                "vendor": "openai",
-                "phase": "background"
-            },
-            "user_id": "test_user_123"
+            "user_id": "test_user_123",
         },
         {
-            "service": "draft_anthropic",
+            "phase": "draft",
+            "vendor": "anthropic",
             "cost": 0.50,
-            "metadata": {
-                "vendor": "anthropic",
-                "phase": "draft"
-            },
-            "user_id": "test_user_456"
+            "user_id": "test_user_456",
         },
         {
-            "service": "refine_gemini",
+            "phase": "refine",
+            "vendor": "gemini",
             "cost": 0.35,
-            "metadata": {
-                "vendor": "gemini",
-                "phase": "refine",
-                "fancy": False
-            },
-            "user_id": "test_user_123"
+            "search_queries": 2,
+            "user_id": "test_user_123",
         },
     ]
     
     print(f"Tracking example API costs ({storage_type})...\n")
     for example in examples:
         track_api_cost(
-            service=example["service"],
+            user_id=example["user_id"],
+            phase=example["phase"],
+            vendor=example["vendor"],
             cost=example["cost"],
-            metadata=example["metadata"],
-            user_id=example.get("user_id")
+            metadata=example.get("metadata"),
+            search_queries=example.get("search_queries"),
         )
-        print(f"  ✓ Tracked: {example['service']} - ${example['cost']:.4f}")
+        print(f"  ✓ Tracked: {example['phase']}/{example['vendor']} - ${example['cost']:.4f}")
     
     print("\n✓ Cost tracking completed!\n")
 

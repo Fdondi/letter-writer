@@ -27,6 +27,7 @@ class BaseClient:
         self.total_cost = 0.0
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+        self.total_search_queries = 0
         self._costs_cache: dict | None = None
         self._last_mtime: float = 0.0
 
@@ -119,6 +120,7 @@ class BaseClient:
         self.total_cost += input_cost + output_cost + search_cost
         self.total_input_tokens += input_tokens
         self.total_output_tokens += output_tokens
+        self.total_search_queries += search_queries
 
     def call(self, model_size: ModelSize, system: str, messages: List[Dict], search: bool = False) -> str:
         raise NotImplementedError("Subclasses must implement this method")

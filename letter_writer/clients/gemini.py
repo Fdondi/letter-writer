@@ -93,6 +93,7 @@ class GeminiClient(BaseClient):
         self.total_cost += input_cost + output_cost + search_cost
         self.total_input_tokens += input_tokens
         self.total_output_tokens += output_tokens
+        self.total_search_queries += search_queries
 
     def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
         if types is None:
@@ -139,11 +140,22 @@ class GeminiClient(BaseClient):
         # Track cost if usage metadata is available
         usage = getattr(response, "usage_metadata", None)
         if usage is not None:
+            # Get actual search count from grounding metadata when available (Gemini 3 bills per query)
+            search_queries = 0
+            if search and hasattr(response, "candidates") and response.candidates:
+                cand = response.candidates[0]
+                gm = getattr(cand, "grounding_metadata", None)
+                if gm is not None:
+                    wsq = getattr(gm, "web_search_queries", None)
+                    if wsq is not None:
+                        search_queries = len(wsq) if hasattr(wsq, "__len__") else (1 if wsq else 0)
+                if search_queries == 0:
+                    search_queries = 1  # Search enabled but no grounding metadata (fallback)
             self.track_cost(
                 model_name,
                 getattr(usage, "prompt_token_count", 0) or 0,
                 getattr(usage, "candidates_token_count", 0) or 0,
-                search_queries=1 if search else 0,
+                search_queries=search_queries,
             )
 
         # Handle response text - may be None if response has no text content
