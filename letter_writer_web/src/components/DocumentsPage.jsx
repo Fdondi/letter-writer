@@ -162,7 +162,7 @@ export default function DocumentsPage() {
           {doc.role || "-"}
         </td>
         <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border-color)" }}>
-          {doc.status || "-"}
+          {doc.location || "-"}
         </td>
         <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border-color)" }}>
           {formatDate(doc.created_at)}
@@ -246,7 +246,7 @@ export default function DocumentsPage() {
               <tr>
                 <th style={{ textAlign: "left", padding: "6px 8px" }}>Company</th>
                 <th style={{ textAlign: "left", padding: "6px 8px" }}>Role</th>
-                <th style={{ textAlign: "left", padding: "6px 8px" }}>Status</th>
+                <th style={{ textAlign: "left", padding: "6px 8px" }}>Location</th>
                 <th style={{ textAlign: "left", padding: "6px 8px" }}>Created</th>
               </tr>
             </thead>
@@ -296,7 +296,7 @@ export default function DocumentsPage() {
               <strong>Role:</strong> {selected.role || "-"}
             </div>
             <div>
-              <strong>Status:</strong> {selected.status || "-"}
+              <strong>Location:</strong> {selected.location || "-"}
             </div>
             <div>
               <strong>Updated:</strong> {formatDate(selected.updated_at)}
