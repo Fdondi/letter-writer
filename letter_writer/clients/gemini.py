@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple, Any
+from typing import List, Tuple, Any
 
 import typer
 
@@ -95,7 +95,7 @@ class GeminiClient(BaseClient):
         self.total_output_tokens += output_tokens
         self.total_search_queries += search_queries
 
-    def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False, model_override: Optional[str] = None) -> str:
+    def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
         if types is None:
             raise ImportError(
                 "Gemini client requires the 'google-genai' package. Install it to use Gemini models."
@@ -107,8 +107,7 @@ class GeminiClient(BaseClient):
         else:
             tools = []
 
-        model_name = self._resolve_model(model_size, model_override)
-        self.last_model_used = model_name
+        model_name = self.get_model_for_size(model_size)
         typer.echo(f"[INFO] using Gemini model {model_name}" + (" with search" if search else ""))
 
         # Validate and filter user_messages - Gemini API requires all strings to be non-None

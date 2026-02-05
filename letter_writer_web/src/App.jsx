@@ -6,7 +6,6 @@ import PhaseFlow from "./components/PhaseFlow";
 import DocumentsPage from "./components/DocumentsPage";
 import PersonalDataPage from "./components/PersonalDataPage";
 import SettingsPage from "./components/SettingsPage";
-import PageOverlay from "./components/PageOverlay";
 import LanguageConfig from "./components/LanguageConfig";
 import LanguageSelector from "./components/LanguageSelector";
 import AuthButton from "./components/AuthButton";
@@ -82,7 +81,7 @@ export default function App() {
   const [phaseSessionId, setPhaseSessionId] = useState(null);
   const [phaseSessions, setPhaseSessions] = useState({}); // vendor -> session_id
   const [savingFinal, setSavingFinal] = useState(false);
-  const [activeOverlay, setActiveOverlay] = useState(null); // null | "documents" | "personal-data" | "settings" | "costs"
+  const [activeTab, setActiveTab] = useState("compose"); // "compose" | "documents" | "personal-data" | "settings"
   const [assemblyVisible, setAssemblyVisible] = useState(true); // when in assembly stage, show assembly or phases
   const [extractedData, setExtractedData] = useState(null); // Track extracted data to detect modifications
   const [vendorFeedback, setVendorFeedback] = useState({}); // vendor -> { rating, comment }
@@ -1093,7 +1092,7 @@ export default function App() {
     setFinalParagraphs([]);
     setDocumentId(null);
     setSavingFinal(false);
-    setActiveOverlay(null);
+    setActiveTab("compose");
     setAssemblyVisible(true);
     // Keep extracted data and job text - don't clear them
     // setCompanyName("");
@@ -1771,13 +1770,27 @@ export default function App() {
           <h1 style={{ margin: 0, color: "var(--text-color)" }}>Letter Writer</h1>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <button
+              onClick={() => setActiveTab("compose")}
+              style={{
+                padding: "8px 12px",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                backgroundColor: activeTab === "compose" ? "#3b82f6" : "var(--button-bg)",
+                color: activeTab === "compose" ? "white" : "var(--button-text)",
+                cursor: "pointer",
+                fontSize: "14px",
+              }}
+            >
+              Compose
+            </button>
+            <button
               onClick={() => setShowStyleBlade(true)}
               style={{
                 padding: "8px 12px",
                 border: "1px solid var(--border-color)",
                 borderRadius: "4px",
-                backgroundColor: showStyleBlade ? "#3b82f6" : "var(--button-bg)",
-                color: showStyleBlade ? "white" : "var(--button-text)",
+                backgroundColor: "var(--button-bg)",
+                color: "var(--button-text)",
                 cursor: "pointer",
                 fontSize: "14px",
               }}
@@ -1785,14 +1798,14 @@ export default function App() {
               AI Instructions
             </button>
             <button
-              onClick={() => setActiveOverlay(activeOverlay === "personal-data" ? null : "personal-data")}
+              onClick={() => setActiveTab("personal-data")}
               style={{
                 padding: "8px 12px",
                 border: "1px solid var(--border-color)",
                 borderRadius: "4px",
                 backgroundColor:
-                  activeOverlay === "personal-data" ? "#3b82f6" : "var(--button-bg)",
-                color: activeOverlay === "personal-data" ? "white" : "var(--button-text)",
+                  activeTab === "personal-data" ? "#3b82f6" : "var(--button-bg)",
+                color: activeTab === "personal-data" ? "white" : "var(--button-text)",
                 cursor: "pointer",
                 fontSize: "14px",
               }}
@@ -1800,14 +1813,14 @@ export default function App() {
               Your CV
             </button>
             <button
-              onClick={() => setActiveOverlay(activeOverlay === "documents" ? null : "documents")}
+              onClick={() => setActiveTab("documents")}
               style={{
                 padding: "8px 12px",
                 border: "1px solid var(--border-color)",
                 borderRadius: "4px",
                 backgroundColor:
-                  activeOverlay === "documents" ? "#3b82f6" : "var(--button-bg)",
-                color: activeOverlay === "documents" ? "white" : "var(--button-text)",
+                  activeTab === "documents" ? "#3b82f6" : "var(--button-bg)",
+                color: activeTab === "documents" ? "white" : "var(--button-text)",
                 cursor: "pointer",
                 fontSize: "14px",
               }}
@@ -1815,14 +1828,14 @@ export default function App() {
               Previous Examples
             </button>
             <button
-              onClick={() => setActiveOverlay(activeOverlay === "settings" ? null : "settings")}
+              onClick={() => setActiveTab("settings")}
               style={{
                 padding: "8px 12px",
                 border: "1px solid var(--border-color)",
                 borderRadius: "4px",
                 backgroundColor:
-                  activeOverlay === "settings" ? "#3b82f6" : "var(--button-bg)",
-                color: activeOverlay === "settings" ? "white" : "var(--button-text)",
+                  activeTab === "settings" ? "#3b82f6" : "var(--button-bg)",
+                color: activeTab === "settings" ? "white" : "var(--button-text)",
                 cursor: "pointer",
                 fontSize: "14px",
               }}
@@ -1830,53 +1843,27 @@ export default function App() {
               Settings
             </button>
 
-            <CostDisplay onNavigate={() => setActiveOverlay(activeOverlay === "costs" ? null : "costs")} />
+            <CostDisplay onNavigate={() => setActiveTab("costs")} />
             <AuthButton />
           </div>
         </div>
 
       </div>
 
-      {/* Main compose content - always rendered */}
-      {renderCompose()}
-
-      {/* Page Overlays */}
-      <PageOverlay
-        isOpen={activeOverlay === "personal-data"}
-        onClose={() => setActiveOverlay(null)}
-        title="Your CV"
-      >
-        <PersonalDataPage />
-      </PageOverlay>
-
-      <PageOverlay
-        isOpen={activeOverlay === "documents"}
-        onClose={() => setActiveOverlay(null)}
-        title="Previous Examples"
-      >
-        <DocumentsPage />
-      </PageOverlay>
-
-      <PageOverlay
-        isOpen={activeOverlay === "settings"}
-        onClose={() => setActiveOverlay(null)}
-        title="Settings"
-      >
-        <SettingsPage 
-          vendors={vendors} 
-          selectedVendors={selectedVendors}
-          setSelectedVendors={setSelectedVendors}
-          onCompetenceScalesChange={() => setCompetenceScaleConfig(getScaleConfig())}
-        />
-      </PageOverlay>
-
-      <PageOverlay
-        isOpen={activeOverlay === "costs"}
-        onClose={() => setActiveOverlay(null)}
-        title="API Costs"
-      >
-        <CostsPage />
-      </PageOverlay>
+      {activeTab === "compose"
+        ? renderCompose()
+        : activeTab === "documents"
+        ? <DocumentsPage />
+        : activeTab === "settings"
+        ? <SettingsPage 
+            vendors={vendors} 
+            selectedVendors={selectedVendors}
+            setSelectedVendors={setSelectedVendors}
+            onCompetenceScalesChange={() => setCompetenceScaleConfig(getScaleConfig())}
+          />
+        : activeTab === "costs"
+        ? <CostsPage />
+        : <PersonalDataPage />}
 
       {/* Floating toggle to assembly while still in phases (after first refinement ready) */}
       {!showInput && uiStage !== "assembly" && hasAssembly && (

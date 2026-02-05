@@ -20,7 +20,6 @@ NEW_FIELD_CONFIG = {
     "competences": ("ratings", {}),
     "style": ("instructions", ""),
     "models": ("active", []),
-    "phase_models": ("overrides", {}),  # { phase: { vendor: model_id } }
 }
 
 
@@ -95,15 +94,6 @@ def get_models(doc: dict) -> list:
         return a if isinstance(a, list) else []
     old = doc.get("default_models")
     return old if isinstance(old, list) else []
-
-
-def get_phase_model_overrides(doc: dict) -> dict:
-    """Get phase model overrides: { phase: { vendor: model_id } }."""
-    new = doc.get("phase_models")
-    if isinstance(new, dict) and "overrides" in new:
-        o = new["overrides"]
-        return o if isinstance(o, dict) else {}
-    return {}
 
 
 def get_cv_revisions(doc: dict) -> list:

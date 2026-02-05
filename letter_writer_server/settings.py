@@ -226,7 +226,7 @@ STATIC_URL = "static/"
 SESSION_ENGINE = "letter_writer_server.api.session_backend"
 SESSION_COOKIE_NAME = "letter_writer_session"
 SESSION_COOKIE_HTTPONLY = True  # Prevent JavaScript access (XSS protection)
-SESSION_COOKIE_SECURE = True
+SESSION_COOKIE_SECURE = os.environ.get("DJANGO_SESSION_COOKIE_SECURE", "false").lower() in ("1", "true", "yes")  # HTTPS only in production
 SESSION_COOKIE_SAMESITE = "Lax"  # CSRF protection
 SESSION_COOKIE_AGE = 60 * 60 * 24 * 30  # 30 days (same as Firestore TTL)
 SESSION_SAVE_EVERY_REQUEST = False  # Only save when modified (saves writes)
@@ -258,13 +258,25 @@ if AUTHENTICATION_AVAILABLE:
     # For OAuth callbacks: django-allauth redirects back to the callback URL on the backend first
     # Then it redirects to LOGIN_REDIRECT_URL
     # Must use absolute URL to redirect to frontend (different port in dev)
-    frontend_url = os.environ.get("FRONTEND_URL", "https://localhost:8443")
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
     # For SPA: redirect to frontend root after OAuth callback completes
     LOGIN_REDIRECT_URL = frontend_url.rstrip("/") + "/"  # Redirect to frontend app root after OAuth login
     LOGOUT_REDIRECT_URL = frontend_url.rstrip("/") + "/"  # Redirect to frontend app root after logout
-    # HTTPS only; FRONTEND_URL must use https (local: https://localhost:8443, production: https://yourdomain.com)
-    ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https"
-
+    
+    # Protocol for redirect URLs
+    # Auto-detect: use https for GCP Cloud Run (production), http for local development
+    # GCP Cloud Run provides HTTPS automatically with SSL certificate
+    is_local_dev = all(host in ["localhost", "127.0.0.1", "0.0.0.1", "backend", "0.0.0.0"] for host in ALLOWED_HOSTS)
+    # If running on GCP (has K_SERVICE env var) or has non-local hosts, use https
+    is_gcp_production = bool(os.environ.get("K_SERVICE")) or not is_local_dev
+    ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https" if is_gcp_production else "http"
+    
+    # For production: use HTTPS (GCP Cloud Run provides SSL automatically)
+    # For local dev: use HTTP (unless you set up SSL locally)
+    # Note: Google Cloud Console OAuth redirect URI must match the protocol:
+    #   - Development: http://localhost:8000/accounts/google/login/callback/
+    #   - Production: https://yourdomain.com/accounts/google/login/callback/
+    
     # Social account settings (django-allauth)
     # Automatically create accounts for social logins (skip intermediate consent page)
     SOCIALACCOUNT_AUTO_SIGNUP = True  # Automatically create user account on first social login
@@ -320,8 +332,10 @@ if CORS_AVAILABLE:
         CORS_ALLOWED_ORIGINS = [origin.strip() for origin in CORS_ALLOWED_ORIGINS_ENV.split(",") if origin.strip()]
     else:
         CORS_ALLOWED_ORIGINS = [
-            "https://localhost:8443",
-            "https://127.0.0.1:8443",
+            "http://localhost:5173",  # Vite dev server
+            "http://localhost:3000",  # Alternative frontend port
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:3000",
         ]
     # Allow credentials (cookies, authorization headers) for CSRF
     CORS_ALLOW_CREDENTIALS = True
@@ -334,17 +348,10 @@ if CORS_AVAILABLE:
 # Django's CSRF protection works with cookies for same-origin requests
 # For cross-origin, we'll send token in header
 CSRF_COOKIE_HTTPONLY = False  # Allow JavaScript to read CSRF token (required for SPA)
-CSRF_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = os.environ.get("DJANGO_CSRF_COOKIE_SECURE", "false").lower() in ("1", "true", "yes")  # HTTPS only in production
 CSRF_COOKIE_SAMESITE = "Lax"  # CSRF protection
 CSRF_USE_SESSIONS = False  # Use cookies, not sessions (default)
 CSRF_COOKIE_NAME = "csrftoken"  # Standard Django CSRF cookie name
-
-# HTTPS only: trust X-Forwarded-Proto from reverse proxy (Nginx, Cloud Run)
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-SECURE_SSL_REDIRECT = True
-SECURE_HSTS_SECONDS = 31536000
-SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-SECURE_HSTS_PRELOAD = True
 
 # Logging configuration
 LOGGING = {

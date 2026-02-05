@@ -54,12 +54,6 @@ SCHEMA: List[Dict[str, Any]] = [
         "description": "AI vendor (openai, anthropic, gemini, mistral, grok, deepseek, google_translate)",
     },
     {
-        "name": "model",
-        "type": "STRING",
-        "mode": "NULLABLE",
-        "description": "Actual model used (e.g. gemini-2.5-flash, claude-3-5-sonnet). May differ from default when user overrides.",
-    },
-    {
         "name": "cost",
         "type": "FLOAT64",
         "mode": "REQUIRED",

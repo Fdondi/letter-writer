@@ -1,6 +1,6 @@
 from .base import BaseClient, ModelSize
 from mistralai import Mistral
-from typing import List, Dict, Optional
+from typing import List, Dict
 import os
 import typer
 
@@ -94,10 +94,9 @@ class MistralClient(BaseClient):
         system: str,
         user_messages: List[str],
         search: bool = False,
-        model_override: Optional[str] = None,
     ) -> str:
-        model = self._resolve_model(model_size, model_override)
-        self.last_model_used = model
+        model = self.get_model_for_size(model_size)
+        
         typer.echo(
             f"[INFO] using Mistral model {model}" + (" with search" if search else "")
         )

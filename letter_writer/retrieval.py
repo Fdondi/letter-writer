@@ -1,5 +1,5 @@
 import json
-from typing import List, Dict, Optional
+from typing import List, Dict
 from pathlib import Path
 from openai import OpenAI
 import typer
@@ -43,7 +43,6 @@ def select_top_documents(
     job_text: str,
     ai_client: BaseClient,
     trace_dir: Path,
-    model_override: Optional[str] = None,
 ) -> List[dict]:
     """Select top documents from search results and rerank them.
     
@@ -74,7 +73,7 @@ def select_top_documents(
                 )
             retrieved_docs[normalized_company] = doc
 
-    top_docs = rerank_documents(job_text, retrieved_docs, ai_client, trace_dir, model_override=model_override)
+    top_docs = rerank_documents(job_text, retrieved_docs, ai_client, trace_dir)
 
     # Validate that all reranked company names exist in retrieved_docs
     missing_names = [name for name in top_docs.keys() if name not in retrieved_docs]
@@ -107,7 +106,7 @@ def select_top_documents(
         for name, score in top_docs.items()
     ]
 
-def rerank_documents(job_text: str, docs: dict, ai_client: BaseClient, trace_dir: Path, model_override: Optional[str] = None) -> dict:
+def rerank_documents(job_text: str, docs: dict, ai_client: BaseClient, trace_dir: Path) -> dict:
     """Ask the model to score docs and return top 3 as dicts with company_name and score."""
     
     # Prepare mapping of doc id -> company_name for scoring
@@ -129,7 +128,7 @@ def rerank_documents(job_text: str, docs: dict, ai_client: BaseClient, trace_dir
         "Return ONLY the JSON object, no wrappers.\n\n"
     )
     prompt = "Original Job Description:\n" + job_text + "\n\nOther Descriptions (JSON):\n" + mapping_json
-    scores_json = ai_client.call(ModelSize.LARGE, system, [prompt], model_override=model_override)
+    scores_json = ai_client.call(ModelSize.LARGE, system=system, user_messages=[prompt])
 
     # remove wrapping '''json if present
     if scores_json.startswith("```json"):

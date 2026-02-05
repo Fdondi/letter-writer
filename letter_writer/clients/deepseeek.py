@@ -1,6 +1,6 @@
 from .base import BaseClient, ModelSize
 from openai import OpenAI
-from typing import List, Dict, Optional
+from typing import List, Dict
 import os
 import typer
 
@@ -16,10 +16,9 @@ class DeepSeekClient(BaseClient):
     def _format_messages(self, system: str, user_messages: List[str]) -> List[Dict]:
         return [{"role": "system", "content": system}] + [{"role": "user", "content": message} for message in user_messages]
 
-    def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False, model_override: Optional[str] = None) -> str:
+    def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
         messages = self._format_messages(system, user_messages)
-        model = self._resolve_model(model_size, model_override)
-        self.last_model_used = model
+        model = self.get_model_for_size(model_size)
         if search:
             typer.echo(f"[WARNING] Search functionality not supported for DeepSeek models, proceeding without search")
         typer.echo(f"[INFO] using DeepSeek model {model}")

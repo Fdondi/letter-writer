@@ -1,6 +1,6 @@
 from .base import BaseClient, ModelSize
 from anthropic import Anthropic
-from typing import List, Dict, Optional
+from typing import List, Dict
 import typer
 
 class ClaudeClient(BaseClient):
@@ -11,10 +11,9 @@ class ClaudeClient(BaseClient):
     def _format_messages(self, user_messages: List[str]) -> List[Dict]:
         return [{"role": "user", "content": [{"type": "text", "text": message}]} for message in user_messages]
 
-    def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False, model_override: Optional[str] = None) -> str:
+    def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
         messages = self._format_messages(user_messages)
-        model = self._resolve_model(model_size, model_override)
-        self.last_model_used = model
+        model = self.get_model_for_size(model_size)
         typer.echo(f"[INFO] using Anthropic model {model}" + (" with search" if search else ""))
         tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}] if search else []
         # Use 2048 for search, 8000 for everything else (letters, comments, etc.)

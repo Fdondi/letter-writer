@@ -2,7 +2,7 @@ import json
 import sys
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 class ModelVendor(Enum):
@@ -28,7 +28,6 @@ class BaseClient:
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_search_queries = 0
-        self.last_model_used: Optional[str] = None
         self._costs_cache: dict | None = None
         self._last_mtime: float = 0.0
 
@@ -69,12 +68,6 @@ class BaseClient:
             # Fallback to hardcoded or raise if missing
             raise ValueError(f"Model size '{model_size.value}' not defined in {self.__class__.__name__} config")
         return model_name
-
-    def _resolve_model(self, model_size: ModelSize, model_override: Optional[str] = None) -> str:
-        """Resolve model name: use override if set, else size-based default."""
-        if model_override:
-            return model_override
-        return self.get_model_for_size(model_size)
 
     def get_model_cost(self, model_name: str) -> dict:
         """Retrieve cost dict for a model from the client's JSON config.

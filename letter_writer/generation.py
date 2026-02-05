@@ -32,7 +32,6 @@ def _call_with_required_suffix(
     *,
     search: bool = False,
     max_retries: int = 2,
-    model_override: Optional[str] = None,
 ) -> str:
     """Call an LLM and enforce that the reply ends with NO COMMENT or PLEASE FIX."""
     suffix_instruction = (
@@ -44,7 +43,7 @@ def _call_with_required_suffix(
 
     last_response = ""
     for attempt in range(1, max_retries + 1):
-        response = client.call(model_size, enforced_system, [prompt], search=search, model_override=model_override)
+        response = client.call(model_size, enforced_system, [prompt], search=search)
         last_response = response.strip()
         if _has_required_suffix(last_response):
             return last_response
@@ -463,7 +462,7 @@ def get_style_instructions() -> str:
         )
 
 
-def company_research(company_name: Optional[str], job_text: str, client: BaseClient, trace_dir: Path, point_of_contact: dict = None, additional_company_info: str = "", model_override: Optional[str] = None) -> Optional[str]:
+def company_research(company_name: Optional[str], job_text: str, client: BaseClient, trace_dir: Path, point_of_contact: dict = None, additional_company_info: str = "") -> Optional[str]:
     """Research company information using OpenAI.
     
     Args:
@@ -521,11 +520,11 @@ def company_research(company_name: Optional[str], job_text: str, client: BaseCli
         logger.warning("Not enough information to research the company.")
         return None
 
-    result = client.call(ModelSize.LARGE, system, [prompt], search=True, model_override=model_override)
+    result = client.call(ModelSize.LARGE, system, [prompt], search=True)
     (trace_dir / "company_research.txt").write_text(result, encoding="utf-8")
     return result
 
-def generate_letter(cv_text: str, examples: List[dict], company_report: str, job_text: str, client: BaseClient, trace_dir: Path, style_instructions: str = "", additional_user_info: str = "", model_override: Optional[str] = None) -> str:
+def generate_letter(cv_text: str, examples: List[dict], company_report: str, job_text: str, client: BaseClient, trace_dir: Path, style_instructions: str = "", additional_user_info: str = "") -> str:
     """Generate a personalized cover letter based on CV, examples, company report, and job description.
     
     Args:
@@ -575,9 +574,9 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
         "========== Target Job Description:\n" + job_text + "\n=========="
     )
     (trace_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
-    return client.call(ModelSize.XLARGE, system, [prompt], model_override=model_override)
+    return client.call(ModelSize.XLARGE, system, [prompt])
 
-def instruction_check(letter: str, client: BaseClient, style_instructions: str = "", model_override: Optional[str] = None) -> str:
+def instruction_check(letter: str, client: BaseClient, style_instructions: str = "") -> str:
     """Check the letter for consistency with the instructions."""
     if not style_instructions:
         style_instructions = get_style_instructions()
@@ -592,10 +591,10 @@ def instruction_check(letter: str, client: BaseClient, style_instructions: str =
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
         "Please catch any strong inconsitency with the instructions, or output NO COMMENT"
     )
-    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt, model_override=model_override)
+    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 
-def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_user_info: str = "", model_override: Optional[str] = None) -> str:
+def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_user_info: str = "") -> str:
     """Check the accuracy of the cover letter against the user's CV.
     
     Args:
@@ -630,9 +629,9 @@ def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_use
         "Please review the cover letter for factual accuracy against the CV. "
         "Point out any claims that cannot be verified from the CV or are inconsistent with it."
     )
-    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt, model_override=model_override)
+    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
-def precision_check(letter: str, company_report: str, job_text: str, client: BaseClient, model_override: Optional[str] = None) -> str:
+def precision_check(letter: str, company_report: str, job_text: str, client: BaseClient) -> str:
     """Check the precision and style of the cover letter against the company report and job description."""
     system = (
         "You are a senior HR manager at the company. Evaluate how well the cover letter addresses the needs of the company, as described in the company report and job description. "
@@ -653,9 +652,9 @@ def precision_check(letter: str, company_report: str, job_text: str, client: Bas
         "Please review the cover letter for consistency with the company report and job description. "
         "Provide specific feedback on how to better align with the company's needs."
     )
-    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt, model_override=model_override)
+    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
-def company_fit_check(letter: str, company_report: str, job_offer: str, client: BaseClient, model_override: Optional[str] = None) -> str:
+def company_fit_check(letter: str, company_report: str, job_offer: str, client: OpenAI) -> str:
     """Check how well the cover letter aligns with the company's values, culture, tone, and needs."""
     system = (
         "You are a senior HR manager at the company. Evaluate how well the cover letter "
@@ -672,9 +671,9 @@ def company_fit_check(letter: str, company_report: str, job_offer: str, client: 
         "Please review the cover letter for alignment with the company's values, tone, and culture. "
         "Provide feedback on how to better demonstrate understanding of and fit with the company. "
     )
-    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt, model_override=model_override)
+    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
-def user_fit_check(letter: str, examples: List[dict], client: BaseClient, model_override: Optional[str] = None) -> str:
+def user_fit_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     """Check how well the cover letter showcases the user's unique value proposition."""
     examples_formatted = "\n\n".join(
         f"---- Example #{i+1} - {ex['company_name']} ----\n"
@@ -693,7 +692,7 @@ def user_fit_check(letter: str, examples: List[dict], client: BaseClient, model_
         "Please review the cover letter for effectiveness in adhering to the style and tone of the previous examples."
         "Provide feedback on how to improve the letter to better match the previous examples."
     )
-    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt, model_override=model_override)
+    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 def _format_correction(corr: dict) -> str:
     """Format a correction diff for display in the review agent prompt."""
@@ -713,7 +712,7 @@ def _format_correction(corr: dict) -> str:
         edited = corr.get("edited", "").strip()
         return f"  Original: {original}\n  Edited: {edited}"
 
-def human_check(letter: str, examples: List[dict], client: BaseClient, model_override: Optional[str] = None) -> str:
+def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     """Check the letter for consistency with the instructions."""
     rewritten_examples = [
         ex
@@ -769,7 +768,7 @@ def human_check(letter: str, examples: List[dict], client: BaseClient, model_ove
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
         "Please review the cover letter for anything that looks like something the reviewer would change, based on the examples."
     )
-    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt, model_override=model_override)
+    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 
 def rewrite_letter(
@@ -780,9 +779,8 @@ def rewrite_letter(
     company_fit_feedback: str,
     user_fit_feedback: str,
     human_feedback: str,
-    client: BaseClient,
-    trace_dir: Path,
-    model_override: Optional[str] = None,
+    client: OpenAI,
+    trace_dir: Path
 ) -> str:
     """Rewrite the cover letter incorporating all feedback."""
     system = (
@@ -821,7 +819,7 @@ def rewrite_letter(
         "If you see that no feedback meaningfully needs to be addressed, output NO REVISIONS and end the answer.\n"
     )
     (trace_dir / "rewrite_prompt.txt").write_text(prompt, encoding="utf-8")
-    revised_letter = client.call(ModelSize.XLARGE, system, [prompt], model_override=model_override)
+    revised_letter = client.call(ModelSize.XLARGE, system, [prompt])
     if "NO REVISIONS" in revised_letter:
         print("No revisions needed, returning original letter.")
         return original_letter

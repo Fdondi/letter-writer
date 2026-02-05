@@ -9,3 +9,4 @@ cv-external/
 qdrant_test.py
 gcloud-credentials.json
 db.sqlite3
+certs/*
