@@ -172,10 +172,9 @@ export default function DocumentsPage() {
   };
 
   return (
-    <div style={{ display: "flex", gap: 16, minHeight: "70vh" }}>
+    <div style={{ display: "flex", gap: 16, minHeight: "70vh", padding: 20 }}>
       <div style={{ flex: 1 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <h3 style={{ margin: 0, color: "var(--text-color)" }}>Documents</h3>
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", marginBottom: 8 }}>
           <button
             onClick={fetchList}
             disabled={loadingList}

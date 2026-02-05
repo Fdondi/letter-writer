@@ -5,7 +5,7 @@ import React, { useState, useEffect } from "react";
  * 
  * To use Google OAuth:
  * 1. Create OAuth 2.0 credentials in Google Cloud Console: https://console.cloud.google.com/apis/credentials
- * 2. Set authorized redirect URI to: http://localhost:8000/accounts/google/login/callback/ (development)
+ * 2. Set authorized redirect URI to: https://localhost:8443/accounts/google/login/callback/ (local)
  * 3. For production, use your production domain
  * 4. Set environment variables:
  *    - GOOGLE_OAUTH_CLIENT_ID: Your OAuth client ID

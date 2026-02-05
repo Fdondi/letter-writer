@@ -25,8 +25,10 @@ COPY --from=build /app/dist/ /usr/share/nginx/html/
 
 # Nginx config for SPA + API proxy
 COPY letter_writer_web/nginx.conf /etc/nginx/conf.d/default.conf
+COPY letter_writer_web/docker-entrypoint-nginx.sh /docker-entrypoint-nginx.sh
+RUN chmod +x /docker-entrypoint-nginx.sh
 
-EXPOSE 80
+EXPOSE 443
 
-CMD ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["/docker-entrypoint-nginx.sh"]
 

@@ -20,13 +20,16 @@ services:
       # Note: For Podman (rootless), the file must be readable by your user (e.g., chmod 600 or 644)
       - ${GOOGLE_APPLICATION_CREDENTIALS_HOST:-./gcloud-credentials.json}:/app/gcloud-credentials.json:ro
     environment:
+      # Sticky routing: N workers on ports 8001..800N; Nginx on 8000 routes by session cookie
+      - GUNICORN_WORKERS=${GUNICORN_WORKERS:-3}
       # DJANGO_DEBUG should be false in production
       # DJANGO_ALLOWED_HOSTS should include your public domain(s)
       # DJANGO_SECRET_KEY must be set in .env file
       - DJANGO_DEBUG=${DJANGO_DEBUG:-false}
-      - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS}
-      - DJANGO_SESSION_COOKIE_SECURE=${DJANGO_SESSION_COOKIE_SECURE:-true}
-      - DJANGO_CSRF_COOKIE_SECURE=${DJANGO_CSRF_COOKIE_SECURE:-true}
+      - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
+      - DJANGO_SESSION_COOKIE_SECURE=true
+      - DJANGO_CSRF_COOKIE_SECURE=true
+      - DJANGO_SESSION_PERSIST=true
       # Firestore connection (uses Application Default Credentials)
       # The credentials file is mounted at /app/gcloud-credentials.json
       - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
@@ -41,7 +44,7 @@ services:
       # Google OAuth credentials (explicitly set to ensure they're loaded)
       - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}
       - GOOGLE_OAUTH_SECRET=${GOOGLE_OAUTH_SECRET}
-      - FRONTEND_URL=${FRONTEND_URL}
+      - FRONTEND_URL=${FRONTEND_URL:-https://localhost:8443}
       # Redis for cost tracking (optional - falls back to in-memory)
       - REDIS_URL=redis://redis:6379/0
       # BigQuery for cost analytics (uses same credentials as Firestore)
@@ -60,6 +63,7 @@ services:
     image: docker.io/redis:alpine
     container_name: letter-writer-redis
     restart: unless-stopped
+    stop_grace_period: 30s
     ports:
       - "6379:6379"
 
@@ -70,7 +74,10 @@ services:
     container_name: letter-writer-frontend
     restart: unless-stopped
     ports:
-      - "80:80"
+      # HTTPS only; use 8443 to avoid privileged port 443 (rootless Podman/Docker)
+      - "8443:443"
+    volumes:
+      - ./certs:/etc/nginx/certs:ro
     depends_on:
       - backend
 

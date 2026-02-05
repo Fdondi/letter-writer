@@ -119,6 +119,7 @@ from .personal_data_sections import (
     get_competence_ratings,
     get_cv_revisions,
     get_models,
+    get_phase_model_overrides,
     get_style_instructions,
     merge_on_conflict,
     unwrap_for_response,
@@ -272,13 +273,9 @@ def google_oauth_redirect(request):
         current_site = get_current_site(request)
         site_domain = current_site.domain
         
-        # Use ACCOUNT_DEFAULT_HTTP_PROTOCOL or detect from request
-        protocol = getattr(settings, 'ACCOUNT_DEFAULT_HTTP_PROTOCOL', 'http')
-        if request.is_secure() or 'K_SERVICE' in os.environ:  # GCP Cloud Run uses HTTPS
-            protocol = 'https'
-        elif 'localhost' in site_domain or '127.0.0.1' in site_domain or ':8000' in site_domain:
-            protocol = 'http'
-        
+        # HTTPS only
+        protocol = getattr(settings, 'ACCOUNT_DEFAULT_HTTP_PROTOCOL', 'https')
+
         # Clean up domain (remove protocol if present, remove port if not needed)
         if site_domain.startswith('http://') or site_domain.startswith('https://'):
             site_domain = site_domain.split('://', 1)[1]
@@ -1048,6 +1045,11 @@ def background_phase_view(request: HttpRequest, vendor: str):
         
         # Load common data (read-only - background phase does NOT write common data)
         common_data = load_session_common_data(request)
+        # Add phase model overrides from user's personal data
+        if common_data:
+            user_data = get_user_data(user_id, use_cache=True) or {}
+            common_data = dict(common_data)
+            common_data["phase_model_overrides"] = get_phase_model_overrides(user_data)
         
         # Debug: log loaded metadata
         import logging
@@ -1116,6 +1118,7 @@ def background_phase_view(request: HttpRequest, vendor: str):
                         input_tokens=phase_cost.input_tokens or None,
                         output_tokens=phase_cost.output_tokens or None,
                         search_queries=phase_cost.search_queries or None,
+                        model=phase_cost.model,
                     )
         
         # Return only data for the requested vendor
@@ -1178,6 +1181,9 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
         from letter_writer.session_store import set_current_request
         # Set request in thread-local so session_store can use Django sessions
         set_current_request(request)
+
+        user_data = get_user_data(user_id, use_cache=True) or {}
+        phase_overrides = get_phase_model_overrides(user_data)
         
         state = advance_to_refinement(
             session_id=session_id,
@@ -1187,6 +1193,7 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
             company_report_override=data.get("company_report"),
             top_docs_override=data.get("top_docs"),
             fancy=fancy,
+            phase_model_overrides=phase_overrides,
         )
         
         # Track cost for this API call (user_id from require_auth_user at start)
@@ -1204,6 +1211,7 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
                         input_tokens=phase_cost.input_tokens or None,
                         output_tokens=phase_cost.output_tokens or None,
                         search_queries=phase_cost.search_queries or None,
+                        model=phase_cost.model,
                     )
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
@@ -1263,6 +1271,9 @@ def draft_phase_view(request: HttpRequest, vendor: str):
         instructions = request.session.get("style_instructions", "")
         if not instructions:
              instructions = get_style_instructions()
+
+        user_data = get_user_data(user_id, use_cache=True) or {}
+        phase_overrides = get_phase_model_overrides(user_data)
              
         state = advance_to_draft(
             session_id=session_id,
@@ -1270,6 +1281,7 @@ def draft_phase_view(request: HttpRequest, vendor: str):
             company_report_override=data.get("company_report"),
             top_docs_override=data.get("top_docs"),
             style_instructions=instructions,
+            phase_model_overrides=phase_overrides,
         )
         
         # Track cost for this API call (user_id from require_auth_user at start)
@@ -1287,6 +1299,7 @@ def draft_phase_view(request: HttpRequest, vendor: str):
                         input_tokens=phase_cost.input_tokens or None,
                         output_tokens=phase_cost.output_tokens or None,
                         search_queries=phase_cost.search_queries or None,
+                        model=phase_cost.model,
                     )
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
@@ -1826,12 +1839,15 @@ def personal_data_view(request: HttpRequest):
         else:
             response_revisions = []
         
+        phase_model_overrides = get_phase_model_overrides(user_data)
+
         return JsonResponse({
             "cv": latest_content,
             "revisions": response_revisions,
             "default_languages": default_languages,
             "default_models": default_models,
             "min_column_width": min_column_width,
+            "phase_model_overrides": phase_model_overrides,
         })
     
     if request.method == "POST":
@@ -1934,6 +1950,23 @@ def personal_data_view(request: HttpRequest):
                         request.session["metadata"]["common"]["selected_vendors"] = models
                         request.session.modified = True
 
+            # Check if updating phase_model_overrides
+            if "phase_model_overrides" in data:
+                overrides = data["phase_model_overrides"]
+                if not isinstance(overrides, dict):
+                    return JsonResponse({"detail": "phase_model_overrides must be an object"}, status=400)
+                # Validate structure: { phase: { vendor: model_id } }
+                sanitized = {}
+                for phase, vendor_map in overrides.items():
+                    if not isinstance(phase, str) or not isinstance(vendor_map, dict):
+                        continue
+                    sanitized[phase] = {
+                        str(v): str(m)
+                        for v, m in vendor_map.items()
+                        if isinstance(v, str) and isinstance(m, str) and v and m
+                    }
+                updates["phase_models"] = wrap_new_field("phase_models", sanitized, now)
+
             # Check if updating min_column_width (stays old field)
             if "min_column_width" in data:
                 width = data["min_column_width"]
@@ -2031,6 +2064,9 @@ def personal_data_view(request: HttpRequest):
 
         if "models" in updates:
             response_data["default_models"] = unwrap_for_response("models", updates["models"])
+
+        if "phase_models" in updates:
+            response_data["phase_model_overrides"] = unwrap_for_response("phase_models", updates["phase_models"])
         
         return JsonResponse(response_data, status=201)
     
@@ -2187,18 +2223,23 @@ def cost_daily_view(request: HttpRequest):
 
 
 def cost_models_view(request: HttpRequest):
-    """Get model pricing from client JSON files for cost projections.
+    """Get model pricing and phase defaults from client JSON files.
 
-    Returns vendors and models with input/output prices per 1M tokens.
+    Returns:
+        - models: { vendor_label: [{id, name, input, output}, ...] }
+        - phase_defaults: { phase: { vendor: model_id } }
     Does not require authentication (pricing is not sensitive).
     """
     if request.method != "GET":
         return JsonResponse({"detail": "Method not allowed"}, status=405)
 
-    from letter_writer.cost_tracker import get_all_model_pricing
+    from letter_writer.cost_tracker import get_all_model_pricing, get_phase_default_models
 
     try:
-        result = get_all_model_pricing()
+        result = {
+            "models": get_all_model_pricing(),
+            "phase_defaults": get_phase_default_models(),
+        }
         return JsonResponse(result)
     except Exception as exc:
         return JsonResponse({"detail": str(exc)}, status=500)

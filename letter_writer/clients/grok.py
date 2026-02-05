@@ -1,5 +1,5 @@
 from .base import BaseClient, ModelSize
-from typing import List
+from typing import List, Optional
 import os
 import typer
 import xai_sdk
@@ -16,8 +16,9 @@ class GrokClient(BaseClient):
         # Use OpenAI client with xAI's endpoint
         self.client = xai_sdk.Client(api_key=api_key)
 
-    def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
-        model = self.get_model_for_size(model_size)
+    def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False, model_override: Optional[str] = None) -> str:
+        model = self._resolve_model(model_size, model_override)
+        self.last_model_used = model
         typer.echo(f"[INFO] using Grok model {model}")
         
         # Use Agent Tools API for search (replaces deprecated SearchParameters)

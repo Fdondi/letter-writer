@@ -107,6 +107,7 @@ def test_cost_tracking(storage_type):
             "vendor": "gemini",
             "cost": 0.35,
             "search_queries": 2,
+            "model": "gemini-2.5-flash",
             "user_id": "test_user_123",
         },
     ]
@@ -120,6 +121,7 @@ def test_cost_tracking(storage_type):
             cost=example["cost"],
             metadata=example.get("metadata"),
             search_queries=example.get("search_queries"),
+            model=example.get("model"),
         )
         print(f"  ✓ Tracked: {example['phase']}/{example['vendor']} - ${example['cost']:.4f}")
     

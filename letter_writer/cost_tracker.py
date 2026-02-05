@@ -60,6 +60,16 @@ BIGQUERY_PROJECT = os.environ.get("BIGQUERY_PROJECT") or os.environ.get("GOOGLE_
 BIGQUERY_DATASET = os.environ.get("BIGQUERY_DATASET", "letter_writer")
 BIGQUERY_TABLE = os.environ.get("BIGQUERY_TABLE", "api_costs")
 
+# Mapping from JSON filename (stem) to vendor key (for API/costs)
+_CLIENT_JSON_TO_VENDOR = {
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "gemini": "gemini",
+    "mistral": "mistral",
+    "grok": "grok",
+    "deepseeek": "deepseek",
+}
+
 # Mapping from JSON filename (stem) to vendor display name for model pricing API
 _CLIENT_JSON_VENDORS = {
     "openai": "OpenAI",
@@ -68,6 +78,14 @@ _CLIENT_JSON_VENDORS = {
     "mistral": "Mistral",
     "grok": "xAI",
     "deepseeek": "DeepSeek",
+}
+
+# Phase -> JSON sizes key (which model size is used for each phase)
+PHASE_TO_SIZE = {
+    "background": "large",
+    "draft": "xlarge",
+    "feedback": "tiny",
+    "refine": "xlarge",
 }
 
 
@@ -94,8 +112,9 @@ def get_all_model_pricing() -> Dict[str, List[Dict[str, Any]]]:
 
     result: Dict[str, List[Dict[str, Any]]] = {}
     for json_path in sorted(clients_dir.glob("*.json")):
-        vendor_key = json_path.stem
-        vendor_label = _CLIENT_JSON_VENDORS.get(vendor_key, vendor_key.replace("_", " ").title())
+        stem = json_path.stem
+        vendor_key = _CLIENT_JSON_TO_VENDOR.get(stem, stem)
+        vendor_label = _CLIENT_JSON_VENDORS.get(stem, stem.replace("_", " ").title())
         try:
             cfg = json.loads(json_path.read_text(encoding="utf-8"))
         except Exception as e:
@@ -104,6 +123,9 @@ def get_all_model_pricing() -> Dict[str, List[Dict[str, Any]]]:
         models_cfg = cfg.get("models", {})
         if not isinstance(models_cfg, dict):
             continue
+        defaults = cfg.get("defaults", {})
+        default_search = float((defaults.get("search", 0.0) if isinstance(defaults, dict) else 0.0) or 0.0)
+
         models = []
         for model_id, model_cfg in models_cfg.items():
             if not isinstance(model_cfg, dict):
@@ -112,6 +134,7 @@ def get_all_model_pricing() -> Dict[str, List[Dict[str, Any]]]:
             output_price = _parse_price_field(model_cfg.get("output", 0.0))
             if input_price == 0 and output_price == 0:
                 continue
+            search_price = float(model_cfg.get("search", default_search) or 0.0)
             # Humanize model id for display: "claude-haiku-4-5" -> "Claude Haiku 4-5"
             name = model_id.replace("-", " ").title()
             models.append({
@@ -119,9 +142,41 @@ def get_all_model_pricing() -> Dict[str, List[Dict[str, Any]]]:
                 "name": name,
                 "input": round(input_price, 2),
                 "output": round(output_price, 2),
+                "search": round(search_price, 2),
+                "vendor": vendor_key,
             })
         if models:
             result[vendor_label] = models
+
+    return result
+
+
+def get_phase_default_models() -> Dict[str, Dict[str, str]]:
+    """Get default model per (phase, vendor) from client JSON sizes.
+
+    Returns:
+        { phase: { vendor: model_id } } e.g. {"background": {"openai": "gpt-5.2", ...}, ...}
+    """
+    clients_dir = Path(__file__).resolve().parent / "clients"
+    if not clients_dir.exists():
+        return {}
+
+    result: Dict[str, Dict[str, str]] = {p: {} for p in PHASE_TO_SIZE}
+    for json_path in sorted(clients_dir.glob("*.json")):
+        vendor_key = _CLIENT_JSON_TO_VENDOR.get(json_path.stem, json_path.stem)
+        if vendor_key == "deepseeek":
+            vendor_key = "deepseek"
+        try:
+            cfg = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        sizes = cfg.get("sizes", {})
+        if not isinstance(sizes, dict):
+            continue
+        for phase, size_key in PHASE_TO_SIZE.items():
+            model_id = sizes.get(size_key)
+            if model_id:
+                result[phase][vendor_key] = model_id
 
     return result
 
@@ -335,6 +390,7 @@ def _track_in_memory(
     input_tokens: Optional[int] = None,
     output_tokens: Optional[int] = None,
     search_queries: Optional[int] = None,
+    model: Optional[str] = None,
 ) -> None:
     """Track cost in memory (fallback when Redis unavailable).
     
@@ -360,6 +416,8 @@ def _track_in_memory(
             request_data["output_tokens"] = output_tokens
         if search_queries is not None and search_queries > 0:
             request_data["search_queries"] = search_queries
+        if model:
+            request_data["model"] = model
         if metadata and "character_count" in metadata:
             request_data["character_count"] = metadata["character_count"]
         
@@ -376,6 +434,7 @@ def _track_in_redis(
     input_tokens: Optional[int] = None,
     output_tokens: Optional[int] = None,
     search_queries: Optional[int] = None,
+    model: Optional[str] = None,
 ) -> None:
     """Track cost in Redis using atomic operations.
     
@@ -410,6 +469,8 @@ def _track_in_redis(
             request_data["output_tokens"] = output_tokens
         if search_queries is not None and search_queries > 0:
             request_data["search_queries"] = search_queries
+        if model:
+            request_data["model"] = model
         if metadata and "character_count" in metadata:
             request_data["character_count"] = metadata["character_count"]
         
@@ -420,7 +481,7 @@ def _track_in_redis(
     except Exception as e:
         logger.error(f"Error tracking cost in Redis: {e}")
         # Fall back to memory tracking
-        _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries)
+        _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries, model)
 
 
 def track_api_cost(
@@ -432,6 +493,7 @@ def track_api_cost(
     input_tokens: Optional[int] = None,
     output_tokens: Optional[int] = None,
     search_queries: Optional[int] = None,
+    model: Optional[str] = None,
 ) -> None:
     """Track cost for an API call.
     
@@ -446,6 +508,7 @@ def track_api_cost(
         input_tokens: Number of input/prompt tokens (for AI services)
         output_tokens: Number of output/completion tokens (for AI services)
         search_queries: Number of web/grounding search calls (Gemini, Grok)
+        model: Actual model used (e.g. gemini-2.5-flash). May differ from default when user overrides.
     """
     # Ensure flush thread is running
     _ensure_flush_thread()
@@ -453,9 +516,9 @@ def track_api_cost(
     redis_client = _get_redis_client()
     
     if redis_client is not None:
-        _track_in_redis(redis_client, user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries)
+        _track_in_redis(redis_client, user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries, model)
     else:
-        _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries)
+        _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries, model)
 
 
 def _get_summary_from_memory() -> Dict[str, Any]:
@@ -573,6 +636,23 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
           AND timestamp >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL @months_back MONTH))
         GROUP BY vendor
         """
+
+        # Query for phase+vendor breakdown (for phase model settings)
+        phase_vendor_query = f"""
+        SELECT 
+            phase,
+            vendor,
+            SUM(cost) as total_cost,
+            SUM(request_count) as total_requests,
+            SUM(COALESCE(input_tokens, 0)) as input_tokens,
+            SUM(COALESCE(output_tokens, 0)) as output_tokens,
+            SUM(COALESCE(search_queries, 0)) as search_queries
+        FROM `{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}`
+        WHERE user_id = @user_id
+          AND timestamp >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL @months_back MONTH))
+          AND vendor != 'google_translate'
+        GROUP BY phase, vendor
+        """
         
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
@@ -581,9 +661,10 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
             ]
         )
         
-        # Run both queries
+        # Run all three queries
         phase_results = client.query(phase_query, job_config=job_config).result()
         vendor_results = client.query(vendor_query, job_config=job_config).result()
+        phase_vendor_results = client.query(phase_vendor_query, job_config=job_config).result()
         
         total_cost = 0.0
         total_requests = 0
@@ -591,6 +672,7 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
         total_output_tokens = 0
         by_phase = {}
         by_vendor = {}
+        by_phase_by_vendor = {}
         
         for row in phase_results:
             phase_cost = float(row.total_cost or 0)
@@ -612,6 +694,19 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
                 "input_tokens": int(row.input_tokens or 0),
                 "output_tokens": int(row.output_tokens or 0)
             }
+
+        for row in phase_vendor_results:
+            phase = row.phase
+            vendor = row.vendor
+            if phase not in by_phase_by_vendor:
+                by_phase_by_vendor[phase] = {}
+            by_phase_by_vendor[phase][vendor] = {
+                "total_cost": float(row.total_cost or 0),
+                "request_count": int(row.total_requests or 0),
+                "input_tokens": int(row.input_tokens or 0),
+                "output_tokens": int(row.output_tokens or 0),
+                "search_queries": int(row.search_queries or 0),
+            }
         
         return {
             "user_id": user_id,
@@ -621,7 +716,8 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
             "total_input_tokens": total_input_tokens,
             "total_output_tokens": total_output_tokens,
             "by_phase": by_phase,
-            "by_vendor": by_vendor
+            "by_vendor": by_vendor,
+            "by_phase_by_vendor": by_phase_by_vendor,
         }
         
     except Exception as e:
@@ -876,6 +972,8 @@ def flush_costs_to_bigquery(reset_after_flush: bool = True, save_completing_user
                 row["character_count"] = req["character_count"]
             if "search_queries" in req and req["search_queries"] is not None:
                 row["search_queries"] = req["search_queries"]
+            if req.get("model"):
+                row["model"] = req["model"]
             if save_completing_user_id is not None:
                 row["document_saved"] = req.get("user_id") == save_completing_user_id
 

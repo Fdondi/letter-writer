@@ -340,12 +340,12 @@ export default function PersonalDataPage() {
       <div
         style={{
           display: "flex",
-          justifyContent: "space-between",
+          justifyContent: "flex-end",
           alignItems: "center",
           marginBottom: 20,
+          gap: 8,
         }}
       >
-        <h2 style={{ margin: 0, color: "var(--text-color)" }}>Your CV</h2>
         <div style={{ display: "flex", gap: 8 }}>
           {!isEditing && (
             <>

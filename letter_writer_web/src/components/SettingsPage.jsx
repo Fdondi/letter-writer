@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { useLanguages } from "../contexts/LanguageContext";
 import LanguageConfig from "./LanguageConfig";
 import CompetenceScaleSettings from "./CompetenceScaleSettings";
+import PhaseModelSettings from "./PhaseModelSettings";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
 
 export default function SettingsPage({ vendors = [], selectedVendors, setSelectedVendors, onCompetenceScalesChange }) {
@@ -11,6 +12,7 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
   const [savingModels, setSavingModels] = useState(false);
   const [minColumnWidth, setMinColumnWidth] = useState(200); // pixels
   const [savingColumnWidth, setSavingColumnWidth] = useState(false);
+  const [phaseModelOverrides, setPhaseModelOverrides] = useState({});
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -42,6 +44,9 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
             setMinColumnWidth(data.min_column_width);
           } else {
             setMinColumnWidth(200); // Default value shown in UI
+          }
+          if (data.phase_model_overrides && typeof data.phase_model_overrides === "object") {
+            setPhaseModelOverrides(data.phase_model_overrides);
           }
         }
       } catch (e) {
@@ -149,8 +154,6 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
 
   return (
     <div style={{ padding: 20 }}>
-      <h2 style={{ margin: "0 0 20px 0", color: "var(--text-color)" }}>Settings</h2>
-
       {error && (
         <div
           style={{
@@ -311,6 +314,13 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
           ))}
         </div>
       </div>
+
+      <PhaseModelSettings
+        vendors={vendors}
+        phaseModelOverrides={phaseModelOverrides}
+        onSaveOverrides={setPhaseModelOverrides}
+        personalDataLoaded={!loading}
+      />
 
       {/* Minimum Column Width Section */}
       <div

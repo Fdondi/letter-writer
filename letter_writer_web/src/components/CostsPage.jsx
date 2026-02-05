@@ -25,11 +25,12 @@ export default function CostsPage() {
     fetch("/api/costs/models/", { credentials: "include" })
       .then((res) => (res.ok ? res.json() : {}))
       .then((data) => {
-        setModelPricing(data);
+        const models = data.models || data;
+        setModelPricing(models);
         // Set default projection model to first available
-        if (Object.keys(data).length > 0) {
-          const firstVendor = Object.keys(data)[0];
-          const firstModel = data[firstVendor]?.[0];
+        if (Object.keys(models).length > 0) {
+          const firstVendor = Object.keys(models)[0];
+          const firstModel = models[firstVendor]?.[0];
           if (firstModel) {
             setProjectionModel((prev) => (prev ? prev : firstModel.id));
           }
@@ -171,8 +172,7 @@ export default function CostsPage() {
 
   return (
     <div style={{ padding: 20, maxWidth: 900, margin: "0 auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h2 style={{ margin: 0 }}>API Costs</h2>
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", marginBottom: 20 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <label style={{ fontSize: 14 }}>Period:</label>
           <select

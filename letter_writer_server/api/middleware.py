@@ -32,14 +32,17 @@ class OAuthHostFixMiddleware(MiddlewareMixin):
             return None
         
         try:
-            # Get the Site domain (the public-facing hostname)
+            # Get the Site domain (the public-facing hostname, should include port e.g. localhost:8443)
             site = Site.objects.get(id=1)
             site_domain = site.domain
-            
+            request_host = request.get_host()
+            # Prefer request host when it has a port and site_domain doesn't (avoid stripping port)
+            if ':' in request_host and ':' not in site_domain and site_domain in request_host.split(':')[0]:
+                site_domain = request_host
             # If request hostname is different from Site domain, fix it
             # This happens in Docker where Host header is 'backend:8000'
-            # but we need 'localhost:8000' for OAuth redirect URIs
-            if request.get_host() != site_domain:
+            # but we need 'localhost:8443' for OAuth redirect URIs
+            if request_host != site_domain:
                 # Override META['HTTP_HOST'] to use Site domain
                 # This affects request.build_absolute_uri() which django-allauth uses
                 request.META['HTTP_HOST'] = site_domain

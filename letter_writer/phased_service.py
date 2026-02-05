@@ -37,6 +37,7 @@ class PhaseCost:
     input_tokens: int = 0
     output_tokens: int = 0
     search_queries: int = 0
+    model: Optional[str] = None
 
 
 @dataclass
@@ -53,7 +54,7 @@ class VendorPhaseState:
     # Per-phase cost tracking
     phase_costs: Dict[str, PhaseCost] = field(default_factory=dict)
     
-    def add_phase_cost(self, phase: str, cost: float, input_tokens: int, output_tokens: int, search_queries: int = 0):
+    def add_phase_cost(self, phase: str, cost: float, input_tokens: int, output_tokens: int, search_queries: int = 0, model: Optional[str] = None):
         """Add cost for a specific phase."""
         if phase not in self.phase_costs:
             self.phase_costs[phase] = PhaseCost()
@@ -61,6 +62,8 @@ class VendorPhaseState:
         self.phase_costs[phase].input_tokens += input_tokens
         self.phase_costs[phase].output_tokens += output_tokens
         self.phase_costs[phase].search_queries += search_queries
+        if model is not None:
+            self.phase_costs[phase].model = model
         # Also update legacy totals
         self.cost += cost
         self.input_tokens += input_tokens
@@ -145,8 +148,9 @@ def _update_cost(state: VendorPhaseState, client, phase: str = "unknown") -> Non
     input_tokens = int(getattr(client, "total_input_tokens", 0) or 0)
     output_tokens = int(getattr(client, "total_output_tokens", 0) or 0)
     search_queries = int(getattr(client, "total_search_queries", 0) or 0)
+    model = getattr(client, "last_model_used", None)
     
-    state.add_phase_cost(phase, cost, input_tokens, output_tokens, search_queries)
+    state.add_phase_cost(phase, cost, input_tokens, output_tokens, search_queries, model)
 
 
 def _get_client_usage(client) -> tuple:
@@ -165,6 +169,8 @@ def _reset_client_counters(client) -> None:
     client.total_output_tokens = 0
     if hasattr(client, "total_search_queries"):
         client.total_search_queries = 0
+    if hasattr(client, "last_model_used"):
+        client.last_model_used = None
 
 
 def _create_session(
@@ -246,10 +252,12 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
     trace_dir = Path("trace", f"{company_name}.{vendor.value}.background")
     trace_dir.mkdir(parents=True, exist_ok=True)
     ai_client = get_client(vendor)
+    phase_overrides = common_data.get("phase_model_overrides") or {}
+    bg_override = phase_overrides.get("background", {}).get(vendor.value)
     print(f"[PHASE] background -> {vendor.value} :: select_top_documents")
-    top_docs = select_top_documents(search_result, job_text, ai_client, trace_dir)
+    top_docs = select_top_documents(search_result, job_text, ai_client, trace_dir, model_override=bg_override)
     print(f"[PHASE] background -> {vendor.value} :: company_research")
-    company_report = company_research(company_name, job_text, ai_client, trace_dir, point_of_contact=point_of_contact, additional_company_info=additional_company_info)
+    company_report = company_research(company_name, job_text, ai_client, trace_dir, point_of_contact=point_of_contact, additional_company_info=additional_company_info, model_override=bg_override)
 
     state = VendorPhaseState(
         top_docs=top_docs,
@@ -271,6 +279,7 @@ def advance_to_draft(
     company_report_override: Optional[str] = None,
     top_docs_override: Optional[List[dict]] = None,
     style_instructions: str = "",
+    phase_model_overrides: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> VendorPhaseState:
     # Force reload from MongoDB to ensure we have the latest session state
     # This is important because the session might have been updated by background phase
@@ -315,8 +324,9 @@ def advance_to_draft(
                 trace_dir = Path("trace", f"{company_name}.{vendor.value}.background")
                 trace_dir.mkdir(parents=True, exist_ok=True)
                 ai_client = get_client(vendor)
+                bg_override = (phase_model_overrides or {}).get("background", {}).get(vendor.value)
                 try:
-                    state.top_docs = select_top_documents(session.search_result, session.job_text, ai_client, trace_dir)
+                    state.top_docs = select_top_documents(session.search_result, session.job_text, ai_client, trace_dir, model_override=bg_override)
                     _update_cost(state, ai_client, phase="background")
                 except Exception:
                     # If retrieval fails, use empty list (user can proceed with just company_report)
@@ -360,13 +370,17 @@ def advance_to_draft(
     state.company_report = company_report
     state.top_docs = top_docs
 
+    overrides = phase_model_overrides or {}
+    draft_override = overrides.get("draft", {}).get(vendor.value)
+    feedback_override = overrides.get("feedback", {}).get(vendor.value)
+
     try:
         # Reset counters to track draft generation separately
         _reset_client_counters(ai_client)
         
         print(f"[PHASE] draft -> {vendor.value} :: generate_letter (XLARGE)")
         draft_letter = generate_letter(
-            cv_text, top_docs, company_report, job_text, ai_client, trace_dir, style_instructions, additional_user_info
+            cv_text, top_docs, company_report, job_text, ai_client, trace_dir, style_instructions, additional_user_info, model_override=draft_override
         )
         
         # Capture draft cost before feedback generation
@@ -376,16 +390,16 @@ def advance_to_draft(
         # Run checks on the draft so the user can review/override feedback before refinement
         print(f"[PHASE] draft -> {vendor.value} :: running checks (TINY)")
         with ThreadPoolExecutor(max_workers=5) as executor:
-            instruction_future = executor.submit(instruction_check, draft_letter, ai_client, style_instructions)
-            accuracy_future = executor.submit(accuracy_check, draft_letter, cv_text, ai_client, additional_user_info)
+            instruction_future = executor.submit(instruction_check, draft_letter, ai_client, style_instructions, feedback_override)
+            accuracy_future = executor.submit(accuracy_check, draft_letter, cv_text, ai_client, additional_user_info, feedback_override)
             precision_future = executor.submit(
-                precision_check, draft_letter, company_report, job_text, ai_client
+                precision_check, draft_letter, company_report, job_text, ai_client, feedback_override
             )
             company_fit_future = executor.submit(
-                company_fit_check, draft_letter, company_report, job_text, ai_client
+                company_fit_check, draft_letter, company_report, job_text, ai_client, feedback_override
             )
-            user_fit_future = executor.submit(user_fit_check, draft_letter, top_docs, ai_client)
-            human_future = executor.submit(human_check, draft_letter, top_docs, ai_client)
+            user_fit_future = executor.submit(user_fit_check, draft_letter, top_docs, ai_client, feedback_override)
+            human_future = executor.submit(human_check, draft_letter, top_docs, ai_client, feedback_override)
 
         feedback = {
             "instruction": instruction_future.result(),
@@ -422,6 +436,7 @@ def advance_to_refinement(
     company_report_override: Optional[str] = None,
     top_docs_override: Optional[List[dict]] = None,
     fancy: bool = False,
+    phase_model_overrides: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> VendorPhaseState:
     # Force reload from MongoDB to ensure we have the latest session state
     from .session_store import load_session
@@ -463,6 +478,8 @@ def advance_to_refinement(
         # Merge/replace cached feedback with user-provided overrides
         state.feedback = feedback_override
 
+    refine_override = (phase_model_overrides or {}).get("refine", {}).get(vendor.value)
+
     try:
         feedback = state.feedback or {}
         print(f"[PHASE] refine -> {vendor.value} :: rewrite_letter (XLARGE)")
@@ -476,6 +493,7 @@ def advance_to_refinement(
             feedback.get("human", ""),
             ai_client,
             trace_dir,
+            model_override=refine_override,
         )
 
         if fancy:
