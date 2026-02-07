@@ -354,9 +354,9 @@ def _track_in_memory(
             "request_count": 1,
             "metadata": metadata
         }
-        if input_tokens:
+        if input_tokens is not None:
             request_data["input_tokens"] = input_tokens
-        if output_tokens:
+        if output_tokens is not None:
             request_data["output_tokens"] = output_tokens
         if search_queries is not None and search_queries > 0:
             request_data["search_queries"] = search_queries
@@ -404,9 +404,9 @@ def _track_in_redis(
             "request_count": 1,
             "metadata": metadata
         }
-        if input_tokens:
+        if input_tokens is not None:
             request_data["input_tokens"] = input_tokens
-        if output_tokens:
+        if output_tokens is not None:
             request_data["output_tokens"] = output_tokens
         if search_queries is not None and search_queries > 0:
             request_data["search_queries"] = search_queries

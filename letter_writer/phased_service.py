@@ -146,6 +146,8 @@ def _update_cost(state: VendorPhaseState, client, phase: str = "unknown") -> Non
     output_tokens = int(getattr(client, "total_output_tokens", 0) or 0)
     search_queries = int(getattr(client, "total_search_queries", 0) or 0)
     
+    print(f"[DEBUG] _update_cost({phase}): cost={cost}, in={input_tokens}, out={output_tokens}, search={search_queries}")
+    
     state.add_phase_cost(phase, cost, input_tokens, output_tokens, search_queries)
 
 

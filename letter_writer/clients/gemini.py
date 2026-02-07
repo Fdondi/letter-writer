@@ -94,6 +94,8 @@ class GeminiClient(BaseClient):
         self.total_input_tokens += input_tokens
         self.total_output_tokens += output_tokens
         self.total_search_queries += search_queries
+        
+        typer.echo(f"[DEBUG] track_cost called: in={input_tokens}, out={output_tokens}, totals: in={self.total_input_tokens}, out={self.total_output_tokens}")
 
     def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
         if types is None:
@@ -137,9 +139,19 @@ class GeminiClient(BaseClient):
         except Exception as exc:
             raise RuntimeError(f"Gemini generate_content failed: {exc}") from exc
 
-        # Track cost if usage metadata is available
+        # Track cost from usage metadata
         usage = getattr(response, "usage_metadata", None)
+        
+        # Debug: log what we're getting from the response
+        typer.echo(f"[DEBUG] Gemini response usage_metadata: {usage}")
         if usage is not None:
+            typer.echo(f"[DEBUG] prompt_token_count: {getattr(usage, 'prompt_token_count', 'MISSING')}")
+            typer.echo(f"[DEBUG] candidates_token_count: {getattr(usage, 'candidates_token_count', 'MISSING')}")
+        
+        if usage is not None:
+            prompt_tokens = getattr(usage, "prompt_token_count", None)
+            output_tokens = getattr(usage, "candidates_token_count", None)
+            
             # Get actual search count from grounding metadata when available (Gemini 3 bills per query)
             search_queries = 0
             if search and hasattr(response, "candidates") and response.candidates:
@@ -151,12 +163,16 @@ class GeminiClient(BaseClient):
                         search_queries = len(wsq) if hasattr(wsq, "__len__") else (1 if wsq else 0)
                 if search_queries == 0:
                     search_queries = 1  # Search enabled but no grounding metadata (fallback)
+            
+            # Track even if token counts are missing (as 0) - we still want the record
             self.track_cost(
                 model_name,
-                getattr(usage, "prompt_token_count", 0) or 0,
-                getattr(usage, "candidates_token_count", 0) or 0,
+                prompt_tokens if prompt_tokens is not None else 0,
+                output_tokens if output_tokens is not None else 0,
                 search_queries=search_queries,
             )
+        else:
+            typer.echo(f"[WARNING] Gemini response has no usage_metadata - token tracking unavailable")
 
         # Handle response text - may be None if response has no text content
         response_text = getattr(response, "text", None)

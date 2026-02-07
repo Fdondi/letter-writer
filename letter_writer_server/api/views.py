@@ -1107,15 +1107,16 @@ def background_phase_view(request: HttpRequest, vendor: str):
             
             # Track costs per phase
             for phase_name, phase_cost in vendor_state.phase_costs.items():
+                print(f"[DEBUG] views.py phase={phase_name}: cost={phase_cost.cost}, in={phase_cost.input_tokens}, out={phase_cost.output_tokens}")
                 if phase_cost.cost > 0:
                     track_api_cost(
                         user_id=user_id,
                         phase=phase_name,
                         vendor=vendor,
                         cost=phase_cost.cost,
-                        input_tokens=phase_cost.input_tokens or None,
-                        output_tokens=phase_cost.output_tokens or None,
-                        search_queries=phase_cost.search_queries or None,
+                        input_tokens=phase_cost.input_tokens,
+                        output_tokens=phase_cost.output_tokens,
+                        search_queries=phase_cost.search_queries,
                     )
         
         # Return only data for the requested vendor
@@ -1195,15 +1196,16 @@ def refinement_phase_view(request: HttpRequest, vendor: str):
             
             # Track costs per phase
             for phase_name, phase_cost in state.phase_costs.items():
+                print(f"[DEBUG] views.py draft phase={phase_name}: cost={phase_cost.cost}, in={phase_cost.input_tokens}, out={phase_cost.output_tokens}")
                 if phase_cost.cost > 0:
                     track_api_cost(
                         user_id=user_id,
                         phase=phase_name,
                         vendor=vendor,
                         cost=phase_cost.cost,
-                        input_tokens=phase_cost.input_tokens or None,
-                        output_tokens=phase_cost.output_tokens or None,
-                        search_queries=phase_cost.search_queries or None,
+                        input_tokens=phase_cost.input_tokens,
+                        output_tokens=phase_cost.output_tokens,
+                        search_queries=phase_cost.search_queries,
                     )
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
@@ -1278,15 +1280,16 @@ def draft_phase_view(request: HttpRequest, vendor: str):
             
             # Track costs per phase (draft and feedback are tracked separately)
             for phase_name, phase_cost in state.phase_costs.items():
+                print(f"[DEBUG] views.py refine phase={phase_name}: cost={phase_cost.cost}, in={phase_cost.input_tokens}, out={phase_cost.output_tokens}")
                 if phase_cost.cost > 0:
                     track_api_cost(
                         user_id=user_id,
                         phase=phase_name,
                         vendor=vendor,
                         cost=phase_cost.cost,
-                        input_tokens=phase_cost.input_tokens or None,
-                        output_tokens=phase_cost.output_tokens or None,
-                        search_queries=phase_cost.search_queries or None,
+                        input_tokens=phase_cost.input_tokens,
+                        output_tokens=phase_cost.output_tokens,
+                        search_queries=phase_cost.search_queries,
                     )
     except ValueError as exc:
         return JsonResponse({"detail": str(exc)}, status=400)
