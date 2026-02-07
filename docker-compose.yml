@@ -70,7 +70,7 @@ services:
     container_name: letter-writer-frontend
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "8443:80"
     depends_on:
       - backend
 
