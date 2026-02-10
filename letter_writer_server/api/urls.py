@@ -38,4 +38,7 @@ urlpatterns = [
     path("costs/daily/", views.cost_daily_view, name="cost_daily"),
     path("costs/global/", views.cost_global_view, name="cost_global"),
     path("costs/models/", views.cost_models_view, name="cost_models"),
+    # Research endpoints
+    path("research/company/", views.research_company_view, name="research_company"),
+    path("research/poc/", views.research_poc_view, name="research_poc"),
 ] 

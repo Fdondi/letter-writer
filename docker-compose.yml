@@ -70,7 +70,11 @@ services:
     container_name: letter-writer-frontend
     restart: unless-stopped
     ports:
-      - "8443:80"
+      - "8443:443"
+      - "8080:80"
+    volumes:
+      - ./certs:/etc/nginx/certs:ro
+      - ./letter_writer_web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - backend
 

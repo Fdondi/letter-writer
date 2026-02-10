@@ -11,9 +11,12 @@ class ClaudeClient(BaseClient):
     def _format_messages(self, user_messages: List[str]) -> List[Dict]:
         return [{"role": "user", "content": [{"type": "text", "text": message}]} for message in user_messages]
 
-    def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
+    def call(self, model_size: ModelSize | str, system: str, user_messages: List[str], search: bool = False) -> str:
         messages = self._format_messages(user_messages)
-        model = self.get_model_for_size(model_size)
+        if isinstance(model_size, str):
+            model = model_size
+        else:
+            model = self.get_model_for_size(model_size)
         typer.echo(f"[INFO] using Anthropic model {model}" + (" with search" if search else ""))
         tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}] if search else []
         # Use 2048 for search, 8000 for everything else (letters, comments, etc.)

@@ -1099,7 +1099,26 @@ def background_phase_view(request: HttpRequest, vendor: str):
         
         # Run background phase for this vendor (writes only vendor-specific data)
         # Note: _run_background_phase still expects session_id for compatibility, but we'll update it to use request
-        vendor_state = _run_background_phase(session_id, vendors[0], common_data)
+        
+        # Check for overrides in request body (from consolidated research)
+        company_report_override = data.get("company_report")
+        top_docs_override = data.get("top_docs")
+        
+        if company_report_override:
+            # Use provided report instead of running research
+            from letter_writer.phased_service import VendorPhaseState
+            from letter_writer.session_store import save_vendor_data
+            
+            vendor_state = VendorPhaseState(
+                top_docs=top_docs_override or [],
+                company_report=company_report_override,
+            )
+            # Save vendor-specific data
+            save_vendor_data(session_id, vendor, vendor_state)
+            
+            # We skip cost tracking here as no generation happened (or it happened in research phase)
+        else:
+            vendor_state = _run_background_phase(session_id, vendors[0], common_data)
         
         # Track cost for this API call (user_id required - already authenticated via require_auth_user)
         if vendor_state.cost > 0 and user_id:
@@ -1789,6 +1808,13 @@ def personal_data_view(request: HttpRequest):
         revisions = get_cv_revisions(user_data)
         default_languages = user_data.get("default_languages") or []
         default_models = get_models(user_data)
+        # Helper for background models? Or just get raw
+        # get_models uses "models" field.
+        # We can implement get_background_models similarly or just raw access.
+        # personal_data_sections.py handles wrapping.
+        from .personal_data_sections import unwrap_for_response
+        default_background_models = unwrap_for_response("background_models", user_data.get("background_models")) or []
+        
         min_column_width = user_data.get("min_column_width")
         
         # Convert Firestore Timestamps to ISO strings and find latest
@@ -1834,6 +1860,7 @@ def personal_data_view(request: HttpRequest):
             "revisions": response_revisions,
             "default_languages": default_languages,
             "default_models": default_models,
+            "default_background_models": default_background_models,
             "min_column_width": min_column_width,
         })
     
@@ -1937,6 +1964,13 @@ def personal_data_view(request: HttpRequest):
                         request.session["metadata"]["common"]["selected_vendors"] = models
                         request.session.modified = True
 
+            # Check if updating default_background_models -> write to new field background_models
+            if "default_background_models" in data:
+                bg_models = data["default_background_models"]
+                if not isinstance(bg_models, list):
+                    return JsonResponse({"detail": "default_background_models must be a list"}, status=400)
+                updates["background_models"] = wrap_new_field("background_models", bg_models, now)
+
             # Check if updating min_column_width (stays old field)
             if "min_column_width" in data:
                 width = data["min_column_width"]
@@ -2034,6 +2068,9 @@ def personal_data_view(request: HttpRequest):
 
         if "models" in updates:
             response_data["default_models"] = unwrap_for_response("models", updates["models"])
+
+        if "background_models" in updates:
+            response_data["default_background_models"] = unwrap_for_response("background_models", updates["background_models"])
         
         return JsonResponse(response_data, status=201)
     
@@ -2204,4 +2241,117 @@ def cost_models_view(request: HttpRequest):
         result = get_all_model_pricing()
         return JsonResponse(result)
     except Exception as exc:
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+
+@prevent_duplicate_requests(endpoint_path="research/company")
+def research_company_view(request: HttpRequest):
+    """Perform company research."""
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+
+    user_id, error_response = require_auth_user(request)
+    if error_response:
+        return error_response
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Invalid JSON"}, status=400)
+
+    company_name = data.get("company_name")
+    if not company_name:
+        return JsonResponse({"detail": "company_name is required"}, status=400)
+
+    job_text = data.get("job_text", "")
+    models = data.get("models") or data.get("vendors", [])
+    point_of_contact = data.get("point_of_contact")
+    additional_company_info = data.get("additional_company_info", "")
+
+    try:
+        from letter_writer.clients.base import ModelVendor
+        from letter_writer.research import perform_company_research
+        
+        # If no models provided, try to get default models from user settings
+        if not models:
+            from letter_writer.firestore_store import get_user_data
+            from .personal_data_sections import get_models
+            user_data = get_user_data(user_id, use_cache=True)
+            default_models = get_models(user_data)
+            if default_models:
+                models = default_models
+        
+        # Fallback to OpenAI if still empty
+        if not models:
+             models = ["openai"]
+
+        results = perform_company_research(
+            company_name=company_name,
+            user_id=user_id,
+            models=models,
+            job_text=job_text,
+            point_of_contact=point_of_contact,
+            additional_company_info=additional_company_info
+        )
+        
+        return JsonResponse({"status": "ok", "results": results})
+    except Exception as exc:
+        traceback.print_exc()
+        return JsonResponse({"detail": str(exc)}, status=500)
+
+
+@prevent_duplicate_requests(endpoint_path="research/poc")
+def research_poc_view(request: HttpRequest):
+    """Perform POC research."""
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+
+    user_id, error_response = require_auth_user(request)
+    if error_response:
+        return error_response
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Invalid JSON"}, status=400)
+
+    poc_name = data.get("poc_name")
+    if not poc_name:
+        return JsonResponse({"detail": "poc_name is required"}, status=400)
+
+    company_name = data.get("company_name")
+    if not company_name:
+        return JsonResponse({"detail": "company_name is required for POC research"}, status=400)
+
+    job_text = data.get("job_text", "")
+    models = data.get("models") or data.get("vendors", [])
+
+    try:
+        from letter_writer.clients.base import ModelVendor
+        from letter_writer.research import perform_poc_research
+        
+        # If no models provided, try to get default models from user settings
+        if not models:
+            from letter_writer.firestore_store import get_user_data
+            from .personal_data_sections import get_models
+            user_data = get_user_data(user_id, use_cache=True)
+            default_models = get_models(user_data)
+            if default_models:
+                models = default_models
+
+        # Fallback to OpenAI if still empty
+        if not models:
+             models = ["openai"]
+
+        results = perform_poc_research(
+            poc_name=poc_name,
+            user_id=user_id,
+            models=models,
+            company_name=company_name,
+            job_text=job_text
+        )
+        
+        return JsonResponse({"status": "ok", "results": results})
+    except Exception as exc:
+        traceback.print_exc()
         return JsonResponse({"detail": str(exc)}, status=500)

@@ -11,9 +11,12 @@ class OpenAIClient(BaseClient):
     def _format_messages(self, system: str, user_messages: List[str]) -> List[Dict]:
         return [{"role": "system", "content": system}] + [{"role": "user", "content": message} for message in user_messages]
 
-    def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
+    def call(self, model_size: ModelSize | str, system: str, user_messages: List[str], search: bool = False) -> str:
         messages = self._format_messages(system, user_messages)
-        model = self.get_model_for_size(model_size)
+        if isinstance(model_size, str):
+            model = model_size
+        else:
+            model = self.get_model_for_size(model_size)
         if search:
             if "gpt-4o" not in model:
                 typer.echo(f"[WARNING] ignoring requested model {model}, using gpt-4o-search-preview instead")

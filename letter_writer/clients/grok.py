@@ -16,8 +16,11 @@ class GrokClient(BaseClient):
         # Use OpenAI client with xAI's endpoint
         self.client = xai_sdk.Client(api_key=api_key)
 
-    def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
-        model = self.get_model_for_size(model_size)
+    def call(self, model_size: ModelSize | str, system: str, user_messages: List[str], search: bool = False) -> str:
+        if isinstance(model_size, str):
+            model = model_size
+        else:
+            model = self.get_model_for_size(model_size)
         typer.echo(f"[INFO] using Grok model {model}")
         
         # Use Agent Tools API for search (replaces deprecated SearchParameters)

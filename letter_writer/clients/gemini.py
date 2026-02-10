@@ -97,7 +97,7 @@ class GeminiClient(BaseClient):
         
         typer.echo(f"[DEBUG] track_cost called: in={input_tokens}, out={output_tokens}, totals: in={self.total_input_tokens}, out={self.total_output_tokens}")
 
-    def call(self, model_size: ModelSize, system: str, user_messages: List[str], search: bool = False) -> str:
+    def call(self, model_size: ModelSize | str, system: str, user_messages: List[str], search: bool = False) -> str:
         if types is None:
             raise ImportError(
                 "Gemini client requires the 'google-genai' package. Install it to use Gemini models."
@@ -109,7 +109,10 @@ class GeminiClient(BaseClient):
         else:
             tools = []
 
-        model_name = self.get_model_for_size(model_size)
+        if isinstance(model_size, str):
+            model_name = model_size
+        else:
+            model_name = self.get_model_for_size(model_size)
         typer.echo(f"[INFO] using Gemini model {model_name}" + (" with search" if search else ""))
 
         # Validate and filter user_messages - Gemini API requires all strings to be non-None

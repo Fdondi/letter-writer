@@ -488,6 +488,131 @@ def append_negatives(collection, doc_id: str, negatives: List[dict], user_id: Op
     return get_document(collection, doc_id, user_id=user_id)
 
 
+def get_companies_collection():
+    """Return the Firestore collection reference for companies."""
+    client = get_firestore_client()
+    return client.collection("companies")
+
+
+def save_company_info(company_name: str, data: dict, user_id: str, vector: Optional[List[float]] = None) -> dict:
+    """Save company research data.
+    
+    Args:
+        company_name: Company name (used as ID after normalization)
+        data: Data to save (reports, etc.)
+        user_id: User ID (for ownership/scoping)
+        vector: Optional vector embedding for fuzzy search
+    """
+    if not company_name or not user_id:
+        raise ValueError("company_name and user_id are required")
+    
+    # Normalize name for ID
+    doc_id = f"{user_id}_{company_name.strip().lower().replace(' ', '_')}"
+    
+    collection = get_companies_collection()
+    
+    # Use direct set with merge=True to support arbitrary fields (like reports)
+    # upsert_document is too strict and only supports specific document fields
+    update_data = {
+        "id": doc_id,
+        "company_name": company_name,
+        "user_id": user_id,
+        "updated_at": datetime.now(timezone.utc),
+        **data
+    }
+    
+    # Add vector if provided
+    if vector is not None:
+        from google.cloud.firestore_v1.vector import Vector
+        update_data["vector"] = Vector(vector)
+    
+    collection.document(doc_id).set(update_data, merge=True)
+    return update_data
+
+
+def get_company_info(company_name: str, user_id: str) -> Optional[dict]:
+    """Get company research data.
+    
+    Args:
+        company_name: Company name
+        user_id: User ID
+    """
+    if not company_name or not user_id:
+        raise ValueError("company_name and user_id are required")
+        
+    doc_id = f"{user_id}_{company_name.strip().lower().replace(' ', '_')}"
+    collection = get_companies_collection()
+    doc = collection.document(doc_id).get()
+    if doc.exists:
+        return doc.to_dict()
+    return None
+
+
+def save_poc_info(company_name: str, poc_name: str, data: dict, user_id: str) -> dict:
+    """Save POC research data into the company document.
+    
+    Args:
+        company_name: Company name (parent document)
+        poc_name: POC name
+        data: Data to save
+        user_id: User ID
+    """
+    if not company_name or not poc_name or not user_id:
+        raise ValueError("company_name, poc_name, and user_id are required")
+        
+    company_id = f"{user_id}_{company_name.strip().lower().replace(' ', '_')}"
+    poc_key = poc_name.strip().lower().replace(' ', '_')
+    
+    collection = get_companies_collection()
+    
+    # Update nested field using dot notation (requires document to exist? No, set with merge handles it)
+    # Actually, to update a nested map safely without overwriting other POCs, we need to use
+    # a dict with dot notation keys if using update(), or construct the nested dict if using set(merge=True).
+    # set(merge=True) merges top-level fields. For nested maps, it merges them too!
+    # "If you use set() with merge=True, the contents of the document are updated... Maps are merged."
+    
+    update_data = {
+        "pocs": {
+            poc_key: {
+                "name": poc_name,
+                "updated_at": datetime.now(timezone.utc),
+                **data
+            }
+        },
+        # Ensure parent fields exist
+        "company_name": company_name,
+        "user_id": user_id,
+        "updated_at": datetime.now(timezone.utc)
+    }
+    
+    collection.document(company_id).set(update_data, merge=True)
+    return update_data["pocs"][poc_key]
+
+
+def get_poc_info(company_name: str, poc_name: str, user_id: str) -> Optional[dict]:
+    """Get POC research data from company document.
+    
+    Args:
+        company_name: Company name
+        poc_name: POC name
+        user_id: User ID
+    """
+    if not company_name or not poc_name or not user_id:
+        raise ValueError("company_name, poc_name, and user_id are required")
+        
+    company_id = f"{user_id}_{company_name.strip().lower().replace(' ', '_')}"
+    poc_key = poc_name.strip().lower().replace(' ', '_')
+    
+    collection = get_companies_collection()
+    doc = collection.document(company_id).get()
+    
+    if doc.exists:
+        data = doc.to_dict()
+        pocs = data.get("pocs", {})
+        return pocs.get(poc_key)
+    return None
+
+
 def documents_by_ids(collection, ids: List[str], user_id: Optional[str] = None) -> List[dict]:
     """Get multiple documents by IDs.
     

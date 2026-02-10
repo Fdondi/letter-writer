@@ -55,7 +55,7 @@ def _get_allowed_hosts():
         return gcp_hosts
     
     # Default for local development (Docker Compose)
-    return ["backend", "localhost", "127.0.0.1", "0.0.0.0"]
+    return ["backend", "localhost", "127.0.0.1", "0.0.0.0", "example.com"]
 
 
 # SECURITY: SECRET_KEY must be set via environment variable
@@ -71,6 +71,10 @@ DEBUG = os.environ.get("DJANGO_DEBUG", "false").lower() in ("1", "true", "yes")
 # - If running on Cloud Run, automatically detects service URL
 # - Otherwise defaults to local development hosts (backend, localhost, etc.)
 ALLOWED_HOSTS = _get_allowed_hosts()
+
+# SECURITY: Proxy SSL Header (required for correct protocol detection behind Nginx)
+# This tells Django to trust the X-Forwarded-Proto header set by Nginx
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # Check if optional dependencies are installed (before using them)
 # Note: django-cors-headers is in requirements.txt, so it should be installed
@@ -336,6 +340,9 @@ if CORS_AVAILABLE:
             "http://localhost:3000",  # Alternative frontend port
             "http://127.0.0.1:5173",
             "http://127.0.0.1:3000",
+            "https://localhost:8443",  # HTTPS frontend
+            "https://localhost",
+            "https://example.com",     # Default site domain (fallback)
         ]
     # Allow credentials (cookies, authorization headers) for CSRF
     CORS_ALLOW_CREDENTIALS = True

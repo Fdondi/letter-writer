@@ -122,5 +122,5 @@ class BaseClient:
         self.total_output_tokens += output_tokens
         self.total_search_queries += search_queries
 
-    def call(self, model_size: ModelSize, system: str, messages: List[Dict], search: bool = False) -> str:
+    def call(self, model_size: ModelSize | str, system: str, messages: List[Dict], search: bool = False) -> str:
         raise NotImplementedError("Subclasses must implement this method")

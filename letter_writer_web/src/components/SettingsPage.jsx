@@ -9,6 +9,9 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
   const [savingLanguages, setSavingLanguages] = useState(false);
   const [defaultModels, setDefaultModels] = useState(new Set());
   const [savingModels, setSavingModels] = useState(false);
+  const [defaultBackgroundModels, setDefaultBackgroundModels] = useState(new Set());
+  const [savingBackgroundModels, setSavingBackgroundModels] = useState(false);
+  const [availableModels, setAvailableModels] = useState({}); // { vendor: { model: { input: ..., output: ... } } }
   const [minColumnWidth, setMinColumnWidth] = useState(200); // pixels
   const [savingColumnWidth, setSavingColumnWidth] = useState(false);
   const [error, setError] = useState(null);
@@ -19,6 +22,18 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
     const loadSettings = async () => {
       try {
         setLoading(true);
+        
+        // Fetch available models
+        try {
+            const modelsRes = await fetch("/api/cost/models/");
+            if (modelsRes.ok) {
+                const modelsData = await modelsRes.json();
+                setAvailableModels(modelsData || {});
+            }
+        } catch (e) {
+            console.error("Failed to load models:", e);
+        }
+
         const res = await fetch("/api/personal-data/");
         if (res.ok) {
           const data = await res.json();
@@ -35,6 +50,15 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
             // If no defaults saved and no current selection, use all vendors
             setDefaultModels(new Set(vendors));
             setHasLoadedFromBackend(false);
+          }
+          
+          // Load default background models
+          if (data.default_background_models && Array.isArray(data.default_background_models)) {
+            setDefaultBackgroundModels(new Set(data.default_background_models));
+          } else {
+            // Default to OpenAI gpt-4o if nothing set (or empty set if preferred, but safer to have one)
+            // Or just leave empty
+            setDefaultBackgroundModels(new Set(["openai/gpt-4o"]));
           }
           
           // Load minimum column width (default to 200px if not set)
@@ -104,6 +128,25 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
     }
   };
 
+  const handleSaveBackgroundModels = async () => {
+    try {
+      setSavingBackgroundModels(true);
+      setError(null);
+      const modelsArray = Array.from(defaultBackgroundModels);
+      
+      await fetchWithHeartbeat("/api/personal-data/", {
+        method: "POST",
+        body: JSON.stringify({
+          default_background_models: modelsArray,
+        }),
+      });
+    } catch (e) {
+      setError("Failed to save background research models");
+    } finally {
+      setSavingBackgroundModels(false);
+    }
+  };
+
   const handleSaveColumnWidth = async () => {
     try {
       setSavingColumnWidth(true);
@@ -135,9 +178,42 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
     });
   };
 
+  const toggleBackgroundModel = (modelId) => {
+    setDefaultBackgroundModels((prev) => {
+      const next = new Set(prev);
+      if (next.has(modelId)) {
+        next.delete(modelId);
+      } else {
+        if (next.size >= 3) return prev; // Limit to 3
+        next.add(modelId);
+      }
+      return next;
+    });
+  };
+
   const selectAllModels = (checked) => {
     setDefaultModels(checked ? new Set(vendors) : new Set());
   };
+
+  // Group available models for display
+  const groupedModels = {};
+  if (availableModels) {
+    Object.entries(availableModels).forEach(([vendorLabel, models]) => {
+      // Try to map display name to vendor ID
+      const vendorId = vendors.find(v => 
+        vendorLabel.toLowerCase().includes(v.toLowerCase()) || 
+        v.toLowerCase().includes(vendorLabel.toLowerCase())
+      ) || vendorLabel.toLowerCase().replace(/\s+/g, '');
+      
+      if (Array.isArray(models)) {
+        groupedModels[vendorId] = models.map(m => ({
+          id: `${vendorId}/${m.id}`,
+          name: m.name,
+          vendorLabel
+        }));
+      }
+    });
+  }
 
   if (loading) {
     return (
@@ -309,6 +385,98 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
               {v}
             </label>
           ))}
+        </div>
+      </div>
+
+      {/* Background Research Models Section */}
+      <div
+        style={{
+          marginBottom: 30,
+          padding: 20,
+          backgroundColor: "var(--bg-color)",
+          border: "1px solid var(--border-color)",
+          borderRadius: "4px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 15,
+          }}
+        >
+          <h3 style={{ margin: 0, color: "var(--text-color)" }}>
+            Background Research Models
+          </h3>
+          <button
+            onClick={handleSaveBackgroundModels}
+            disabled={savingBackgroundModels}
+            style={{
+              padding: "6px 12px",
+              backgroundColor: "#3b82f6",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor: savingBackgroundModels ? "not-allowed" : "pointer",
+              opacity: savingBackgroundModels ? 0.7 : 1,
+              fontSize: "14px",
+            }}
+          >
+            {savingBackgroundModels ? "Saving..." : "Save Defaults"}
+          </button>
+        </div>
+        <p
+          style={{
+            marginTop: 0,
+            marginBottom: 15,
+            fontSize: "14px",
+            color: "var(--secondary-text-color)",
+          }}
+        >
+          Select up to 3 models to perform parallel background research on companies and contacts.
+          Results will be aggregated.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 15 }}>
+          {Object.entries(groupedModels).map(([vendorId, models]) => (
+            <div key={vendorId}>
+              <strong style={{ display: "block", marginBottom: 5, textTransform: "capitalize", color: "var(--text-color)" }}>
+                {vendorId}
+              </strong>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                {models.map((model) => (
+                  <label
+                    key={model.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 4,
+                      cursor: "pointer",
+                      color: "var(--text-color)",
+                      fontSize: "14px",
+                      backgroundColor: "var(--input-bg)",
+                      padding: "4px 8px",
+                      borderRadius: "4px",
+                      border: "1px solid var(--border-color)",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={defaultBackgroundModels.has(model.id)}
+                      onChange={() => toggleBackgroundModel(model.id)}
+                      disabled={!defaultBackgroundModels.has(model.id) && defaultBackgroundModels.size >= 3}
+                    />
+                    {model.name}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+          {Object.keys(groupedModels).length === 0 && (
+            <p style={{ color: "var(--secondary-text-color)", fontStyle: "italic" }}>
+              Loading models or none available...
+            </p>
+          )}
         </div>
       </div>
 

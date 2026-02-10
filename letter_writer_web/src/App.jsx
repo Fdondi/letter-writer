@@ -12,6 +12,7 @@ import AuthButton from "./components/AuthButton";
 import CostDisplay from "./components/CostDisplay";
 import CostsPage from "./components/CostsPage";
 import CompetencesList from "./components/CompetencesList";
+import ResearchComponent from "./components/ResearchComponent";
 import { splitIntoParagraphs } from "./utils/split";
 import { fetchWithHeartbeat, retryApiCall, initializeCsrfToken, getCsrfToken } from "./utils/apiHelpers";
 import { phases as phaseModules } from "./components/phases";
@@ -85,6 +86,16 @@ export default function App() {
   const [assemblyVisible, setAssemblyVisible] = useState(true); // when in assembly stage, show assembly or phases
   const [extractedData, setExtractedData] = useState(null); // Track extracted data to detect modifications
   const [vendorFeedback, setVendorFeedback] = useState({}); // vendor -> { rating, comment }
+  
+  // Research state
+  const [selectedCompanyReport, setSelectedCompanyReport] = useState(null);
+  const [selectedTopDocs, setSelectedTopDocs] = useState(null);
+  const [selectedPocReport, setSelectedPocReport] = useState(null);
+  const [backgroundModels, setBackgroundModels] = useState(new Set(["openai/gpt-4o"])); // Default fallback
+  
+  // Triggers for auto-research
+  const [triggerCompanyResearch, setTriggerCompanyResearch] = useState(0);
+  const [triggerPocResearch, setTriggerPocResearch] = useState(0);
   
   // Translation state for job text
   const { enabledLanguages } = useLanguages();
@@ -275,6 +286,10 @@ export default function App() {
         // Load minimum column width
         if (settings.min_column_width !== undefined && settings.min_column_width !== null) {
           localStorage.setItem("minColumnWidth", settings.min_column_width.toString());
+        }
+        // Load default background models
+        if (settings.default_background_models && Array.isArray(settings.default_background_models) && settings.default_background_models.length > 0) {
+          setBackgroundModels(new Set(settings.default_background_models));
         }
       })
       .catch((e) => {
@@ -488,6 +503,15 @@ export default function App() {
         additional_user_info: additionalUserInfo,
         additional_company_info: additionalCompanyInfo,
       });
+
+      // Trigger research if data is available
+      if (extracted.company_name || companyName) {
+        setTriggerCompanyResearch(Date.now());
+      }
+      if (extracted.point_of_contact?.name || currentPoc?.name) {
+        setTriggerPocResearch(Date.now());
+      }
+
     } catch (e) {
       console.error("Extract error", e);
       setExtractionError(e?.message || String(e));
@@ -871,14 +895,21 @@ export default function App() {
     vendorList.forEach((vendor) => {
       (async () => {
         try {
+          const body = {
+            session_id: initialSessionId,
+          };
+          // Pass overrides if available (from consolidated research)
+          if (selectedCompanyReport) {
+            body.company_report = selectedCompanyReport;
+            body.top_docs = selectedTopDocs;
+          }
+
           const result = await fetchWithHeartbeat(
             `/api/phases/background/${vendor}/`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                session_id: initialSessionId,
-              }),
+              body: JSON.stringify(body),
             },
             { getState: getStateForRestore }
           );
@@ -1271,176 +1302,8 @@ export default function App() {
             )}
           </div>
           
-          <div style={{ marginTop: 20, display: "grid", gridTemplateColumns: "minmax(0, 0.38fr) 1fr", gap: 10, minWidth: 0, alignItems: "stretch" }}>
-            {/* Left column: Job Title, Company, Location, Language, Salary, Point of Contact */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, overflow: "hidden" }}>
-              <div style={{ minWidth: 0 }}>
-                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Job Title *
-                </label>
-                <input
-                  type="text"
-                  value={jobTitle}
-                  onChange={(e) => setJobTitle(e.target.value)}
-                  style={{
-                    width: "100%",
-                    minWidth: 0,
-                    boxSizing: "border-box",
-                    padding: 8,
-                    backgroundColor: "var(--input-bg)",
-                    color: "var(--text-color)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "4px",
-                  }}
-                  placeholder="Job title"
-                />
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Company Name
-                </label>
-                <input
-                  type="text"
-                  value={companyName}
-                  onChange={(e) => setCompanyName(e.target.value)}
-                  style={{
-                    width: "100%",
-                    minWidth: 0,
-                    boxSizing: "border-box",
-                    padding: 8,
-                    backgroundColor: "var(--input-bg)",
-                    color: "var(--text-color)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "4px",
-                  }}
-                  placeholder="Company name"
-                />
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Location
-                </label>
-                <input
-                  type="text"
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  style={{
-                    width: "100%",
-                    minWidth: 0,
-                    boxSizing: "border-box",
-                    padding: 8,
-                    backgroundColor: "var(--input-bg)",
-                    color: "var(--text-color)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "4px",
-                  }}
-                  placeholder="Location"
-                />
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Language
-                </label>
-                <input
-                  type="text"
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  style={{
-                    width: "100%",
-                    minWidth: 0,
-                    boxSizing: "border-box",
-                    padding: 8,
-                    backgroundColor: "var(--input-bg)",
-                    color: "var(--text-color)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "4px",
-                  }}
-                  placeholder="Language"
-                />
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>
-                  Salary
-                </label>
-                <input
-                  type="text"
-                  value={salary}
-                  onChange={(e) => setSalary(e.target.value)}
-                  style={{
-                    width: "100%",
-                    minWidth: 0,
-                    boxSizing: "border-box",
-                    padding: 8,
-                    backgroundColor: "var(--input-bg)",
-                    color: "var(--text-color)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "4px",
-                  }}
-                  placeholder="Salary range"
-                />
-              </div>
-              {/* Point of Contact — in left column */}
-              <div style={{ padding: 12, backgroundColor: "var(--input-bg)", borderRadius: "8px", border: "1px solid var(--border-color)", minWidth: 0 }}>
-                <h3 style={{ marginTop: 0, marginBottom: 8, fontSize: "14px", fontWeight: 600 }}>
-                  Point of Contact
-                </h3>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <div>
-                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Name</label>
-                    <input
-                      type="text"
-                      value={pointOfContact.name}
-                      onChange={(e) => setPointOfContact({ ...pointOfContact, name: e.target.value })}
-                      style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--input-bg)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: "4px", boxSizing: "border-box" }}
-                      placeholder="Contact name"
-                    />
-                  </div>
-                  <div>
-                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Role</label>
-                    <input
-                      type="text"
-                      value={pointOfContact.role}
-                      onChange={(e) => setPointOfContact({ ...pointOfContact, role: e.target.value })}
-                      style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--input-bg)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: "4px", boxSizing: "border-box" }}
-                      placeholder="Role in company"
-                    />
-                  </div>
-                  <div>
-                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Contact Details</label>
-                    <input
-                      type="text"
-                      value={pointOfContact.contact_details}
-                      onChange={(e) => setPointOfContact({ ...pointOfContact, contact_details: e.target.value })}
-                      style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--input-bg)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: "4px", boxSizing: "border-box" }}
-                      placeholder="Email, phone, etc."
-                    />
-                  </div>
-                  <div>
-                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Company (if intermediary)</label>
-                    <input
-                      type="text"
-                      value={pointOfContact.company}
-                      onChange={(e) => setPointOfContact({ ...pointOfContact, company: e.target.value })}
-                      style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--input-bg)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: "4px", boxSizing: "border-box" }}
-                      placeholder="Intermediary company"
-                    />
-                  </div>
-                  <div>
-                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Notes</label>
-                    <textarea
-                      value={pointOfContact.notes}
-                      onChange={(e) => setPointOfContact({ ...pointOfContact, notes: e.target.value })}
-                      style={{ width: "100%", height: 48, padding: 6, fontSize: 13, resize: "vertical", backgroundColor: "var(--input-bg)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: "4px", boxSizing: "border-box" }}
-                      placeholder="Notes about contact"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Right column: Key Competences only */}
-            <div style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0 }}>
-              <div style={{ marginBottom: 4, flexShrink: 0 }}>
+          <div style={{ marginTop: 20 }}>
+              <div style={{ marginBottom: 4 }}>
                 <label style={{ display: "block", fontSize: "14px", fontWeight: 600 }}>
                   How good is your fit? Key competences weighted match:
                   {(() => {
@@ -1470,82 +1333,99 @@ export default function App() {
                   CV fit levels can be adjusted. They will be remembered.
                 </div>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", flex: "1 1 0", minHeight: 0 }}>
-                <div
-                  style={{
-                    flexShrink: 0,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    marginBottom: 2,
-                    paddingLeft: 2,
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => competencesScrollRef.current?.scrollBy({ top: -80, behavior: "smooth" })}
-                    disabled={!canScrollCompetencesUp}
-                    aria-label="Scroll up"
-                    style={{
-                      width: 24,
-                      padding: 2,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      background: "var(--panel-bg)",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: 2,
-                      color: canScrollCompetencesUp ? "var(--text-color)" : "var(--secondary-text-color)",
-                      opacity: canScrollCompetencesUp ? 1 : 0.5,
-                      cursor: canScrollCompetencesUp ? "pointer" : "default",
-                      fontSize: 10,
-                    }}
-                  >
-                    ▲
-                  </button>
-                  <span style={{ width: 52, flexShrink: 0, fontSize: 10, fontWeight: 600, color: "var(--secondary-text-color)" }}>Importance</span>
-                  <span style={{ width: 52, flexShrink: 0, fontSize: 10, fontWeight: 600, color: "var(--secondary-text-color)" }}>CV fit</span>
+              <CompetencesList
+                requirements={requirements}
+                competences={competences}
+                scaleConfig={competenceScaleConfig}
+                overrides={competenceOverrides}
+                onOverridesChange={setCompetenceOverrides}
+                editable
+                onRequirementsChange={setRequirements}
+                onCompetencesChange={setCompetences}
+              />
+          </div>
+
+          <div style={{ marginTop: 20, padding: 15, border: "1px solid var(--border-color)", borderRadius: 8, backgroundColor: "var(--input-bg)" }}>
+             <h3 style={{ marginTop: 0, fontSize: "16px", fontWeight: 600 }}>Company & Job Details</h3>
+             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div>
+                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Job Title *</label>
+                        <input type="text" value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Job title" />
+                    </div>
+                    <div>
+                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Company Name</label>
+                        <input type="text" value={companyName} onChange={(e) => setCompanyName(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Company name" />
+                    </div>
+                    <div>
+                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Location</label>
+                        <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Location" />
+                    </div>
+                    <div>
+                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Language</label>
+                        <input type="text" value={language} onChange={(e) => setLanguage(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Language" />
+                    </div>
+                    <div>
+                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Salary</label>
+                        <input type="text" value={salary} onChange={(e) => setSalary(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Salary range" />
+                    </div>
                 </div>
-                <div
-                  ref={competencesScrollRef}
-                  style={{ flex: "1 1 0", minHeight: 0, overflowY: "auto", paddingLeft: 30 }}
-                >
-                    <CompetencesList
-                      requirements={requirements}
-                      competences={competences}
-                      scaleConfig={competenceScaleConfig}
-                      overrides={competenceOverrides}
-                      onOverridesChange={setCompetenceOverrides}
-                      editable
-                      onRequirementsChange={setRequirements}
-                      onCompetencesChange={setCompetences}
+                <div>
+                    <ResearchComponent 
+                        label="Company Research"
+                        type="company"
+                        query={companyName}
+                        context={{ job_text: jobText, additional_company_info: additionalCompanyInfo, point_of_contact: pointOfContact }}
+                        vendors={backgroundModels}
+                        onResultSelected={(report, topDocs) => {
+                            setSelectedCompanyReport(report);
+                            setSelectedTopDocs(topDocs);
+                        }}
+                        externalTrigger={triggerCompanyResearch}
                     />
                 </div>
-                <button
-                  type="button"
-                  onClick={() => competencesScrollRef.current?.scrollBy({ top: 80, behavior: "smooth" })}
-                  disabled={!canScrollCompetencesDown}
-                  aria-label="Scroll down"
-                  style={{
-                    flexShrink: 0,
-                    padding: 2,
-                    marginTop: 2,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    background: "var(--panel-bg)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: 2,
-                    color: canScrollCompetencesDown ? "var(--text-color)" : "var(--secondary-text-color)",
-                    opacity: canScrollCompetencesDown ? 1 : 0.5,
-                    cursor: canScrollCompetencesDown ? "pointer" : "default",
-                    fontSize: 10,
-                  }}
-                >
-                  ▼
-                </button>
-              </div>
-            </div>
+             </div>
+          </div>
+
+          <div style={{ marginTop: 20, padding: 15, border: "1px solid var(--border-color)", borderRadius: 8, backgroundColor: "var(--input-bg)" }}>
+             <h3 style={{ marginTop: 0, fontSize: "16px", fontWeight: 600 }}>Point of Contact</h3>
+             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Name</label>
+                    <input type="text" value={pointOfContact.name} onChange={(e) => setPointOfContact({ ...pointOfContact, name: e.target.value })} style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Contact name" />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Role</label>
+                    <input type="text" value={pointOfContact.role} onChange={(e) => setPointOfContact({ ...pointOfContact, role: e.target.value })} style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Role in company" />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Contact Details</label>
+                    <input type="text" value={pointOfContact.contact_details} onChange={(e) => setPointOfContact({ ...pointOfContact, contact_details: e.target.value })} style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Email, phone, etc." />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Company (if intermediary)</label>
+                    <input type="text" value={pointOfContact.company} onChange={(e) => setPointOfContact({ ...pointOfContact, company: e.target.value })} style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Intermediary company" />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Notes</label>
+                    <textarea value={pointOfContact.notes} onChange={(e) => setPointOfContact({ ...pointOfContact, notes: e.target.value })} style={{ width: "100%", height: 48, padding: 6, fontSize: 13, resize: "vertical", backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Notes about contact" />
+                  </div>
+                </div>
+                <div>
+                    <ResearchComponent 
+                        label="POC Research"
+                        type="poc"
+                        query={pointOfContact.name}
+                        context={{ job_text: jobText, company_name: companyName }}
+                        vendors={backgroundModels}
+                        onResultSelected={(report, topDocs) => {
+                            setSelectedPocReport(report);
+                        }}
+                        externalTrigger={triggerPocResearch}
+                    />
+                </div>
+             </div>
           </div>
           
           {(() => {

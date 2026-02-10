@@ -462,7 +462,7 @@ def get_style_instructions() -> str:
         )
 
 
-def company_research(company_name: Optional[str], job_text: str, client: BaseClient, trace_dir: Path, point_of_contact: dict = None, additional_company_info: str = "") -> Optional[str]:
+def company_research(company_name: Optional[str], job_text: str, client: BaseClient, trace_dir: Path, point_of_contact: dict = None, additional_company_info: str = "", search: bool = True, model: str | ModelSize = ModelSize.LARGE) -> Optional[str]:
     """Research company information using OpenAI.
     
     Args:
@@ -472,6 +472,8 @@ def company_research(company_name: Optional[str], job_text: str, client: BaseCli
         trace_dir: Directory for tracing
         point_of_contact: Optional dict with name, role, contact_details, notes, company (intermediary)
         additional_company_info: User-provided additional context about the company or role
+        search: Whether to enable web search tools (default: True)
+        model: Model to use (default: ModelSize.LARGE)
     """
     system = "You are an expert in searching the internet for information about companies."
     
@@ -520,7 +522,7 @@ def company_research(company_name: Optional[str], job_text: str, client: BaseCli
         logger.warning("Not enough information to research the company.")
         return None
 
-    result = client.call(ModelSize.LARGE, system, [prompt], search=True)
+    result = client.call(model, system, [prompt], search=search)
     (trace_dir / "company_research.txt").write_text(result, encoding="utf-8")
     return result
 

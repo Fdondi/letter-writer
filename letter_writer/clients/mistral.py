@@ -90,12 +90,15 @@ class MistralClient(BaseClient):
 
     def call(
         self,
-        model_size: ModelSize,
+        model_size: ModelSize | str,
         system: str,
         user_messages: List[str],
         search: bool = False,
     ) -> str:
-        model = self.get_model_for_size(model_size)
+        if isinstance(model_size, str):
+            model = model_size
+        else:
+            model = self.get_model_for_size(model_size)
         
         typer.echo(
             f"[INFO] using Mistral model {model}" + (" with search" if search else "")
