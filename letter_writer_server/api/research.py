@@ -22,7 +22,7 @@ class ResearchPocRequest(BaseModel):
     job_text: Optional[str] = ""
     models: Optional[List[str]] = None
 
-@router.post("/company")
+@router.post("/company/")
 async def research_company(request: Request, data: ResearchCompanyRequest, session: Session = Depends(get_session)):
     user = session.get('user')
     if not user:
@@ -55,7 +55,7 @@ async def research_company(request: Request, data: ResearchCompanyRequest, sessi
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/poc")
+@router.post("/poc/")
 async def research_poc(request: Request, data: ResearchPocRequest, session: Session = Depends(get_session)):
     user = session.get('user')
     if not user:

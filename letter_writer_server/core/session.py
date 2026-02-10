@@ -99,16 +99,17 @@ class SessionMiddleware(BaseHTTPMiddleware):
             try:
                 session_key = self.signer.loads(signed_session_id, max_age=self.max_age)
                 # Load from server-side storage
+                # Always check filesystem first (authoritative source across workers)
                 with _STORAGE_LOCK:
-                    if session_key in _SESSION_STORAGE:
+                    fs_data = _load_from_filesystem(session_key)
+                    if fs_data:
+                        session_data = fs_data
+                        _SESSION_STORAGE[session_key] = session_data
+                    elif session_key in _SESSION_STORAGE:
                         session_data = _SESSION_STORAGE[session_key]
                     else:
-                        session_data = _load_from_filesystem(session_key)
-                        if session_data:
-                            _SESSION_STORAGE[session_key] = session_data
-                        else:
-                            session_data = {} # Session expired or lost
-                            session_key = None # Generate new one
+                        session_data = {} # Session expired or lost
+                        session_key = None # Generate new one
             except (BadSignature, Exception):
                 session_key = None
         
@@ -117,7 +118,9 @@ class SessionMiddleware(BaseHTTPMiddleware):
             session_key = secrets.token_urlsafe(32)
             session_data = {}
             
+        
         request.state.session = Session(session_data, session_key)
+        request.scope["session"] = request.state.session
         
         response = await call_next(request)
         

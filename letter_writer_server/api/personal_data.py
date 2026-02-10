@@ -10,7 +10,7 @@ from datetime import datetime
 
 router = APIRouter()
 
-@router.get("/personal-data")
+@router.get("/personal-data/")
 async def get_personal_data(session: Session = Depends(get_session)):
     user = session.get('user')
     if not user:
@@ -45,7 +45,7 @@ async def get_personal_data(session: Session = Depends(get_session)):
         "min_column_width": min_column_width
     }
 
-@router.post("/personal-data")
+@router.post("/personal-data/")
 async def update_personal_data(request: Request, session: Session = Depends(get_session)):
     user = session.get('user')
     if not user:
@@ -101,7 +101,7 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             
         return {"status": "ok"}
 
-@router.get("/style-instructions")
+@router.get("/style-instructions/")
 async def get_style_instructions_endpoint(session: Session = Depends(get_session)):
     instructions = session.get("style_instructions", "")
     if not instructions:
@@ -115,7 +115,7 @@ async def get_style_instructions_endpoint(session: Session = Depends(get_session
         
     return {"instructions": instructions}
 
-@router.post("/style-instructions")
+@router.post("/style-instructions/")
 async def update_style_instructions(request: Request, session: Session = Depends(get_session)):
     user = session.get('user')
     if not user:

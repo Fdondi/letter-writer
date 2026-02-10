@@ -127,10 +127,10 @@ export default function App() {
         } else {
           // Not authenticated - redirect to Google OAuth login
           const returnUrl = window.location.pathname + window.location.search;
-          if (returnUrl && returnUrl !== "/accounts/google/login/") {
+          if (returnUrl && returnUrl !== "/accounts/google/login") {
             sessionStorage.setItem("authReturnUrl", returnUrl);
           }
-          window.location.href = "/accounts/google/login/";
+          window.location.href = "/accounts/google/login";
           setIsAuthenticated(false);
         }
         setCheckingAuth(false);
@@ -139,10 +139,10 @@ export default function App() {
         console.error("Failed to check auth status:", e);
         // On error, redirect to Google OAuth login
         const returnUrl = window.location.pathname + window.location.search;
-        if (returnUrl && returnUrl !== "/accounts/google/login/") {
+        if (returnUrl && returnUrl !== "/accounts/google/login") {
           sessionStorage.setItem("authReturnUrl", returnUrl);
         }
-        window.location.href = "/accounts/google/login/";
+        window.location.href = "/accounts/google/login";
         setIsAuthenticated(false);
         setCheckingAuth(false);
       });
@@ -372,7 +372,7 @@ export default function App() {
           </p>
           <button
             onClick={() => {
-              window.location.href = "/accounts/google/login/";
+              window.location.href = "/accounts/google/login";
             }}
             style={{
               width: "100%",

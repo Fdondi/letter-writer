@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from starlette.middleware.sessions import SessionMiddleware as StarletteSessionMiddleware
 # Use our custom session middleware instead
 from letter_writer_server.core.session import SessionMiddleware
@@ -21,13 +22,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Session
 app.add_middleware(
     SessionMiddleware,
     secret_key=settings.SESSION_SECRET_KEY,
     cookie_name=settings.SESSION_COOKIE_NAME,
     max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
 )
+
+# Trust Proxy Headers (for HTTPS/Host behind Nginx)
+# Added last to be executed first
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
 
 # Routers
 app.include_router(auth.router, prefix="/accounts/google", tags=["auth"]) # Legacy path for redirect compatibility

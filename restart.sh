@@ -1,3 +1,4 @@
-podman rm -f letter-writer-frontend letter-writer-backend || echo "=== Failed to remove containers ==="
-podman rmi -f localhost/letter-writer_backend:latest localhost/letter-writer_frontend:latest || echo "=== Failed to remove images ==="
-podman-compose build --no-cache frontend backend && podman-compose up -d frontend backend && echo "=== Started containers ===" || echo "=== Failed to start containers ==="
+podman stop letter-writer-frontend letter-writer-backend &&echo "=== Stopped containers ===" || echo "=== Failed to stop containers ==="
+podman rm letter-writer-frontend && echo "=== Removed frontend ===" || echo "=== Failed to remove frontend ==="
+podman rm letter-writer-backend && echo "=== Removed backend ===" || echo "=== Failed to remove backend ==="
+podman-compose up -d frontend backend --build && echo "=== Started containers ===" || echo "=== Failed to start containers ==="

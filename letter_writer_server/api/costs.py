@@ -14,21 +14,21 @@ from letter_writer.cost_tracker import (
 
 router = APIRouter()
 
-@router.get("/summary")
+@router.get("/summary/")
 async def get_summary():
     try:
         return get_cost_summary()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/flush")
+@router.post("/flush/")
 async def flush_costs():
     try:
         return flush_costs_to_bigquery(reset_after_flush=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/user")
+@router.get("/user/")
 async def get_user_costs(request: Request, session: Session = Depends(get_session)):
     user = session.get('user')
     if not user:
@@ -47,7 +47,7 @@ async def get_user_costs(request: Request, session: Session = Depends(get_sessio
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/global")
+@router.get("/global/")
 async def get_global_costs(request: Request):
     months = int(request.query_params.get("months", 1))
     try:
@@ -55,7 +55,7 @@ async def get_global_costs(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/daily")
+@router.get("/daily/")
 async def get_daily_costs(request: Request, session: Session = Depends(get_session)):
     user = session.get('user')
     if not user:
@@ -67,7 +67,7 @@ async def get_daily_costs(request: Request, session: Session = Depends(get_sessi
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/models")
+@router.get("/models/")
 async def get_models_pricing():
     try:
         return get_all_model_pricing()

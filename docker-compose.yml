@@ -19,6 +19,8 @@ services:
       # If not set, defaults to ./gcloud-credentials.json in the project root
       # Note: For Podman (rootless), the file must be readable by your user (e.g., chmod 600 or 644)
       - ${GOOGLE_APPLICATION_CREDENTIALS_HOST:-./gcloud-credentials.json}:/app/gcloud-credentials.json:ro
+    # Run production ASGI server
+    command: sh -c "uvicorn letter_writer_server.main:app --host 0.0.0.0 --port 8000 --workers ${GUNICORN_WORKERS:-3} --proxy-headers --forwarded-allow-ips '*'"
     environment:
       # DJANGO_DEBUG should be false in production
       # DJANGO_ALLOWED_HOSTS should include your public domain(s)

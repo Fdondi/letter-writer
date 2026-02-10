@@ -18,12 +18,12 @@ oauth.register(
     }
 )
 
-@router.get("/login")
+@router.get("/login/")
 async def login(request: Request):
     redirect_uri = settings.GOOGLE_REDIRECT_URI
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
-@router.get("/callback")
+@router.get("/callback/")
 async def auth_callback(request: Request, session: Session = Depends(get_session)):
     try:
         token = await oauth.google.authorize_access_token(request)
@@ -45,17 +45,17 @@ async def auth_callback(request: Request, session: Session = Depends(get_session
     
     return RedirectResponse(url="/")
 
-@router.get("/login/callback") # Alias for compatibility
+@router.get("/login/callback/") # Alias for compatibility
 async def auth_callback_alias(request: Request, session: Session = Depends(get_session)):
     return await auth_callback(request, session)
 
-@router.post("/logout")
+@router.post("/logout/")
 async def logout(request: Request, response: Response, session: Session = Depends(get_session)):
     session.clear()
     response.delete_cookie(settings.SESSION_COOKIE_NAME)
     return {"status": "ok", "message": "Logged out successfully"}
 
-@router.get("/user")
+@router.get("/user/")
 async def get_current_user(session: Session = Depends(get_session)):
     user = session.get('user')
     return {
@@ -63,7 +63,7 @@ async def get_current_user(session: Session = Depends(get_session)):
         "user": user
     }
 
-@router.get("/status")
+@router.get("/status/")
 async def auth_status(session: Session = Depends(get_session)):
     user = session.get('user')
     return {
@@ -73,6 +73,6 @@ async def auth_status(session: Session = Depends(get_session)):
         "cors_available": True
     }
 
-@router.get("/csrf-token")
+@router.get("/csrf-token/")
 async def csrf_token():
     return {"csrfToken": "not-needed-for-cookie-session"}

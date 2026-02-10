@@ -60,7 +60,7 @@ export default function LoginPage() {
       sessionStorage.setItem("authReturnUrl", returnUrl);
     }
     // Redirect to Google OAuth login
-    window.location.href = "/accounts/google/login/";
+    window.location.href = "/accounts/google/login";
   };
 
   if (loading) {

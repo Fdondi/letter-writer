@@ -40,7 +40,7 @@ class RefinePhaseRequest(BaseModel):
     company_report: Optional[Dict[str, Any]] = None
     top_docs: Optional[List[Dict[str, Any]]] = None
 
-@router.post("/init")
+@router.post("/init/")
 async def init_session(request: Request, data: InitSessionRequest, session: Session = Depends(get_session)):
     # Check if recovery
     is_recovery = bool(data.job_text or data.metadata or data.vendors)
@@ -93,7 +93,7 @@ async def init_session(request: Request, data: InitSessionRequest, session: Sess
         "session_exists": session_exists
     }
 
-@router.post("/restore")
+@router.post("/restore/")
 async def restore_session(request: Request, data: InitSessionRequest, session: Session = Depends(get_session)):
     if data.job_text:
         session['job_text'] = data.job_text
@@ -107,7 +107,7 @@ async def restore_session(request: Request, data: InitSessionRequest, session: S
         "message": "Session restored successfully"
     }
 
-@router.get("/state")
+@router.get("/state/")
 async def get_session_state(session: Session = Depends(get_session)):
     # Return full session state (excluding potentially huge/sensitive fields if needed, but logic says allow all except CV)
     state = dict(session)
@@ -120,7 +120,7 @@ async def get_session_state(session: Session = Depends(get_session)):
         "has_data": bool(state)
     }
 
-@router.post("/clear")
+@router.post("/clear/")
 async def clear_session(session: Session = Depends(get_session)):
     old_id = session.session_key
     session.clear()
@@ -132,7 +132,7 @@ async def clear_session(session: Session = Depends(get_session)):
         "message": "Session cleared successfully"
     }
 
-@router.post("/session")
+@router.post("/session/")
 async def update_session_common_data(request: Request, data: Dict[str, Any], session: Session = Depends(get_session)):
     # Update common data like job_text, metadata fields
     if "job_text" in data:
@@ -155,7 +155,7 @@ async def update_session_common_data(request: Request, data: Dict[str, Any], ses
     session['metadata']['common'] = common
     return {"status": "ok", "session_id": session.session_key}
 
-@router.post("/background/{vendor}")
+@router.post("/background/{vendor}/")
 async def background_phase(vendor: str, data: BackgroundPhaseRequest, request: Request, session: Session = Depends(get_session)):
     # Set current request for session_store compatibility (if it uses thread locals)
     set_current_request(request)
@@ -213,7 +213,7 @@ async def background_phase(vendor: str, data: BackgroundPhaseRequest, request: R
         "cost": vendor_state.cost
     }
 
-@router.post("/draft/{vendor}")
+@router.post("/draft/{vendor}/")
 async def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, session: Session = Depends(get_session)):
     set_current_request(request)
     user = session.get('user')
@@ -241,7 +241,7 @@ async def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, se
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/refine/{vendor}")
+@router.post("/refine/{vendor}/")
 async def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, session: Session = Depends(get_session)):
     set_current_request(request)
     user = session.get('user')

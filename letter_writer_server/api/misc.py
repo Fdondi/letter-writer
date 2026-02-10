@@ -38,7 +38,7 @@ class RefreshRequest(BaseModel):
     negative_letters_source_suffix: Optional[str] = None
     clear: bool = False
 
-@router.post("/refresh")
+@router.post("/refresh/")
 async def refresh(request: Request, data: RefreshRequest):
     try:
         kwargs = data.dict(exclude_unset=True)
@@ -52,7 +52,7 @@ async def refresh(request: Request, data: RefreshRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/extract")
+@router.post("/extract/")
 async def extract_job(request: Request, data: ExtractRequest, session: Session = Depends(get_session)):
     user = session.get('user')
     # Load CV logic...
@@ -93,7 +93,7 @@ async def extract_job(request: Request, data: ExtractRequest, session: Session =
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/process-job")
+@router.post("/process-job/")
 async def process_job(request: Request, data: ProcessJobRequest, session: Session = Depends(get_session)):
     try:
         instructions = session.get("style_instructions", "")
@@ -123,7 +123,7 @@ async def process_job(request: Request, data: ProcessJobRequest, session: Sessio
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/translate")
+@router.post("/translate/")
 async def translate(request: Request):
     # Retrieve logic from views.py:
     # _translate_with_google(texts, target_language, source_language)
@@ -131,7 +131,7 @@ async def translate(request: Request):
     # For now, stub or simplified.
     return {"status": "ok", "translations": []}
 
-@router.get("/vendors")
+@router.get("/vendors/")
 async def list_vendors(session: Session = Depends(get_session)):
     vendors = [v.value for v in ModelVendor]
     active_vendors = set(vendors)
@@ -143,11 +143,11 @@ async def list_vendors(session: Session = Depends(get_session)):
         "inactive": [v for v in vendors if v not in active_vendors]
     }
 
-@router.get("/debug/in-flight-requests")
+@router.get("/debug/in-flight-requests/")
 async def debug_in_flight():
     return {"count": len(get_in_flight_requests()), "requests": get_in_flight_requests()}
 
-@router.post("/debug/clear-in-flight-requests")
+@router.post("/debug/clear-in-flight-requests/")
 async def debug_clear_in_flight():
     cleared = clear_in_flight_requests()
     return {"status": "ok", "cleared_count": cleared}

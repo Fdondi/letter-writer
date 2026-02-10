@@ -63,7 +63,7 @@ async def create_doc(request: Request, data: DocumentRequest, session: Session =
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.get("/{document_id}")
+@router.get("/{document_id}/")
 async def get_doc(document_id: str, session: Session = Depends(get_session)):
     user = session.get('user')
     if not user:
@@ -78,7 +78,7 @@ async def get_doc(document_id: str, session: Session = Depends(get_session)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.put("/{document_id}")
+@router.put("/{document_id}/")
 async def update_doc(document_id: str, data: DocumentRequest, session: Session = Depends(get_session)):
     user = session.get('user')
     if not user:
@@ -94,7 +94,7 @@ async def update_doc(document_id: str, data: DocumentRequest, session: Session =
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.delete("/{document_id}")
+@router.delete("/{document_id}/")
 async def delete_doc(document_id: str, session: Session = Depends(get_session)):
     user = session.get('user')
     if not user:
@@ -112,7 +112,7 @@ async def delete_doc(document_id: str, session: Session = Depends(get_session)):
     delete_documents(collection, [document_id])
     return {"status": "deleted"}
 
-@router.post("/{document_id}/negatives")
+@router.post("/{document_id}/negatives/")
 async def add_negatives(document_id: str, request: Request, session: Session = Depends(get_session)):
     user = session.get('user')
     if not user:
@@ -128,7 +128,7 @@ async def add_negatives(document_id: str, request: Request, session: Session = D
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.post("/{document_id}/reembed")
+@router.post("/{document_id}/reembed/")
 async def reembed_doc(document_id: str, session: Session = Depends(get_session)):
     user = session.get('user')
     if not user:
