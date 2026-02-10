@@ -20,11 +20,8 @@ COPY letter_writer_server/ ./letter_writer_server/
 # Create necessary directories
 RUN mkdir -p letters trace
 
-# Expose Django port
+# Expose FastAPI port
 EXPOSE 8000
 
-# Run production WSGI server
-CMD ["sh", "-c", "gunicorn letter_writer_server.wsgi:application --bind 0.0.0.0:8000 --workers ${GUNICORN_WORKERS:-3} --threads ${GUNICORN_THREADS:-2} --timeout ${GUNICORN_TIMEOUT:-120}"]
-
-
-
+# Run production ASGI server
+CMD ["sh", "-c", "uvicorn letter_writer_server.main:app --host 0.0.0.0 --port 8000 --workers ${GUNICORN_WORKERS:-3}"]

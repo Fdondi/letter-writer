@@ -21,6 +21,14 @@ class ScoreRow(BaseModel):
 class ScoreTable(BaseModel):
     scores: List[ScoreRow]
 
+def delete_documents(collection, doc_ids: List[str]):
+    """Delete documents by their IDs."""
+    if not doc_ids:
+        return
+        
+    for doc_id in doc_ids:
+        collection.document(doc_id).delete()
+
 def retrieve_similar_job_offers(job_text: str, collection, openai_client: OpenAI) -> List[dict]:
     """Retrieve similar job offers based on the input job text using Firestore vector search.
     
