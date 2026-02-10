@@ -9,10 +9,10 @@
  * 3. Observer (VendorCardWrapper): Detects data on the shelf and renders.
  * 
  * PHASES IN THIS PIPELINE:
- * - BACKGROUND: Corresponds to /api/phases/background/. Approving this calls /api/phases/draft/
- *               to populate the 'refine' shelf.
- * - REFINE: Corresponds to /api/phases/draft/ (displaying draft + feedback). Approving this 
- *           calls /api/phases/refine/ to generate the final letter.
+ * - DRAFT: Displays the generated draft letter + feedback (from /api/phases/draft/).
+ *          Background search (company research, document selection) is done during the
+ *          initial phase before the phased flow starts. Approving this calls
+ *          /api/phases/refine/ to generate the final letter.
  * - ASSEMBLY: A separate UI rendered by App.jsx that holds the result of the refine call.
  * 
  * KEY RULES:
@@ -586,7 +586,7 @@ function ExtractionCard({
     <div style={{ ...cardStyle, flex: "1 1 360px", maxWidth: 420 }}>
       <h3 style={{ marginTop: 0, marginBottom: 6 }}>1) Extract job info ({vendor})</h3>
       <div style={{ fontSize: 13, color: "#374151", marginBottom: 8 }}>
-        We parsed the job description. Tweak any fields, then approve to run background search.
+        We parsed the job description. Tweak any fields, then approve to generate the draft.
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
         {fields.map(({ key, label, placeholder }) => (
@@ -644,7 +644,7 @@ function ExtractionCard({
             cursor: loading || !(edits?.company_name || data?.company_name) ? "not-allowed" : "pointer",
           }}
         >
-          {loading ? "Running background..." : approved ? "Re-run background" : "Approve & run background"}
+          {loading ? "Generating draft..." : approved ? "Re-run draft" : "Approve & generate draft"}
         </button>
       </div>
     </div>
@@ -697,7 +697,6 @@ function VendorCardWrapper({
   onEditChange,
   onApprove,
   onSaveFeedbackOverride,
-  onRerunFromBackground,
   onPhaseComplete,
   triggerUpdate,
   onExpand,
@@ -753,11 +752,10 @@ function VendorCardWrapper({
         } else {
           // Fallback: use onEditChange if available
           if (onEditChange) {
-            onEditChange(vendor, "refine", "feedback_overrides", { [key]: val });
+            onEditChange(vendor, "draft", "feedback_overrides", { [key]: val });
           }
         }
       }}
-      onRerunFromBackground={onRerunFromBackground}
       onPhaseComplete={(vendor, phase, completionData) => {
         // Completion data is already handled by the onApprove caller (App.jsx)
         // which populates the shelf. We just need to ensure the current phase
@@ -797,7 +795,7 @@ function VendorCard({
   vendor,
   // Phase structure - for navigation only, not for state
   phases, // Array of phase objects
-  phaseObj, // The phase object this card belongs to: { phase: "background", previous: null, next: <phaseObj>, ... }
+  phaseObj, // The phase object this card belongs to: { phase: "draft", previous: null, next: <phaseObj>, ... }
   // Data from outer component
   data = null, // Data from API (passed from wrapper)
   status = "idle", // "idle" | "loading" | "success" | "error"
@@ -809,7 +807,6 @@ function VendorCard({
   onApprove,
   sessionId, // Required: session ID for API calls
   onStatusChange, // Callback to register status with phase: (status: CardStatus) => void
-  onRerunFromBackground,
   disabled = false,
   // Callbacks for when card completes phases (to update parent state)
   onPhaseComplete, // (vendor, phase, data) => void - called when phase completes
@@ -1030,9 +1027,7 @@ function VendorCard({
 
   // Helper to check if any field has translation for a language
   const hasAnyTranslation = useCallback((code) => {
-    if (cardPhase === "background") {
-      return translation.hasTranslation("company_report");
-    } else if (cardPhase === "refine") {
+    if (cardPhase === "draft") {
       return translation.hasTranslation("draft_letter") || 
              feedbackKeys.some(k => translation.hasTranslation(`feedback_${k}`));
     }
@@ -1049,12 +1044,7 @@ function VendorCard({
     }
     
     // Translate all fields in this card if not already cached
-    if (cardPhase === "background" && cardPhaseData.company_report) {
-      const sourceText = cardPhaseEdits.company_report ?? cardPhaseData.company_report ?? "";
-      if (sourceText) {
-        await translation.translateField("company_report", sourceText, code);
-      }
-    } else if (cardPhase === "refine") {
+    if (cardPhase === "draft") {
       // Translate draft and all feedback fields independently in parallel
       const translationPromises = [];
       
@@ -1140,8 +1130,8 @@ function VendorCard({
           </div>
         )}
         {/* Only show card-level language selector for phases without per-field selectors */}
-        {/* Background and refine phases have per-field selectors, so hide card-level selector */}
-        {cardPhase !== "refine" && cardPhase !== "background" && (
+        {/* Draft phase has per-field selectors, so hide card-level selector */}
+        {cardPhase !== "draft" && (
           <LanguageSelector
             languages={translation.languages}
             viewLanguage={translation.viewLanguage}
@@ -1288,7 +1278,6 @@ function VendorCard({
             isDone,
             cardPhase,
             collapsed,
-            onRerunFromBackground,
             vendor,
           })
         )}
@@ -1299,10 +1288,10 @@ function VendorCard({
 }
 
 // Transform to phase-indexed structure - cards now own their state, so we just create phase objects
-// Output: phases = [{ phase: "background", previous: null, next: <phaseObj>, readyCount, pendingCount }, ...]
+// Output: phases = [{ phase: "draft", previous: null, next: <phaseObj>, readyCount, pendingCount }, ...]
 function transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCounters, setPhaseCounters) {
-  // Use a stable phase order - "draft" phase was removed, logic merged into refine
-  const phaseOrder = ["background", "refine"];
+  // Background search is done during the initial phase; the phased flow starts with draft
+  const phaseOrder = ["draft"];
   
   // First pass: create all phase objects - cards will own their own state
   const phaseObjects = phaseOrder.map((phaseName, index) => {
@@ -1398,7 +1387,6 @@ export default function PhaseFlow({
   onEditChange,
   onApprove,
   onApproveAll,
-  onRerunFromBackground,
   // Required for cards to make API calls
   sessionId, 
   // Callback for when a phase completes
@@ -1407,8 +1395,7 @@ export default function PhaseFlow({
   onRegisterPhases, // (phases) => void
 }) {
   const [collapsedPhases, setCollapsedPhases] = useState({
-    background: false, // first phase starts open
-    refine: true,
+    draft: false, // first (and only) phase starts open
   });
 
   const [expandedCard, setExpandedCard] = useState(null); // { phase, vendor } | null
@@ -1531,7 +1518,7 @@ export default function PhaseFlow({
     if (!vendor || !key) return;
     // Cards now own their state, so we just notify parent if callback provided
     if (onEditChange) {
-      onEditChange(vendor, "refine", "feedback_overrides", { [key]: val });
+      onEditChange(vendor, "draft", "feedback_overrides", { [key]: val });
     }
   }, [onEditChange]);
 
@@ -1552,7 +1539,6 @@ export default function PhaseFlow({
           onEditChange={onEditChange}
           onApprove={onApprove}
           onSaveFeedbackOverride={saveFeedbackOverride}
-          onRerunFromBackground={onRerunFromBackground}
           onPhaseComplete={onPhaseComplete}
           triggerUpdate={() => setPhaseUpdateTrigger(prev => prev + 1)}
           onExpand={overlayMode ? undefined : () => toggleExpand(phaseName, vendor)}
@@ -1564,7 +1550,7 @@ export default function PhaseFlow({
       ));
     });
     return renderFunctions;
-  }, [phases, sessionId, onEditChange, onApprove, onRerunFromBackground, onPhaseComplete, saveFeedbackOverride, toggleExpand, closeExpand, onAfterApproveInExpanded]);
+  }, [phases, sessionId, onEditChange, onApprove, onPhaseComplete, saveFeedbackOverride, toggleExpand, closeExpand, onAfterApproveInExpanded]);
   
   phases.forEach(phaseObj => {
     const phaseName = phaseObj.phase;

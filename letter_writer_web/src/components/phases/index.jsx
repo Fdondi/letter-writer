@@ -1,10 +1,11 @@
 /**
  * Phase modules index - exports phase-specific functions by phase name
+ *
+ * Background search is handled during the initial phase (extraction or standalone),
+ * so the phased flow starts directly with the draft.
  */
-import * as backgroundPhase from "./background";
-import * as refinePhase from "./refine";
+import * as draftPhase from "./draft";
 
 export const phases = {
-  background: backgroundPhase,
-  refine: refinePhase,
+  draft: draftPhase,
 };

@@ -21,10 +21,10 @@ def _parse_model_str(model_str: str) -> Tuple[ModelVendor, str | ModelSize]:
     try:
         vendor = ModelVendor(parts[0])
     except ValueError:
-        # raise ValueError(f"Unknown vendor: {parts[0]}")
-        # Default to OpenAI if unknown (e.g. for safety)
-        logger.warning(f"Unknown vendor '{parts[0]}', defaulting to OpenAI")
-        vendor = ModelVendor.OPENAI
+        raise ValueError(
+            f"Unknown vendor '{parts[0]}' in model string '{model_str}'. "
+            f"Valid vendors: {[v.value for v in ModelVendor]}"
+        )
         
     if len(parts) > 1:
         return vendor, parts[1]
@@ -86,16 +86,26 @@ def perform_company_research(
         if updated_at:
             # Check if fresh (less than 6 months old)
             cutoff = datetime.now(timezone.utc) - timedelta(days=180)
-            if updated_at > cutoff:
-                logger.info(f"Using cached company research for {company_name}")
-                return cached_info.get("reports", {})
+            cached_reports = cached_info.get("reports", {})
+            # Only use cache if it covers ALL requested models
+            requested_set = set(models)
+            cached_set = set(cached_reports.keys())
+            cache_covers_request = requested_set.issubset(cached_set)
+            
+            if updated_at > cutoff and cache_covers_request:
+                logger.info(f"Using cached company research for {company_name} (covers requested models)")
+                # Return only the requested model results from cache
+                return {k: v for k, v in cached_reports.items() if k in requested_set}
             else:
-                logger.info(f"Cached research for {company_name} is older than 6 months. Using as context.")
+                if not cache_covers_request:
+                    logger.info(f"Cached research for {company_name} doesn't cover requested models "
+                                f"(cached: {cached_set}, requested: {requested_set}). Re-running.")
+                else:
+                    logger.info(f"Cached research for {company_name} is older than 6 months. Using as context.")
                 # Use the most recent report as context (pick first available)
-                reports = cached_info.get("reports", {})
-                if reports:
+                if cached_reports:
                     # Pick a report, preferably a long one
-                    best_report = max(reports.values(), key=lambda x: len(x.get("report", "")), default={})
+                    best_report = max(cached_reports.values(), key=lambda x: len(x.get("report", "")), default={})
                     previous_context = best_report.get("report", "")
 
     # 2. Perform new consolidated research (once)
@@ -209,14 +219,21 @@ def perform_poc_research(
         
         if updated_at:
             cutoff = datetime.now(timezone.utc) - timedelta(days=180)
-            if updated_at > cutoff:
-                logger.info(f"Using cached POC research for {poc_name}")
-                return cached_info.get("reports", {})
+            cached_reports = cached_info.get("reports", {})
+            requested_set = set(models)
+            cached_set = set(cached_reports.keys())
+            cache_covers_request = requested_set.issubset(cached_set)
+            
+            if updated_at > cutoff and cache_covers_request:
+                logger.info(f"Using cached POC research for {poc_name} (covers requested models)")
+                return {k: v for k, v in cached_reports.items() if k in requested_set}
             else:
-                logger.info(f"Cached research for {poc_name} is older than 6 months. Using as context.")
-                reports = cached_info.get("reports", {})
-                if reports:
-                    best_report = max(reports.values(), key=lambda x: len(x.get("report", "")), default={})
+                if not cache_covers_request:
+                    logger.info(f"Cached POC research for {poc_name} doesn't cover requested models. Re-running.")
+                else:
+                    logger.info(f"Cached research for {poc_name} is older than 6 months. Using as context.")
+                if cached_reports:
+                    best_report = max(cached_reports.values(), key=lambda x: len(x.get("report", "")), default={})
                     previous_context = best_report.get("report", "")
 
     # 2. Perform new research

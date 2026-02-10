@@ -16,7 +16,7 @@ const formatUrl = (input) => {
  * Check if this URL should trigger a notification.
  * Only count:
  * - Extractions: /api/extract/
- * - Phase cards: /api/phases/background/<vendor>/ and /api/phases/draft/<vendor>/
+ * - Phase cards: /api/phases/draft/<vendor>/ and /api/phases/refine/<vendor>/
  */
 const shouldNotify = (url) => {
   if (typeof url !== "string") return false;
@@ -26,7 +26,7 @@ const shouldNotify = (url) => {
     return true;
   }
   
-  // Phase cards (background and draft phases)
+  // Phase cards (draft and refine phases)
   if (url.includes("/api/phases")) {
     return true;
   }
@@ -55,7 +55,7 @@ const formatNotificationMessage = (url, status) => {
   }
   
   // Phase cards - extract phase name and vendor name
-  const phaseMatch = url.match(/\/api\/phases\/(background|draft|refine)\/([^/]+)\//);
+  const phaseMatch = url.match(/\/api\/phases\/(draft|refine)\/([^/]+)\//);
   if (phaseMatch) {
     const phaseName = phaseMatch[1];
     const vendor = phaseMatch[2];

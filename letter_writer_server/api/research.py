@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from letter_writer_server.core.session import Session, get_session
 from letter_writer.research import perform_company_research, perform_poc_research
 from letter_writer.firestore_store import get_user_data
-from letter_writer.personal_data_sections import get_models
+from letter_writer.personal_data_sections import get_background_models
 
 router = APIRouter()
 
@@ -33,14 +33,7 @@ async def research_company(request: Request, data: ResearchCompanyRequest, sessi
     
     if not models:
         user_data = get_user_data(user_id, use_cache=True)
-        # get_models returns list of strings or we need to parse it? 
-        # personal_data_sections.py: get_models returns unwrap_for_response("models")
-        default_models = get_models(user_data)
-        if default_models:
-            models = default_models
-    
-    if not models:
-        models = ["openai"]
+        models = get_background_models(user_data)
 
     try:
         results = perform_company_research(
@@ -65,8 +58,8 @@ async def research_poc(request: Request, data: ResearchPocRequest, session: Sess
     models = data.models
     
     if not models:
-        # Same fallback logic
-        models = ["openai"]
+        user_data = get_user_data(user_id, use_cache=True)
+        models = get_background_models(user_data)
 
     try:
         results = perform_poc_research(

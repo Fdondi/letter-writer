@@ -1,5 +1,14 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Default background research models - used when user has not configured any
+DEFAULT_BACKGROUND_MODELS = ["gemini/gemini-3-flash-preview"]
+
+# Valid vendor prefixes for model IDs (must match ModelVendor enum values)
+VALID_VENDOR_KEYS: Set[str] = {"openai", "anthropic", "gemini", "mistral", "grok", "deepseek"}
 
 def get_cv_revisions(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return user_data.get("cv_revisions", [])
@@ -8,6 +17,27 @@ def get_models(user_data: Dict[str, Any]) -> List[str]:
     # Check for "models" field, which might be wrapped
     models_data = user_data.get("models")
     return unwrap_for_response("models", models_data) or []
+
+def _validate_model_ids(model_ids: List[str]) -> List[str]:
+    """Filter out model IDs with invalid vendor prefixes (e.g. 'google/...' instead of 'gemini/...')."""
+    valid = []
+    for mid in model_ids:
+        vendor = mid.split("/", 1)[0] if "/" in mid else mid
+        if vendor in VALID_VENDOR_KEYS:
+            valid.append(mid)
+        else:
+            logger.warning("Dropping invalid background model ID '%s' (unknown vendor '%s')", mid, vendor)
+    return valid
+
+def get_background_models(user_data: Dict[str, Any]) -> List[str]:
+    """Get the user's background research models, falling back to the default.
+    
+    Validates vendor prefixes and drops any with unknown vendors (e.g. stale 'google/...' IDs).
+    """
+    models_data = user_data.get("background_models")
+    models = unwrap_for_response("background_models", models_data) or []
+    models = _validate_model_ids(models) if models else []
+    return models if models else list(DEFAULT_BACKGROUND_MODELS)
 
 def unwrap_for_response(field_name: str, field_data: Any) -> Any:
     if isinstance(field_data, dict) and "value" in field_data:

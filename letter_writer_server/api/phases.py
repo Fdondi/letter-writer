@@ -26,18 +26,18 @@ class InitSessionRequest(BaseModel):
     search_result: Optional[str] = None
 
 class BackgroundPhaseRequest(BaseModel):
-    company_report: Optional[Dict[str, Any]] = None
+    company_report: Optional[str] = None
     top_docs: Optional[List[Dict[str, Any]]] = None
 
 class DraftPhaseRequest(BaseModel):
-    company_report: Optional[Dict[str, Any]] = None
+    company_report: Optional[str] = None
     top_docs: Optional[List[Dict[str, Any]]] = None
 
 class RefinePhaseRequest(BaseModel):
     fancy: Optional[bool] = False
     draft_letter: Optional[str] = None
     feedback_override: Optional[str] = None
-    company_report: Optional[Dict[str, Any]] = None
+    company_report: Optional[str] = None
     top_docs: Optional[List[Dict[str, Any]]] = None
 
 @router.post("/init/")

@@ -117,6 +117,7 @@ def get_all_model_pricing() -> Dict[str, List[Dict[str, Any]]]:
             models.append({
                 "id": model_id,
                 "name": name,
+                "vendor_key": vendor_key,  # e.g. "gemini", "grok" - for building composite IDs
                 "input": round(input_price, 2),
                 "output": round(output_price, 2),
             })

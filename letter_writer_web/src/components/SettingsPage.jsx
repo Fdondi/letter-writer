@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useLanguages } from "../contexts/LanguageContext";
 import LanguageConfig from "./LanguageConfig";
 import CompetenceScaleSettings from "./CompetenceScaleSettings";
@@ -9,7 +9,7 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
   const [savingLanguages, setSavingLanguages] = useState(false);
   const [defaultModels, setDefaultModels] = useState(new Set());
   const [savingModels, setSavingModels] = useState(false);
-  const [defaultBackgroundModels, setDefaultBackgroundModels] = useState(new Set());
+  const [defaultBackgroundModels, setDefaultBackgroundModels] = useState(new Set()); // Loaded from backend
   const [savingBackgroundModels, setSavingBackgroundModels] = useState(false);
   const [availableModels, setAvailableModels] = useState({}); // { vendor: { model: { input: ..., output: ... } } }
   const [minColumnWidth, setMinColumnWidth] = useState(200); // pixels
@@ -25,7 +25,7 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
         
         // Fetch available models
         try {
-            const modelsRes = await fetch("/api/cost/models/");
+            const modelsRes = await fetch("/api/costs/models/");
             if (modelsRes.ok) {
                 const modelsData = await modelsRes.json();
                 setAvailableModels(modelsData || {});
@@ -52,13 +52,9 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
             setHasLoadedFromBackend(false);
           }
           
-          // Load default background models
+          // Load default background models (backend always returns a non-empty list with defaults applied)
           if (data.default_background_models && Array.isArray(data.default_background_models)) {
             setDefaultBackgroundModels(new Set(data.default_background_models));
-          } else {
-            // Default to OpenAI gpt-4o if nothing set (or empty set if preferred, but safer to have one)
-            // Or just leave empty
-            setDefaultBackgroundModels(new Set(["openai/gpt-4o"]));
           }
           
           // Load minimum column width (default to 200px if not set)
@@ -182,6 +178,8 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
     setDefaultBackgroundModels((prev) => {
       const next = new Set(prev);
       if (next.has(modelId)) {
+        // Don't allow deselecting the last model
+        if (next.size <= 1) return prev;
         next.delete(modelId);
       } else {
         if (next.size >= 3) return prev; // Limit to 3
@@ -195,25 +193,36 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
     setDefaultModels(checked ? new Set(vendors) : new Set());
   };
 
-  // Group available models for display
-  const groupedModels = {};
-  if (availableModels) {
-    Object.entries(availableModels).forEach(([vendorLabel, models]) => {
-      // Try to map display name to vendor ID
-      const vendorId = vendors.find(v => 
-        vendorLabel.toLowerCase().includes(v.toLowerCase()) || 
-        v.toLowerCase().includes(vendorLabel.toLowerCase())
-      ) || vendorLabel.toLowerCase().replace(/\s+/g, '');
-      
-      if (Array.isArray(models)) {
-        groupedModels[vendorId] = models.map(m => ({
-          id: `${vendorId}/${m.id}`,
-          name: m.name,
-          vendorLabel
-        }));
-      }
+  // Group available models for display, building correct composite IDs using vendor_key from API
+  const { groupedModels, validModelIds } = useMemo(() => {
+    const grouped = {};
+    const valid = new Set();
+    if (availableModels) {
+      Object.entries(availableModels).forEach(([vendorLabel, models]) => {
+        if (Array.isArray(models) && models.length > 0) {
+          const vendorKey = models[0].vendor_key || vendorLabel.toLowerCase().replace(/\s+/g, '');
+          grouped[vendorLabel] = models.map(m => {
+            const compositeId = `${m.vendor_key || vendorKey}/${m.id}`;
+            valid.add(compositeId);
+            return { id: compositeId, name: m.name, vendorLabel };
+          });
+        }
+      });
+    }
+    return { groupedModels: grouped, validModelIds: valid };
+  }, [availableModels]);
+
+  // Clean up stale/broken background model IDs (e.g. "google/..." instead of "gemini/...")
+  // once we know which IDs are actually valid from the model pricing API
+  useEffect(() => {
+    if (validModelIds.size === 0) return; // models not loaded yet
+    setDefaultBackgroundModels(prev => {
+      const cleaned = new Set([...prev].filter(id => validModelIds.has(id)));
+      if (cleaned.size === prev.size) return prev; // no change
+      console.log("Cleaned stale background model IDs:", [...prev].filter(id => !validModelIds.has(id)));
+      return cleaned;
     });
-  }
+  }, [validModelIds]);
 
   if (loading) {
     return (
@@ -411,19 +420,19 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
           </h3>
           <button
             onClick={handleSaveBackgroundModels}
-            disabled={savingBackgroundModels}
+            disabled={savingBackgroundModels || defaultBackgroundModels.size === 0}
             style={{
               padding: "6px 12px",
-              backgroundColor: "#3b82f6",
+              backgroundColor: (savingBackgroundModels || defaultBackgroundModels.size === 0) ? "#94a3b8" : "#3b82f6",
               color: "white",
               border: "none",
               borderRadius: "4px",
-              cursor: savingBackgroundModels ? "not-allowed" : "pointer",
-              opacity: savingBackgroundModels ? 0.7 : 1,
+              cursor: (savingBackgroundModels || defaultBackgroundModels.size === 0) ? "not-allowed" : "pointer",
+              opacity: (savingBackgroundModels || defaultBackgroundModels.size === 0) ? 0.7 : 1,
               fontSize: "14px",
             }}
           >
-            {savingBackgroundModels ? "Saving..." : "Save Defaults"}
+            {savingBackgroundModels ? "Saving..." : defaultBackgroundModels.size === 0 ? "Select at least one" : "Save Defaults"}
           </button>
         </div>
         <p
@@ -438,10 +447,10 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
           Results will be aggregated.
         </p>
         <div style={{ display: "flex", flexDirection: "column", gap: 15 }}>
-          {Object.entries(groupedModels).map(([vendorId, models]) => (
-            <div key={vendorId}>
-              <strong style={{ display: "block", marginBottom: 5, textTransform: "capitalize", color: "var(--text-color)" }}>
-                {vendorId}
+          {Object.entries(groupedModels).map(([vendorLabel, models]) => (
+            <div key={vendorLabel}>
+              <strong style={{ display: "block", marginBottom: 5, color: "var(--text-color)" }}>
+                {vendorLabel}
               </strong>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                 {models.map((model) => (

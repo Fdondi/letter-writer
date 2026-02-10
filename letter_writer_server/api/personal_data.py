@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from letter_writer_server.core.session import Session, get_session
 from letter_writer.firestore_store import get_user_data, get_personal_data_document
 from letter_writer.generation import get_style_instructions
-from letter_writer.personal_data_sections import get_cv_revisions, get_models, unwrap_for_response, wrap_new_field
+from letter_writer.personal_data_sections import get_cv_revisions, get_models, get_background_models, unwrap_for_response, wrap_new_field
 from datetime import datetime
 
 router = APIRouter()
@@ -23,7 +23,7 @@ async def get_personal_data(session: Session = Depends(get_session)):
     revisions = get_cv_revisions(user_data)
     default_languages = user_data.get("default_languages") or []
     default_models = get_models(user_data)
-    default_background_models = unwrap_for_response("background_models", user_data.get("background_models")) or []
+    default_background_models = get_background_models(user_data)
     min_column_width = user_data.get("min_column_width")
     
     # Process revisions to ISO format... (omitted detailed implementation for brevity, assume similar to Django view)
