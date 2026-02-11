@@ -4,8 +4,10 @@ from pydantic import BaseModel
 
 from letter_writer_server.core.session import Session, get_session
 from letter_writer.firestore_store import get_user_data, get_personal_data_document
-from letter_writer.generation import get_style_instructions
+from letter_writer.generation import get_style_instructions, get_search_instructions
 from letter_writer.personal_data_sections import get_cv_revisions, get_models, get_background_models, unwrap_for_response, wrap_new_field
+from letter_writer.personal_data_sections import get_style_instructions as get_user_style_instructions
+from letter_writer.personal_data_sections import get_search_instructions as get_user_search_instructions
 from datetime import datetime
 
 router = APIRouter()
@@ -95,6 +97,10 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
         if "style_instructions" in data:
             updates["style"] = wrap_new_field("style", data["style_instructions"], now)
             session["style_instructions"] = data["style_instructions"]
+        
+        if "search_instructions" in data:
+            updates["search_instructions"] = wrap_new_field("search_instructions", data["search_instructions"], now)
+            session["search_instructions"] = data["search_instructions"]
             
         if updates:
             user_doc_ref.set(updates, merge=True)
@@ -108,7 +114,7 @@ async def get_style_instructions_endpoint(session: Session = Depends(get_session
         user = session.get('user')
         if user:
              user_data = get_user_data(user['id'], use_cache=True)
-             instructions = get_style_instructions(user_data)
+             instructions = get_user_style_instructions(user_data)
     
     if not instructions:
         instructions = get_style_instructions() # Default from file
@@ -132,6 +138,43 @@ async def update_style_instructions(request: Request, session: Session = Depends
     user_doc_ref = get_personal_data_document(user['id'])
     updates = {
         "style": wrap_new_field("style", instructions, datetime.utcnow()),
+        "updated_at": datetime.utcnow()
+    }
+    user_doc_ref.set(updates, merge=True)
+    
+    return {"status": "ok", "instructions": instructions}
+
+@router.get("/search-instructions/")
+async def get_search_instructions_endpoint(session: Session = Depends(get_session)):
+    instructions = session.get("search_instructions", "")
+    if not instructions:
+        user = session.get('user')
+        if user:
+             user_data = get_user_data(user['id'], use_cache=True)
+             instructions = get_user_search_instructions(user_data)
+    
+    if not instructions:
+        instructions = get_search_instructions() # Default from file
+        
+    return {"instructions": instructions}
+
+@router.post("/search-instructions/")
+async def update_search_instructions(request: Request, session: Session = Depends(get_session)):
+    user = session.get('user')
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    data = await request.json()
+    instructions = data.get("instructions", "")
+    if not instructions:
+        raise HTTPException(status_code=400, detail="Instructions cannot be empty")
+        
+    session["search_instructions"] = instructions
+    
+    # Save to Firestore
+    user_doc_ref = get_personal_data_document(user['id'])
+    updates = {
+        "search_instructions": wrap_new_field("search_instructions", instructions, datetime.utcnow()),
         "updated_at": datetime.utcnow()
     }
     user_doc_ref.set(updates, merge=True)

@@ -468,8 +468,27 @@ def get_style_instructions() -> str:
         )
 
 
+def get_search_instructions() -> str:
+    """Load default search instructions from file."""
+    search_file = Path(__file__).parent / "search_instructions.txt"
+    try:
+        return search_file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # Fallback to default if file doesn't exist
+        return (
+            "You are an expert in searching the internet for information about companies.\n\n"
+            "Focus on what distinguishes the company, in the good and bad. Keep it concise but informative.\n"
+            "Do NOT include any links, only plain text.\n"
+            "Do NOT just repeat the ads the company puts out. Do report what they say about themselves, "
+            "but make it clear it's reporting on how they like to present themselves, not the objective truth. "
+            "Be inquisitive, almost cynical, read between the lines. If we are writing to a company that likes "
+            "to present themselves as trailblazing but is actually quite boring, or vice versa likes to underpromise "
+            "but is actually exceptional, we need to consider both aspects.\n"
+        )
+
+
 @traceable(run_type="chain", name="company_research")
-def company_research(company_name: Optional[str], job_text: str, client: BaseClient, trace_dir: Path, point_of_contact: dict = None, additional_company_info: str = "", search: bool = True, model: str | ModelSize = ModelSize.LARGE) -> Optional[str]:
+def company_research(company_name: Optional[str], job_text: str, client: BaseClient, trace_dir: Path, point_of_contact: dict = None, additional_company_info: str = "", search: bool = True, model: str | ModelSize = ModelSize.LARGE, search_instructions: str = "") -> Optional[str]:
     """Research company information using OpenAI.
     
     Args:
@@ -481,8 +500,13 @@ def company_research(company_name: Optional[str], job_text: str, client: BaseCli
         additional_company_info: User-provided additional context about the company or role
         search: Whether to enable web search tools (default: True)
         model: Model to use (default: ModelSize.LARGE)
+        search_instructions: User-provided instructions for how to conduct the background search
     """
-    system = "You are an expert in searching the internet for information about companies."
+    # Use user-provided search instructions or fall back to defaults
+    if search_instructions and search_instructions.strip():
+        system = search_instructions.strip()
+    else:
+        system = "You are an expert in searching the internet for information about companies."
     
     contact_prompt = ""
     if point_of_contact and (point_of_contact.get("name") or point_of_contact.get("role")):
@@ -506,12 +530,7 @@ def company_research(company_name: Optional[str], job_text: str, client: BaseCli
         company_prompt = (
         f"Search the internet and write a short, opinionated company report about {company_name}\n"
         f"To disambiguiate, here is how they present themselves: {job_text[:500]}...\n"
-        "Focus on what distinguishes the company, in the good and bad. Keep it concise but informative.\n"
         "Do NOT include any links, only plain text.\n"
-        "Do NOT just repeat the ads the company puts out. Do report what they say about themsleves, but make it clear it's reporting "
-        "on how they like to present themselves, not the objective truth. Be inquisiteive, almost cynical, read between the lines. "
-        "If we are writing to a company that likes to present themselves as trailblazing but is actually quite boring, "
-        "or viceversa likes to underpromise but is actually exceprional, we need to consider both aspects.\n"
     )
 
     # Add user-provided company context if available

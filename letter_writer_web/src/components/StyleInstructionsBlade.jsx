@@ -1,61 +1,81 @@
 import React, { useState, useEffect } from 'react';
 import { fetchWithHeartbeat } from '../utils/apiHelpers';
 
-const StyleInstructionsBlade = ({ isOpen, onClose }) => {
-  const [instructions, setInstructions] = useState('');
-  const [originalInstructions, setOriginalInstructions] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const [saveSuccess, setSaveSuccess] = useState(false);
+const TABS = [
+  { key: 'style', label: 'Draft Style', endpoint: '/api/style-instructions/', description: 'These instructions guide the writing style and tone when generating cover letters.' },
+  { key: 'search', label: 'Background Search', endpoint: '/api/search-instructions/', description: 'These instructions guide how the AI researches companies during the background phase.' },
+];
 
-  // Load instructions when blade opens
+const StyleInstructionsBlade = ({ isOpen, onClose }) => {
+  const [activeTab, setActiveTab] = useState('style');
+  // Per-tab state
+  const [tabState, setTabState] = useState({
+    style: { instructions: '', original: '', loading: false, saving: false, error: null, saveSuccess: false },
+    search: { instructions: '', original: '', loading: false, saving: false, error: null, saveSuccess: false },
+  });
+
+  // Load instructions when blade opens or tab changes
   useEffect(() => {
     if (isOpen) {
-      loadInstructions();
+      loadInstructions(activeTab);
     }
-  }, [isOpen]);
+  }, [isOpen, activeTab]);
 
-  const loadInstructions = async () => {
-    setLoading(true);
-    setError(null);
+  const updateTab = (tabKey, updates) => {
+    setTabState(prev => ({
+      ...prev,
+      [tabKey]: { ...prev[tabKey], ...updates }
+    }));
+  };
+
+  const loadInstructions = async (tabKey) => {
+    const tab = TABS.find(t => t.key === tabKey);
+    if (!tab) return;
+    // Don't reload if already loaded
+    if (tabState[tabKey].original && !tabState[tabKey].error) return;
+    
+    updateTab(tabKey, { loading: true, error: null });
     try {
-      const { data } = await fetchWithHeartbeat('/api/style-instructions/');
-      setInstructions(data.instructions);
-      setOriginalInstructions(data.instructions);
+      const { data } = await fetchWithHeartbeat(tab.endpoint);
+      updateTab(tabKey, { instructions: data.instructions, original: data.instructions, loading: false });
     } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+      updateTab(tabKey, { error: err.message, loading: false });
     }
   };
 
-  const saveInstructions = async () => {
-    setSaving(true);
-    setError(null);
-    setSaveSuccess(false);
+  const saveInstructions = async (tabKey) => {
+    const tab = TABS.find(t => t.key === tabKey);
+    if (!tab) return;
+    
+    updateTab(tabKey, { saving: true, error: null, saveSuccess: false });
     try {
-      await fetchWithHeartbeat('/api/style-instructions/', {
+      await fetchWithHeartbeat(tab.endpoint, {
         method: 'POST',
-        body: JSON.stringify({ instructions }),
+        body: JSON.stringify({ instructions: tabState[tabKey].instructions }),
       });
       
-      setOriginalInstructions(instructions);
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 3000);
+      updateTab(tabKey, { original: tabState[tabKey].instructions, saveSuccess: true, saving: false });
+      setTimeout(() => updateTab(tabKey, { saveSuccess: false }), 3000);
     } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
+      updateTab(tabKey, { error: err.message, saving: false });
     }
   };
 
-  const hasChanges = instructions !== originalInstructions;
+  const current = tabState[activeTab];
+  const hasChanges = current.instructions !== current.original;
+  const currentTabMeta = TABS.find(t => t.key === activeTab);
 
   const handleClose = () => {
-    if (hasChanges) {
+    // Check for unsaved changes in any tab
+    const unsavedTabs = TABS.filter(t => tabState[t.key].instructions !== tabState[t.key].original);
+    if (unsavedTabs.length > 0) {
       if (window.confirm('You have unsaved changes. Are you sure you want to close?')) {
-        setInstructions(originalInstructions);
+        // Revert all unsaved changes
+        const reverted = { ...tabState };
+        unsavedTabs.forEach(t => {
+          reverted[t.key] = { ...reverted[t.key], instructions: reverted[t.key].original };
+        });
+        setTabState(reverted);
         onClose();
       }
     } else {
@@ -64,7 +84,7 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
   };
 
   const resetToOriginal = () => {
-    setInstructions(originalInstructions);
+    updateTab(activeTab, { instructions: current.original });
   };
 
   if (!isOpen) return null;
@@ -94,7 +114,7 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
         alignItems: 'center'
       }}>
         <h2 style={{ margin: 0, fontSize: '1.5em', color: 'var(--text-color)' }}>
-          Style Instructions
+          AI Instructions
         </h2>
         <button
           onClick={handleClose}
@@ -107,19 +127,62 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
             padding: '5px'
           }}
         >
-          ×
+          &times;
         </button>
+      </div>
+
+      {/* Tabs */}
+      <div style={{
+        display: 'flex',
+        borderBottom: '1px solid var(--border-color)',
+        backgroundColor: 'var(--header-bg)',
+        padding: '0 20px',
+      }}>
+        {TABS.map(tab => {
+          const isActive = activeTab === tab.key;
+          const tabHasChanges = tabState[tab.key].instructions !== tabState[tab.key].original;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              style={{
+                padding: '10px 20px',
+                border: 'none',
+                borderBottom: isActive ? '3px solid #007bff' : '3px solid transparent',
+                backgroundColor: 'transparent',
+                color: isActive ? '#007bff' : 'var(--secondary-text-color)',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: isActive ? 'bold' : 'normal',
+                position: 'relative',
+              }}
+            >
+              {tab.label}
+              {tabHasChanges && (
+                <span style={{
+                  display: 'inline-block',
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  backgroundColor: '#f59e0b',
+                  marginLeft: '6px',
+                  verticalAlign: 'middle',
+                }} title="Unsaved changes" />
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Content */}
       <div style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column' }}>
-        {loading && (
+        {current.loading && (
           <div style={{ textAlign: 'center', padding: '20px', color: 'var(--secondary-text-color)' }}>
-            Loading style instructions...
+            Loading {currentTabMeta.label.toLowerCase()} instructions...
           </div>
         )}
 
-        {error && (
+        {current.error && (
           <div style={{
             backgroundColor: 'var(--error-bg)',
             border: '1px solid var(--error-border)',
@@ -128,11 +191,11 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
             marginBottom: '15px',
             color: 'var(--error-text)'
           }}>
-            Error: {error}
+            Error: {current.error}
           </div>
         )}
 
-        {saveSuccess && (
+        {current.saveSuccess && (
           <div style={{
             backgroundColor: 'var(--success-bg, #efe)',
             border: '1px solid var(--success-border, #cfc)',
@@ -141,22 +204,21 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
             marginBottom: '15px',
             color: 'var(--success-text, #3c3)'
           }}>
-            Style instructions saved successfully!
+            {currentTabMeta.label} instructions saved successfully!
           </div>
         )}
 
-        {!loading && (
+        {!current.loading && (
           <>
             <div style={{ marginBottom: '15px' }}>
               <p style={{ margin: '0 0 10px 0', color: 'var(--secondary-text-color)' }}>
-                These instructions will be used when generating cover letters. 
-                Modify them to customize the writing style and approach.
+                {currentTabMeta.description}
               </p>
             </div>
 
             <textarea
-              value={instructions}
-              onChange={(e) => setInstructions(e.target.value)}
+              value={current.instructions}
+              onChange={(e) => updateTab(activeTab, { instructions: e.target.value })}
               style={{
                 flex: 1,
                 width: '100%',
@@ -171,7 +233,7 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
                 backgroundColor: 'var(--input-bg)',
                 color: 'var(--text-color)'
               }}
-              placeholder="Enter style instructions..."
+              placeholder={`Enter ${currentTabMeta.label.toLowerCase()} instructions...`}
             />
 
             {/* Action buttons */}
@@ -198,19 +260,19 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
               )}
               
               <button
-                onClick={saveInstructions}
-                disabled={saving || !hasChanges || !instructions.trim()}
+                onClick={() => saveInstructions(activeTab)}
+                disabled={current.saving || !hasChanges || !current.instructions.trim()}
                 style={{
                   padding: '10px 20px',
                   border: 'none',
                   borderRadius: '4px',
-                  backgroundColor: hasChanges && instructions.trim() ? '#007bff' : 'var(--header-bg)',
+                  backgroundColor: hasChanges && current.instructions.trim() ? '#007bff' : 'var(--header-bg)',
                   color: 'white',
-                  cursor: hasChanges && instructions.trim() ? 'pointer' : 'not-allowed',
+                  cursor: hasChanges && current.instructions.trim() ? 'pointer' : 'not-allowed',
                   fontWeight: 'bold'
                 }}
               >
-                {saving ? 'Saving...' : 'Save Changes'}
+                {current.saving ? 'Saving...' : 'Save Changes'}
               </button>
             </div>
 

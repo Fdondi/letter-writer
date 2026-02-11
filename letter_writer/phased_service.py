@@ -19,6 +19,7 @@ from .generation import (
     company_research,
     fancy_letter,
     generate_letter,
+    get_search_instructions,
     human_check,
     instruction_check,
     precision_check,
@@ -246,6 +247,11 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
     
     # Get additional company info from metadata (user's extra context about the company)
     additional_company_info = get_metadata_field(metadata, vendor, "additional_company_info", "")
+    
+    # Get search instructions from session data, falling back to user data or default file
+    search_instructions = common_data.get("search_instructions", "")
+    if not search_instructions:
+        search_instructions = get_search_instructions()  # Default from file
 
     trace_dir = Path("trace", f"{company_name}.{vendor.value}.background")
     trace_dir.mkdir(parents=True, exist_ok=True)
@@ -253,7 +259,7 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
     print(f"[PHASE] background -> {vendor.value} :: select_top_documents")
     top_docs = select_top_documents(search_result, job_text, ai_client, trace_dir)
     print(f"[PHASE] background -> {vendor.value} :: company_research")
-    company_report = company_research(company_name, job_text, ai_client, trace_dir, point_of_contact=point_of_contact, additional_company_info=additional_company_info)
+    company_report = company_research(company_name, job_text, ai_client, trace_dir, point_of_contact=point_of_contact, additional_company_info=additional_company_info, search_instructions=search_instructions)
 
     state = VendorPhaseState(
         top_docs=top_docs,

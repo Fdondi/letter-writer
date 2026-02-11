@@ -60,6 +60,11 @@ def get_style_instructions(user_data: Dict[str, Any]) -> str:
     style_data = user_data.get("style")
     return unwrap_for_response("style", style_data) or ""
 
+def get_search_instructions(user_data: Dict[str, Any]) -> str:
+    # Check "search_instructions" field
+    search_data = user_data.get("search_instructions")
+    return unwrap_for_response("search_instructions", search_data) or ""
+
 def merge_on_conflict(updates: Dict[str, Any], existing: Dict[str, Any], timestamp: datetime) -> Dict[str, Any]:
     # Simple merge logic for optimistic locking retry
     merged = existing.copy()
