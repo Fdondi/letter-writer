@@ -43,6 +43,18 @@ const updateTitleBadge = () => {
 const formatNotificationMessage = (url, status) => {
   // Check if status indicates success (numeric 200-299) or failure (anything else including "error" string)
   const isSuccess = typeof status === "number" && status >= 200 && status < 300;
+
+  if (typeof status === "number" && status == 401) {
+    return "Authentication required";
+  }
+
+  if (typeof status === "number" && status == 403) {
+    return "Authorization required";
+  }
+
+  if (typeof status === "number" && status == 404) {
+    return "Not found";
+  }
   
   // Extract endpoint
   if (url.includes("/api/extract/")) {
