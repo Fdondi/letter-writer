@@ -2,6 +2,7 @@ from .base import BaseClient, ModelSize
 from anthropic import Anthropic
 from typing import List, Dict
 import typer
+from langsmith import traceable
 
 class ClaudeClient(BaseClient):
     def __init__(self):
@@ -11,6 +12,7 @@ class ClaudeClient(BaseClient):
     def _format_messages(self, user_messages: List[str]) -> List[Dict]:
         return [{"role": "user", "content": [{"type": "text", "text": message}]} for message in user_messages]
 
+    @traceable(run_type="llm", name="Anthropic.call")
     def call(self, model_size: ModelSize | str, system: str, user_messages: List[str], search: bool = False) -> str:
         messages = self._format_messages(user_messages)
         if isinstance(model_size, str):

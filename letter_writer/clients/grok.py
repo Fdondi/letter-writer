@@ -4,6 +4,7 @@ import os
 import typer
 import xai_sdk
 from xai_sdk.tools import web_search
+from langsmith import traceable
 
 
 class GrokClient(BaseClient):
@@ -16,6 +17,7 @@ class GrokClient(BaseClient):
         # Use OpenAI client with xAI's endpoint
         self.client = xai_sdk.Client(api_key=api_key)
 
+    @traceable(run_type="llm", name="Grok.call")
     def call(self, model_size: ModelSize | str, system: str, user_messages: List[str], search: bool = False) -> str:
         if isinstance(model_size, str):
             model = model_size

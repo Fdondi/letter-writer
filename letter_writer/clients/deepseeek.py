@@ -3,6 +3,7 @@ from openai import OpenAI
 from typing import List, Dict
 import os
 import typer
+from langsmith import traceable
 
 
 class DeepSeekClient(BaseClient):
@@ -16,6 +17,7 @@ class DeepSeekClient(BaseClient):
     def _format_messages(self, system: str, user_messages: List[str]) -> List[Dict]:
         return [{"role": "system", "content": system}] + [{"role": "user", "content": message} for message in user_messages]
 
+    @traceable(run_type="llm", name="DeepSeek.call")
     def call(self, model_size: ModelSize | str, system: str, user_messages: List[str], search: bool = False) -> str:
         messages = self._format_messages(system, user_messages)
         if isinstance(model_size, str):

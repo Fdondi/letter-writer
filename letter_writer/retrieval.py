@@ -3,6 +3,7 @@ from typing import List, Dict
 from pathlib import Path
 from openai import OpenAI
 import typer
+from langsmith import traceable
 
 from .clients.base import BaseClient, ModelSize
 
@@ -46,6 +47,7 @@ def retrieve_similar_job_offers(job_text: str, collection, openai_client: OpenAI
     return results
 
 
+@traceable(run_type="chain", name="select_top_documents")
 def select_top_documents(
     search_result: List[dict],
     job_text: str,
@@ -114,6 +116,7 @@ def select_top_documents(
         for name, score in top_docs.items()
     ]
 
+@traceable(run_type="chain", name="rerank_documents")
 def rerank_documents(job_text: str, docs: dict, ai_client: BaseClient, trace_dir: Path) -> dict:
     """Ask the model to score docs and return top 3 as dicts with company_name and score."""
     

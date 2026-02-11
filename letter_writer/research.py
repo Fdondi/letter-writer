@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from concurrent.futures import ThreadPoolExecutor
 
+from langsmith import traceable
+
 from .client import get_client
 from .clients.base import ModelVendor, ModelSize, BaseClient
 from .firestore_store import get_company_info, save_company_info, get_collection, get_poc_info, save_poc_info
@@ -31,6 +33,7 @@ def _parse_model_str(model_str: str) -> Tuple[ModelVendor, str | ModelSize]:
     return vendor, ModelSize.LARGE
 
 
+@traceable(run_type="chain", name="perform_web_search")
 def perform_web_search(query: str) -> str:
     """Perform a web search using a capable model (OpenAI for now)."""
     try:
@@ -43,6 +46,7 @@ def perform_web_search(query: str) -> str:
         return ""
 
 
+@traceable(run_type="chain", name="perform_company_research")
 def perform_company_research(
     company_name: str,
     user_id: str,
@@ -191,6 +195,7 @@ def perform_company_research(
     return results
 
 
+@traceable(run_type="chain", name="perform_poc_research")
 def perform_poc_research(
     poc_name: str,
     user_id: str,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import List, Tuple, Any
 
 import typer
+from langsmith import traceable
 
 from .base import BaseClient, ModelSize
 
@@ -97,6 +98,7 @@ class GeminiClient(BaseClient):
         
         typer.echo(f"[DEBUG] track_cost called: in={input_tokens}, out={output_tokens}, totals: in={self.total_input_tokens}, out={self.total_output_tokens}")
 
+    @traceable(run_type="llm", name="Gemini.call")
     def call(self, model_size: ModelSize | str, system: str, user_messages: List[str], search: bool = False) -> str:
         if types is None:
             raise ImportError(

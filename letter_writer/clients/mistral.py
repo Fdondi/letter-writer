@@ -3,6 +3,7 @@ from mistralai import Mistral
 from typing import List, Dict
 import os
 import typer
+from langsmith import traceable
 
 class MistralClient(BaseClient):
     """Client that talks to Mistral via the official SDK instead of hand-rolled
@@ -88,6 +89,7 @@ class MistralClient(BaseClient):
         # Fallback: try to convert to string
         return str(content)
 
+    @traceable(run_type="llm", name="Mistral.call")
     def call(
         self,
         model_size: ModelSize | str,

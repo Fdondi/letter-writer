@@ -53,6 +53,10 @@ services:
       - BIGQUERY_LOCATION=${BIGQUERY_LOCATION:-EU}
       # Google Translate API key (for translation costs tracking)
       - GOOGLE_TRANSLATE_API_KEY=${GOOGLE_TRANSLATE_API_KEY}
+      # LangSmith tracing (optional - disabled by default)
+      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
+      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-letter-writer}
     env_file:
       - .env
     depends_on:

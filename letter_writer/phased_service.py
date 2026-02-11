@@ -8,6 +8,7 @@ from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 
+from langsmith import traceable
 from openai import OpenAI
 
 from .client import get_client
@@ -189,6 +190,7 @@ def _create_session(
     return session
 
 
+@traceable(run_type="chain", name="run_background_phase")
 def _run_background_phase(session_id: str, vendor: ModelVendor, 
                           common_data: dict) -> VendorPhaseState:
     """Run the background phase for a single vendor.
@@ -266,6 +268,7 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
     return state
 
 
+@traceable(run_type="chain", name="advance_to_draft")
 def advance_to_draft(
     *,
     session_id: str,
@@ -415,6 +418,7 @@ def advance_to_draft(
     return state
 
 
+@traceable(run_type="chain", name="advance_to_refinement")
 def advance_to_refinement(
     *,
     session_id: str,

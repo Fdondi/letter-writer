@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 from openai import OpenAI
+from langsmith import traceable
 
 from .config import TRACE_DIR
 from .clients.base import BaseClient, ModelSize
@@ -24,6 +25,7 @@ def _has_required_suffix(text: str) -> bool:
     return any(normalized.endswith(marker) for marker in REQUIRED_SUFFIXES)
 
 
+@traceable(run_type="chain", name="call_with_required_suffix")
 def _call_with_required_suffix(
     client: BaseClient,
     model_size: ModelSize,
@@ -84,6 +86,7 @@ def _write_trace(trace_dir: Path | None, system: str, prompt: str, raw: str) -> 
         pass
 
 
+@traceable(run_type="chain", name="extract_job_metadata_no_requirements")
 def extract_job_metadata_no_requirements(
     job_text: str,
     client: BaseClient,
@@ -147,6 +150,7 @@ DEFAULT_NEED_SEMANTICS: Dict[str, str] = {
 }
 
 
+@traceable(run_type="chain", name="extract_key_competences")
 def extract_key_competences(
     job_text: str,
     client: BaseClient,
@@ -226,6 +230,7 @@ def _flatten_competences_by_category(
     return pairs
 
 
+@traceable(run_type="chain", name="grade_competence_cv_match")
 def grade_competence_cv_match(
     competences: List[str],
     cv_text: str,
@@ -291,6 +296,7 @@ def _normalize_skill(s: str) -> str:
     return " ".join((s or "").strip().lower().split())
 
 
+@traceable(run_type="chain", name="extract_job_metadata")
 def extract_job_metadata(
     job_text: str,
     client: BaseClient,
@@ -462,6 +468,7 @@ def get_style_instructions() -> str:
         )
 
 
+@traceable(run_type="chain", name="company_research")
 def company_research(company_name: Optional[str], job_text: str, client: BaseClient, trace_dir: Path, point_of_contact: dict = None, additional_company_info: str = "", search: bool = True, model: str | ModelSize = ModelSize.LARGE) -> Optional[str]:
     """Research company information using OpenAI.
     
@@ -526,6 +533,7 @@ def company_research(company_name: Optional[str], job_text: str, client: BaseCli
     (trace_dir / "company_research.txt").write_text(result, encoding="utf-8")
     return result
 
+@traceable(run_type="chain", name="generate_letter")
 def generate_letter(cv_text: str, examples: List[dict], company_report: str, job_text: str, client: BaseClient, trace_dir: Path, style_instructions: str = "", additional_user_info: str = "") -> str:
     """Generate a personalized cover letter based on CV, examples, company report, and job description.
     
@@ -578,6 +586,7 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
     (trace_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
     return client.call(ModelSize.XLARGE, system, [prompt])
 
+@traceable(run_type="chain", name="instruction_check")
 def instruction_check(letter: str, client: BaseClient, style_instructions: str = "") -> str:
     """Check the letter for consistency with the instructions."""
     if not style_instructions:
@@ -596,6 +605,7 @@ def instruction_check(letter: str, client: BaseClient, style_instructions: str =
     return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 
+@traceable(run_type="chain", name="accuracy_check")
 def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_user_info: str = "") -> str:
     """Check the accuracy of the cover letter against the user's CV.
     
@@ -633,6 +643,7 @@ def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_use
     )
     return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
+@traceable(run_type="chain", name="precision_check")
 def precision_check(letter: str, company_report: str, job_text: str, client: BaseClient) -> str:
     """Check the precision and style of the cover letter against the company report and job description."""
     system = (
@@ -656,6 +667,7 @@ def precision_check(letter: str, company_report: str, job_text: str, client: Bas
     )
     return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
+@traceable(run_type="chain", name="company_fit_check")
 def company_fit_check(letter: str, company_report: str, job_offer: str, client: OpenAI) -> str:
     """Check how well the cover letter aligns with the company's values, culture, tone, and needs."""
     system = (
@@ -675,6 +687,7 @@ def company_fit_check(letter: str, company_report: str, job_offer: str, client: 
     )
     return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
+@traceable(run_type="chain", name="user_fit_check")
 def user_fit_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     """Check how well the cover letter showcases the user's unique value proposition."""
     examples_formatted = "\n\n".join(
@@ -714,6 +727,7 @@ def _format_correction(corr: dict) -> str:
         edited = corr.get("edited", "").strip()
         return f"  Original: {original}\n  Edited: {edited}"
 
+@traceable(run_type="chain", name="human_check")
 def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     """Check the letter for consistency with the instructions."""
     rewritten_examples = [
@@ -773,6 +787,7 @@ def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 
+@traceable(run_type="chain", name="rewrite_letter")
 def rewrite_letter(
     original_letter: str,
     instruction_feedback: str,
@@ -827,6 +842,7 @@ def rewrite_letter(
         return original_letter
     return revised_letter 
 
+@traceable(run_type="chain", name="fancy_letter")
 def fancy_letter(letter: str, client: OpenAI) -> str:
     """Fancy up the letter with a fancy style."""
     system = (

@@ -13,6 +13,7 @@ tdqm
 PyPDF2>=3.0.0
 redis>=5.0.0  # For cost tracking with atomic operations
 google-cloud-bigquery>=3.0.0  # For cost analytics and reporting
+langsmith>=0.3.0  # For LLM observability and tracing
 
 # FastAPI Backend
 fastapi>=0.104.0
