@@ -13,6 +13,7 @@ import CostDisplay from "./components/CostDisplay";
 import CostsPage from "./components/CostsPage";
 import CompetencesList from "./components/CompetencesList";
 import ResearchComponent from "./components/ResearchComponent";
+import SimilarOffersCarousel from "./components/SimilarOffersCarousel";
 import { splitIntoParagraphs } from "./utils/split";
 import { fetchWithHeartbeat, retryApiCall, initializeCsrfToken, getCsrfToken } from "./utils/apiHelpers";
 import { phases as phaseModules } from "./components/phases";
@@ -92,6 +93,8 @@ export default function App() {
   const [selectedTopDocs, setSelectedTopDocs] = useState(null);
   const [selectedPocReport, setSelectedPocReport] = useState(null);
   const [backgroundModels, setBackgroundModels] = useState(new Set()); // Loaded from backend on mount
+  const [allSearchResults, setAllSearchResults] = useState([]); // All RAG-retrieved similar docs
+  const [selectedDocIds, setSelectedDocIds] = useState(new Set()); // User-selected doc IDs for draft
   
   // Triggers for auto-research
   const [triggerCompanyResearch, setTriggerCompanyResearch] = useState(0);
@@ -209,6 +212,29 @@ export default function App() {
     }
     return jobText;
   }, [jobTextViewLanguage, jobTextTranslations, jobText]);
+
+  // Compute effective top_docs from user's manual selection (selectedDocIds)
+  // Falls back to LLM-selected selectedTopDocs if no manual selection
+  const effectiveTopDocs = useMemo(() => {
+    if (selectedDocIds.size > 0 && allSearchResults.length > 0) {
+      // Build docs from user selection, preserving LLM scores where available
+      const llmScoreMap = {};
+      (selectedTopDocs || []).forEach(d => {
+        const id = d.id || d.company_name;
+        if (id) llmScoreMap[id] = d.score;
+      });
+      return allSearchResults
+        .filter(d => selectedDocIds.has(d.id || d.company_name))
+        .map(d => {
+          const id = d.id || d.company_name;
+          const score = llmScoreMap[id];
+          // Ensure every doc has a score (required by generate_letter)
+          // User-added docs without LLM score get a default of 5
+          return { ...d, score: score !== undefined ? score : 5 };
+        });
+    }
+    return selectedTopDocs;
+  }, [selectedDocIds, allSearchResults, selectedTopDocs]);
 
   // Handle job text language change
   const handleJobTextLanguageChange = async (code) => {
@@ -443,6 +469,17 @@ export default function App() {
       });
       const data = result.data;
       const extracted = data.extraction || {};
+      // Similar previous job offers came back in parallel with extraction
+      if (data.similar_documents && data.similar_documents.length > 0) {
+        setAllSearchResults(data.similar_documents);
+      }
+      // LLM-reranked top docs (also from extraction, independent of company research)
+      if (data.top_docs && data.top_docs.length > 0) {
+        setSelectedTopDocs(data.top_docs);
+        // Auto-select LLM picks
+        const llmIds = new Set(data.top_docs.map(d => d.id || d.company_name).filter(Boolean));
+        setSelectedDocIds(llmIds);
+      }
       if (extracted.company_name) setCompanyName(extracted.company_name);
       if (extracted.job_title) setJobTitle(extracted.job_title);
       if (extracted.location) setLocation(extracted.location);
@@ -738,7 +775,7 @@ export default function App() {
       };
       if (selectedCompanyReport) {
         draftBody.company_report = selectedCompanyReport;
-        draftBody.top_docs = selectedTopDocs;
+        draftBody.top_docs = effectiveTopDocs;
       }
       const result = await fetchWithHeartbeat(
         `/api/phases/draft/${vendor}/`,
@@ -904,7 +941,7 @@ export default function App() {
           // Pass overrides if available (from consolidated research)
           if (selectedCompanyReport) {
             body.company_report = selectedCompanyReport;
-            body.top_docs = selectedTopDocs;
+            body.top_docs = effectiveTopDocs;
           }
 
           const result = await fetchWithHeartbeat(
@@ -1261,8 +1298,31 @@ export default function App() {
             )}
           </div>
           
-          <div style={{ marginTop: 20 }}>
-              <div style={{ marginBottom: 4 }}>
+          {/* Two-column layout: Similar offers (left) | Competences (right) */}
+          <div style={{ marginTop: 20, display: "grid", gridTemplateColumns: "1fr 1fr", gridTemplateRows: "minmax(0, 1fr)", gap: 16, height: "min(80vh, 600px)" }}>
+            {/* Left column: Similar previous job offers from RAG */}
+            <div style={{ display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+              <div style={{ marginBottom: 4, flexShrink: 0 }}>
+                <label style={{ display: "block", fontSize: "14px", fontWeight: 600 }}>
+                  Similar Previous Offers
+                </label>
+                <div style={{ fontSize: 11, color: "var(--secondary-text-color)", marginTop: 2 }}>
+                  RAG-retrieved offers. LLM picks are highlighted. Toggle to include/exclude from draft.
+                </div>
+              </div>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <SimilarOffersCarousel
+                  allSearchResults={allSearchResults}
+                  topDocs={selectedTopDocs || []}
+                  selectedDocIds={selectedDocIds}
+                  onSelectionChange={setSelectedDocIds}
+                />
+              </div>
+            </div>
+
+            {/* Right column: Key competences */}
+            <div style={{ display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+              <div style={{ marginBottom: 4, flexShrink: 0 }}>
                 <label style={{ display: "block", fontSize: "14px", fontWeight: 600 }}>
                   How good is your fit? Key competences weighted match:
                   {(() => {
@@ -1292,16 +1352,19 @@ export default function App() {
                   CV fit levels can be adjusted. They will be remembered.
                 </div>
               </div>
-              <CompetencesList
-                requirements={requirements}
-                competences={competences}
-                scaleConfig={competenceScaleConfig}
-                overrides={competenceOverrides}
-                onOverridesChange={setCompetenceOverrides}
-                editable
-                onRequirementsChange={setRequirements}
-                onCompetencesChange={setCompetences}
-              />
+              <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+                <CompetencesList
+                  requirements={requirements}
+                  competences={competences}
+                  scaleConfig={competenceScaleConfig}
+                  overrides={competenceOverrides}
+                  onOverridesChange={setCompetenceOverrides}
+                  editable
+                  onRequirementsChange={setRequirements}
+                  onCompetencesChange={setCompetences}
+                />
+              </div>
+            </div>
           </div>
 
           <div style={{ marginTop: 20, padding: 15, border: "1px solid var(--border-color)", borderRadius: 8, backgroundColor: "var(--input-bg)" }}>
@@ -1339,6 +1402,11 @@ export default function App() {
                         onResultSelected={(report, topDocs) => {
                             setSelectedCompanyReport(report);
                             setSelectedTopDocs(topDocs);
+                            // Auto-select LLM-picked doc IDs (overlay onto carousel)
+                            if (topDocs && topDocs.length > 0) {
+                              const llmIds = new Set(topDocs.map(d => d.id || d.company_name).filter(Boolean));
+                              setSelectedDocIds(llmIds);
+                            }
                         }}
                         externalTrigger={triggerCompanyResearch}
                     />

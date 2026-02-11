@@ -9,10 +9,14 @@ from .config import EMBED_MODEL
 from .firestore_store import get_collection, get_firestore_client
 
 
-def embed(text: str, client: OpenAI) -> List[float]:
-    """Get embedding vector for text using OpenAI."""
+def embed(text: str, client: OpenAI) -> Vector:
+    """Get embedding vector for text using OpenAI.
+    
+    Returns a Firestore Vector object so that find_nearest can use the field.
+    Plain Python lists are stored as Firestore arrays, which the vector index ignores.
+    """
     response = client.embeddings.create(model=EMBED_MODEL, input=text)
-    return response.data[0].embedding
+    return Vector(response.data[0].embedding)
 
 
 def ensure_vector_index(collection, vector_field: str = "vector", vector_size: int = 1536) -> None:
@@ -106,6 +110,20 @@ def query_vector_similarity(
     Returns:
         List of documents (as dicts) with similarity scores
     """
+    print(f"[RAG] query_vector_similarity: collection={collection.id}, limit={limit}, vector_len={len(vector) if vector else 0}")
+    
+    # Diagnostic: check collection state
+    try:
+        sample = list(collection.limit(3).stream())
+        print(f"[RAG] diagnostic: collection has docs={len(sample) > 0} (sampled {len(sample)})")
+        for s in sample:
+            d = s.to_dict()
+            has_vec = "vector" in d and d["vector"] is not None
+            vec_len = len(d["vector"]) if has_vec and hasattr(d["vector"], "__len__") else "N/A"
+            print(f"[RAG] diagnostic: doc={s.id}, has_vector={has_vec}, vector_len={vec_len}, company={d.get('company_name_original', d.get('company_name', '?'))}")
+    except Exception as diag_err:
+        print(f"[RAG] diagnostic failed: {diag_err}")
+    
     # Firestore vector search uses find_nearest on collection
     # Note: This requires a vector index to be created first via Console or gcloud
     # Create vector query
@@ -124,6 +142,11 @@ def query_vector_similarity(
         doc_dict["id"] = doc.id
         # Firestore vector search may add distance metadata
         doc_dicts.append(doc_dict)
+    
+    if len(doc_dicts) < limit:
+        print(f"[RAG] WARNING: query_vector_similarity returned {len(doc_dicts)} docs, expected up to {limit}")
+    else:
+        print(f"[RAG] query_vector_similarity returned {len(doc_dicts)} docs")
     
     return doc_dicts
 

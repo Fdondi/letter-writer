@@ -2,13 +2,14 @@ from fastapi import APIRouter, Request, HTTPException, Depends
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 from letter_writer_server.core.session import Session, get_session
 from letter_writer.client import get_client, ModelVendor
 from letter_writer.generation import extract_job_metadata, MissingCVError, get_style_instructions
 from letter_writer.service import write_cover_letter, refresh_repository
 from letter_writer.firestore_store import get_collection, upsert_document, get_user_data
-from letter_writer.retrieval import embed
+from letter_writer.retrieval import embed, retrieve_similar_job_offers, select_top_documents, sanitize_search_results
 from letter_writer.personal_data_sections import get_models
 from letter_writer.spam_prevention import get_in_flight_requests, clear_in_flight_requests
 from openai import OpenAI
@@ -72,22 +73,82 @@ async def extract_job(request: Request, data: ExtractRequest, session: Session =
     try:
         ai_client = get_client(ModelVendor.OPENAI)
         trace_dir = Path("trace", "extraction.openai")
-        extraction = extract_job_metadata(
-            data.job_text,
-            ai_client,
-            trace_dir=trace_dir,
-            cv_text=cv_text,
-            scale_config=data.scale_config
-        )
+        
+        # Run extraction and RAG vector search in parallel
+        # Both only need job_text; no dependency between them
+        collection = get_collection()
+        openai_client = OpenAI()
+        
+        print(f"[EXTRACT] Starting parallel: extraction + RAG search (job_text length={len(data.job_text)})")
+        
+        similar_documents = []
+        top_docs = []
+        
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            extract_future = executor.submit(
+                extract_job_metadata,
+                data.job_text,
+                ai_client,
+                trace_dir=trace_dir,
+                cv_text=cv_text,
+                scale_config=data.scale_config,
+            )
+            rag_future = executor.submit(
+                retrieve_similar_job_offers,
+                data.job_text,
+                collection,
+                openai_client,
+            )
+            
+            # Wait for RAG first, then kick off LLM reranking in parallel with extraction
+            try:
+                raw_similar = rag_future.result()
+                print(f"[EXTRACT] RAG search returned {len(raw_similar)} raw results")
+                similar_documents = sanitize_search_results(raw_similar)
+                print(f"[EXTRACT] After sanitization: {len(similar_documents)} documents")
+                
+                # LLM reranking — runs while extraction may still be in progress
+                if raw_similar:
+                    rerank_trace = Path("trace", "extraction.rerank")
+                    rerank_trace.mkdir(parents=True, exist_ok=True)
+                    rerank_future = executor.submit(
+                        select_top_documents,
+                        raw_similar,
+                        data.job_text,
+                        ai_client,
+                        rerank_trace,
+                    )
+                else:
+                    rerank_future = None
+            except Exception as rag_err:
+                print(f"[EXTRACT] ERROR: RAG search failed: {type(rag_err).__name__}: {rag_err}")
+                import traceback
+                traceback.print_exc()
+                rerank_future = None
+            
+            extraction = extract_future.result()
+            print(f"[EXTRACT] Extraction complete")
+            
+            # Collect reranking result (non-blocking at this point, extraction already done)
+            if rerank_future:
+                try:
+                    top_docs = rerank_future.result()  # already minimal: {id, company_name, score}
+                    print(f"[EXTRACT] LLM reranking selected {len(top_docs)} top docs")
+                except Exception as rerank_err:
+                    print(f"[EXTRACT] WARNING: LLM reranking failed: {rerank_err}")
+                    top_docs = []
         
         if "metadata" not in session: session["metadata"] = {}
         if "common" not in session["metadata"]: session["metadata"]["common"] = {}
         session["metadata"]["common"].update(extraction)
         session["job_text"] = data.job_text
         
+        print(f"[EXTRACT] Returning response with {len(similar_documents)} similar_documents, {len(top_docs)} top_docs")
         return {
             "status": "ok",
             "extraction": extraction,
+            "similar_documents": similar_documents,
+            "top_docs": top_docs,
             "session_id": session.session_key
         }
     except Exception as e:

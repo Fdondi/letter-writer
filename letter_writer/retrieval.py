@@ -14,6 +14,29 @@ import pandas as pd
 
 from pydantic import BaseModel, ValidationError
 
+# Fields to strip from search results before sending to frontend
+_SEARCH_RESULT_STRIP_FIELDS = {"vector", "user_id", "blocks", "ai_letters", "negative_letter_text", "notes"}
+
+
+def sanitize_search_results(search_results: List[dict]) -> List[dict]:
+    """Strip large/sensitive fields from Firestore document dicts for frontend display."""
+    print(f"[RAG] sanitize_search_results: input {len(search_results)} docs")
+    sanitized = []
+    for doc in search_results:
+        clean = {k: v for k, v in doc.items() if k not in _SEARCH_RESULT_STRIP_FIELDS}
+        # Ensure we have a display-friendly company name
+        if "company_name_original" in clean:
+            clean["company_name"] = clean.get("company_name_original") or clean.get("company_name", "")
+        # Serialize Firestore timestamps
+        for ts_field in ("created_at", "updated_at"):
+            if ts_field in clean and hasattr(clean[ts_field], "isoformat"):
+                clean[ts_field] = clean[ts_field].isoformat()
+            elif ts_field in clean and hasattr(clean[ts_field], "to_datetime"):
+                clean[ts_field] = clean[ts_field].to_datetime().isoformat()
+        sanitized.append(clean)
+    print(f"[RAG] sanitize_search_results: output {len(sanitized)} docs, keys sample: {list(sanitized[0].keys()) if sanitized else 'N/A'}")
+    return sanitized
+
 class ScoreRow(BaseModel):
     company_name: str
     comment: str
@@ -41,9 +64,12 @@ def retrieve_similar_job_offers(job_text: str, collection, openai_client: OpenAI
     Returns:
         List of document dicts (Firestore returns full documents directly)
     """
+    print(f"[RAG] retrieve_similar_job_offers: job_text length={len(job_text)}, collection={collection.id}")
     vector = embed(job_text, openai_client)
+    print(f"[RAG] embedding generated, vector length={len(vector)}")
     # Firestore vector search returns full documents directly
     results = query_vector_similarity(collection, vector, limit=7)
+    print(f"[RAG] retrieve_similar_job_offers: got {len(results)} results")
     return results
 
 
@@ -65,7 +91,9 @@ def select_top_documents(
     Returns:
         List of top documents with scores
     """
+    print(f"[RAG] select_top_documents: input {len(search_result)} docs")
     if not search_result:
+        print(f"[RAG] select_top_documents: empty input, returning []")
         return []
 
     retrieved_docs: Dict[str, dict] = {}
@@ -83,7 +111,9 @@ def select_top_documents(
                 )
             retrieved_docs[normalized_company] = doc
 
+    print(f"[RAG] select_top_documents: {len(retrieved_docs)} unique companies after dedup, sending to rerank")
     top_docs = rerank_documents(job_text, retrieved_docs, ai_client, trace_dir)
+    print(f"[RAG] select_top_documents: reranking returned {len(top_docs)} top docs")
 
     # Validate that all reranked company names exist in retrieved_docs
     missing_names = [name for name in top_docs.keys() if name not in retrieved_docs]
@@ -110,8 +140,9 @@ def select_top_documents(
 
     return [
         {
+            "id": retrieved_docs[name].get("id", ""),
+            "company_name": name,
             "score": score,
-            **retrieved_docs[name],
         }
         for name, score in top_docs.items()
     ]

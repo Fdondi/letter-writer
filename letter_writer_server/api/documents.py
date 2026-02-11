@@ -10,7 +10,7 @@ from letter_writer.firestore_store import (
     upsert_document, 
     append_negatives
 )
-from letter_writer.retrieval import delete_documents, embed
+from letter_writer.retrieval import delete_documents, embed, retrieve_similar_job_offers, sanitize_search_results
 from openai import OpenAI
 
 router = APIRouter()
@@ -63,6 +63,27 @@ async def create_doc(request: Request, data: DocumentRequest, session: Session =
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+class SimilarRequest(BaseModel):
+    job_text: str
+
+@router.post("/similar/")
+async def get_similar_docs(data: SimilarRequest, session: Session = Depends(get_session)):
+    """Return similar previous job offers from the documents collection via RAG vector search."""
+    user = session.get('user')
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    if not data.job_text or not data.job_text.strip():
+        raise HTTPException(status_code=400, detail="job_text is required")
+    
+    collection = get_collection()
+    try:
+        openai_client = OpenAI()
+        raw_results = retrieve_similar_job_offers(data.job_text, collection, openai_client)
+        return {"documents": sanitize_search_results(raw_results)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/{document_id}/")
 async def get_doc(document_id: str, session: Session = Depends(get_session)):
     user = session.get('user')
@@ -87,6 +108,13 @@ async def update_doc(document_id: str, data: DocumentRequest, session: Session =
     collection = get_collection()
     doc_data = data.dict(exclude_unset=True)
     doc_data["id"] = document_id
+    
+    # Ensure vector exists: generate from job_text if not already stored
+    if data.job_text and "vector" not in doc_data:
+        existing = get_document(collection, document_id, user_id=user['id'])
+        if not existing or not existing.get("vector"):
+            openai_client = OpenAI()
+            doc_data["vector"] = embed(data.job_text, openai_client)
     
     try:
         updated = upsert_document(collection, doc_data, allow_update=True, user_id=user['id'])
