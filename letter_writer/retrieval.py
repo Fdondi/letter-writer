@@ -93,8 +93,8 @@ def select_top_documents(
     """
     print(f"[RAG] select_top_documents: input {len(search_result)} docs")
     if not search_result:
-        print(f"[RAG] select_top_documents: empty input, returning []")
-        return []
+        print(f"[RAG] select_top_documents: empty input, returning empty")
+        return {"top_docs": [], "all_scores": {}}
 
     retrieved_docs: Dict[str, dict] = {}
     for doc in search_result:
@@ -113,7 +113,7 @@ def select_top_documents(
 
     print(f"[RAG] select_top_documents: {len(retrieved_docs)} unique companies after dedup, sending to rerank")
     top_docs = rerank_documents(job_text, retrieved_docs, ai_client, trace_dir)
-    print(f"[RAG] select_top_documents: reranking returned {len(top_docs)} top docs")
+    print(f"[RAG] select_top_documents: reranking returned {len(top_docs)} scored docs")
 
     # Validate that all reranked company names exist in retrieved_docs
     missing_names = [name for name in top_docs.keys() if name not in retrieved_docs]
@@ -138,14 +138,17 @@ def select_top_documents(
         (trace_dir / "error_mismatch.txt").write_text(error_log, encoding="utf-8")
         raise ValueError(error_msg)
 
-    return [
+    # top_docs: top 3 for LLM picks; all_scores: company_name -> score for display
+    top3_items = list(top_docs.items())[:3]
+    top_docs_list = [
         {
             "id": retrieved_docs[name].get("id", ""),
             "company_name": name,
             "score": score,
         }
-        for name, score in top_docs.items()
+        for name, score in top3_items
     ]
+    return {"top_docs": top_docs_list, "all_scores": dict(top_docs)}
 
 @traceable(run_type="chain", name="rerank_documents")
 def rerank_documents(job_text: str, docs: dict, ai_client: BaseClient, trace_dir: Path) -> dict:
@@ -188,6 +191,5 @@ def rerank_documents(job_text: str, docs: dict, ai_client: BaseClient, trace_dir
     score_table.sort_values(by="score", ascending=False, inplace=True)
     score_table.to_json(trace_dir / "retrieved_docs.json", orient="records", indent=2)
 
-    # return top 3 documents as dicts with company_name and score
-    top3 = score_table.head(3)
-    return {row["company_name"]: row["score"] for _, row in top3.iterrows()}
+    # return all scored docs as dict company_name -> score (top 3 used for picks, all for display)
+    return {row["company_name"]: row["score"] for _, row in score_table.iterrows()}

@@ -18,20 +18,26 @@ export default function SimilarOffersCarousel({
 }) {
   const [currentIndex, setCurrentIndex] = useState(0);
 
-  // Build a map of doc id -> LLM score from topDocs
+  // Build a map of doc id -> LLM score (from topDocs for LLM picks; all docs may have doc.score from backend)
   const llmScoreMap = useMemo(() => {
     const map = {};
-    (topDocs || []).forEach((doc) => {
-      const id = doc.id || doc.company_name;
-      if (id) map[id] = doc.score;
+    (topDocs || []).forEach((d) => {
+      const id = d.id || d.company_name;
+      if (id) map[id] = d.score;
     });
     return map;
   }, [topDocs]);
 
-  // Build a set of LLM-selected doc IDs
+  // Build a set of LLM-selected doc IDs (top 3)
   const llmSelectedIds = useMemo(() => {
     return new Set(Object.keys(llmScoreMap));
   }, [llmScoreMap]);
+
+  // Score for display: doc.score from backend (all scored) or llmScoreMap fallback
+  const getScore = (d) => {
+    const id = d.id || d.company_name;
+    return d.score ?? (id ? llmScoreMap[id] : undefined);
+  };
 
   if (!allSearchResults || allSearchResults.length === 0) {
     return (
@@ -57,7 +63,7 @@ export default function SimilarOffersCarousel({
   const doc = allSearchResults[currentIndex];
   const docId = doc.id || doc.company_name || `doc-${currentIndex}`;
   const isLlmSelected = llmSelectedIds.has(docId);
-  const llmScore = llmScoreMap[docId];
+  const score = getScore(doc);
   const isUserSelected = selectedDocIds.has(docId);
 
   const goLeft = () => setCurrentIndex((prev) => (prev - 1 + total) % total);
@@ -88,7 +94,7 @@ export default function SimilarOffersCarousel({
       flexDirection: "column",
       height: "100%",
     }}>
-      {/* Header: navigation + selection status */}
+      {/* Header: title + navigation + selection status */}
       <div style={{
         display: "flex",
         alignItems: "center",
@@ -97,8 +103,10 @@ export default function SimilarOffersCarousel({
         borderBottom: "1px solid var(--border-color)",
         backgroundColor: isUserSelected ? "var(--accent-bg, rgba(59,130,246,0.08))" : "transparent",
         flexShrink: 0,
+        flexWrap: "wrap",
+        gap: 8,
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
           <button
             onClick={goLeft}
             style={{
@@ -136,8 +144,35 @@ export default function SimilarOffersCarousel({
           </button>
         </div>
 
+        {/* Title: company + role + LLM badge */}
+        <div style={{
+          flex: 1,
+          minWidth: 0,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+        }}>
+          <span style={{ fontWeight: 600, fontSize: 14, color: "var(--text-color)" }}>{companyName}</span>
+          {role && <span style={{ fontSize: 12, color: "var(--secondary-text-color)" }}>— {role}</span>}
+          {score != null && (
+            <span style={{
+              fontSize: 11,
+              padding: "1px 6px",
+              borderRadius: 10,
+              backgroundColor: isLlmSelected ? "rgba(245,158,11,0.2)" : "var(--bg-color)",
+              color: isLlmSelected ? "#b45309" : "var(--secondary-text-color)",
+              border: isLlmSelected ? "1px solid #f59e0b" : "1px solid var(--border-color)",
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+            }}>
+              {isLlmSelected ? "LLM pick" : "score"}: {score}/10
+            </span>
+          )}
+        </div>
+
         {/* Dot indicators showing all docs and their status */}
-        <div style={{ display: "flex", gap: 3, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 3, alignItems: "center", flexWrap: "wrap", flexShrink: 0 }}>
           {allSearchResults.map((d, idx) => {
             const dId = d.id || d.company_name || `doc-${idx}`;
             const isSelected = selectedDocIds.has(dId);
@@ -151,12 +186,16 @@ export default function SimilarOffersCarousel({
                   width: isCurrent ? 10 : 7,
                   height: isCurrent ? 10 : 7,
                   borderRadius: "50%",
-                  backgroundColor: isSelected ? "#3b82f6" : isLlm ? "#f59e0b" : "var(--border-color)",
+                  backgroundColor:
+                    isLlm && isSelected ? "#f59e0b" // LLM picked, still picked: orange
+                    : isLlm && !isSelected ? "#1f2937" // LLM picked, unpicked: black
+                    : !isLlm && isSelected ? "#3b82f6" // LLM not picked, I picked: blue
+                    : "var(--border-color)", // LLM not picked, still not picked: grey
                   border: isCurrent ? "2px solid var(--text-color)" : "1px solid transparent",
                   cursor: "pointer",
                   transition: "all 0.15s",
                 }}
-                title={`${d.company_name_original || d.company_name || "?"} ${isLlm ? `(LLM score: ${llmScoreMap[dId]})` : ""} ${isSelected ? "(selected)" : ""}`}
+                title={`${d.company_name_original || d.company_name || "?"} ${getScore(d) != null ? `(score: ${getScore(d)}/10)` : ""} ${isSelected ? "(selected)" : ""}`}
               />
             );
           })}
@@ -183,25 +222,6 @@ export default function SimilarOffersCarousel({
 
       {/* Doc content — fills remaining space */}
       <div style={{ padding: "8px 10px", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        {/* Company + role + badges */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap", flexShrink: 0 }}>
-          <span style={{ fontWeight: 600, fontSize: 14 }}>{companyName}</span>
-          {role && <span style={{ fontSize: 12, color: "var(--secondary-text-color)" }}>— {role}</span>}
-          {isLlmSelected && (
-            <span style={{
-              fontSize: 11,
-              padding: "1px 6px",
-              borderRadius: 10,
-              backgroundColor: "#fef3c7",
-              color: "#92400e",
-              fontWeight: 600,
-              whiteSpace: "nowrap",
-            }}>
-              LLM pick (score: {llmScore}/10)
-            </span>
-          )}
-        </div>
-
         {/* Job text — scrollable, fills remaining space */}
         {jobText && (
           <div style={{
@@ -235,14 +255,22 @@ export default function SimilarOffersCarousel({
           {selectedDocIds.size} selected for draft
           {llmSelectedIds.size > 0 && ` (${llmSelectedIds.size} LLM picks)`}
         </span>
-        <span style={{ display: "flex", gap: 8 }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "#3b82f6", display: "inline-block" }} />
-            selected
-          </span>
+        <span style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "#f59e0b", display: "inline-block" }} />
-            LLM pick
+            LLM pick, selected
+          </span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "#1f2937", display: "inline-block" }} />
+            LLM pick, unpicked
+          </span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "#3b82f6", display: "inline-block" }} />
+            my pick
+          </span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "var(--border-color)", display: "inline-block" }} />
+            neither
           </span>
         </span>
       </div>

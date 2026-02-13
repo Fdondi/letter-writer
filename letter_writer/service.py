@@ -203,7 +203,7 @@ def _process_single_vendor(
             company_research, company_name, job_text, ai_client, trace_dir
         )
 
-    top_docs = job_offers_future.result()
+    top_docs = job_offers_future.result()["top_docs"]
     company_report = company_report_future.result()
 
     # letter generation

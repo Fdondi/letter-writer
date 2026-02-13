@@ -1397,7 +1397,7 @@ export default function App() {
                         label="Company Research"
                         type="company"
                         query={companyName}
-                        context={{ job_text: jobText, additional_company_info: additionalCompanyInfo, point_of_contact: pointOfContact }}
+                        context={{ job_text: jobText, additional_company_info: additionalCompanyInfo }}
                         vendors={backgroundModels}
                         onResultSelected={(report, topDocs) => {
                             setSelectedCompanyReport(report);

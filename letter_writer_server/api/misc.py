@@ -130,13 +130,21 @@ async def extract_job(request: Request, data: ExtractRequest, session: Session =
             print(f"[EXTRACT] Extraction complete")
             
             # Collect reranking result (non-blocking at this point, extraction already done)
+            top_docs = []
+            all_scores = {}
             if rerank_future:
                 try:
-                    top_docs = rerank_future.result()  # already minimal: {id, company_name, score}
-                    print(f"[EXTRACT] LLM reranking selected {len(top_docs)} top docs")
+                    result = rerank_future.result()
+                    top_docs = result["top_docs"]
+                    all_scores = result.get("all_scores", {})
+                    print(f"[EXTRACT] LLM reranking selected {len(top_docs)} top docs, {len(all_scores)} scored")
                 except Exception as rerank_err:
                     print(f"[EXTRACT] WARNING: LLM reranking failed: {rerank_err}")
-                    top_docs = []
+            # Merge scores into similar_documents for display
+            for doc in similar_documents:
+                company = (doc.get("company_name_original") or doc.get("company_name") or "").strip()
+                if company and company in all_scores:
+                    doc["score"] = all_scores[company]
         
         if "metadata" not in session: session["metadata"] = {}
         if "common" not in session["metadata"]: session["metadata"]["common"] = {}
@@ -184,13 +192,68 @@ async def process_job(request: Request, data: ProcessJobRequest, session: Sessio
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class TranslateRequest(BaseModel):
+    text: str
+    target_language: str
+    source_language: Optional[str] = None
+
 @router.post("/translate/")
-async def translate(request: Request):
-    # Retrieve logic from views.py:
-    # _translate_with_google(texts, target_language, source_language)
-    # I need to import or reimplement it. It uses googleapis.com directly.
-    # For now, stub or simplified.
-    return {"status": "ok", "translations": []}
+async def translate(data: TranslateRequest, session: Session = Depends(get_session)):
+    import httpx
+    import os
+    from letter_writer.cost_tracker import calculate_translation_cost, track_api_cost
+
+    api_key = os.environ.get("GOOGLE_TRANSLATE_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GOOGLE_TRANSLATE_API_KEY not configured")
+
+    if not data.text or not data.text.strip():
+        return {"status": "ok", "translation": ""}
+
+    params = {
+        "q": data.text,
+        "target": data.target_language,
+        "format": "text",
+        "key": api_key,
+    }
+    if data.source_language:
+        params["source"] = data.source_language
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://translation.googleapis.com/language/translate/v2",
+                data=params,
+            )
+
+        if resp.status_code != 200:
+            detail = resp.text[:500]
+            print(f"[TRANSLATE] Google API error {resp.status_code}: {detail}")
+            raise HTTPException(status_code=502, detail=f"Google Translate API error: {resp.status_code}")
+
+        body = resp.json()
+        translated = body["data"]["translations"][0]["translatedText"]
+
+        # Track cost
+        user = session.get("user")
+        user_id = user["id"] if user else "anonymous"
+        char_count = len(data.text)
+        cost = calculate_translation_cost(char_count)
+        track_api_cost(
+            user_id=user_id,
+            phase="translate",
+            vendor="google_translate",
+            cost=cost,
+            metadata={"character_count": char_count, "target_language": data.target_language},
+        )
+
+        return {"status": "ok", "translation": translated}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[TRANSLATE] Error: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/vendors/")
 async def list_vendors(session: Session = Depends(get_session)):

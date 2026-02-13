@@ -3,7 +3,7 @@ from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 
 from letter_writer_server.core.session import Session, get_session
-from letter_writer.firestore_store import get_user_data, get_personal_data_document
+from letter_writer.firestore_store import get_user_data, get_personal_data_document, clear_user_data_cache
 from letter_writer.generation import get_style_instructions, get_search_instructions
 from letter_writer.personal_data_sections import get_cv_revisions, get_models, get_background_models, unwrap_for_response, wrap_new_field
 from letter_writer.personal_data_sections import get_style_instructions as get_user_style_instructions
@@ -104,7 +104,8 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             
         if updates:
             user_doc_ref.set(updates, merge=True)
-            
+            clear_user_data_cache(user_id)
+
         return {"status": "ok"}
 
 @router.get("/style-instructions/")
@@ -113,8 +114,8 @@ async def get_style_instructions_endpoint(session: Session = Depends(get_session
     if not instructions:
         user = session.get('user')
         if user:
-             user_data = get_user_data(user['id'], use_cache=True)
-             instructions = get_user_style_instructions(user_data)
+             user_data = get_user_data(user['id'], use_cache=False)
+             instructions = get_user_style_instructions(user_data or {})
     
     if not instructions:
         instructions = get_style_instructions() # Default from file
@@ -141,7 +142,8 @@ async def update_style_instructions(request: Request, session: Session = Depends
         "updated_at": datetime.utcnow()
     }
     user_doc_ref.set(updates, merge=True)
-    
+    clear_user_data_cache(user['id'])
+
     return {"status": "ok", "instructions": instructions}
 
 @router.get("/search-instructions/")
@@ -150,8 +152,8 @@ async def get_search_instructions_endpoint(session: Session = Depends(get_sessio
     if not instructions:
         user = session.get('user')
         if user:
-             user_data = get_user_data(user['id'], use_cache=True)
-             instructions = get_user_search_instructions(user_data)
+             user_data = get_user_data(user['id'], use_cache=False)
+             instructions = get_user_search_instructions(user_data or {})
     
     if not instructions:
         instructions = get_search_instructions() # Default from file
@@ -178,5 +180,6 @@ async def update_search_instructions(request: Request, session: Session = Depend
         "updated_at": datetime.utcnow()
     }
     user_doc_ref.set(updates, merge=True)
-    
+    clear_user_data_cache(user['id'])
+
     return {"status": "ok", "instructions": instructions}

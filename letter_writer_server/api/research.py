@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, HTTPException, Depends
-from typing import Dict, Any, List, Optional
+from typing import List, Optional
 from pydantic import BaseModel
 
 from letter_writer_server.core.session import Session, get_session
@@ -13,7 +13,6 @@ class ResearchCompanyRequest(BaseModel):
     company_name: str
     job_text: Optional[str] = ""
     models: Optional[List[str]] = None
-    point_of_contact: Optional[Dict[str, Any]] = None
     additional_company_info: Optional[str] = ""
 
 class ResearchPocRequest(BaseModel):
@@ -41,7 +40,6 @@ async def research_company(request: Request, data: ResearchCompanyRequest, sessi
             user_id=user_id,
             models=models,
             job_text=data.job_text,
-            point_of_contact=data.point_of_contact,
             additional_company_info=data.additional_company_info
         )
         return {"status": "ok", "results": results}

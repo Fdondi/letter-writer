@@ -52,7 +52,6 @@ def perform_company_research(
     user_id: str,
     models: List[str],
     job_text: str,
-    point_of_contact: Optional[dict] = None,
     additional_company_info: str = "",
 ) -> Dict[str, dict]:
     """
@@ -133,10 +132,6 @@ def perform_company_research(
 
     # Web Search (once)
     web_search_query = f"Research company {company_name}"
-    if point_of_contact:
-        poc_name = point_of_contact.get("name")
-        if poc_name:
-            web_search_query += f" and point of contact {poc_name}"
     
     web_context = perform_web_search(web_search_query)
     
@@ -159,7 +154,8 @@ def perform_company_research(
             # Select top docs (reranking) - might differ slightly per vendor model but usually similar
             # Reranking is cheap/fast enough to do per model, or we could do it once.
             # `select_top_documents` uses the client to rerank/select.
-            top_docs = select_top_documents(search_result, job_text, client, trace_dir)
+            result = select_top_documents(search_result, job_text, client, trace_dir)
+            top_docs = result["top_docs"]
             
             # Generate report using consolidated context (search=False)
             report = company_research(
@@ -167,7 +163,6 @@ def perform_company_research(
                 job_text, 
                 client, 
                 trace_dir, 
-                point_of_contact=point_of_contact, 
                 additional_company_info=combined_context,
                 search=False,  # Disable individual model search, rely on context
                 model=model_id

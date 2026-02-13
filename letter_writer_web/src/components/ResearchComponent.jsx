@@ -69,7 +69,6 @@ export default function ResearchComponent({
     if (type === "company") {
       payload.company_name = query;
       payload.additional_company_info = context.additional_company_info;
-      payload.point_of_contact = context.point_of_contact;
     } else {
       payload.poc_name = query;
       payload.company_name = context.company_name;
