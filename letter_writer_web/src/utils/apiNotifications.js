@@ -17,20 +17,22 @@ const formatUrl = (input) => {
  * Only count:
  * - Extractions: /api/extract/
  * - Phase cards: /api/phases/draft/<vendor>/ and /api/phases/refine/<vendor>/
+ * Exclude agentic flow: notifications for agentic are shown only when ongoing becomes false (in App).
  */
 const shouldNotify = (url) => {
   if (typeof url !== "string") return false;
-  
+  if (url.includes("/api/phases/agentic")) return false;
+
   // Extract endpoint
   if (url.includes("/api/extract/")) {
     return true;
   }
-  
+
   // Phase cards (draft and refine phases)
   if (url.includes("/api/phases")) {
     return true;
   }
-  
+
   return false;
 };
 
@@ -83,20 +85,23 @@ const formatNotificationMessage = (url, status) => {
   return isSuccess ? "Completed" : "Failed";
 };
 
+const doNotify = (message) => {
+  if (typeof window === "undefined" || typeof Notification === "undefined") return;
+  try {
+    new Notification(message, { tag: "api-call" });
+  } catch {
+    // Ignore Notification errors (e.g., blocked by browser)
+  }
+};
+
 const tryNotify = (url, status) => {
   if (typeof window === "undefined" || typeof Notification === "undefined") {
     return;
   }
 
   const notify = () => {
-    try {
-      const message = formatNotificationMessage(url, status);
-      new Notification(message, {
-        tag: "api-call",
-      });
-    } catch {
-      // Ignore Notification errors (e.g., blocked by browser)
-    }
+    const message = formatNotificationMessage(url, status);
+    doNotify(message);
   };
 
   // Already allowed: fire immediately
@@ -115,6 +120,14 @@ const tryNotify = (url, status) => {
     });
   }
 };
+
+/** Show a one-off notification (e.g. agentic feedback completed). Uses same permission as API notifications. */
+export function showNotification(message) {
+  if (typeof window === "undefined" || typeof Notification === "undefined") return;
+  if (Notification.permission === "granted") {
+    doNotify(message);
+  }
+}
 
 const bumpCounters = (url, status) => {
   // Only count specific endpoints (extractions and phase cards)

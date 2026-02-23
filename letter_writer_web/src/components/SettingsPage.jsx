@@ -14,6 +14,8 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
   const [availableModels, setAvailableModels] = useState({}); // { vendor: { model: { input: ..., output: ... } } }
   const [minColumnWidth, setMinColumnWidth] = useState(200); // pixels
   const [savingColumnWidth, setSavingColumnWidth] = useState(false);
+  const [agenticDraftModel, setAgenticDraftModel] = useState(""); // vendor key for per-topic agentic draft; empty = use first default model
+  const [savingAgenticDraftModel, setSavingAgenticDraftModel] = useState(false);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -62,6 +64,12 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
             setMinColumnWidth(data.min_column_width);
           } else {
             setMinColumnWidth(200); // Default value shown in UI
+          }
+          // Agentic draft model (per-topic flow)
+          if (data.agentic_draft_model != null && data.agentic_draft_model !== "") {
+            setAgenticDraftModel(data.agentic_draft_model);
+          } else {
+            setAgenticDraftModel("");
           }
         }
       } catch (e) {
@@ -159,6 +167,23 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
       setError("Failed to save minimum column width");
     } finally {
       setSavingColumnWidth(false);
+    }
+  };
+
+  const handleSaveAgenticDraftModel = async () => {
+    try {
+      setSavingAgenticDraftModel(true);
+      setError(null);
+      await fetchWithHeartbeat("/api/personal-data/", {
+        method: "POST",
+        body: JSON.stringify({
+          agentic_draft_model: agenticDraftModel || null,
+        }),
+      });
+    } catch (e) {
+      setError("Failed to save agentic draft model");
+    } finally {
+      setSavingAgenticDraftModel(false);
     }
   };
 
@@ -394,6 +419,78 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
               {v}
             </label>
           ))}
+        </div>
+      </div>
+
+      {/* Agentic draft model (per-topic flow) */}
+      <div
+        style={{
+          marginBottom: 30,
+          padding: 20,
+          backgroundColor: "var(--bg-color)",
+          border: "1px solid var(--border-color)",
+          borderRadius: "4px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 15,
+          }}
+        >
+          <h3 style={{ margin: 0, color: "var(--text-color)" }}>
+            Agentic draft model
+          </h3>
+          <button
+            onClick={handleSaveAgenticDraftModel}
+            disabled={savingAgenticDraftModel}
+            style={{
+              padding: "6px 12px",
+              backgroundColor: "#3b82f6",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor: savingAgenticDraftModel ? "not-allowed" : "pointer",
+              opacity: savingAgenticDraftModel ? 0.7 : 1,
+              fontSize: "14px",
+            }}
+          >
+            {savingAgenticDraftModel ? "Saving..." : "Save"}
+          </button>
+        </div>
+        <p
+          style={{
+            marginTop: 0,
+            marginBottom: 15,
+            fontSize: "14px",
+            color: "var(--secondary-text-color)",
+          }}
+        >
+          Model used to write the draft in the per-topic (agentic) flow. If unset, the first selected default model is used.
+        </p>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <select
+            value={agenticDraftModel}
+            onChange={(e) => setAgenticDraftModel(e.target.value)}
+            style={{
+              padding: "8px 12px",
+              fontSize: "14px",
+              border: "1px solid var(--border-color)",
+              borderRadius: "4px",
+              backgroundColor: "var(--input-bg)",
+              color: "var(--text-color)",
+              minWidth: 160,
+            }}
+          >
+            <option value="">Use first default model</option>
+            {vendors.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 

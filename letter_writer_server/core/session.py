@@ -57,6 +57,67 @@ def _delete_from_filesystem(session_key: str) -> None:
     except Exception as e:
         logger.warning(f"Failed to delete session {session_key} from filesystem: {e}")
 
+
+def get_agentic_last_poll_at_from_storage(session_key: str) -> float:
+    """Load session from filesystem and return agentic.last_poll_at (for abort-after-idle check)."""
+    data = _load_from_filesystem(session_key)
+    if not data:
+        return 0.0
+    agentic = data.get("agentic") or {}
+    return float(agentic.get("last_poll_at") or 0.0)
+
+
+def load_session_from_storage(session_key: str) -> Dict[str, Any]:
+    """Load full session dict from disk (e.g. for background feedback step)."""
+    data = _load_from_filesystem(session_key)
+    return data if data is not None else {}
+
+
+def save_session_to_storage(session_key: str, data: Dict[str, Any]) -> None:
+    """Persist full session dict to disk (e.g. after background feedback step)."""
+    _save_to_filesystem(session_key, data)
+
+
+def persist_agentic_last_poll_at(session_key: str, last_poll_at: float) -> None:
+    """Record that the browser just polled (client still wants results). Persisted immediately
+    on every poll so agent duration has no effect on the abort check."""
+    data = _load_from_filesystem(session_key)
+    if data is None:
+        data = {}
+    if "agentic" not in data:
+        data["agentic"] = {}
+    data["agentic"]["last_poll_at"] = last_poll_at
+    _save_to_filesystem(session_key, data)
+
+
+def agentic_processing_lock_path(session_key: str) -> Path:
+    """Path for per-session lock so only one poll request runs work at a time."""
+    SESSION_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    return SESSION_STORAGE_DIR / f"{session_key}.agentic_work.lock"
+
+
+def try_acquire_agentic_lock(session_key: str, timeout_seconds: float = 120.0) -> bool:
+    """Create lock file if not present or stale. Returns True if acquired."""
+    lock_path = agentic_processing_lock_path(session_key)
+    try:
+        if lock_path.exists():
+            age = time.time() - lock_path.stat().st_mtime
+            if age < timeout_seconds:
+                return False
+            lock_path.unlink(missing_ok=True)
+        lock_path.write_text(str(time.time()))
+        return True
+    except Exception:
+        return False
+
+
+def release_agentic_lock(session_key: str) -> None:
+    try:
+        agentic_processing_lock_path(session_key).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 class Session(dict):
     def __init__(self, initial_data: Dict[str, Any] = None, session_key: str = None):
         super().__init__(initial_data or {})

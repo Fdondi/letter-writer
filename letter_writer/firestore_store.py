@@ -103,19 +103,20 @@ def get_user_data(user_id: str, use_cache: bool = True) -> dict:
     return user_data
 
 
-def clear_user_data_cache(user_id: str = None):
-    """Clear cached user data (call after updates).
-    
-    Args:
-        user_id: Specific user ID to clear, or None to clear all
+def update_user_data_cache(user_id: str, updates: dict) -> None:
+    """Merge saved updates into the cached user data so subsequent get_user_data(use_cache=True)
+    sees the new values without reading from Firestore. Call this after writing to Firestore.
     """
-    if hasattr(get_user_data, "_cache"):
-        cache = getattr(get_user_data, "_cache", {})
-        if user_id:
-            cache_key = f"user_data_{user_id}"
-            cache.pop(cache_key, None)
-        else:
-            cache.clear()
+    if not user_id:
+        return
+    cache_key = f"user_data_{user_id}"
+    if not hasattr(get_user_data, "_cache"):
+        setattr(get_user_data, "_cache", {})
+    cache = getattr(get_user_data, "_cache", {})
+    if cache_key in cache:
+        cache[cache_key].update(updates)
+    else:
+        cache[cache_key] = dict(updates)
 
 
 def _to_utc_datetime(dt_or_str_or_timestamp):

@@ -19,9 +19,13 @@ services:
       # If not set, defaults to ./gcloud-credentials.json in the project root
       # Note: For Podman (rootless), the file must be readable by your user (e.g., chmod 600 or 644)
       - ${GOOGLE_APPLICATION_CREDENTIALS_HOST:-./gcloud-credentials.json}:/app/gcloud-credentials.json:ro
-    # Run production ASGI server
-    command: sh -c "uvicorn letter_writer_server.main:app --host 0.0.0.0 --port 8000 --workers ${GUNICORN_WORKERS:-3} --proxy-headers --forwarded-allow-ips '*'"
+    # Run production ASGI server (or with periodic py-spy flamegraphs when RUN_WITH_PYSPY=1)
+    command: sh -c "if [ -n \"$$RUN_WITH_PYSPY\" ]; then ( interval=$${PYSPY_INTERVAL:-60}; duration=$${PYSPY_DURATION:-30}; while true; do sleep $$interval; py-spy record -p 1 -d $$duration -o /app/trace/py-spy-$$(date +%s).svg --format flamegraph 2>/dev/null || true; done ) & exec python -m uvicorn letter_writer_server.main:app --host 0.0.0.0 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips '*'; else exec uvicorn letter_writer_server.main:app --host 0.0.0.0 --port 8000 --workers ${GUNICORN_WORKERS:-3} --proxy-headers --forwarded-allow-ips '*'; fi"
     environment:
+      # Set to 1 to run with py-spy: flamegraph every PYSPY_INTERVAL sec (default 60), each samples PYSPY_DURATION sec (default 30). Files: ./trace/py-spy-<timestamp>.svg (use 1 worker)
+      - RUN_WITH_PYSPY=${RUN_WITH_PYSPY:-}
+      - PYSPY_INTERVAL=${PYSPY_INTERVAL:-60}
+      - PYSPY_DURATION=${PYSPY_DURATION:-30}
       # DJANGO_DEBUG should be false in production
       # DJANGO_ALLOWED_HOSTS should include your public domain(s)
       # DJANGO_SECRET_KEY must be set in .env file
@@ -57,6 +61,7 @@ services:
       - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
       - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-letter-writer}
+      - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
     env_file:
       - .env
     depends_on:

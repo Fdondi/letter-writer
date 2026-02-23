@@ -1,5 +1,12 @@
+import logging
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# Ensure agentic and API logs are visible (e.g. when running: podman logs letter-writer-backend)
+for _name in ("letter_writer", "letter_writer_server"):
+    logging.getLogger(_name).setLevel(logging.INFO)
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from starlette.middleware.sessions import SessionMiddleware as StarletteSessionMiddleware
 # Use our custom session middleware instead
@@ -48,3 +55,24 @@ app.include_router(misc.router, prefix="/api", tags=["misc"])
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@app.on_event("startup")
+def _log_langsmith_status():
+    tracing = (os.environ.get("LANGSMITH_TRACING") or "").strip().lower() == "true"
+    project = os.environ.get("LANGSMITH_PROJECT", "")
+    endpoint = os.environ.get("LANGSMITH_ENDPOINT", "")
+    key_set = bool(os.environ.get("LANGSMITH_API_KEY"))
+    log = logging.getLogger("letter_writer_server.main")
+    if tracing and key_set:
+        log.info(
+            "LangSmith tracing enabled | project=%s | endpoint=%s",
+            project or "(default)",
+            endpoint or "(default)",
+        )
+    else:
+        log.info(
+            "LangSmith tracing disabled (LANGSMITH_TRACING=%s, API key set=%s)",
+            os.environ.get("LANGSMITH_TRACING", ""),
+            key_set,
+        )

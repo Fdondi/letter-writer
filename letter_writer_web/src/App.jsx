@@ -3,6 +3,7 @@ import ModelSelector from "./components/ModelSelector";
 import LetterTabs from "./components/LetterTabs";
 import StyleInstructionsBlade from "./components/StyleInstructionsBlade";
 import PhaseFlow from "./components/PhaseFlow";
+import AgenticFlow from "./components/AgenticFlow";
 import DocumentsPage from "./components/DocumentsPage";
 import PersonalDataPage from "./components/PersonalDataPage";
 import SettingsPage from "./components/SettingsPage";
@@ -16,6 +17,7 @@ import ResearchComponent from "./components/ResearchComponent";
 import SimilarOffersCarousel from "./components/SimilarOffersCarousel";
 import { splitIntoParagraphs } from "./utils/split";
 import { fetchWithHeartbeat, retryApiCall, initializeCsrfToken, getCsrfToken } from "./utils/apiHelpers";
+import { showNotification } from "./utils/apiNotifications";
 import { phases as phaseModules } from "./components/phases";
 import { translateText } from "./utils/translate";
 import { useLanguages } from "./contexts/LanguageContext";
@@ -87,6 +89,13 @@ export default function App() {
   const [assemblyVisible, setAssemblyVisible] = useState(true); // when in assembly stage, show assembly or phases
   const [extractedData, setExtractedData] = useState(null); // Track extracted data to detect modifications
   const [vendorFeedback, setVendorFeedback] = useState({}); // vendor -> { rating, comment }
+
+  // Agentic (per-topic) flow state
+  const [agenticState, setAgenticState] = useState(null);
+  const [agenticLoading, setAgenticLoading] = useState(false);
+  const [agenticError, setAgenticError] = useState(null);
+  const [agenticSavingFinal, setAgenticSavingFinal] = useState(false);
+  const [agenticSaveError, setAgenticSaveError] = useState(null);
   
   // Research state
   const [selectedCompanyReport, setSelectedCompanyReport] = useState(null);
@@ -340,6 +349,35 @@ export default function App() {
       })
       .catch((e) => setError(String(e)));
   }, []);
+
+  // Load full agentic state once when showing agentic view and state is missing (e.g. refresh)
+  useEffect(() => {
+    if (uiStage !== "agentic" || agenticState != null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/phases/agentic/state/", { credentials: "include" });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (data.agentic_state != null && !cancelled) setAgenticState(data.agentic_state);
+      } catch (e) {
+        if (!cancelled) console.warn("Failed to fetch agentic state:", e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [uiStage, agenticState]);
+
+  // Notify only when agentic feedback actually completes (ongoing becomes false), not on start or every poll
+  const agenticOngoingRef = useRef(undefined);
+  useEffect(() => {
+    const ongoing = agenticState?.ongoing;
+    const status = agenticState?.status;
+    const wasOngoing = agenticOngoingRef.current;
+    agenticOngoingRef.current = ongoing;
+    if (status === "feedback" && ongoing === false && wasOngoing !== false) {
+      showNotification("Agentic feedback completed");
+    }
+  }, [agenticState?.status, agenticState?.ongoing]);
 
   // Note: We no longer need to reload when switching tabs since SettingsPage
   // now updates the shared state directly when saving
@@ -673,6 +711,57 @@ export default function App() {
     }
   };
 
+  const persistAgenticLetter = async (letterText) => {
+    if (!letterText?.trim()) {
+      const err = new Error("No letter text to save");
+      setAgenticSaveError(err.message);
+      throw err;
+    }
+    if (!jobText?.trim()) {
+      setAgenticSaveError("Job description is required to save");
+      throw new Error("Job description is required to save");
+    }
+    const aiLetters = [
+      {
+        vendor: "agentic",
+        text: agenticState?.draft_letter || letterText,
+        cost: agenticState?.cost ?? null,
+        rating: null,
+        comment: "",
+        chunks_used: 1,
+        user_corrections: [],
+      },
+    ];
+    const payload = {
+      company_name: companyName || "",
+      role: jobTitle || "",
+      location: location || "",
+      language: language || "",
+      salary: salary || "",
+      requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
+      job_text: jobText,
+      letter_text: letterText.trim(),
+      ai_letters: aiLetters,
+    };
+    try {
+      setAgenticSaveError(null);
+      setAgenticSavingFinal(true);
+      const result = await fetchWithHeartbeat("/api/documents/", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      if (result.data?.document?.id) {
+        setDocumentId(result.data.document.id);
+      }
+    } catch (e) {
+      const msg = e.message || "Failed to save letter";
+      setAgenticSaveError(msg);
+      throw new Error(msg);
+    } finally {
+      setAgenticSavingFinal(false);
+    }
+  };
+
   // Generic retry function - takes URL, body, and result handler
   // No phase knowledge - caller provides everything
   // Returns the result data or throws on error
@@ -981,6 +1070,246 @@ export default function App() {
     setLoading(false);
   };
 
+  const handleSubmitAgentic = async () => {
+    if (!jobTitle.trim()) {
+      setError("Job title is required");
+      return;
+    }
+    setAgenticLoading(true);
+    setAgenticError(null);
+    setError(null);
+    setShowInput(false);
+    setUiStage("agentic");
+    const initialSessionId = phaseSessionId || (
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2)
+    );
+    if (!phaseSessionId) {
+      setPhaseSessionId(initialSessionId);
+      try {
+        await fetchWithHeartbeat("/api/phases/init/", {
+          method: "POST",
+          body: JSON.stringify({ session_id: initialSessionId }),
+        });
+      } catch (e) {
+        console.error("Failed to initialize session:", e);
+      }
+    }
+    const currentData = {
+      company_name: companyName,
+      job_title: jobTitle,
+      location: location,
+      language: language,
+      salary: salary,
+      requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
+      job_text: jobText,
+      point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
+      additional_user_info: additionalUserInfo || "",
+      additional_company_info: additionalCompanyInfo || "",
+    };
+    const dataModified = !extractedData ||
+      extractedData.company_name !== currentData.company_name ||
+      extractedData.job_title !== currentData.job_title ||
+      extractedData.job_text !== currentData.job_text ||
+      JSON.stringify(extractedData.point_of_contact || null) !== JSON.stringify(currentData.point_of_contact);
+    const shouldUpdateSession = !phaseSessionId || dataModified || !extractedData;
+    if (shouldUpdateSession) {
+      try {
+        const sessionPayload = {
+          session_id: initialSessionId,
+          job_text: jobText,
+          company_name: companyName,
+          job_title: jobTitle,
+          location: location,
+          language: language,
+          salary: salary,
+          requirements: (Array.isArray(requirements) ? requirements : requirements ? [requirements] : []).filter(Boolean),
+          point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
+          additional_user_info: additionalUserInfo || "",
+          additional_company_info: additionalCompanyInfo || "",
+        };
+        if (Object.keys(competences).length > 0) sessionPayload.competences = competences;
+        await fetchWithHeartbeat("/api/phases/session/", {
+          method: "POST",
+          body: JSON.stringify(sessionPayload),
+        });
+      } catch (e) {
+        console.error("Failed to update session:", e);
+        setAgenticError("Failed to update session. Please try again.");
+        setAgenticLoading(false);
+        setShowInput(true);
+        return;
+      }
+    }
+    // Save competence ratings to profile (same as phased flow) for future extractions and CV appendix
+    const ratingsToSave = buildCompetenceRatingsForProfile(
+      competences,
+      requirements,
+      competenceOverrides,
+      competenceScaleConfig
+    );
+    if (Object.keys(ratingsToSave).length > 0) {
+      fetchWithHeartbeat("/api/personal-data/", {
+        method: "POST",
+        body: JSON.stringify({ competence_ratings: ratingsToSave }),
+      }).catch((e) => console.warn("Failed to save competence ratings to profile:", e));
+    }
+    try {
+      const body = {};
+      if (selectedCompanyReport) body.company_report = selectedCompanyReport;
+      if (effectiveTopDocs) body.top_docs = effectiveTopDocs;
+      const res = await fetchWithHeartbeat("/api/phases/agentic/draft/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.isHeartbeat) {
+        setAgenticLoading(false);
+        return;
+      }
+      setAgenticState(res.data?.agentic_state ?? null);
+      setUiStage("agentic");
+    } catch (e) {
+      console.error("Agentic draft error", e);
+      setAgenticError(e?.message || String(e));
+      setShowInput(true);
+      setUiStage("input");
+    } finally {
+      setAgenticLoading(false);
+    }
+  };
+
+  const fetchAgenticPoll = async () => {
+    try {
+      const res = await fetch("/api/phases/agentic/feedback/poll/", { credentials: "include" });
+      if (!res.ok) return false;
+      const data = await res.json();
+      setAgenticState((prev) => ({
+        ...(prev || {}),
+        threads: data.threads || {},
+        status: data.status ?? prev?.status,
+        ongoing: data.ongoing,
+        feedback_suspended: data.feedback_suspended,
+        topic_meta: data.topic_meta || {},
+      }));
+      return data.ongoing === true;
+    } catch (e) {
+      console.warn("Failed to poll agentic feedback:", e);
+      return false;
+    }
+  };
+
+  const handleAgenticFeedbackStart = async () => {
+    if (!vendorsList.length) return;
+    setAgenticLoading(true);
+    setAgenticError(null);
+    try {
+      const res = await fetch("/api/phases/agentic/feedback/start/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback_vendors: vendorsList }),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || res.statusText);
+      }
+      const data = await res.json();
+      setAgenticState((prev) => ({
+        ...(prev || {}),
+        threads: data.threads || {},
+        status: data.status ?? "feedback",
+        ongoing: data.ongoing,
+        feedback_suspended: data.feedback_suspended,
+        topic_meta: data.topic_meta || {},
+      }));
+    } catch (e) {
+      setAgenticError(e?.message || String(e));
+    } finally {
+      setAgenticLoading(false);
+    }
+  };
+
+  const handleAgenticSuspend = async (all = true, topics = null) => {
+    setAgenticLoading(true);
+    setAgenticError(null);
+    try {
+      const res = await fetch("/api/phases/agentic/feedback/suspend/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(all ? { all: true } : { topics: topics || [] }),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || res.statusText);
+      }
+      const data = await res.json();
+      setAgenticState((prev) => ({
+        ...(prev || {}),
+        threads: data.threads || {},
+        status: data.status ?? prev?.status,
+        ongoing: data.ongoing,
+        feedback_suspended: data.feedback_suspended,
+        topic_meta: data.topic_meta || {},
+      }));
+    } catch (e) {
+      setAgenticError(e?.message || String(e));
+    } finally {
+      setAgenticLoading(false);
+    }
+  };
+
+  const handleAgenticResume = async (all = true, topics = null) => {
+    setAgenticLoading(true);
+    setAgenticError(null);
+    try {
+      const res = await fetch("/api/phases/agentic/feedback/resume/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(all ? { all: true } : { topics: topics || [] }),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || res.statusText);
+      }
+      const data = await res.json();
+      setAgenticState((prev) => ({
+        ...(prev || {}),
+        threads: data.threads || {},
+        status: data.status ?? prev?.status,
+        ongoing: data.ongoing,
+        feedback_suspended: data.feedback_suspended,
+        topic_meta: data.topic_meta || {},
+      }));
+    } catch (e) {
+      setAgenticError(e?.message || String(e));
+    } finally {
+      setAgenticLoading(false);
+    }
+  };
+
+  const handleAgenticRefine = async (threadsOverride = null) => {
+    setAgenticLoading(true);
+    setAgenticError(null);
+    try {
+      const opts = { method: "POST" };
+      if (threadsOverride != null && typeof threadsOverride === "object") {
+        opts.headers = { "Content-Type": "application/json" };
+        opts.body = JSON.stringify({ threads: threadsOverride });
+      }
+      const res = await fetchWithHeartbeat("/api/phases/agentic/refine/", opts);
+      if (res.isHeartbeat) return;
+      if (res.data?.agentic_state != null) setAgenticState(res.data.agentic_state);
+    } catch (e) {
+      setAgenticError(e?.message || String(e));
+    } finally {
+      setAgenticLoading(false);
+    }
+  };
+
   const approvePhase = async (phase, vendor, edits = {}) => {
     // Prevent duplicate calls if already approved/processing
     // Note: session tracking is a decent proxy for "is in flight" if we assume
@@ -1110,6 +1439,8 @@ export default function App() {
   const resetForm = async () => {
     setShowInput(true);
     setUiStage("input");
+    setAgenticState(null);
+    setAgenticError(null);
     setPhaseSessionId(null);
     // phaseState, phaseEdits, phaseErrors removed - cards own their state
     setLetters({});
@@ -1455,26 +1786,46 @@ export default function App() {
              </div>
           </div>
           
-          {(() => {
-            const isDisabled = loading || !jobText || !jobTitle.trim() || selectedVendors.size === 0;
-            return (
-              <button
-                onClick={handleSubmit}
-                disabled={isDisabled}
-                style={{
-                  marginTop: 20,
-                  padding: "10px 20px",
-                  backgroundColor: isDisabled ? "var(--header-bg)" : "#3b82f6",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "4px",
-                  cursor: isDisabled ? "not-allowed" : "pointer",
-                }}
-              >
-                {loading ? "Starting..." : "Start phased flow"}
-              </button>
-            );
-          })()}
+          <div style={{ marginTop: 20, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {(() => {
+              const isDisabled = loading || !jobText || !jobTitle.trim() || selectedVendors.size === 0;
+              return (
+                <button
+                  onClick={handleSubmit}
+                  disabled={isDisabled}
+                  style={{
+                    padding: "10px 20px",
+                    backgroundColor: isDisabled ? "var(--header-bg)" : "#3b82f6",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "4px",
+                    cursor: isDisabled ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {loading ? "Starting..." : "Start phased flow"}
+                </button>
+              );
+            })()}
+            {(() => {
+              const isDisabled = agenticLoading || !jobText || !jobTitle.trim() || selectedVendors.size === 0;
+              return (
+                <button
+                  onClick={handleSubmitAgentic}
+                  disabled={isDisabled}
+                  style={{
+                    padding: "10px 20px",
+                    backgroundColor: isDisabled ? "var(--header-bg)" : "#7c3aed",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "4px",
+                    cursor: isDisabled ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {agenticLoading ? "Starting…" : "Start agentic flow"}
+                </button>
+              );
+            })()}
+          </div>
         </>
       ) : (
         <div
@@ -1534,24 +1885,41 @@ export default function App() {
 
       {!showInput && (
         <>
-          <div style={{ display: (uiStage === "assembly" && assemblyVisible) ? "none" : "block" }}>
-            <PhaseFlow
-              vendorsList={vendorsList}
-              onEditChange={updatePhaseEdit}
-              onApprove={approvePhase}
-              onApproveAll={approveAllPhase}
-              sessionId={phaseSessionId}
-              onRegisterPhases={(phases) => {
-                phaseRegistryRef.current = phases;
-              }}
-              onPhaseComplete={(vendor, phase, data) => {
-                // Handle phase completion - update parent state if needed
-                if (phase === "draft" && data?.final_letter) {
-                  // Already handled in approvePhase
-                }
-              }}
+          {uiStage === "agentic" ? (
+            <AgenticFlow
+              agenticState={agenticState}
+              onFeedbackStart={handleAgenticFeedbackStart}
+              onRefine={handleAgenticRefine}
+              onSuspend={handleAgenticSuspend}
+              onResume={handleAgenticResume}
+              onSaveFinalLetter={persistAgenticLetter}
+              feedbackVendors={vendorsList}
+              loading={agenticLoading}
+              error={agenticError}
+              saving={agenticSavingFinal}
+              saveError={agenticSaveError}
+              onPollState={fetchAgenticPoll}
+              pollIntervalMs={1000}
             />
-          </div>
+          ) : (
+            <div style={{ display: (uiStage === "assembly" && assemblyVisible) ? "none" : "block" }}>
+              <PhaseFlow
+                vendorsList={vendorsList}
+                onEditChange={updatePhaseEdit}
+                onApprove={approvePhase}
+                onApproveAll={approveAllPhase}
+                sessionId={phaseSessionId}
+                onRegisterPhases={(phases) => {
+                  phaseRegistryRef.current = phases;
+                }}
+                onPhaseComplete={(vendor, phase, data) => {
+                  if (phase === "draft" && data?.final_letter) {
+                    // Already handled in approvePhase
+                  }
+                }}
+              />
+            </div>
+          )}
 
           {/* Keep LetterTabs mounted to preserve translation state */}
           {uiStage === "assembly" && (

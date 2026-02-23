@@ -1,6 +1,7 @@
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 from openai import OpenAI
@@ -17,6 +18,11 @@ class MissingCVError(Exception):
     pass
 
 REQUIRED_SUFFIXES = ("NO COMMENT", "PLEASE FIX")
+# In agentic flow, agents may output SKIP or NO COMMENT to leave no feedback
+AGENTIC_SKIP_PHRASES = ("NO COMMENT", "SKIP")
+
+# Topic keys for per-topic agentic feedback (same as feedback dict keys)
+AGENTIC_TOPIC_KEYS = ("instruction", "accuracy", "precision", "company_fit", "user_fit", "human")
 
 
 def _has_required_suffix(text: str) -> bool:
@@ -63,6 +69,12 @@ def _call_with_required_suffix(
 def _is_no_comment(feedback: str) -> bool:
     """Return True only if feedback explicitly ends with NO COMMENT."""
     return (feedback or "").strip().upper().endswith("NO COMMENT")
+
+
+def is_agentic_skip(text: str) -> bool:
+    """Return True if the agent chose to skip leaving feedback (NO COMMENT or SKIP)."""
+    normalized = (text or "").strip().upper()
+    return any(normalized.endswith(p) for p in AGENTIC_SKIP_PHRASES)
 
 
 def _clean_metadata_val(val: Any) -> str:
@@ -786,6 +798,97 @@ def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
         "Please review the cover letter for anything that looks like something the reviewer would change, based on the examples."
     )
     return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
+
+
+def get_agentic_topic_context(
+    topic: str,
+    draft_letter: str,
+    cv_text: str,
+    company_report: str,
+    job_text: str,
+    top_docs: List[dict],
+    style_instructions: str = "",
+    additional_user_info: str = "",
+) -> str:
+    """Build the topic-specific context string for agentic feedback prompts.
+    Returns the context blocks (excluding the draft letter itself) to include in the prompt.
+    Aligns with the same inputs used by the existing check functions.
+    """
+    if not style_instructions:
+        style_instructions = get_style_instructions()
+    letter_block = "========== Cover Letter (draft):\n" + draft_letter + "\n==========\n\n"
+    if topic == "instruction":
+        return (
+            "========== Style Instructions:\n" + style_instructions + "\n==========\n\n" + letter_block
+        )
+    if topic == "accuracy":
+        today_str = date.today().isoformat()
+        extra = (
+            "\n(Use this when judging dates: today's date is "
+            + today_str
+            + ". Treat dates after this as future-dated.)\n\n"
+        )
+        if additional_user_info and additional_user_info.strip():
+            extra += (
+                "========== User's additional info (relevant but not in CV):\n"
+                + additional_user_info + "\n==========\n\n"
+            )
+        return "========== User CV:\n" + cv_text + "\n==========\n\n" + extra + letter_block
+    if topic == "precision":
+        return (
+            "========== Company Report:\n" + company_report + "\n==========\n"
+            + "========== Job Offer:\n" + job_text + "\n==========\n\n" + letter_block
+        )
+    if topic == "company_fit":
+        return (
+            "========== Company Report:\n" + company_report + "\n==========\n"
+            + "========== Job Offer:\n" + job_text + "\n==========\n\n" + letter_block
+        )
+    if topic == "user_fit":
+        examples_formatted = "\n\n".join(
+            f"---- Example #{i+1} - {ex.get('company_name', '?')} ----\n"
+            f"Cover Letter:\n{ex.get('letter_text', '')}\n\n"
+            for i, ex in enumerate(top_docs) if ex.get("letter_text")
+        )
+        if not examples_formatted:
+            examples_formatted = "(No reference letters available.)"
+        return "========== Reference Examples:\n" + examples_formatted + "\n==========\n\n" + letter_block
+    if topic == "human":
+        rewritten = [
+            ex for ex in top_docs
+            if ex.get("letter_text") and isinstance(ex.get("ai_letters"), list) and ex["ai_letters"]
+        ]
+        if not rewritten:
+            return letter_block + "(No revision examples available.)"
+        examples_formatted = "\n\n".join(
+            f"---- Example #{i+1} - {ex.get('company_name', '?')} ----\n"
+            "Initial cover letters:\n"
+            + "\n\n".join(
+                f"[attempt {j+1}]:\n"
+                + (f"(Rating: {al.get('rating')}/5)\n" if al.get("rating") else "")
+                + (f"(Feedback: \"{al.get('comment')}\")\n" if al.get("comment") else "")
+                + (al.get("text", "") or "")
+                + (
+                    "\n\nUser corrections:\n"
+                    + "\n".join(
+                        _format_correction(corr)
+                        for corr in (al.get("user_corrections") or [])
+                        if isinstance(corr, dict)
+                        and (
+                            (corr.get("type") == "full" and corr.get("original") is not None and corr.get("edited") is not None)
+                            or (corr.get("type") == "diff" and (corr.get("original") is not None or corr.get("edited") is not None))
+                        )
+                    )
+                    if al.get("user_corrections") else ""
+                )
+                for j, al in enumerate(ex["ai_letters"])
+                if isinstance(al, dict) and al.get("text")
+            )
+            + "\n\nRevised cover letter:\n" + (ex.get("letter_text") or "")
+            for i, ex in enumerate(rewritten)
+        )
+        return "========== Reference Examples (initial + user corrections + revised):\n" + examples_formatted + "\n==========\n\n" + letter_block
+    return letter_block
 
 
 @traceable(run_type="chain", name="rewrite_letter")

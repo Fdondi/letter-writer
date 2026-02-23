@@ -3,9 +3,9 @@ from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 
 from letter_writer_server.core.session import Session, get_session
-from letter_writer.firestore_store import get_user_data, get_personal_data_document, clear_user_data_cache
+from letter_writer.firestore_store import get_user_data, get_personal_data_document, update_user_data_cache
 from letter_writer.generation import get_style_instructions, get_search_instructions
-from letter_writer.personal_data_sections import get_cv_revisions, get_models, get_background_models, unwrap_for_response, wrap_new_field
+from letter_writer.personal_data_sections import get_cv_revisions, get_models, get_background_models, get_agentic_draft_model, unwrap_for_response, wrap_new_field
 from letter_writer.personal_data_sections import get_style_instructions as get_user_style_instructions
 from letter_writer.personal_data_sections import get_search_instructions as get_user_search_instructions
 from datetime import datetime
@@ -26,6 +26,7 @@ async def get_personal_data(session: Session = Depends(get_session)):
     default_languages = user_data.get("default_languages") or []
     default_models = get_models(user_data)
     default_background_models = get_background_models(user_data)
+    agentic_draft_model = get_agentic_draft_model(user_data)
     min_column_width = user_data.get("min_column_width")
     
     # Process revisions to ISO format... (omitted detailed implementation for brevity, assume similar to Django view)
@@ -44,6 +45,7 @@ async def get_personal_data(session: Session = Depends(get_session)):
         "default_languages": default_languages,
         "default_models": default_models,
         "default_background_models": default_background_models,
+        "agentic_draft_model": agentic_draft_model,
         "min_column_width": min_column_width
     }
 
@@ -93,6 +95,11 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             
         if "default_background_models" in data:
             updates["background_models"] = wrap_new_field("background_models", data["default_background_models"], now)
+
+        if "agentic_draft_model" in data:
+            val = data["agentic_draft_model"]
+            stored = (val or "").strip() if isinstance(val, str) else (str(val).strip() if val is not None else None)
+            updates["agentic_draft_model"] = wrap_new_field("agentic_draft_model", stored or None, now)
             
         if "style_instructions" in data:
             updates["style"] = wrap_new_field("style", data["style_instructions"], now)
@@ -104,7 +111,7 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             
         if updates:
             user_doc_ref.set(updates, merge=True)
-            clear_user_data_cache(user_id)
+            update_user_data_cache(user_id, updates)
 
         return {"status": "ok"}
 
@@ -142,7 +149,7 @@ async def update_style_instructions(request: Request, session: Session = Depends
         "updated_at": datetime.utcnow()
     }
     user_doc_ref.set(updates, merge=True)
-    clear_user_data_cache(user['id'])
+    update_user_data_cache(user["id"], updates)
 
     return {"status": "ok", "instructions": instructions}
 
@@ -180,6 +187,6 @@ async def update_search_instructions(request: Request, session: Session = Depend
         "updated_at": datetime.utcnow()
     }
     user_doc_ref.set(updates, merge=True)
-    clear_user_data_cache(user['id'])
+    update_user_data_cache(user["id"], updates)
 
     return {"status": "ok", "instructions": instructions}

@@ -18,6 +18,14 @@ def get_models(user_data: Dict[str, Any]) -> List[str]:
     models_data = user_data.get("models")
     return unwrap_for_response("models", models_data) or []
 
+
+def get_agentic_draft_model(user_data: Dict[str, Any]) -> Optional[str]:
+    """Get the vendor (or vendor/model_id) used as the sole draft author in per-topic agentic flow.
+    Returns None if not set (caller should fall back to first of default_models)."""
+    raw = user_data.get("agentic_draft_model")
+    out = unwrap_for_response("agentic_draft_model", raw) if raw is not None else None
+    return (out or "").strip() or None
+
 def _validate_model_ids(model_ids: List[str]) -> List[str]:
     """Filter out model IDs with invalid vendor prefixes (e.g. 'google/...' instead of 'gemini/...')."""
     valid = []
