@@ -1,4 +1,4 @@
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ COPY letter_writer_web/ ./
 # Build static assets
 RUN npm run build
 
-FROM nginx:1.27-alpine
+FROM nginx:1.29-alpine
 
 WORKDIR /usr/share/nginx/html
 
