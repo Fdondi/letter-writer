@@ -8,9 +8,32 @@ from letter_writer.generation import get_style_instructions, get_search_instruct
 from letter_writer.personal_data_sections import get_cv_revisions, get_models, get_background_models, get_agentic_draft_model, unwrap_for_response, wrap_new_field
 from letter_writer.personal_data_sections import get_style_instructions as get_user_style_instructions
 from letter_writer.personal_data_sections import get_search_instructions as get_user_search_instructions
-from datetime import datetime
+from datetime import datetime, timezone
 
 router = APIRouter()
+
+
+def _append_cv_revision(user_id: str, content: str, source: str = "manual_edit") -> None:
+    """Append a new CV revision to Firestore and update cache."""
+    now = datetime.now(timezone.utc)
+    user_data = get_user_data(user_id, use_cache=False) or {}
+    revisions = list(get_cv_revisions(user_data))
+    revision_number = len(revisions) + 1
+    new_revision = {
+        "content": content,
+        "source": source,
+        "created_at": now,  # Firestore stores datetime natively
+        "revision_number": revision_number,
+    }
+    revisions.append(new_revision)
+    updates = {
+        "cv_revisions": revisions,
+        "updated_at": now,
+    }
+    user_doc_ref = get_personal_data_document(user_id)
+    user_doc_ref.set(updates, merge=True)
+    update_user_data_cache(user_id, updates)
+
 
 @router.get("/personal-data/")
 async def get_personal_data(session: Session = Depends(get_session)):
@@ -65,15 +88,17 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             raise HTTPException(status_code=400, detail="No file provided")
         
         content = await file.read()
-        filename = file.filename
-        # Extract text logic...
-        # For now, just save as string
-        extracted_text = content.decode('utf-8', errors='replace') # Simplified
+        filename = file.filename or "upload"
+        # For txt/md, decode as text; for PDF we'd need extraction
+        extracted_text = content.decode('utf-8', errors='replace')
         
-        # Update Firestore logic...
-        # ...
+        # Save to Firestore as new revision
+        _append_cv_revision(user_id, extracted_text, source=f"file_upload:{filename}")
+        user_data = get_user_data(user_id, use_cache=False) or {}
+        revisions = get_cv_revisions(user_data)
+        latest_content = revisions[-1].get("content", "") if revisions else ""
         
-        return {"status": "ok", "cv": extracted_text}
+        return {"status": "ok", "cv": latest_content, "revisions": revisions}
     else:
         try:
             data = await request.json()
@@ -108,12 +133,27 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
         if "search_instructions" in data:
             updates["search_instructions"] = wrap_new_field("search_instructions", data["search_instructions"], now)
             session["search_instructions"] = data["search_instructions"]
+        
+        if "competence_ratings" in data:
+            updates["competences"] = wrap_new_field("competences", data["competence_ratings"], now)
             
+        if "content" in data and data["content"]:
+            content = str(data["content"]).strip()
+            source = str(data.get("source") or "manual_edit").strip() or "manual_edit"
+            _append_cv_revision(user_id, content, source=source)
+        
         if updates:
             user_doc_ref.set(updates, merge=True)
             update_user_data_cache(user_id, updates)
-
-        return {"status": "ok"}
+        
+        response = {"status": "ok"}
+        if "content" in data and data["content"]:
+            user_data = get_user_data(user_id, use_cache=True) or {}
+            revisions = get_cv_revisions(user_data)
+            latest = revisions[-1] if revisions else {}
+            response["cv"] = latest.get("content", "")
+            response["revisions"] = revisions
+        return response
 
 @router.get("/style-instructions/")
 async def get_style_instructions_endpoint(session: Session = Depends(get_session)):

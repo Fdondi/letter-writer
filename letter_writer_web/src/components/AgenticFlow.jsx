@@ -22,27 +22,24 @@ export default function AgenticFlow({
   onRefine,
   onSuspend,
   onResume,
-  onSaveFinalLetter,
   feedbackVendors = [],
   loading = false,
   error = null,
-  saving = false,
-  saveError = null,
   pollIntervalMs = 1000,
   onPollState,
 }) {
   const hasStartedFeedback = useRef(false);
   const [progress, setProgress] = useState(0);
   const [editedThreads, setEditedThreads] = useState(null);
-  const [editedFinalLetter, setEditedFinalLetter] = useState(null);
-  const [saveButtonState, setSaveButtonState] = useState("save_copy"); // "save_copy" | "copy"
   const [draftCollapsed, setDraftCollapsed] = useState(false);
   const [feedbackCollapsed, setFeedbackCollapsed] = useState(false);
+  const [draftTab, setDraftTab] = useState(null); // selected draft vendor tab
   const startRef = useRef(Date.now());
   const pollInFlightRef = useRef(false);
   const status = agenticState?.status;
   const draftLetter = agenticState?.draft_letter;
-  const finalLetter = agenticState?.final_letter;
+  const draftLetters = agenticState?.draft_letters ?? (draftLetter != null && agenticState?.draft_vendor ? { [agenticState.draft_vendor]: draftLetter } : {});
+  const draftVendorList = Object.keys(draftLetters).filter(Boolean);
   const threadsFromState = agenticState?.threads || {};
   const threads = editedThreads ?? threadsFromState;
   const ongoing = agenticState?.ongoing;
@@ -50,10 +47,14 @@ export default function AgenticFlow({
   const cost = agenticState?.cost ?? 0;
   const feedbackSuspended = agenticState?.feedback_suspended === true;
   const topicMeta = agenticState?.topic_meta || {};
-  const canEditThreads = status === "feedback_done" || (status === "feedback" && ongoing === false);
+  // Active = not done and not suspended. Button and editing when active count is 0.
+  const activeTopicCount = TOPIC_KEYS.filter(
+    (topic) => !topicMeta[topic]?.done && !topicMeta[topic]?.suspended
+  ).length;
+  const allTopicsInactive = activeTopicCount === 0;
+  const canEditThreads = status === "feedback_done" || (status === "feedback" && allTopicsInactive);
   const canSuspendOrResume = status === "feedback";
   const anyCanResume = canSuspendOrResume && Object.values(topicMeta).some((m) => m?.suspended && !m?.done);
-  const displayFinalLetter = editedFinalLetter ?? finalLetter ?? "";
 
   // Start feedback once when draft is ready (status feedback, round 0) and we have vendors
   useEffect(() => {
@@ -104,17 +105,18 @@ export default function AgenticFlow({
     if (editedThreads == null) setEditedThreads(JSON.parse(JSON.stringify(threadsFromState)));
   }, [canEditThreads, threadsFromState, status]);
 
-  // When we get a final letter from server, init editable text (or reset when leaving done)
   useEffect(() => {
-    if (status === "done" && finalLetter != null) {
-      setEditedFinalLetter((prev) => (prev == null ? finalLetter : prev));
+    if (status === "done") {
       setDraftCollapsed(true);
       setFeedbackCollapsed(true);
-    } else {
-      setEditedFinalLetter(null);
-      setSaveButtonState("save_copy");
     }
-  }, [status, finalLetter]);
+  }, [status]);
+
+  // Default draft tab when draft vendors change
+  useEffect(() => {
+    if (draftVendorList.length > 0 && !draftTab) setDraftTab(draftVendorList[0]);
+    if (draftVendorList.length > 0 && draftTab && !draftVendorList.includes(draftTab)) setDraftTab(draftVendorList[0]);
+  }, [draftVendorList, draftTab]);
 
   const handleRemoveComment = (topic, commentIndex) => {
     setEditedThreads((prev) => {
@@ -137,30 +139,6 @@ export default function AgenticFlow({
 
   const handleRefine = async () => {
     await onRefine(editedThreads ?? threadsFromState);
-  };
-
-  const handleFinalLetterChange = (e) => {
-    const next = e.target.value;
-    setEditedFinalLetter(next);
-    setSaveButtonState("save_copy");
-  };
-
-  const handleSaveCopy = async () => {
-    const text = editedFinalLetter ?? finalLetter ?? "";
-    if (!text.trim()) return;
-    if (saveButtonState === "save_copy" && onSaveFinalLetter) {
-      try {
-        await onSaveFinalLetter(text);
-      } catch (err) {
-        return; // Parent sets saveError; keep button as "Save & Copy" so user can retry
-      }
-    }
-    try {
-      await navigator.clipboard.writeText(text);
-      setSaveButtonState("copy");
-    } catch (err) {
-      console.error("Failed to copy:", err);
-    }
   };
 
   if (!agenticState && !loading) {
@@ -200,7 +178,7 @@ export default function AgenticFlow({
         Status: <strong>{status}</strong>
         {status === "feedback" && ongoing === true && !feedbackSuspended && " · Generating feedback…"}
         {status === "feedback" && feedbackSuspended && " · Suspended"}
-        {(status === "feedback_done" || (status === "feedback" && ongoing === false && !feedbackSuspended)) && " · Completed"}
+        {(status === "feedback_done" || (status === "feedback" && allTopicsInactive && !feedbackSuspended)) && " · Completed"}
         {cost > 0 && ` · Cost: $${cost.toFixed(4)}`}
       </div>
 
@@ -227,7 +205,7 @@ export default function AgenticFlow({
         </div>
       )}
 
-      {(status === "feedback" || status === "feedback_done" || status === "done") && draftLetter && (
+      {(status === "feedback" || status === "feedback_done" || status === "done") && draftVendorList.length > 0 && (
         <div
           style={{
             marginBottom: 12,
@@ -256,22 +234,47 @@ export default function AgenticFlow({
             }}
           >
             <span style={{ fontSize: 10 }}>{draftCollapsed ? "▶" : "▼"}</span>
-            Draft letter
+            Draft letter{draftVendorList.length > 1 ? "s" : ""}
           </button>
           {!draftCollapsed && (
-            <div
-              style={{
-                padding: "0 16px 16px",
-                fontSize: 13,
-                color: "var(--text-color)",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                maxHeight: 200,
-                overflowY: "auto",
-              }}
-            >
-              {draftLetter}
-            </div>
+            <>
+              {draftVendorList.length > 1 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: "8px 16px 0", borderBottom: "1px solid var(--border-color)" }}>
+                  {draftVendorList.map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setDraftTab(v)}
+                      style={{
+                        padding: "6px 12px",
+                        fontSize: 12,
+                        fontWeight: draftTab === v ? 600 : 400,
+                        color: "var(--text-color)",
+                        background: draftTab === v ? "var(--header-bg)" : "transparent",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 6,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div
+                style={{
+                  padding: "0 16px 16px",
+                  fontSize: 13,
+                  color: "var(--text-color)",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  maxHeight: 200,
+                  overflowY: "auto",
+                }}
+              >
+                {(draftVendorList.length > 1 ? draftLetters[draftTab] : draftLetter) ?? ""}
+              </div>
+            </>
           )}
         </div>
       )}
@@ -382,7 +385,7 @@ export default function AgenticFlow({
                   />
                 ))}
               </div>
-              {(status === "feedback_done" || (status === "feedback" && ongoing === false)) && (
+              {(status === "feedback_done" || (status === "feedback" && allTopicsInactive)) && (
                 <div style={{ padding: "0 16px 16px", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
                   <button
                     type="button"
@@ -404,75 +407,6 @@ export default function AgenticFlow({
               )}
             </>
           )}
-        </div>
-      )}
-
-      {status === "done" && (finalLetter != null || displayFinalLetter) && (
-        <div
-          style={{
-            marginBottom: 20,
-            padding: 16,
-            backgroundColor: "var(--panel-bg)",
-            border: "1px solid var(--border-color)",
-            borderRadius: 8,
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-color)" }}>Final letter</div>
-            <button
-              type="button"
-              onClick={handleSaveCopy}
-              disabled={saving}
-              style={{
-                padding: "8px 16px",
-                backgroundColor: saveButtonState === "copy" ? "#10b981" : "#3b82f6",
-                color: "white",
-                border: "none",
-                borderRadius: 6,
-                cursor: saving ? "not-allowed" : "pointer",
-                fontSize: 14,
-                fontWeight: 600,
-                minWidth: 120,
-              }}
-            >
-              {saving ? "Saving…" : saveButtonState === "save_copy" ? "Save & Copy" : "Copy"}
-            </button>
-          </div>
-          {saveError && (
-            <div
-              style={{
-                marginBottom: 8,
-                padding: "8px 12px",
-                backgroundColor: "#fef2f2",
-                color: "#b91c1c",
-                fontSize: 12,
-                borderRadius: 6,
-                border: "1px solid #fecaca",
-              }}
-            >
-              {saveError}
-            </div>
-          )}
-          <textarea
-            value={displayFinalLetter}
-            onChange={handleFinalLetterChange}
-            style={{
-              width: "100%",
-              minHeight: 200,
-              maxHeight: 400,
-              fontSize: 13,
-              color: "var(--text-color)",
-              backgroundColor: "var(--bg-color)",
-              border: "1px solid var(--border-color)",
-              borderRadius: 6,
-              padding: 12,
-              resize: "vertical",
-              fontFamily: "inherit",
-              lineHeight: 1.5,
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-            }}
-          />
         </div>
       )}
     </div>

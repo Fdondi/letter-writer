@@ -40,11 +40,11 @@ export function getFullState(state) {
     // Extracted data
     extractedData: state.extractedData || null,
     
-    // UI state
-    uiStage: state.uiStage || "input",
+    // UI state (vendor flow: input|phases|assembly; agentic flow: input|agentic|assembly)
+    vendorStage: state.vendorStage || "input",
+    agenticStage: state.agenticStage || "input",
     activeTab: state.activeTab || "compose",
     assemblyVisible: state.assemblyVisible !== undefined ? state.assemblyVisible : true,
-    showInput: state.showInput !== undefined ? state.showInput : true,
     showStyleBlade: state.showStyleBlade || false,
     
     // Session
@@ -155,10 +155,10 @@ export function restoreStateFromLocal(stateSetters) {
   if (savedState.competenceOverrides !== undefined) stateSetters.setCompetenceOverrides(savedState.competenceOverrides || {});
   if (savedState.pointOfContact !== undefined) stateSetters.setPointOfContact(savedState.pointOfContact);
   if (savedState.extractedData !== undefined) stateSetters.setExtractedData(savedState.extractedData);
-  if (savedState.uiStage !== undefined) stateSetters.setUiStage(savedState.uiStage);
+  if (savedState.vendorStage !== undefined && stateSetters.setVendorStage) stateSetters.setVendorStage(savedState.vendorStage);
+  if (savedState.agenticStage !== undefined && stateSetters.setAgenticStage) stateSetters.setAgenticStage(savedState.agenticStage);
   if (savedState.activeTab !== undefined) stateSetters.setActiveTab(savedState.activeTab);
   if (savedState.assemblyVisible !== undefined) stateSetters.setAssemblyVisible(savedState.assemblyVisible);
-  if (savedState.showInput !== undefined) stateSetters.setShowInput(savedState.showInput);
   if (savedState.showStyleBlade !== undefined) stateSetters.setShowStyleBlade(savedState.showStyleBlade);
   if (savedState.phaseSessionId !== undefined) stateSetters.setPhaseSessionId(savedState.phaseSessionId);
   if (savedState.phaseSessions !== undefined) stateSetters.setPhaseSessions(savedState.phaseSessions || {});

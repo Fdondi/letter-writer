@@ -90,18 +90,24 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
   if (!isOpen) return null;
 
   return (
+    <>
+      <div onClick={handleClose} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.3)', zIndex: 999 }} aria-hidden="true" />
     <div style={{
       position: 'fixed',
-      top: 0,
-      right: 0,
-      width: '50%',
-      height: '100vh',
+      top: '5%',
+      left: '5%',
+      right: '5%',
+      bottom: '5%',
+      width: '90%',
+      height: '90%',
+      margin: 'auto',
       backgroundColor: 'var(--bg-color)',
-      boxShadow: '-4px 0 8px rgba(0,0,0,0.1)',
+      boxShadow: '0 4px 24px rgba(0,0,0,0.2)',
       zIndex: 1000,
       display: 'flex',
       flexDirection: 'column',
-      borderLeft: '1px solid var(--border-color)',
+      border: '1px solid var(--border-color)',
+      borderRadius: '8px',
       color: 'var(--text-color)'
     }}>
       {/* Header */}
@@ -118,6 +124,7 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
         </h2>
         <button
           onClick={handleClose}
+          type="button"
           style={{
             background: 'none',
             border: 'none',
@@ -290,6 +297,7 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
         )}
       </div>
     </div>
+    </>
   );
 };
 

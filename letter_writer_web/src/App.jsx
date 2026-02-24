@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import ModelSelector from "./components/ModelSelector";
 import LetterTabs from "./components/LetterTabs";
 import StyleInstructionsBlade from "./components/StyleInstructionsBlade";
@@ -7,6 +8,7 @@ import AgenticFlow from "./components/AgenticFlow";
 import DocumentsPage from "./components/DocumentsPage";
 import PersonalDataPage from "./components/PersonalDataPage";
 import SettingsPage from "./components/SettingsPage";
+import OverlayPanel from "./components/OverlayPanel";
 import LanguageConfig from "./components/LanguageConfig";
 import LanguageSelector from "./components/LanguageSelector";
 import AuthButton from "./components/AuthButton";
@@ -35,12 +37,13 @@ function generateColors(vendors) {
   }, {});
 }
 
-export default function App() {
+export default function App({ flow = "vendor" }) {
+  const navigate = useNavigate();
   // ALL hooks must be declared before any conditional returns (React rules)
   // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState(null); // null = checking, true = authenticated, false = not authenticated
   const [checkingAuth, setCheckingAuth] = useState(true); // Start checking on mount
-  
+
   // All other state hooks (must be before conditional returns)
   const [vendors, setVendors] = useState([]);
   const [vendorColors, setVendorColors] = useState({});
@@ -79,16 +82,22 @@ export default function App() {
   const [failedVendors, setFailedVendors] = useState({}); // vendor -> error message
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [showInput, setShowInput] = useState(true);
   const [showStyleBlade, setShowStyleBlade] = useState(false);
-  const [uiStage, setUiStage] = useState("input"); // input | phases | assembly
+  const [vendorStage, setVendorStage] = useState("input"); // vendor flow: input | phases | assembly
+  const [agenticStage, setAgenticStage] = useState("input"); // agentic flow: input | agentic | assembly
   const [phaseSessionId, setPhaseSessionId] = useState(null);
   const [phaseSessions, setPhaseSessions] = useState({}); // vendor -> session_id
   const [savingFinal, setSavingFinal] = useState(false);
-  const [activeTab, setActiveTab] = useState("compose"); // "compose" | "documents" | "personal-data" | "settings"
-  const [assemblyVisible, setAssemblyVisible] = useState(true); // when in assembly stage, show assembly or phases
+  const [activeTab, setActiveTab] = useState("compose"); // legacy, kept for CostDisplay/localState; main content is always compose
+  const [showCvOverlay, setShowCvOverlay] = useState(false);
+  const [showDocumentsOverlay, setShowDocumentsOverlay] = useState(false);
+  const [showSettingsOverlay, setShowSettingsOverlay] = useState(false);
+  const [showCostsOverlay, setShowCostsOverlay] = useState(false);
+  const [assemblyVisible, setAssemblyVisible] = useState(true); // vendor flow: when in assembly stage, show assembly or phases
   const [extractedData, setExtractedData] = useState(null); // Track extracted data to detect modifications
   const [vendorFeedback, setVendorFeedback] = useState({}); // vendor -> { rating, comment }
+
+  const showInput = flow === "vendor" ? vendorStage === "input" : agenticStage === "input";
 
   // Agentic (per-topic) flow state
   const [agenticState, setAgenticState] = useState(null);
@@ -96,6 +105,7 @@ export default function App() {
   const [agenticError, setAgenticError] = useState(null);
   const [agenticSavingFinal, setAgenticSavingFinal] = useState(false);
   const [agenticSaveError, setAgenticSaveError] = useState(null);
+  const [agenticFinalParagraphs, setAgenticFinalParagraphs] = useState([]);
   
   // Research state
   const [selectedCompanyReport, setSelectedCompanyReport] = useState(null);
@@ -119,6 +129,7 @@ export default function App() {
   
   // Registry of phase objects from PhaseFlow
   const phaseRegistryRef = React.useRef(null);
+  const agenticPhasesRef = useRef(null);
   const [, setPhaseRegistryTrigger] = useState(0); // For re-rendering when registry changes
   
   // Check authentication status on mount
@@ -352,7 +363,7 @@ export default function App() {
 
   // Load full agentic state once when showing agentic view and state is missing (e.g. refresh)
   useEffect(() => {
-    if (uiStage !== "agentic" || agenticState != null) return;
+    if (agenticStage !== "agentic" || agenticState != null) return;
     let cancelled = false;
     (async () => {
       try {
@@ -365,7 +376,7 @@ export default function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [uiStage, agenticState]);
+  }, [agenticStage, agenticState]);
 
   // Notify only when agentic feedback actually completes (ongoing becomes false), not on start or every poll
   const agenticOngoingRef = useRef(undefined);
@@ -378,6 +389,20 @@ export default function App() {
       showNotification("Agentic feedback completed");
     }
   }, [agenticState?.status, agenticState?.ongoing]);
+
+  // When agentic flow finishes (status done), show assembly stage
+  useEffect(() => {
+    if (flow === "agentic" && agenticState?.status === "done") {
+      setAgenticStage("assembly");
+    }
+  }, [flow, agenticState?.status]);
+
+  // Clear agentic final assembly when not done; do not auto-fill (user builds Final Letter from vendor columns if they want)
+  useEffect(() => {
+    if (agenticState?.status !== "done") {
+      setAgenticFinalParagraphs([]);
+    }
+  }, [agenticState?.status]);
 
   // Note: We no longer need to reload when switching tabs since SettingsPage
   // now updates the shared state directly when saving
@@ -795,8 +820,8 @@ export default function App() {
             if (!documentId) setDocumentId(id);
           },
           setPhaseSessions,
-          setUiStage,
-          setShowInput,
+          setUiStage: setVendorStage,
+          setShowInput: () => setVendorStage("input"),
           setLetters,
           setVendorParagraphs,
           setVendorCosts,
@@ -913,8 +938,8 @@ export default function App() {
     setVendorParagraphs({});
     setFinalParagraphs([]);
     setDocumentId(null);
-    setShowInput(false);
-    setUiStage("phases");
+    navigate("/flows/vendors");
+    setVendorStage("phases");
     // phaseState, phaseEdits, phaseErrors removed - cards own their state
     setPhaseSessions({});
     
@@ -1078,8 +1103,8 @@ export default function App() {
     setAgenticLoading(true);
     setAgenticError(null);
     setError(null);
-    setShowInput(false);
-    setUiStage("agentic");
+    navigate("/flows/agentic");
+    setAgenticStage("agentic");
     const initialSessionId = phaseSessionId || (
       typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
@@ -1138,7 +1163,7 @@ export default function App() {
         console.error("Failed to update session:", e);
         setAgenticError("Failed to update session. Please try again.");
         setAgenticLoading(false);
-        setShowInput(true);
+        setAgenticStage("input");
         return;
       }
     }
@@ -1159,6 +1184,8 @@ export default function App() {
       const body = {};
       if (selectedCompanyReport) body.company_report = selectedCompanyReport;
       if (effectiveTopDocs) body.top_docs = effectiveTopDocs;
+      // Honor vendor selection: one draft per selected vendor
+      if (vendorsList.length > 0) body.draft_vendors = vendorsList;
       const res = await fetchWithHeartbeat("/api/phases/agentic/draft/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1169,12 +1196,11 @@ export default function App() {
         return;
       }
       setAgenticState(res.data?.agentic_state ?? null);
-      setUiStage("agentic");
+      setAgenticStage("agentic");
     } catch (e) {
       console.error("Agentic draft error", e);
       setAgenticError(e?.message || String(e));
-      setShowInput(true);
-      setUiStage("input");
+      setAgenticStage("input");
     } finally {
       setAgenticLoading(false);
     }
@@ -1192,6 +1218,8 @@ export default function App() {
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
         topic_meta: data.topic_meta || {},
+        ...(data.draft_letters && { draft_letters: data.draft_letters }),
+        ...(data.final_letters && { final_letters: data.final_letters }),
       }));
       return data.ongoing === true;
     } catch (e) {
@@ -1386,8 +1414,7 @@ export default function App() {
         });
         
         if (allDone) {
-          setUiStage("assembly");
-          setShowInput(false);
+          setVendorStage("assembly");
           setAssemblyVisible(true);
         }
         
@@ -1437,8 +1464,8 @@ export default function App() {
   };
 
   const resetForm = async () => {
-    setShowInput(true);
-    setUiStage("input");
+    setVendorStage("input");
+    setAgenticStage("input");
     setAgenticState(null);
     setAgenticError(null);
     setPhaseSessionId(null);
@@ -1477,7 +1504,8 @@ export default function App() {
   const vendorsList = Array.from(selectedVendors);
   const toggleX = "40%"; // horizontal placement for phases/assembly toggles
   // Check if we have any letters (indicates at least one refine phase completed)
-  const hasAssembly = vendorsList.some((v) => letters[v]);
+  const hasVendorAssembly = vendorsList.some((v) => letters[v]);
+  const hasAgenticAssembly = agenticState?.status === "done";
 
   const renderCompose = () => (
     <>
@@ -1787,44 +1815,34 @@ export default function App() {
           </div>
           
           <div style={{ marginTop: 20, display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {(() => {
-              const isDisabled = loading || !jobText || !jobTitle.trim() || selectedVendors.size === 0;
-              return (
-                <button
-                  onClick={handleSubmit}
-                  disabled={isDisabled}
-                  style={{
-                    padding: "10px 20px",
-                    backgroundColor: isDisabled ? "var(--header-bg)" : "#3b82f6",
-                    color: "white",
-                    border: "none",
-                    borderRadius: "4px",
-                    cursor: isDisabled ? "not-allowed" : "pointer",
-                  }}
-                >
-                  {loading ? "Starting..." : "Start phased flow"}
-                </button>
-              );
-            })()}
-            {(() => {
-              const isDisabled = agenticLoading || !jobText || !jobTitle.trim() || selectedVendors.size === 0;
-              return (
-                <button
-                  onClick={handleSubmitAgentic}
-                  disabled={isDisabled}
-                  style={{
-                    padding: "10px 20px",
-                    backgroundColor: isDisabled ? "var(--header-bg)" : "#7c3aed",
-                    color: "white",
-                    border: "none",
-                    borderRadius: "4px",
-                    cursor: isDisabled ? "not-allowed" : "pointer",
-                  }}
-                >
-                  {agenticLoading ? "Starting…" : "Start agentic flow"}
-                </button>
-              );
-            })()}
+            <button
+              onClick={handleSubmit}
+              disabled={loading || !jobText || !jobTitle.trim() || selectedVendors.size === 0}
+              style={{
+                padding: "10px 20px",
+                backgroundColor: loading || !jobText || !jobTitle.trim() || selectedVendors.size === 0 ? "var(--header-bg)" : "#3b82f6",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: loading || !jobText || !jobTitle.trim() || selectedVendors.size === 0 ? "not-allowed" : "pointer",
+              }}
+            >
+              {loading ? "Starting..." : "Start vendor flow"}
+            </button>
+            <button
+              onClick={handleSubmitAgentic}
+              disabled={agenticLoading || !jobText || !jobTitle.trim() || selectedVendors.size === 0}
+              style={{
+                padding: "10px 20px",
+                backgroundColor: agenticLoading || !jobText || !jobTitle.trim() || selectedVendors.size === 0 ? "var(--header-bg)" : "#7c3aed",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: agenticLoading || !jobText || !jobTitle.trim() || selectedVendors.size === 0 ? "not-allowed" : "pointer",
+              }}
+            >
+              {agenticLoading ? "Starting…" : "Start agentic flow"}
+            </button>
           </div>
         </>
       ) : (
@@ -1852,7 +1870,7 @@ export default function App() {
           >
             ← Back to Input
           </button>
-          {uiStage === "assembly" && assemblyVisible && (
+          {(flow === "vendor" && vendorStage === "assembly" && assemblyVisible) && (
             <div
               style={{
                 position: "absolute",
@@ -1876,6 +1894,31 @@ export default function App() {
               </button>
             </div>
           )}
+          {(flow === "agentic" && agenticStage === "assembly") && (
+            <div
+              style={{
+                position: "absolute",
+                left: toggleX,
+                transform: "translateX(-50%)",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => agenticPhasesRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                style={{
+                  padding: "10px 14px",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "999px",
+                  backgroundColor: "var(--button-bg)",
+                  color: "var(--button-text)",
+                  cursor: "pointer",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
+                }}
+              >
+                ↑ Back to feedback
+              </button>
+            </div>
+          )}
           <div style={{ marginLeft: "auto" }}>
             <LanguageConfig />
           </div>
@@ -1885,24 +1928,25 @@ export default function App() {
 
       {!showInput && (
         <>
-          {uiStage === "agentic" ? (
+          {/* Flow-specific phases: above the final assembly so scroll-up or back shows them. Never show vendor PhaseFlow on agentic route. */}
+          {flow === "agentic" && (
+            <div ref={agenticPhasesRef}>
             <AgenticFlow
               agenticState={agenticState}
               onFeedbackStart={handleAgenticFeedbackStart}
               onRefine={handleAgenticRefine}
               onSuspend={handleAgenticSuspend}
               onResume={handleAgenticResume}
-              onSaveFinalLetter={persistAgenticLetter}
               feedbackVendors={vendorsList}
               loading={agenticLoading}
               error={agenticError}
-              saving={agenticSavingFinal}
-              saveError={agenticSaveError}
               onPollState={fetchAgenticPoll}
               pollIntervalMs={1000}
             />
-          ) : (
-            <div style={{ display: (uiStage === "assembly" && assemblyVisible) ? "none" : "block" }}>
+            </div>
+          )}
+          {flow === "vendor" && (
+            <div style={{ display: (vendorStage === "assembly" && assemblyVisible) ? "none" : "block" }}>
               <PhaseFlow
                 vendorsList={vendorsList}
                 onEditChange={updatePhaseEdit}
@@ -1921,45 +1965,73 @@ export default function App() {
             </div>
           )}
 
-          {/* Keep LetterTabs mounted to preserve translation state */}
-          {uiStage === "assembly" && (
+          {/* Final assembly: same LetterTabs for phased flow and agentic flow (when done) */}
+          {((flow === "vendor" && vendorStage === "assembly") || (flow === "agentic" && agenticStage === "assembly")) && (
             <div style={{ 
               position: "relative", 
               paddingTop: 4,
-              display: assemblyVisible ? "block" : "none"
+              display: (flow === "agentic" && agenticStage === "assembly") ? "block" : (assemblyVisible ? "block" : "none")
             }}>
               <LetterTabs
-                vendorsList={vendorsList}
-                vendorParagraphs={vendorParagraphs}
-                vendorCosts={vendorCosts}
-                vendorRefineCosts={vendorRefineCosts}
-                finalParagraphs={finalParagraphs}
-                setFinalParagraphs={setFinalParagraphs}
+                vendorsList={
+                  flow === "agentic"
+                    ? Object.keys(agenticState?.final_letters || {}).filter(Boolean)
+                    : vendorsList
+                }
+                vendorParagraphs={
+                  flow === "agentic" && agenticState?.final_letters
+                    ? Object.fromEntries(
+                        Object.entries(agenticState.final_letters).map(([v, text]) => [
+                          v,
+                          splitIntoParagraphs(text || "", v),
+                        ])
+                      )
+                    : vendorParagraphs
+                }
+                vendorCosts={
+                  flow === "agentic"
+                    ? (() => {
+                        const cost = agenticState?.cost ?? 0;
+                        const vs = Object.keys(agenticState?.final_letters || {});
+                        return vs.length ? Object.fromEntries(vs.map((v) => [v, cost / vs.length])) : {};
+                      })()
+                    : vendorCosts
+                }
+                vendorRefineCosts={
+                  flow === "agentic"
+                    ? (Object.keys(agenticState?.final_letters || {})).reduce((acc, v) => ({ ...acc, [v]: agenticState?.cost ?? 0 }), {})
+                    : vendorRefineCosts
+                }
+                finalParagraphs={flow === "agentic" ? agenticFinalParagraphs : finalParagraphs}
+                setFinalParagraphs={flow === "agentic" ? setAgenticFinalParagraphs : setFinalParagraphs}
                 originalText={jobText}
                 requirements={requirements}
                 competences={competences}
                 competenceScaleConfig={competenceScaleConfig}
                 competenceOverrides={competenceOverrides}
                 vendorColors={vendorColors}
-                failedVendors={failedVendors}
-                onRetry={async (vendor) => {
-                  // In assembly stage, retry refinement (approve draft again)
-                  setFailedVendors((prev) => {
-                    const next = { ...prev };
-                    delete next[vendor];
-                    return next;
-                  });
-                  try {
-                    await approvePhase("draft", vendor, {});
-                  } catch (e) {
-                    console.error("Retry error:", e);
-                    const errorMessage = extractErrorMessage(e);
-                    setFailedVendors((prev) => ({ ...prev, [vendor]: errorMessage }));
-                  }
-                }}
+                failedVendors={flow === "agentic" ? {} : failedVendors}
+                onRetry={
+                  flow === "agentic"
+                    ? async () => {}
+                    : async (vendor) => {
+                        setFailedVendors((prev) => {
+                          const next = { ...prev };
+                          delete next[vendor];
+                          return next;
+                        });
+                        try {
+                          await approvePhase("draft", vendor, {});
+                        } catch (e) {
+                          console.error("Retry error:", e);
+                          const errorMessage = extractErrorMessage(e);
+                          setFailedVendors((prev) => ({ ...prev, [vendor]: errorMessage }));
+                        }
+                      }
+                }
                 onAddParagraph={onAddParagraph}
-                onSaveAndCopy={persistFinalLetter}
-                savingFinal={savingFinal}
+                onSaveAndCopy={flow === "agentic" ? persistAgenticLetter : persistFinalLetter}
+                savingFinal={flow === "agentic" ? agenticSavingFinal : savingFinal}
                 vendorFeedback={vendorFeedback}
                 setVendorFeedback={setVendorFeedback}
               />
@@ -2019,7 +2091,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Assembly content is shown only in uiStage === "assembly" above */}
+      {/* Assembly (LetterTabs) is shown when vendorStage or agenticStage is "assembly" above */}
     </>
   );
 
@@ -2041,21 +2113,8 @@ export default function App() {
           }}
         >
           <h1 style={{ margin: 0, color: "var(--text-color)" }}>Letter Writer</h1>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button
-              onClick={() => setActiveTab("compose")}
-              style={{
-                padding: "8px 12px",
-                border: "1px solid var(--border-color)",
-                borderRadius: "4px",
-                backgroundColor: activeTab === "compose" ? "#3b82f6" : "var(--button-bg)",
-                color: activeTab === "compose" ? "white" : "var(--button-text)",
-                cursor: "pointer",
-                fontSize: "14px",
-              }}
-            >
-              Compose
-            </button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {/* NOTE: Flow (vendor vs agentic) is fixed per page load—no switching. Compose/vendor/agentic are not buttons. */}
             <button
               onClick={() => setShowStyleBlade(true)}
               style={{
@@ -2071,14 +2130,13 @@ export default function App() {
               AI Instructions
             </button>
             <button
-              onClick={() => setActiveTab("personal-data")}
+              onClick={() => setShowCvOverlay(true)}
               style={{
                 padding: "8px 12px",
                 border: "1px solid var(--border-color)",
                 borderRadius: "4px",
-                backgroundColor:
-                  activeTab === "personal-data" ? "#3b82f6" : "var(--button-bg)",
-                color: activeTab === "personal-data" ? "white" : "var(--button-text)",
+                backgroundColor: showCvOverlay ? "#3b82f6" : "var(--button-bg)",
+                color: showCvOverlay ? "white" : "var(--button-text)",
                 cursor: "pointer",
                 fontSize: "14px",
               }}
@@ -2086,14 +2144,13 @@ export default function App() {
               Your CV
             </button>
             <button
-              onClick={() => setActiveTab("documents")}
+              onClick={() => setShowDocumentsOverlay(true)}
               style={{
                 padding: "8px 12px",
                 border: "1px solid var(--border-color)",
                 borderRadius: "4px",
-                backgroundColor:
-                  activeTab === "documents" ? "#3b82f6" : "var(--button-bg)",
-                color: activeTab === "documents" ? "white" : "var(--button-text)",
+                backgroundColor: showDocumentsOverlay ? "#3b82f6" : "var(--button-bg)",
+                color: showDocumentsOverlay ? "white" : "var(--button-text)",
                 cursor: "pointer",
                 fontSize: "14px",
               }}
@@ -2101,14 +2158,13 @@ export default function App() {
               Previous Examples
             </button>
             <button
-              onClick={() => setActiveTab("settings")}
+              onClick={() => setShowSettingsOverlay(true)}
               style={{
                 padding: "8px 12px",
                 border: "1px solid var(--border-color)",
                 borderRadius: "4px",
-                backgroundColor:
-                  activeTab === "settings" ? "#3b82f6" : "var(--button-bg)",
-                color: activeTab === "settings" ? "white" : "var(--button-text)",
+                backgroundColor: showSettingsOverlay ? "#3b82f6" : "var(--button-bg)",
+                color: showSettingsOverlay ? "white" : "var(--button-text)",
                 cursor: "pointer",
                 fontSize: "14px",
               }}
@@ -2116,30 +2172,36 @@ export default function App() {
               Settings
             </button>
 
-            <CostDisplay onNavigate={() => setActiveTab("costs")} />
+            <CostDisplay onNavigate={() => setShowCostsOverlay(true)} />
             <AuthButton />
           </div>
         </div>
 
       </div>
 
-      {activeTab === "compose"
-        ? renderCompose()
-        : activeTab === "documents"
-        ? <DocumentsPage />
-        : activeTab === "settings"
-        ? <SettingsPage 
-            vendors={vendors} 
-            selectedVendors={selectedVendors}
-            setSelectedVendors={setSelectedVendors}
-            onCompetenceScalesChange={() => setCompetenceScaleConfig(getScaleConfig())}
-          />
-        : activeTab === "costs"
-        ? <CostsPage />
-        : <PersonalDataPage />}
+      {/* Main content is always the flow (compose). AI Instructions, CV, Previous Examples, Settings, Costs are overlays. */}
+      {renderCompose()}
+
+      <OverlayPanel title="Your CV" isOpen={showCvOverlay} onClose={() => setShowCvOverlay(false)}>
+        <PersonalDataPage />
+      </OverlayPanel>
+      <OverlayPanel title="Previous Examples" isOpen={showDocumentsOverlay} onClose={() => setShowDocumentsOverlay(false)}>
+        <DocumentsPage />
+      </OverlayPanel>
+      <OverlayPanel title="Settings" isOpen={showSettingsOverlay} onClose={() => setShowSettingsOverlay(false)}>
+        <SettingsPage
+          vendors={vendors}
+          selectedVendors={selectedVendors}
+          setSelectedVendors={setSelectedVendors}
+          onCompetenceScalesChange={() => setCompetenceScaleConfig(getScaleConfig())}
+        />
+      </OverlayPanel>
+      <OverlayPanel title="API Costs" isOpen={showCostsOverlay} onClose={() => setShowCostsOverlay(false)}>
+        <CostsPage />
+      </OverlayPanel>
 
       {/* Floating toggle to assembly while still in phases (after first refinement ready) */}
-      {!showInput && uiStage !== "assembly" && hasAssembly && (
+      {!showInput && ((flow === "vendor" && vendorStage !== "assembly" && hasVendorAssembly) || (flow === "agentic" && agenticStage !== "assembly" && hasAgenticAssembly)) && (
         <div
           style={{
             position: "fixed",
@@ -2152,7 +2214,8 @@ export default function App() {
         >
           <button
             onClick={() => {
-              setUiStage("assembly");
+              if (flow === "vendor") setVendorStage("assembly");
+              else setAgenticStage("assembly");
               setAssemblyVisible(true);
             }}
             style={{
@@ -2175,7 +2238,7 @@ export default function App() {
       )}
 
       {/* Floating toggle back to assembly when hidden (phases view) */}
-      {!showInput && uiStage === "assembly" && !assemblyVisible && (
+      {!showInput && flow === "vendor" && vendorStage === "assembly" && !assemblyVisible && (
         <div
           style={{
             position: "fixed",

@@ -800,6 +800,22 @@ def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 
+def _letter_block_for_context(draft_letter: str) -> str:
+    """Single draft: one block."""
+    return "========== Cover Letter (draft):\n" + draft_letter + "\n==========\n\n"
+
+
+def _letter_block_multi_proposals(draft_letters: dict) -> str:
+    """Multiple drafts (one per vendor): present as proposals for comparison and preference."""
+    if not draft_letters:
+        return "========== Cover Letter (draft):\n(No proposals.)\n==========\n\n"
+    parts = ["========== Cover letter proposals (one per vendor). Compare them; you may suggest edits to one or say you prefer one vendor's choice over another.\n"]
+    for vendor, text in draft_letters.items():
+        parts.append(f"--- Proposal ({vendor}) ---\n" + (text or "") + "\n")
+    parts.append("==========\n\n")
+    return "\n".join(parts)
+
+
 def get_agentic_topic_context(
     topic: str,
     draft_letter: str,
@@ -809,14 +825,18 @@ def get_agentic_topic_context(
     top_docs: List[dict],
     style_instructions: str = "",
     additional_user_info: str = "",
+    draft_letters: Optional[dict] = None,
 ) -> str:
     """Build the topic-specific context string for agentic feedback prompts.
     Returns the context blocks (excluding the draft letter itself) to include in the prompt.
-    Aligns with the same inputs used by the existing check functions.
+    If draft_letters is provided (vendor -> text), multiple proposals are shown so agents can compare and prefer one vendor's choice.
     """
     if not style_instructions:
         style_instructions = get_style_instructions()
-    letter_block = "========== Cover Letter (draft):\n" + draft_letter + "\n==========\n\n"
+    if draft_letters and len(draft_letters) > 0:
+        letter_block = _letter_block_multi_proposals(draft_letters)
+    else:
+        letter_block = _letter_block_for_context(draft_letter)
     if topic == "instruction":
         return (
             "========== Style Instructions:\n" + style_instructions + "\n==========\n\n" + letter_block

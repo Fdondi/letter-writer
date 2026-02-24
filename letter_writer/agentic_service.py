@@ -67,7 +67,10 @@ def save_agentic_state(session, state: Dict[str, Any]) -> None:
 
 
 # Keys to send to the frontend (no cv_text, job_text, top_docs, company_report, metadata, style_instructions)
-AGENTIC_STATE_RESPONSE_KEYS = ("status", "round", "draft_letter", "final_letter", "threads", "cost", "draft_vendor", "feedback_suspended", "topic_meta")
+AGENTIC_STATE_RESPONSE_KEYS = (
+    "status", "round", "draft_letter", "final_letter", "threads", "cost", "draft_vendor",
+    "draft_letters", "final_letters", "feedback_suspended", "topic_meta",
+)
 
 
 def _build_topic_meta(state: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -104,7 +107,7 @@ def slim_agentic_state_for_response(state: Optional[Dict[str, Any]]) -> Optional
 
 
 def poll_response(state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Minimal poll response: threads, ongoing, status, feedback_suspended, topic_meta.
+    """Minimal poll response: threads, ongoing, status, feedback_suspended, topic_meta, and optionally draft_letters/final_letters.
     ongoing is taken only from persisted state; it is set true until all topic threads have signalled done (or suspend/abort).
     """
     state = state or {}
@@ -113,13 +116,18 @@ def poll_response(state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     status = state.get("status", STATUS_DRAFT)
     feedback_suspended = bool(state.get("feedback_suspended"))
     topic_meta = _build_topic_meta(state)
-    return {
+    out = {
         "threads": threads,
         "ongoing": ongoing,
         "status": status,
         "feedback_suspended": feedback_suspended,
         "topic_meta": topic_meta,
     }
+    if state.get("draft_letters"):
+        out["draft_letters"] = state["draft_letters"]
+    if state.get("final_letters"):
+        out["final_letters"] = state["final_letters"]
+    return out
 
 
 def _empty_threads() -> Dict[str, List[Dict]]:
@@ -131,15 +139,22 @@ def _ensure_agentic_state(session) -> Dict[str, Any]:
     if state is None:
         state = {
             "draft_letter": None,
+            "draft_letters": {},
             "draft_vendor": None,
             "round": 0,
             "status": STATUS_DRAFT,
             "threads": _empty_threads(),
             "cost": 0.0,
+            "final_letter": None,
+            "final_letters": {},
         }
         save_agentic_state(session, state)
     if "threads" not in state:
         state["threads"] = _empty_threads()
+    if "draft_letters" not in state:
+        state["draft_letters"] = state.get("draft_letters") or {}
+    if "final_letters" not in state:
+        state["final_letters"] = state.get("final_letters") or {}
     return state
 
 
@@ -176,7 +191,8 @@ def _agentic_feedback_prompt_first_agent(topic: str, context: str, topic_label: 
     """System and user prompt for the first agent (no existing comments)."""
     system = (
         f"You are a feedback agent for the '{topic_label}' dimension of a cover letter. "
-        "You see the draft letter and the relevant context. "
+        "You see the draft letter(s) and the relevant context. "
+        "If multiple proposals (one per vendor) are shown, you may suggest edits to one or say you prefer one vendor's choice over another. "
         "If you have substantive feedback (issues or suggestions for the draft), write it in a single comment. "
         "If you have nothing to add, output exactly: NO COMMENT (or SKIP). "
         "Do not add anything after NO COMMENT or SKIP. "
@@ -435,11 +451,101 @@ def run_agentic_draft(
 
     state = _ensure_agentic_state(session)
     state["draft_letter"] = draft_letter
+    state["draft_letters"] = {draft_vendor: draft_letter}
     state["draft_vendor"] = draft_vendor
     state["round"] = 0
     state["status"] = STATUS_FEEDBACK
     state["threads"] = _empty_threads()
     state["cost"] = state.get("cost", 0) + cost
+    state["top_docs"] = top_docs
+    state["company_report"] = company_report
+    state["job_text"] = job_text
+    state["cv_text"] = cv_text
+    state["metadata"] = metadata
+    state["style_instructions"] = style_instructions
+    save_agentic_state(session, state)
+    return state
+
+
+def run_agentic_draft_multi(
+    session,
+    draft_vendors: List[str],
+    company_report_override: Optional[str] = None,
+    top_docs_override: Optional[List[dict]] = None,
+    style_instructions: str = "",
+) -> Dict[str, Any]:
+    """
+    Generate one draft letter per selected vendor and store in state as draft_letters.
+    Uses session common data; runs background once (first vendor) if company_report/top_docs not provided.
+    """
+    _require_session(session)
+    if not draft_vendors:
+        raise ValueError("draft_vendors must be non-empty")
+    job_text = session.get("job_text", "")
+    cv_text = session.get("cv_text", "")
+    metadata = session.get("metadata", {})
+    top_docs = list(top_docs_override) if top_docs_override else []
+    company_report = company_report_override or ""
+    first_vendor = draft_vendors[0]
+
+    if not company_report or not top_docs:
+        vendor_enum = ModelVendor(first_vendor)
+        company_name = get_metadata_field(metadata, vendor_enum, "company_name", "Unknown")
+        search_result = session.get("search_result", [])
+        trace_dir = Path("trace", f"{company_name}.agentic.background")
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        ai_client = get_client(vendor_enum)
+        if search_result:
+            result = select_top_documents(search_result, job_text, ai_client, trace_dir)
+            top_docs = result.get("top_docs", [])
+        if not company_report:
+            point_of_contact = metadata.get("common", {}).get("point_of_contact")
+            additional_company_info = get_metadata_field(metadata, vendor_enum, "additional_company_info", "")
+            from .generation import get_search_instructions
+            company_report = company_research(
+                company_name, job_text, ai_client, trace_dir,
+                point_of_contact=point_of_contact,
+                additional_company_info=additional_company_info,
+                search_instructions=get_search_instructions(),
+            )
+
+    if not style_instructions:
+        style_instructions = session.get("style_instructions", "") or get_style_instructions()
+
+    draft_letters_dict: Dict[str, str] = {}
+    total_cost = 0.0
+
+    def _one_draft(vendor: str) -> Tuple[str, str, float]:
+        trace_dir = Path("trace", "agentic.draft")
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        additional_user_info = get_metadata_field(metadata, ModelVendor(vendor), "additional_user_info", "")
+        ai_client = get_client(ModelVendor(vendor))
+        letter = generate_letter(
+            cv_text, top_docs, company_report, job_text, ai_client, trace_dir,
+            style_instructions, additional_user_info,
+        )
+        cost = getattr(ai_client, "total_cost", 0.0) or 0.0
+        return (vendor, letter, cost)
+
+    with ThreadPoolExecutor(max_workers=min(len(draft_vendors), 4)) as executor:
+        futures = {executor.submit(_one_draft, v): v for v in draft_vendors}
+        for fut in as_completed(futures):
+            try:
+                vendor, letter, cost = fut.result()
+                draft_letters_dict[vendor] = letter
+                total_cost += cost
+            except Exception as e:
+                _log(f"AGENTIC draft error for vendor {futures[fut]}: {e}")
+                raise
+
+    state = _ensure_agentic_state(session)
+    state["draft_letters"] = draft_letters_dict
+    state["draft_letter"] = draft_letters_dict.get(first_vendor) or ""
+    state["draft_vendor"] = first_vendor
+    state["round"] = 0
+    state["status"] = STATUS_FEEDBACK
+    state["threads"] = _empty_threads()
+    state["cost"] = state.get("cost", 0) + total_cost
     state["top_docs"] = top_docs
     state["company_report"] = company_report
     state["job_text"] = job_text
@@ -480,10 +586,12 @@ def run_agentic_feedback_round(
     trace_dir = Path("trace", "agentic.feedback")
     trace_dir.mkdir(parents=True, exist_ok=True)
 
+    draft_letters_multi = state.get("draft_letters") or {}
     for topic in AGENTIC_TOPIC_KEYS:
         context = get_agentic_topic_context(
             topic, draft_letter, cv_text, company_report, job_text, top_docs,
             style_instructions, additional_user_info,
+            draft_letters=draft_letters_multi if len(draft_letters_multi) > 0 else None,
         )
         thread = list(threads.get(topic, []))
         order = list(feedback_vendors)
@@ -637,6 +745,7 @@ def run_agentic_feedback_step(
             cur["vendor_index"] = 0
         topic_cursors[topic] = cur
 
+    draft_letters_multi = state.get("draft_letters") or {}
     # Build one work item per topic: run all vendors for that topic sequentially so each sees prior addendums
     work = []
     for topic in AGENTIC_TOPIC_KEYS:
@@ -647,6 +756,7 @@ def run_agentic_feedback_step(
         context = get_agentic_topic_context(
             topic, draft_letter, cv_text, company_report, job_text, top_docs,
             style_instructions, additional_user_info,
+            draft_letters=draft_letters_multi if len(draft_letters_multi) > 0 else None,
         )
         # Copy thread so each topic's worker has its own list/dicts (no shared refs across parallel topics)
         thread_copy = []
@@ -725,7 +835,8 @@ def run_agentic_feedback_step(
 
 def run_agentic_refine(session, threads_override: Optional[Dict[str, List[Dict]]] = None) -> Dict[str, Any]:
     """
-    Collect all positive-vote comments and addendums, call rewrite with draft model, save final letter.
+    Collect all positive-vote comments and addendums, then produce one final letter per vendor.
+    When draft_letters has multiple vendors, each vendor's draft is rewritten with the same feedback.
     Allow when status is feedback_done OR when feedback has stopped (feedback_ongoing false).
     If threads_override is provided, use it instead of state threads (e.g. user-edited).
     """
@@ -733,16 +844,20 @@ def run_agentic_refine(session, threads_override: Optional[Dict[str, List[Dict]]
     state = get_agentic_state(session)
     if not state:
         raise ValueError("Agentic state missing")
-    # Allow refine when we've reached feedback_done, or when feedback has stopped (e.g. all topics done or 10s abort)
     if state.get("status") != STATUS_FEEDBACK_DONE and state.get("feedback_ongoing") is not False:
         raise ValueError("Agentic state missing or not in feedback_done phase")
     if state.get("status") != STATUS_FEEDBACK_DONE:
-        state["status"] = STATUS_FEEDBACK_DONE  # align status so later code and UI stay consistent
+        state["status"] = STATUS_FEEDBACK_DONE
+    draft_letters = state.get("draft_letters") or {}
+    if not draft_letters:
+        draft_letters = {state.get("draft_vendor") or "": state.get("draft_letter") or ""}
+        if not any(draft_letters.values()):
+            draft_letters = {}
     draft_letter = state.get("draft_letter") or ""
-    draft_vendor = state.get("draft_vendor") or ""
+    draft_vendor = state.get("draft_vendor") or (list(draft_letters.keys())[0] if draft_letters else "")
     threads = threads_override if threads_override is not None else (state.get("threads") or _empty_threads())
     if threads_override is not None:
-        state["threads"] = threads  # keep state in sync for any later use
+        state["threads"] = threads
 
     parts = []
     for topic in AGENTIC_TOPIC_KEYS:
@@ -755,36 +870,51 @@ def run_agentic_refine(session, threads_override: Optional[Dict[str, List[Dict]]
             label = _topic_label(topic)
             parts.append(f"[{label}] {c.get('text', '')}")
             for a in c.get("addendums", []):
-                # Only include addendums that have at least one upvote (legacy addendums without "up" are still included)
                 aup = a.get("up")
                 if aup is not None and len(aup) == 0:
                     continue
                 parts.append(f"  Addendum: {a.get('text', '')}")
     combined = "\n\n".join(parts) if parts else ""
-    if not combined.strip():
-        state["final_letter"] = draft_letter
-        state["status"] = STATUS_DONE
-        save_agentic_state(session, state)
-        return state
-
     instruction_fb = combined
     accuracy_fb = "NO COMMENT"
     precision_fb = "NO COMMENT"
     company_fit_fb = "NO COMMENT"
     user_fit_fb = "NO COMMENT"
     human_fb = "NO COMMENT"
+
     trace_dir = Path("trace", "agentic.refine")
     trace_dir.mkdir(parents=True, exist_ok=True)
-    ai_client = get_client(ModelVendor(draft_vendor))
-    final_letter = rewrite_letter(
-        draft_letter,
-        instruction_fb, accuracy_fb, precision_fb,
-        company_fit_fb, user_fit_fb, human_fb,
-        ai_client, trace_dir,
-    )
-    cost = getattr(ai_client, "total_cost", 0.0) or 0.0
-    state["final_letter"] = final_letter
+    final_letters_dict: Dict[str, str] = {}
+    total_cost = 0.0
+
+    if not draft_letters:
+        state["final_letter"] = draft_letter
+        state["final_letters"] = {}
+        state["status"] = STATUS_DONE
+        save_agentic_state(session, state)
+        return state
+
+    for vendor, d_letter in draft_letters.items():
+        if not d_letter.strip():
+            final_letters_dict[vendor] = d_letter
+            continue
+        if not combined.strip():
+            final_letters_dict[vendor] = d_letter
+            continue
+        ai_client = get_client(ModelVendor(vendor))
+        final_letter = rewrite_letter(
+            d_letter,
+            instruction_fb, accuracy_fb, precision_fb,
+            company_fit_fb, user_fit_fb, human_fb,
+            ai_client, trace_dir,
+        )
+        final_letters_dict[vendor] = final_letter
+        total_cost += getattr(ai_client, "total_cost", 0.0) or 0.0
+
+    first_v = list(final_letters_dict.keys())[0] if final_letters_dict else draft_vendor
+    state["final_letters"] = final_letters_dict
+    state["final_letter"] = final_letters_dict.get(first_v) or final_letters_dict.get(draft_vendor) or ""
     state["status"] = STATUS_DONE
-    state["cost"] = state.get("cost", 0) + cost
+    state["cost"] = state.get("cost", 0) + total_cost
     save_agentic_state(session, state)
     return state

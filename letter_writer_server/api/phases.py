@@ -37,6 +37,7 @@ from letter_writer.personal_data_sections import get_models, get_agentic_draft_m
 from letter_writer.agentic_service import (
     get_agentic_state,
     run_agentic_draft,
+    run_agentic_draft_multi,
     run_agentic_feedback_round,
     run_agentic_refine,
     slim_agentic_state_for_response,
@@ -75,7 +76,9 @@ class RefinePhaseRequest(BaseModel):
 
 
 class AgenticDraftRequest(BaseModel):
+    """If draft_vendors is non-empty, one draft per vendor is generated (honors selection at top). Else single draft with draft_vendor."""
     draft_vendor: Optional[str] = None
+    draft_vendors: Optional[List[str]] = None
     company_report: Optional[str] = None
     top_docs: Optional[List[Dict[str, Any]]] = None
     style_instructions: Optional[str] = None
@@ -339,6 +342,19 @@ async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Se
         raise HTTPException(status_code=401, detail="Authentication required")
     if not session.get("job_text"):
         raise HTTPException(status_code=400, detail="Job text is missing")
+    draft_vendors = [v for v in (data.draft_vendors or []) if v]
+    if draft_vendors:
+        try:
+            state = run_agentic_draft_multi(
+                session,
+                draft_vendors=draft_vendors,
+                company_report_override=data.company_report,
+                top_docs_override=data.top_docs,
+                style_instructions=data.style_instructions or "",
+            )
+            return {"status": "ok", "agentic_state": slim_agentic_state_for_response(state)}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
     draft_vendor = data.draft_vendor
     if not draft_vendor:
         user_data = get_user_data(user["id"], use_cache=True) or {}
@@ -515,9 +531,11 @@ def _run_topic_loop(session_key: str, topic: str) -> None:
             continue
 
         vendor = order[vi]
+        draft_letters_multi = state.get("draft_letters") or {}
         context = get_agentic_topic_context(
             topic, draft_letter, cv_text, company_report, job_text, top_docs,
             style_instructions, additional_user_info,
+            draft_letters=draft_letters_multi if len(draft_letters_multi) > 0 else None,
         )
         _, updated_thread = _run_one_topic_agent(topic, vendor, context, thread_copy, trace_dir)
 
@@ -578,7 +596,7 @@ async def agentic_feedback_poll(session: Session = Depends(get_session)):
                     snapshot["topic_cursors"] = {}
                 snapshot["threads"][topic] = list((threads.get(topic) or []))
                 snapshot["topic_cursors"][topic] = dict((topic_cursors.get(topic) or {}))
-        for k in ("feedback_ongoing", "status", "round", "draft_letter", "final_letter", "cost", "draft_vendor", "feedback_suspended"):
+        for k in ("feedback_ongoing", "status", "round", "draft_letter", "final_letter", "cost", "draft_vendor", "feedback_suspended", "draft_letters", "final_letters"):
             if k in state:
                 snapshot[k] = state[k]
         snapshot["last_poll_at"] = now
