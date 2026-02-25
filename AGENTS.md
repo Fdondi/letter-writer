@@ -47,10 +47,11 @@ Firestore/GCP: `GOOGLE_CLOUD_PROJECT`, `FIRESTORE_PROJECT_ID`, `FIRESTORE_DATABA
 
 ### Firestore (GCP) dependency
 
-Most core features (`/api/extract/`, `/api/phases/init/`, `/api/documents/`, `/api/personal-data/`) require **GCP Application Default Credentials** for Firestore. Without a service account JSON key, these endpoints fail with `DefaultCredentialsError`. To set up:
-1. Obtain a service account JSON key with Firestore access
-2. Write it to a file, e.g. `/workspace/gcloud-credentials.json`
-3. Set `GOOGLE_APPLICATION_CREDENTIALS=/workspace/gcloud-credentials.json` as a system env var
+Most core features (`/api/extract/`, `/api/phases/init/`, `/api/documents/`, `/api/personal-data/`) require **GCP Application Default Credentials** for Firestore. Without credentials, these endpoints fail with `DefaultCredentialsError`.
+
+**Setup for Cursor Cloud:** Add a secret named `GOOGLE_CREDENTIALS_JSON` containing the full service account JSON. The update script writes it to `/workspace/gcloud-credentials.json`, and `~/.bashrc` sets `GOOGLE_APPLICATION_CREDENTIALS` to point at it. After adding the secret, restart the backend for it to take effect.
+
+**Setup for local dev:** Place the service account JSON at `/workspace/gcloud-credentials.json` and `export GOOGLE_APPLICATION_CREDENTIALS=/workspace/gcloud-credentials.json`.
 
 Endpoints that work **without** Firestore: `/health`, `/api/auth/*`, `/api/vendors/`, `/api/style-instructions/`, `/api/search-instructions/`, `/api/costs/*`.
 
