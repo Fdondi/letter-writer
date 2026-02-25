@@ -419,7 +419,7 @@ def _track_in_redis(
         pipe.execute()
         
     except Exception as e:
-        logger.error(f"Error tracking cost in Redis: {e}")
+        logger.warning("Redis cost track failed, falling back to memory: %s", e)
         # Fall back to memory tracking
         _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries)
 
@@ -453,10 +453,16 @@ def track_api_cost(
     
     redis_client = _get_redis_client()
     
-    if redis_client is not None:
-        _track_in_redis(redis_client, user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries)
-    else:
-        _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries)
+    try:
+        if redis_client is not None:
+            _track_in_redis(redis_client, user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries)
+            logger.info("Cost tracked (Redis): user_id=%s phase=%s vendor=%s cost=%.6f", user_id, phase, vendor, cost)
+        else:
+            _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries)
+            logger.info("Cost tracked (memory): user_id=%s phase=%s vendor=%s cost=%.6f", user_id, phase, vendor, cost)
+    except Exception as e:
+        logger.error("Cost tracking failed: user_id=%s phase=%s vendor=%s cost=%.6f error=%s", user_id, phase, vendor, cost, e)
+        raise
 
 
 def _get_summary_from_memory() -> Dict[str, Any]:
@@ -519,9 +525,13 @@ def get_cost_summary() -> Dict[str, Any]:
     redis_client = _get_redis_client()
     
     if redis_client is not None:
-        return _get_summary_from_redis(redis_client)
+        summary = _get_summary_from_redis(redis_client)
+        logger.debug("Cost summary (Redis): pending_cost=%.4f pending_requests=%s", summary.get("pending_cost", 0), summary.get("pending_requests", 0))
+        return summary
     else:
-        return _get_summary_from_memory()
+        summary = _get_summary_from_memory()
+        logger.debug("Cost summary (memory): pending_cost=%.4f pending_requests=%s", summary.get("pending_cost", 0), summary.get("pending_requests", 0))
+        return summary
 
 
 def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
@@ -538,10 +548,12 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
     """
     client = _get_bigquery_client()
     if client is None:
+        logger.debug("get_user_monthly_cost: BigQuery not available, returning 0 for user_id=%s", user_id)
         return {"error": "BigQuery not available", "total_cost": 0.0}
     
     # Ensure table exists before querying
     if not _ensure_bigquery_table():
+        logger.warning("get_user_monthly_cost: BigQuery table not available for user_id=%s", user_id)
         return {"error": "BigQuery table not available", "total_cost": 0.0}
     
     try:
@@ -614,6 +626,7 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
                 "output_tokens": int(row.output_tokens or 0)
             }
         
+        logger.debug("get_user_monthly_cost: user_id=%s months_back=%s total_cost=%.4f from BigQuery", user_id, months_back, total_cost)
         return {
             "user_id": user_id,
             "period_months": months_back,
@@ -626,7 +639,7 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
         }
         
     except Exception as e:
-        logger.error(f"Error querying BigQuery for user costs: {e}")
+        logger.error("get_user_monthly_cost failed: user_id=%s error=%s", user_id, e)
         return {"error": str(e), "total_cost": 0.0}
 
 
@@ -845,10 +858,12 @@ def flush_costs_to_bigquery(reset_after_flush: bool = True, save_completing_user
         pending_requests = _get_pending_requests_from_memory()
     
     if not pending_requests:
+        logger.info("Cost flush skipped: no pending costs to flush")
         return {"status": "skipped", "reason": "No costs to flush", "rows_inserted": 0}
     
     client = _get_bigquery_client()
     if client is None:
+        logger.warning("Cost flush failed: BigQuery not available (rows_pending=%s)", len(pending_requests))
         return {"status": "error", "error": "BigQuery not available", "rows_pending": len(pending_requests)}
     
     try:
@@ -886,25 +901,24 @@ def flush_costs_to_bigquery(reset_after_flush: bool = True, save_completing_user
         errors = client.insert_rows_json(table_id, rows_to_insert)
         
         if errors:
-            logger.error(f"BigQuery insert errors: {errors}")
+            logger.error("Cost flush BigQuery insert errors: %s (rows_attempted=%s)", errors[:5], len(rows_to_insert))
             return {
                 "status": "partial",
                 "rows_attempted": len(rows_to_insert),
                 "errors": errors[:5],  # Limit error output
             }
         
-        logger.info(f"Flushed {len(rows_to_insert)} cost records to BigQuery")
+        total_cost = sum(r["cost"] for r in rows_to_insert)
+        logger.info("Cost flush success: rows_inserted=%s total_cost=%.4f", len(rows_to_insert), total_cost)
         
         # Reset counters after successful flush
         if reset_after_flush:
             if redis_client is not None:
                 _reset_redis_counters(redis_client)
             _reset_memory_store()  # Always reset memory too
-            logger.info("Reset cost counters after flush")
+            logger.debug("Reset cost counters after flush")
         
-        # Calculate totals for response
-        total_cost = sum(r["cost"] for r in rows_to_insert)
-        
+        # Calculate totals for response (total_cost already computed above for logging)
         return {
             "status": "success",
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -913,7 +927,7 @@ def flush_costs_to_bigquery(reset_after_flush: bool = True, save_completing_user
         }
         
     except Exception as e:
-        logger.error(f"Error flushing costs to BigQuery: {e}")
+        logger.error("Cost flush failed: %s (rows_pending=%s)", e, len(pending_requests))
         return {"status": "error", "error": str(e), "rows_pending": len(pending_requests)}
 
 

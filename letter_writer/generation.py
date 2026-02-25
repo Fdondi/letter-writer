@@ -500,9 +500,19 @@ def get_search_instructions() -> str:
 
 
 @traceable(run_type="chain", name="company_research")
-def company_research(company_name: Optional[str], job_text: str, client: BaseClient, trace_dir: Path, additional_company_info: str = "", search: bool = True, model: str | ModelSize = ModelSize.LARGE, search_instructions: str = "") -> Optional[str]:
+def company_research(
+    company_name: Optional[str],
+    job_text: str,
+    client: BaseClient,
+    trace_dir: Path,
+    additional_company_info: str = "",
+    search: bool = True,
+    model: str | ModelSize = ModelSize.LARGE,
+    search_instructions: str = "",
+    point_of_contact: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
     """Research company information using OpenAI.
-    
+
     Args:
         company_name: Name of the company to research (may be none if we know the intermediary but not the real one)
         job_text: Job description text
@@ -512,20 +522,22 @@ def company_research(company_name: Optional[str], job_text: str, client: BaseCli
         search: Whether to enable web search tools (default: True)
         model: Model to use (default: ModelSize.LARGE)
         search_instructions: User-provided instructions for how to conduct the background search
+        point_of_contact: Optional dict with name, role, contact_details, notes (for context only)
     """
     # Use user-provided search instructions or fall back to defaults
     if search_instructions and search_instructions.strip():
         system = search_instructions.strip()
     else:
         system = "You are an expert in searching the internet for information about companies."
-    
+
+    job_text_safe = (job_text or "") if job_text is not None else ""
     company_prompt = ""
     if company_name:
         company_prompt = (
-        f"Search the internet and write a short, opinionated company report about {company_name}\n"
-        f"To disambiguiate, here is how they present themselves: {job_text[:500]}...\n"
-        "Do NOT include any links, only plain text.\n"
-    )
+            f"Search the internet and write a short, opinionated company report about {company_name}\n"
+            f"To disambiguiate, here is how they present themselves: {job_text_safe[:500]}...\n"
+            "Do NOT include any links, only plain text.\n"
+        )
 
     # Add user-provided company context if available
     user_company_context = ""
@@ -537,13 +549,36 @@ def company_research(company_name: Optional[str], job_text: str, client: BaseCli
             f"{additional_company_info}\n"
         )
 
-    prompt = company_prompt + user_company_context
+    # Optional point-of-contact context (e.g. recruiter/intermediary) for disambiguation or tone
+    poc_context = ""
+    if point_of_contact and isinstance(point_of_contact, dict):
+        parts = [f"{k}: {v}" for k, v in point_of_contact.items() if v]
+        if parts:
+            poc_context = "\n\nPOINT OF CONTACT (for context only): " + "; ".join(parts) + "\n"
+
+    prompt = company_prompt + user_company_context + poc_context
     if len(prompt) == 0:
         logger.warning("Not enough information to research the company.")
+        # #region agent log
+        try:
+            import json
+            with open("/home/fdondi/Documents/#GitHub/letter-writer/.cursor/debug-5b1b21.log", "a") as _f:
+                _f.write(json.dumps({"sessionId": "5b1b21", "hypothesisId": "H1", "location": "generation.py:company_research", "message": "company_research returning None (empty prompt)", "data": {"company_name": company_name, "job_text_is_none": job_text is None}, "timestamp": __import__("time").time() * 1000}) + "\n")
+        except Exception:
+            pass
+        # #endregion
         return None
 
     result = client.call(model, system, [prompt], search=search)
     (trace_dir / "company_research.txt").write_text(result, encoding="utf-8")
+    # #region agent log
+    try:
+        import json
+        with open("/home/fdondi/Documents/#GitHub/letter-writer/.cursor/debug-5b1b21.log", "a") as _f:
+            _f.write(json.dumps({"sessionId": "5b1b21", "hypothesisId": "H1", "location": "generation.py:company_research", "message": "company_research return", "data": {"result_is_none": result is None, "result_type": type(result).__name__}, "timestamp": __import__("time").time() * 1000}) + "\n")
+    except Exception:
+        pass
+    # #endregion
     return result
 
 @traceable(run_type="chain", name="generate_letter")
@@ -553,6 +588,16 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
     Args:
         additional_user_info: User-provided information about themselves relevant to this position (not in CV).
     """
+    # #region agent log
+    try:
+        import json
+        with open("/home/fdondi/Documents/#GitHub/letter-writer/.cursor/debug-5b1b21.log", "a") as _f:
+            _f.write(json.dumps({"sessionId": "5b1b21", "hypothesisId": "H3", "location": "generation.py:generate_letter", "message": "generate_letter entry", "data": {"company_report_is_none": company_report is None, "job_text_is_none": job_text is None, "company_report_type": type(company_report).__name__, "job_text_type": type(job_text).__name__}, "timestamp": __import__("time").time() * 1000}) + "\n")
+    except Exception:
+        pass
+    # #endregion
+    company_report = company_report if company_report is not None else ""
+    job_text = job_text if job_text is not None else ""
     # Validate CV text is present
     if cv_text is None or not cv_text or not str(cv_text).strip():
         error_msg = "CV text is missing or empty - cannot generate cover letter"
@@ -590,6 +635,14 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
         + additional_context +
         "\n\n"
     )
+    # #region agent log
+    try:
+        import json
+        with open("/home/fdondi/Documents/#GitHub/letter-writer/.cursor/debug-5b1b21.log", "a") as _f:
+            _f.write(json.dumps({"sessionId": "5b1b21", "hypothesisId": "H3", "location": "generation.py:generate_letter:before_prompt", "message": "before prompt build", "data": {"company_report_is_none": company_report is None, "job_text_is_none": job_text is None}, "timestamp": __import__("time").time() * 1000}) + "\n")
+    except Exception:
+        pass
+    # #endregion
     prompt = (
         "========== User CV:\n" + cv_text + "\n==========\n" +
         "========== Examples:\n" + examples_formatted + "\n==========\n" +

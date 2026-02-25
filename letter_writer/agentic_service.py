@@ -31,6 +31,7 @@ from .generation import (
     rewrite_letter,
 )
 from .phased_service import get_metadata_field
+from .cost_tracker import track_api_cost
 from .retrieval import select_top_documents
 from .research import company_research
 
@@ -41,7 +42,7 @@ STATUS_FEEDBACK = "feedback"
 STATUS_FEEDBACK_DONE = "feedback_done"
 STATUS_DONE = "done"
 
-MAX_ROUNDS = 5
+DEFAULT_MAX_ROUNDS = 3
 MAX_POSITIVE_COMMENTS = 5
 MIN_ROUNDS_BEFORE_DONE = 2  # require at least 2 full rounds (2 interactions per vendor) before we can stop
 # If the client does not send a poll request for this many seconds, we abort (client likely left).
@@ -53,6 +54,11 @@ def _require_session(session) -> None:
     """Raise if session is missing or invalid."""
     if not session:
         raise ValueError("Session is required")
+
+
+def _user_id(session) -> str:
+    """Return authenticated user id for cost tracking, or 'anonymous'."""
+    return (session.get("user") or {}).get("id") or "anonymous"
 
 
 def get_agentic_state(session) -> Optional[Dict[str, Any]]:
@@ -69,23 +75,31 @@ def save_agentic_state(session, state: Dict[str, Any]) -> None:
 # Keys to send to the frontend (no cv_text, job_text, top_docs, company_report, metadata, style_instructions)
 AGENTIC_STATE_RESPONSE_KEYS = (
     "status", "round", "draft_letter", "final_letter", "threads", "cost", "draft_vendor",
-    "draft_letters", "final_letters", "feedback_suspended", "topic_meta",
+    "draft_letters", "final_letters", "feedback_suspended", "topic_meta", "max_rounds",
 )
 
 
+def _get_max_rounds(state: Optional[Dict[str, Any]]) -> int:
+    """Return configured max_rounds for this run (default DEFAULT_MAX_ROUNDS)."""
+    if not state:
+        return DEFAULT_MAX_ROUNDS
+    return int(state.get("max_rounds") or DEFAULT_MAX_ROUNDS)
+
+
 def _build_topic_meta(state: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Build per-topic meta for UI: round, messages, suspended, done (round > MAX_ROUNDS)."""
+    """Build per-topic meta for UI: round, messages, suspended, done (round > max_rounds)."""
     if not state:
         return {}
     threads = state.get("threads") or _empty_threads()
     cursors = state.get("topic_cursors") or {}
     global_suspended = bool(state.get("feedback_suspended"))
+    max_rounds = _get_max_rounds(state)
     out = {}
     for topic in AGENTIC_TOPIC_KEYS:
         cur = cursors.get(topic) or {}
         r = cur.get("round", 1)
         suspended = global_suspended or bool(cur.get("suspended"))
-        done = r > MAX_ROUNDS
+        done = r > max_rounds
         out[topic] = {
             "round": r,
             "messages": len(threads.get(topic) or []),
@@ -101,6 +115,7 @@ def slim_agentic_state_for_response(state: Optional[Dict[str, Any]]) -> Optional
         return None
     result = {k: state.get(k) for k in AGENTIC_STATE_RESPONSE_KEYS if k in state}
     result["topic_meta"] = _build_topic_meta(state)
+    result["max_rounds"] = _get_max_rounds(state)
     if "feedback_suspended" not in result and state.get("feedback_suspended") is not None:
         result["feedback_suspended"] = state.get("feedback_suspended")
     return result
@@ -122,6 +137,7 @@ def poll_response(state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "status": status,
         "feedback_suspended": feedback_suspended,
         "topic_meta": topic_meta,
+        "max_rounds": _get_max_rounds(state),
     }
     if state.get("draft_letters"):
         out["draft_letters"] = state["draft_letters"]
@@ -403,6 +419,7 @@ def run_agentic_draft(
     company_report_override: Optional[str] = None,
     top_docs_override: Optional[List[dict]] = None,
     style_instructions: str = "",
+    max_rounds: int = DEFAULT_MAX_ROUNDS,
 ) -> Dict[str, Any]:
     """
     Generate the draft letter with the given vendor and store agentic state.
@@ -435,6 +452,7 @@ def run_agentic_draft(
                 additional_company_info=additional_company_info,
                 search_instructions=get_search_instructions(),
             )
+            company_report = company_report or ""
 
     if not style_instructions:
         style_instructions = session.get("style_instructions", "") or get_style_instructions()
@@ -463,7 +481,10 @@ def run_agentic_draft(
     state["cv_text"] = cv_text
     state["metadata"] = metadata
     state["style_instructions"] = style_instructions
+    state["max_rounds"] = max_rounds
     save_agentic_state(session, state)
+    if cost > 0:
+        track_api_cost(_user_id(session), "draft", draft_vendor, cost)
     return state
 
 
@@ -473,6 +494,7 @@ def run_agentic_draft_multi(
     company_report_override: Optional[str] = None,
     top_docs_override: Optional[List[dict]] = None,
     style_instructions: str = "",
+    max_rounds: int = DEFAULT_MAX_ROUNDS,
 ) -> Dict[str, Any]:
     """
     Generate one draft letter per selected vendor and store in state as draft_letters.
@@ -508,6 +530,15 @@ def run_agentic_draft_multi(
                 additional_company_info=additional_company_info,
                 search_instructions=get_search_instructions(),
             )
+            company_report = company_report or ""
+        # #region agent log
+        try:
+            import json
+            with open("/home/fdondi/Documents/#GitHub/letter-writer/.cursor/debug-5b1b21.log", "a") as _f:
+                _f.write(json.dumps({"sessionId": "5b1b21", "hypothesisId": "H4", "location": "agentic_service.py:run_agentic_draft_multi", "message": "after company_research", "data": {"company_report_is_none": company_report is None, "company_report_type": type(company_report).__name__}, "timestamp": __import__("time").time() * 1000}) + "\n")
+        except Exception:
+            pass
+        # #endregion
 
     if not style_instructions:
         style_instructions = session.get("style_instructions", "") or get_style_instructions()
@@ -529,11 +560,14 @@ def run_agentic_draft_multi(
 
     with ThreadPoolExecutor(max_workers=min(len(draft_vendors), 4)) as executor:
         futures = {executor.submit(_one_draft, v): v for v in draft_vendors}
+        user_id = _user_id(session)
         for fut in as_completed(futures):
             try:
                 vendor, letter, cost = fut.result()
                 draft_letters_dict[vendor] = letter
                 total_cost += cost
+                if cost > 0:
+                    track_api_cost(user_id, "draft", vendor, cost)
             except Exception as e:
                 _log(f"AGENTIC draft error for vendor {futures[fut]}: {e}")
                 raise
@@ -552,6 +586,7 @@ def run_agentic_draft_multi(
     state["cv_text"] = cv_text
     state["metadata"] = metadata
     state["style_instructions"] = style_instructions
+    state["max_rounds"] = max_rounds
     save_agentic_state(session, state)
     return state
 
@@ -610,7 +645,8 @@ def run_agentic_feedback_round(
 
     state["threads"] = threads
     positive_count = _count_positive_comments(threads)
-    if not any_change or round_num >= MAX_ROUNDS or positive_count > MAX_POSITIVE_COMMENTS:
+    max_rounds = _get_max_rounds(state)
+    if not any_change or round_num >= max_rounds or positive_count > MAX_POSITIVE_COMMENTS:
         state["status"] = STATUS_FEEDBACK_DONE
     save_agentic_state(session, state)
     return state
@@ -653,6 +689,36 @@ def start_agentic_feedback(session, feedback_vendors: List[str]) -> Dict[str, An
         }
         for topic in AGENTIC_TOPIC_KEYS
     }
+    save_agentic_state(session, state)
+    return state
+
+
+def add_agentic_round_to_state(
+    state: Dict[str, Any], all_topics: bool = True, topic: Optional[str] = None
+) -> None:
+    """Mutate state: add one round for all topics (increment max_rounds) or for one topic (decrement its round)."""
+    if all_topics:
+        state["max_rounds"] = (state.get("max_rounds") or DEFAULT_MAX_ROUNDS) + 1
+        return
+    if topic and topic in AGENTIC_TOPIC_KEYS:
+        if "topic_cursors" not in state or state["topic_cursors"] is None:
+            state["topic_cursors"] = {}
+        cursors = state["topic_cursors"]
+        cur = cursors.get(topic) or {}
+        cur = dict(cur)
+        cur["round"] = max(1, (cur.get("round") or 1) - 1)
+        cursors[topic] = cur
+
+
+def add_agentic_round(
+    session, all_topics: bool = True, topic: Optional[str] = None
+) -> Dict[str, Any]:
+    """Add one round for all topics (increment max_rounds) or one topic (decrement its round). Persist and return state."""
+    _require_session(session)
+    state = get_agentic_state(session)
+    if not state or state.get("status") not in (STATUS_FEEDBACK, STATUS_FEEDBACK_DONE):
+        raise ValueError("Agentic state missing or not in feedback phase")
+    add_agentic_round_to_state(state, all_topics=all_topics, topic=topic)
     save_agentic_state(session, state)
     return state
 
@@ -781,9 +847,10 @@ def run_agentic_feedback_step(
         rounds = {t: (topic_cursors.get(t) or {}).get("round", 1) for t in AGENTIC_TOPIC_KEYS}
         min_round = min(rounds.values())
         positive_count = _count_positive_comments(threads)
-        all_topics_finished = all(r > MAX_ROUNDS for r in rounds.values())
+        max_rounds = _get_max_rounds(state)
+        all_topics_finished = all(r > max_rounds for r in rounds.values())
         if min_round <= MIN_ROUNDS_BEFORE_DONE:
-            _log(f"AGENTIC no work this poll, min_round={min_round} — not stopping (need all topics >{MAX_ROUNDS} or positive cap)")
+            _log(f"AGENTIC no work this poll, min_round={min_round} — not stopping (need all topics >{max_rounds} or positive cap)")
         elif all_topics_finished or positive_count > MAX_POSITIVE_COMMENTS:
             state["feedback_ongoing"] = False
             state["status"] = STATUS_FEEDBACK_DONE
@@ -815,13 +882,14 @@ def run_agentic_feedback_step(
     rounds_per_topic = {t: (topic_cursors.get(t) or {}).get("round", 1) for t in AGENTIC_TOPIC_KEYS}
     min_round = min(rounds_per_topic.values())
     positive_count = _count_positive_comments(threads)
+    max_rounds = _get_max_rounds(state)
     _log(f"AGENTIC poll step: work_count={len(work)} min_round={min_round} rounds={rounds_per_topic}")
 
-    # Ongoing becomes false only when every topic thread has signalled done (round > MAX_ROUNDS for all), or positive cap.
+    # Ongoing becomes false only when every topic thread has signalled done (round > max_rounds for all), or positive cap.
     # We never set done just because this poll ran — only when the state explicitly has all topics finished.
-    all_topics_finished = all(r > MAX_ROUNDS for r in rounds_per_topic.values())
+    all_topics_finished = all(r > max_rounds for r in rounds_per_topic.values())
     if min_round <= MIN_ROUNDS_BEFORE_DONE:
-        _log(f"AGENTIC not done: min_round={min_round} (need all topics >{MAX_ROUNDS} or positive cap)")
+        _log(f"AGENTIC not done: min_round={min_round} (need all topics >{max_rounds} or positive cap)")
     elif all_topics_finished or positive_count > MAX_POSITIVE_COMMENTS:
         state["feedback_ongoing"] = False
         state["status"] = STATUS_FEEDBACK_DONE
@@ -894,6 +962,7 @@ def run_agentic_refine(session, threads_override: Optional[Dict[str, List[Dict]]
         save_agentic_state(session, state)
         return state
 
+    user_id = _user_id(session)
     for vendor, d_letter in draft_letters.items():
         if not d_letter.strip():
             final_letters_dict[vendor] = d_letter
@@ -909,7 +978,10 @@ def run_agentic_refine(session, threads_override: Optional[Dict[str, List[Dict]]
             ai_client, trace_dir,
         )
         final_letters_dict[vendor] = final_letter
-        total_cost += getattr(ai_client, "total_cost", 0.0) or 0.0
+        cost_inc = getattr(ai_client, "total_cost", 0.0) or 0.0
+        total_cost += cost_inc
+        if cost_inc > 0:
+            track_api_cost(user_id, "refine", vendor, cost_inc)
 
     first_v = list(final_letters_dict.keys())[0] if final_letters_dict else draft_vendor
     state["final_letters"] = final_letters_dict

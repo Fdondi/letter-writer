@@ -27,6 +27,7 @@ from .generation import (
     user_fit_check,
     extract_job_metadata,
 )
+from .cost_tracker import track_api_cost
 from .retrieval import retrieve_similar_job_offers, select_top_documents
 from .session_store import get_session as get_session_from_store, save_session
 from .firestore_store import get_collection
@@ -135,13 +136,23 @@ def set_metadata_field(metadata: dict, vendor: ModelVendor, field: str, value: s
     metadata[vendor.value][field] = value
 
 
-def _update_cost(state: VendorPhaseState, client, phase: str = "unknown") -> None:
+def _update_cost(
+    state: VendorPhaseState,
+    client,
+    phase: str = "unknown",
+    *,
+    user_id: Optional[str] = None,
+    vendor_str: Optional[str] = None,
+) -> None:
     """Update state with cost from client, tracking by phase.
+    If user_id and vendor_str are provided, also records cost via track_api_cost for Redis/BigQuery.
     
     Args:
         state: The vendor phase state to update
         client: The AI client with cost/token counters
         phase: The phase name (background, draft, feedback, refine)
+        user_id: Optional user id for cost tracking (when set, cost is sent to cost_tracker)
+        vendor_str: Optional vendor name for cost tracking (e.g. vendor.value)
     """
     cost = float(getattr(client, "total_cost", 0.0) or 0.0)
     input_tokens = int(getattr(client, "total_input_tokens", 0) or 0)
@@ -151,6 +162,13 @@ def _update_cost(state: VendorPhaseState, client, phase: str = "unknown") -> Non
     print(f"[DEBUG] _update_cost({phase}): cost={cost}, in={input_tokens}, out={output_tokens}, search={search_queries}")
     
     state.add_phase_cost(phase, cost, input_tokens, output_tokens, search_queries)
+    if cost > 0 and user_id and vendor_str:
+        track_api_cost(
+            user_id, phase, vendor_str, cost,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            search_queries=search_queries if search_queries else None,
+        )
 
 
 def _get_client_usage(client) -> tuple:
@@ -192,8 +210,13 @@ def _create_session(
 
 
 @traceable(run_type="chain", name="run_background_phase")
-def _run_background_phase(session_id: str, vendor: ModelVendor, 
-                          common_data: dict) -> VendorPhaseState:
+def _run_background_phase(
+    session_id: str,
+    vendor: ModelVendor,
+    common_data: dict,
+    *,
+    user_id: Optional[str] = None,
+) -> VendorPhaseState:
     """Run the background phase for a single vendor.
     
     Reads common data, processes vendor-specific work, and saves only vendor data.
@@ -266,7 +289,7 @@ def _run_background_phase(session_id: str, vendor: ModelVendor,
         top_docs=top_docs,
         company_report=company_report,
     )
-    _update_cost(state, ai_client, phase="background")
+    _update_cost(state, ai_client, phase="background", user_id=user_id, vendor_str=vendor.value)
     
     # Save vendor-specific data (lock-free, atomic)
     from .session_store import save_vendor_data
@@ -283,6 +306,7 @@ def advance_to_draft(
     company_report_override: Optional[str] = None,
     top_docs_override: Optional[List[dict]] = None,
     style_instructions: str = "",
+    user_id: Optional[str] = None,
 ) -> VendorPhaseState:
     # Force reload from MongoDB to ensure we have the latest session state
     # This is important because the session might have been updated by background phase
@@ -329,7 +353,7 @@ def advance_to_draft(
                 ai_client = get_client(vendor)
                 try:
                     state.top_docs = select_top_documents(session.search_result, session.job_text, ai_client, trace_dir)["top_docs"]
-                    _update_cost(state, ai_client, phase="background")
+                    _update_cost(state, ai_client, phase="background", user_id=user_id, vendor_str=vendor.value)
                 except Exception:
                     # If retrieval fails, use empty list (user can proceed with just company_report)
                     state.top_docs = []
@@ -382,7 +406,7 @@ def advance_to_draft(
         )
         
         # Capture draft cost before feedback generation
-        _update_cost(state, ai_client, phase="draft")
+        _update_cost(state, ai_client, phase="draft", user_id=user_id, vendor_str=vendor.value)
         _reset_client_counters(ai_client)
         
         # Run checks on the draft so the user can review/override feedback before refinement
@@ -409,7 +433,7 @@ def advance_to_draft(
         }
         
         # Capture feedback cost separately
-        _update_cost(state, ai_client, phase="feedback")
+        _update_cost(state, ai_client, phase="feedback", user_id=user_id, vendor_str=vendor.value)
         
     except Exception:
         traceback.print_exc()
@@ -435,6 +459,7 @@ def advance_to_refinement(
     company_report_override: Optional[str] = None,
     top_docs_override: Optional[List[dict]] = None,
     fancy: bool = False,
+    user_id: Optional[str] = None,
 ) -> VendorPhaseState:
     # Force reload from MongoDB to ensure we have the latest session state
     from .session_store import load_session
@@ -501,7 +526,7 @@ def advance_to_refinement(
     state.draft_letter = draft_letter
     state.final_letter = refined
     state.feedback = feedback
-    _update_cost(state, ai_client, phase="refine")
+    _update_cost(state, ai_client, phase="refine", user_id=user_id, vendor_str=vendor.value)
     
     # Save vendor-specific data to session_vendors collection (lock-free)
     from .session_store import save_vendor_data

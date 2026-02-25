@@ -17,6 +17,11 @@ router = APIRouter()
 
 class DocumentRequest(BaseModel):
     company_name: Optional[str] = None
+    role: Optional[str] = None
+    location: Optional[str] = None
+    language: Optional[str] = None
+    salary: Optional[str] = None
+    requirements: Optional[List[Any]] = None
     job_text: Optional[str] = None
     ai_letters: Optional[List[Dict[str, Any]]] = None
     letter_text: Optional[str] = None

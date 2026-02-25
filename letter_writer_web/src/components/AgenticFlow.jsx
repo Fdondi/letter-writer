@@ -4,6 +4,8 @@
  */
 import React, { useEffect, useRef, useState } from "react";
 import AgenticThread from "./AgenticThread";
+import { useTranslation } from "../utils/useTranslation";
+import LanguageSelector from "./LanguageSelector";
 
 const FEEDBACK_DESCRIPTIONS = {
   instruction: "Style and tone vs instructions.",
@@ -16,13 +18,78 @@ const FEEDBACK_DESCRIPTIONS = {
 
 const TOPIC_KEYS = ["instruction", "accuracy", "precision", "company_fit", "user_fit", "human"];
 
+const DRAFT_FIELD_ID = "agentic_draft";
+
+function DraftWithTranslation({ draftText, translation }) {
+  useEffect(() => {
+    if (translation) translation.resetFieldTranslation(DRAFT_FIELD_ID, draftText);
+  }, [draftText, translation]);
+
+  const displayedText = translation
+    ? translation.getTranslatedText(DRAFT_FIELD_ID, draftText)
+    : draftText;
+  const viewLanguage = translation ? translation.getFieldViewLanguage(DRAFT_FIELD_ID) : "source";
+
+  const handleLanguageChange = async (code) => {
+    if (!translation) return;
+    translation.setFieldViewLanguage(DRAFT_FIELD_ID, code);
+    if (code === "source") return;
+    if (draftText) await translation.translateField(DRAFT_FIELD_ID, draftText, code);
+  };
+
+  return (
+    <div style={{ position: "relative", padding: "0 16px 16px" }}>
+      {translation && (
+        <div
+          style={{
+            position: "absolute",
+            right: 16,
+            top: -22,
+            zIndex: 10,
+            background: "var(--panel-bg)",
+            border: "1px solid var(--border-color)",
+            borderBottom: "none",
+            borderTopLeftRadius: 4,
+            borderTopRightRadius: 4,
+            padding: "2px 2px 2px 4px",
+          }}
+        >
+          <LanguageSelector
+            languages={translation.languages}
+            viewLanguage={viewLanguage}
+            onLanguageChange={handleLanguageChange}
+            hasTranslation={(code) => translation.hasTranslation(DRAFT_FIELD_ID, code)}
+            isTranslating={translation.isTranslating[DRAFT_FIELD_ID] || false}
+            size="tiny"
+          />
+        </div>
+      )}
+      <div
+        style={{
+          paddingTop: translation ? 32 : 0,
+          fontSize: 13,
+          color: "var(--text-color)",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          maxHeight: 200,
+          overflowY: "auto",
+        }}
+      >
+        {displayedText}
+      </div>
+    </div>
+  );
+}
+
 export default function AgenticFlow({
   agenticState,
   onFeedbackStart,
   onRefine,
   onSuspend,
   onResume,
+  onAddRound,
   feedbackVendors = [],
+  vendorColors = {},
   loading = false,
   error = null,
   pollIntervalMs = 1000,
@@ -47,6 +114,7 @@ export default function AgenticFlow({
   const cost = agenticState?.cost ?? 0;
   const feedbackSuspended = agenticState?.feedback_suspended === true;
   const topicMeta = agenticState?.topic_meta || {};
+  const maxRounds = agenticState?.max_rounds ?? 3;
   // Active = not done and not suspended. Button and editing when active count is 0.
   const activeTopicCount = TOPIC_KEYS.filter(
     (topic) => !topicMeta[topic]?.done && !topicMeta[topic]?.suspended
@@ -55,6 +123,8 @@ export default function AgenticFlow({
   const canEditThreads = status === "feedback_done" || (status === "feedback" && allTopicsInactive);
   const canSuspendOrResume = status === "feedback";
   const anyCanResume = canSuspendOrResume && Object.values(topicMeta).some((m) => m?.suspended && !m?.done);
+
+  const translation = useTranslation();
 
   // Start feedback once when draft is ready (status feedback, round 0) and we have vendors
   useEffect(() => {
@@ -133,6 +203,33 @@ export default function AgenticFlow({
       const list = (base[topic] || []).map((c, i) =>
         i === commentIndex ? { ...c, text: newText } : c
       );
+      return { ...base, [topic]: list };
+    });
+  };
+
+  const handleRemoveAddendum = (topic, commentIndex, addendumIndex) => {
+    setEditedThreads((prev) => {
+      const base = prev ?? threadsFromState;
+      const list = (base[topic] || []).map((c, i) => {
+        if (i !== commentIndex) return c;
+        const addendums = [...(c.addendums || [])];
+        addendums.splice(addendumIndex, 1);
+        return { ...c, addendums };
+      });
+      return { ...base, [topic]: list };
+    });
+  };
+
+  const handleEditAddendum = (topic, commentIndex, addendumIndex, newText) => {
+    setEditedThreads((prev) => {
+      const base = prev ?? threadsFromState;
+      const list = (base[topic] || []).map((c, i) => {
+        if (i !== commentIndex) return c;
+        const addendums = (c.addendums || []).map((a, j) =>
+          j === addendumIndex ? { ...a, text: newText } : a
+        );
+        return { ...c, addendums };
+      });
       return { ...base, [topic]: list };
     });
   };
@@ -236,7 +333,7 @@ export default function AgenticFlow({
             <span style={{ fontSize: 10 }}>{draftCollapsed ? "▶" : "▼"}</span>
             Draft letter{draftVendorList.length > 1 ? "s" : ""}
           </button>
-          {!draftCollapsed && (
+              {!draftCollapsed && (
             <>
               {draftVendorList.length > 1 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: "8px 16px 0", borderBottom: "1px solid var(--border-color)" }}>
@@ -261,19 +358,10 @@ export default function AgenticFlow({
                   ))}
                 </div>
               )}
-              <div
-                style={{
-                  padding: "0 16px 16px",
-                  fontSize: 13,
-                  color: "var(--text-color)",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                  maxHeight: 200,
-                  overflowY: "auto",
-                }}
-              >
-                {(draftVendorList.length > 1 ? draftLetters[draftTab] : draftLetter) ?? ""}
-              </div>
+              <DraftWithTranslation
+                draftText={(draftVendorList.length > 1 ? draftLetters[draftTab] : draftLetter) ?? ""}
+                translation={translation}
+              />
             </>
           )}
         </div>
@@ -358,6 +446,25 @@ export default function AgenticFlow({
                       Resume all
                     </button>
                   )}
+                  {onAddRound && (status === "feedback" || status === "feedback_done") && (
+                    <button
+                      type="button"
+                      onClick={() => onAddRound(true, null)}
+                      disabled={loading}
+                      style={{
+                        padding: "6px 12px",
+                        fontSize: 13,
+                        backgroundColor: "var(--panel-bg)",
+                        color: "var(--text-color)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 6,
+                        cursor: loading ? "not-allowed" : "pointer",
+                      }}
+                      title={`Add one more round for all topics (max ${maxRounds + 1})`}
+                    >
+                      Add +1 round (all)
+                    </button>
+                  )}
                 </div>
               )}
               <div
@@ -375,13 +482,19 @@ export default function AgenticFlow({
                     thread={threads[topic] || []}
                     topicMeta={topicMeta[topic]}
                     description={FEEDBACK_DESCRIPTIONS[topic]}
+                    vendorColors={vendorColors}
+                    translation={translation}
                     canEdit={canEditThreads}
                     canSuspend={canSuspendOrResume && ongoing === true}
                     canResume={canSuspendOrResume && topicMeta[topic]?.suspended && !topicMeta[topic]?.done}
                     onSuspend={() => onSuspend?.(false, [topic])}
                     onResume={() => onResume?.(false, [topic])}
+                    onAddRound={onAddRound ? () => onAddRound(false, topic) : undefined}
+                    addRoundLoading={loading}
                     onRemoveComment={handleRemoveComment}
                     onEditComment={handleEditComment}
+                    onRemoveAddendum={handleRemoveAddendum}
+                    onEditAddendum={handleEditAddendum}
                   />
                 ))}
               </div>

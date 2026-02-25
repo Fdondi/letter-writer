@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import ModelSelector from "./components/ModelSelector";
 import LetterTabs from "./components/LetterTabs";
 import StyleInstructionsBlade from "./components/StyleInstructionsBlade";
@@ -39,6 +39,7 @@ function generateColors(vendors) {
 
 export default function App({ flow = "vendor" }) {
   const navigate = useNavigate();
+  const navLocation = useLocation();
   // ALL hooks must be declared before any conditional returns (React rules)
   // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState(null); // null = checking, true = authenticated, false = not authenticated
@@ -103,6 +104,7 @@ export default function App({ flow = "vendor" }) {
   const [agenticState, setAgenticState] = useState(null);
   const [agenticLoading, setAgenticLoading] = useState(false);
   const [agenticError, setAgenticError] = useState(null);
+  const [agenticMaxRounds, setAgenticMaxRounds] = useState(3);
   const [agenticSavingFinal, setAgenticSavingFinal] = useState(false);
   const [agenticSaveError, setAgenticSaveError] = useState(null);
   const [agenticFinalParagraphs, setAgenticFinalParagraphs] = useState([]);
@@ -396,6 +398,15 @@ export default function App({ flow = "vendor" }) {
       setAgenticStage("assembly");
     }
   }, [flow, agenticState?.status]);
+
+  // When navigating to agentic route with startAgentic state (clicking "Start agentic flow" from vendor route),
+  // the new route mount gets fresh state; restore agentic stage and clear the state from history.
+  useEffect(() => {
+    if (flow === "agentic" && navLocation.state?.startAgentic) {
+      setAgenticStage("agentic");
+      navigate(navLocation.pathname, { replace: true, state: {} });
+    }
+  }, [flow, navLocation.pathname, navLocation.state?.startAgentic, navigate]);
 
   // Clear agentic final assembly when not done; do not auto-fill (user builds Final Letter from vendor columns if they want)
   useEffect(() => {
@@ -746,17 +757,33 @@ export default function App({ flow = "vendor" }) {
       setAgenticSaveError("Job description is required to save");
       throw new Error("Job description is required to save");
     }
-    const aiLetters = [
-      {
-        vendor: "agentic",
-        text: agenticState?.draft_letter || letterText,
-        cost: agenticState?.cost ?? null,
-        rating: null,
-        comment: "",
-        chunks_used: 1,
-        user_corrections: [],
-      },
-    ];
+    // Build ai_letters like vendor flow: one entry per vendor with that vendor's letter text,
+    // so saved documents have the same structure and AI letters are stored under user data.
+    const finalLetters = agenticState?.final_letters || {};
+    const vendorKeys = Object.keys(finalLetters).filter(Boolean);
+    const totalCost = agenticState?.cost ?? null;
+    const costPerVendor = vendorKeys.length ? (totalCost != null ? totalCost / vendorKeys.length : null) : totalCost;
+    const aiLetters = vendorKeys.length > 0
+      ? vendorKeys.map((vendor) => ({
+          vendor,
+          text: (finalLetters[vendor] || "").trim(),
+          cost: costPerVendor,
+          rating: null,
+          comment: "",
+          chunks_used: 1,
+          user_corrections: [],
+        }))
+      : [
+          {
+            vendor: agenticState?.draft_vendor || "agentic",
+            text: letterText.trim(),
+            cost: totalCost,
+            rating: null,
+            comment: "",
+            chunks_used: 1,
+            user_corrections: [],
+          },
+        ];
     const payload = {
       company_name: companyName || "",
       role: jobTitle || "",
@@ -768,15 +795,18 @@ export default function App({ flow = "vendor" }) {
       letter_text: letterText.trim(),
       ai_letters: aiLetters,
     };
+    const url = documentId ? `/api/documents/${documentId}/` : "/api/documents/";
+    const method = documentId ? "PUT" : "POST";
     try {
       setAgenticSaveError(null);
       setAgenticSavingFinal(true);
-      const result = await fetchWithHeartbeat("/api/documents/", {
-        method: "POST",
+      const result = await fetchWithHeartbeat(url, {
+        method,
         body: JSON.stringify(payload),
       });
-      if (result.data?.document?.id) {
-        setDocumentId(result.data.document.id);
+      const data = result.data;
+      if (!documentId && data?.document?.id) {
+        setDocumentId(data.document.id);
       }
     } catch (e) {
       const msg = e.message || "Failed to save letter";
@@ -1103,7 +1133,7 @@ export default function App({ flow = "vendor" }) {
     setAgenticLoading(true);
     setAgenticError(null);
     setError(null);
-    navigate("/flows/agentic");
+    navigate("/flows/agentic", { state: { startAgentic: true } });
     setAgenticStage("agentic");
     const initialSessionId = phaseSessionId || (
       typeof crypto !== "undefined" && crypto.randomUUID
@@ -1186,6 +1216,7 @@ export default function App({ flow = "vendor" }) {
       if (effectiveTopDocs) body.top_docs = effectiveTopDocs;
       // Honor vendor selection: one draft per selected vendor
       if (vendorsList.length > 0) body.draft_vendors = vendorsList;
+      body.max_rounds = agenticMaxRounds;
       const res = await fetchWithHeartbeat("/api/phases/agentic/draft/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1218,6 +1249,7 @@ export default function App({ flow = "vendor" }) {
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
         topic_meta: data.topic_meta || {},
+        ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
         ...(data.draft_letters && { draft_letters: data.draft_letters }),
         ...(data.final_letters && { final_letters: data.final_letters }),
       }));
@@ -1281,6 +1313,7 @@ export default function App({ flow = "vendor" }) {
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
         topic_meta: data.topic_meta || {},
+        ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
       }));
     } catch (e) {
       setAgenticError(e?.message || String(e));
@@ -1311,6 +1344,38 @@ export default function App({ flow = "vendor" }) {
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
         topic_meta: data.topic_meta || {},
+        ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
+      }));
+    } catch (e) {
+      setAgenticError(e?.message || String(e));
+    } finally {
+      setAgenticLoading(false);
+    }
+  };
+
+  const handleAgenticAddRound = async (all = true, topic = null) => {
+    setAgenticLoading(true);
+    setAgenticError(null);
+    try {
+      const res = await fetch("/api/phases/agentic/rounds/add/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(all ? { all: true } : { topic }),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || res.statusText);
+      }
+      const data = await res.json();
+      setAgenticState((prev) => ({
+        ...(prev || {}),
+        threads: data.threads || {},
+        status: data.status ?? prev?.status,
+        ongoing: data.ongoing,
+        feedback_suspended: data.feedback_suspended,
+        topic_meta: data.topic_meta || {},
+        ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
       }));
     } catch (e) {
       setAgenticError(e?.message || String(e));
@@ -1814,7 +1879,7 @@ export default function App({ flow = "vendor" }) {
              </div>
           </div>
           
-          <div style={{ marginTop: 20, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ marginTop: 20, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <button
               onClick={handleSubmit}
               disabled={loading || !jobText || !jobTitle.trim() || selectedVendors.size === 0}
@@ -1829,20 +1894,42 @@ export default function App({ flow = "vendor" }) {
             >
               {loading ? "Starting..." : "Start vendor flow"}
             </button>
-            <button
-              onClick={handleSubmitAgentic}
-              disabled={agenticLoading || !jobText || !jobTitle.trim() || selectedVendors.size === 0}
+            <div
               style={{
-                padding: "10px 20px",
-                backgroundColor: agenticLoading || !jobText || !jobTitle.trim() || selectedVendors.size === 0 ? "var(--header-bg)" : "#7c3aed",
-                color: "white",
-                border: "none",
-                borderRadius: "4px",
-                cursor: agenticLoading || !jobText || !jobTitle.trim() || selectedVendors.size === 0 ? "not-allowed" : "pointer",
+                width: 1,
+                minHeight: 24,
+                backgroundColor: "var(--border-color)",
+                margin: "0 4px",
               }}
-            >
-              {agenticLoading ? "Starting…" : "Start agentic flow"}
-            </button>
+              aria-hidden="true"
+            />
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <button
+                onClick={handleSubmitAgentic}
+                disabled={agenticLoading || !jobText || !jobTitle.trim() || selectedVendors.size === 0}
+                style={{
+                  padding: "10px 20px",
+                  backgroundColor: agenticLoading || !jobText || !jobTitle.trim() || selectedVendors.size === 0 ? "var(--header-bg)" : "#7c3aed",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "4px",
+                  cursor: agenticLoading || !jobText || !jobTitle.trim() || selectedVendors.size === 0 ? "not-allowed" : "pointer",
+                }}
+              >
+                {agenticLoading ? "Starting…" : "Start agentic flow"}
+              </button>
+              <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 13, color: "var(--text-color)" }}>Max rounds:</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={agenticMaxRounds}
+                  onChange={(e) => setAgenticMaxRounds(Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 3)))}
+                  style={{ width: 48, padding: "6px 8px", borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }}
+                />
+              </label>
+            </div>
           </div>
         </>
       ) : (
@@ -1937,7 +2024,9 @@ export default function App({ flow = "vendor" }) {
               onRefine={handleAgenticRefine}
               onSuspend={handleAgenticSuspend}
               onResume={handleAgenticResume}
+              onAddRound={handleAgenticAddRound}
               feedbackVendors={vendorsList}
+              vendorColors={vendorColors}
               loading={agenticLoading}
               error={agenticError}
               onPollState={fetchAgenticPoll}

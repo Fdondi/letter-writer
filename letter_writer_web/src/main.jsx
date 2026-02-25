@@ -27,8 +27,8 @@ createRoot(rootEl).render(
         <Routes>
           <Route path="/flows/vendors" element={<AppWithFlow />} />
           <Route path="/flows/agentic" element={<AppWithFlow />} />
-          <Route path="/" element={<Navigate to="/flows/vendors" replace />} />
-          <Route path="*" element={<Navigate to="/flows/vendors" replace />} />
+          <Route path="/" element={<AppWithFlow />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </LanguageProvider>
     </DndProvider>

@@ -42,11 +42,13 @@ from letter_writer.agentic_service import (
     run_agentic_refine,
     slim_agentic_state_for_response,
     start_agentic_feedback,
+    add_agentic_round,
+    add_agentic_round_to_state,
     poll_response,
     _run_one_topic_agent,
     _get_topic_cursors,
     _empty_threads,
-    MAX_ROUNDS,
+    DEFAULT_MAX_ROUNDS,
     POLL_ABORT_SECONDS,
     STATUS_FEEDBACK_DONE,
 )
@@ -82,6 +84,7 @@ class AgenticDraftRequest(BaseModel):
     company_report: Optional[str] = None
     top_docs: Optional[List[Dict[str, Any]]] = None
     style_instructions: Optional[str] = None
+    max_rounds: Optional[int] = None
 
 
 class AgenticRunRoundRequest(BaseModel):
@@ -103,6 +106,12 @@ class AgenticResumeRequest(BaseModel):
     """Resume all threads (all=True) or specific topics (topics=[...])."""
     all: Optional[bool] = None
     topics: Optional[List[str]] = None
+
+
+class AgenticAddRoundRequest(BaseModel):
+    """Add one round: all=True for all topics (increment max_rounds), or topic='instruction' etc. for one topic."""
+    all: Optional[bool] = None
+    topic: Optional[str] = None
 
 @router.post("/init/")
 async def init_session(request: Request, data: InitSessionRequest, session: Session = Depends(get_session)):
@@ -266,7 +275,8 @@ async def background_phase(vendor: str, data: BackgroundPhaseRequest, request: R
                 raise HTTPException(status_code=400, detail="CV text is missing")
                 
             vendor_enum = ModelVendor(vendor)
-            vendor_state = _run_background_phase(session.session_key, vendor_enum, common_data)
+            user_id = (user or {}).get("id") or "anonymous"
+            vendor_state = _run_background_phase(session.session_key, vendor_enum, common_data, user_id=user_id)
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -288,13 +298,14 @@ async def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, se
         vendor_enum = ModelVendor(vendor)
         # style instructions
         instructions = session.get("style_instructions", "")
-        
+        user_id = (user or {}).get("id") or "anonymous"
         state = advance_to_draft(
             session_id=session.session_key,
             vendor=vendor_enum,
             company_report_override=data.company_report,
             top_docs_override=data.top_docs,
-            style_instructions=instructions
+            style_instructions=instructions,
+            user_id=user_id,
         )
         return {
             "status": "ok",
@@ -314,6 +325,7 @@ async def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, 
 
     try:
         vendor_enum = ModelVendor(vendor)
+        user_id = (user or {}).get("id") or "anonymous"
         state = advance_to_refinement(
             session_id=session.session_key,
             vendor=vendor_enum,
@@ -321,7 +333,8 @@ async def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, 
             feedback_override=data.feedback_override,
             company_report_override=data.company_report,
             top_docs_override=data.top_docs,
-            fancy=data.fancy
+            fancy=data.fancy,
+            user_id=user_id,
         )
         return {
             "status": "ok",
@@ -342,6 +355,7 @@ async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Se
         raise HTTPException(status_code=401, detail="Authentication required")
     if not session.get("job_text"):
         raise HTTPException(status_code=400, detail="Job text is missing")
+    max_rounds = data.max_rounds if data.max_rounds is not None else DEFAULT_MAX_ROUNDS
     draft_vendors = [v for v in (data.draft_vendors or []) if v]
     if draft_vendors:
         try:
@@ -351,6 +365,7 @@ async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Se
                 company_report_override=data.company_report,
                 top_docs_override=data.top_docs,
                 style_instructions=data.style_instructions or "",
+                max_rounds=max_rounds,
             )
             return {"status": "ok", "agentic_state": slim_agentic_state_for_response(state)}
         except Exception as e:
@@ -373,6 +388,7 @@ async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Se
             company_report_override=data.company_report,
             top_docs_override=data.top_docs,
             style_instructions=data.style_instructions or "",
+            max_rounds=max_rounds,
         )
         return {"status": "ok", "agentic_state": slim_agentic_state_for_response(state)}
     except Exception as e:
@@ -453,7 +469,7 @@ def _create_agentic_live(session_key: str, initial_agentic_state: Dict[str, Any]
 
 
 def _run_topic_loop(session_key: str, topic: str) -> None:
-    """Run this topic until it is done (round > MAX_ROUNDS), suspended, or abort (no poll for 30s). No topic checks others."""
+    """Run this topic until it is done (round > max_rounds), suspended, or abort (no poll for 30s). No topic checks others."""
     entry = _get_agentic_live(session_key)
     if not entry:
         return
@@ -524,9 +540,10 @@ def _run_topic_loop(session_key: str, topic: str) -> None:
                     random.shuffle(order)
                     state["topic_cursors"][topic] = cur
                 r = cur.get("round", 1)
-            if not order or r > MAX_ROUNDS:
+            max_rounds = state.get("max_rounds", DEFAULT_MAX_ROUNDS)
+            if not order or r > max_rounds:
                 _exit_persist_if_last(suspended_exit=False)
-                logger.info("AGENTIC topic %s done (round > %d)", topic, MAX_ROUNDS)
+                logger.info("AGENTIC topic %s done (round > %d)", topic, max_rounds)
                 return
             continue
 
@@ -554,9 +571,10 @@ def _run_topic_loop(session_key: str, topic: str) -> None:
 
         with topic_lock:
             cur = state["topic_cursors"].get(topic) or {}
-        if cur.get("round", 1) > MAX_ROUNDS:
+        max_rounds = state.get("max_rounds", DEFAULT_MAX_ROUNDS)
+        if cur.get("round", 1) > max_rounds:
             _exit_persist_if_last(suspended_exit=False)
-            logger.info("AGENTIC topic %s done (round > %d)", topic, MAX_ROUNDS)
+            logger.info("AGENTIC topic %s done (round > %d)", topic, max_rounds)
             return
 
 
@@ -641,9 +659,10 @@ def _apply_suspend(state: Dict[str, Any], all_topics: bool, topics: Optional[Lis
 
 
 def _apply_resume(state: Dict[str, Any], all_topics: bool, topics: Optional[List[str]]) -> List[str]:
-    """Clear suspend flags; set feedback_ongoing=True. Return list of topic keys to spawn (round <= MAX_ROUNDS)."""
+    """Clear suspend flags; set feedback_ongoing=True. Return list of topic keys to spawn (round <= max_rounds)."""
     state["feedback_suspended"] = False
     state["feedback_ongoing"] = True
+    max_rounds = state.get("max_rounds", DEFAULT_MAX_ROUNDS)
     to_spawn = []
     cursors = state.get("topic_cursors") or {}
     if all_topics:
@@ -654,7 +673,7 @@ def _apply_resume(state: Dict[str, Any], all_topics: bool, topics: Optional[List
             if "topic_cursors" not in state:
                 state["topic_cursors"] = {}
             state["topic_cursors"][t] = cur
-            if cur.get("round", 1) <= MAX_ROUNDS:
+            if cur.get("round", 1) <= max_rounds:
                 to_spawn.append(t)
     elif topics:
         for t in topics:
@@ -665,7 +684,7 @@ def _apply_resume(state: Dict[str, Any], all_topics: bool, topics: Optional[List
             cur = dict(state["topic_cursors"].get(t) or {})
             cur.pop("suspended", None)
             state["topic_cursors"][t] = cur
-            if cur.get("round", 1) <= MAX_ROUNDS:
+            if cur.get("round", 1) <= max_rounds:
                 to_spawn.append(t)
     return to_spawn
 
@@ -788,6 +807,42 @@ async def agentic_feedback_resume(
         raise
     except Exception as e:
         logger.exception("AGENTIC resume failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/agentic/rounds/add/")
+async def agentic_rounds_add(
+    data: AgenticAddRoundRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    set_current_request(request)
+    user = session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    all_topics = data.all is True
+    topic = data.topic if (data.topic and not all_topics) else None
+    if not all_topics and not topic:
+        raise HTTPException(status_code=400, detail="Provide all=true or topic=<key>")
+    if topic and topic not in AGENTIC_TOPIC_KEYS:
+        raise HTTPException(status_code=400, detail=f"topic must be one of {AGENTIC_TOPIC_KEYS}")
+    session_key = session.session_key
+    try:
+        entry = _get_agentic_live(session_key) if session_key else None
+        if entry:
+            state = entry["state"]
+            with entry["meta_lock"]:
+                add_agentic_round_to_state(state, all_topics=all_topics, topic=topic)
+            _persist_agentic_from_live(session_key, state)
+            return poll_response(state)
+        state = add_agentic_round(session, all_topics=all_topics, topic=topic)
+        return poll_response(state)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("AGENTIC add round failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 
