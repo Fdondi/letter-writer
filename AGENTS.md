@@ -45,6 +45,15 @@ API keys read via `os.getenv()` throughout the `letter_writer` package:
 
 Firestore/GCP: `GOOGLE_CLOUD_PROJECT`, `FIRESTORE_PROJECT_ID`, `FIRESTORE_DATABASE`
 
+### Firestore (GCP) dependency
+
+Most core features (`/api/extract/`, `/api/phases/init/`, `/api/documents/`, `/api/personal-data/`) require **GCP Application Default Credentials** for Firestore. Without a service account JSON key, these endpoints fail with `DefaultCredentialsError`. To set up:
+1. Obtain a service account JSON key with Firestore access
+2. Write it to a file, e.g. `/workspace/gcloud-credentials.json`
+3. Set `GOOGLE_APPLICATION_CREDENTIALS=/workspace/gcloud-credentials.json` as a system env var
+
+Endpoints that work **without** Firestore: `/health`, `/api/auth/*`, `/api/vendors/`, `/api/style-instructions/`, `/api/search-instructions/`, `/api/costs/*`.
+
 ### Testing
 
 - **Frontend tests**: `cd letter_writer_web && npx jest` — many tests fail due to pre-existing `LanguageProvider` context not being wrapped in test harnesses (31 pass, 64 fail).
