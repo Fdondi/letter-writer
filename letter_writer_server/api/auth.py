@@ -1,5 +1,9 @@
+import hmac
+import os
+
 from fastapi import APIRouter, Request, Response, Depends, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse
+from pydantic import BaseModel
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from letter_writer_server.core.config import settings
 from letter_writer_server.core.session import Session, get_session
@@ -76,3 +80,27 @@ async def auth_status(session: Session = Depends(get_session)):
 @router.get("/csrf-token/")
 async def csrf_token():
     return {"csrfToken": "not-needed-for-cookie-session"}
+
+
+class TestLoginRequest(BaseModel):
+    password: str
+
+
+@router.post("/test-login/")
+async def test_login(body: TestLoginRequest, request: Request, response: Response, session: Session = Depends(get_session)):
+    """Authenticate with a shared test password (set TEST_AUTH_PASSWORD in .env).
+    Disabled when the env var is unset, so production is never affected."""
+    expected = settings.TEST_AUTH_PASSWORD
+    if not expected:
+        raise HTTPException(status_code=404, detail="Test login is not enabled")
+    if not hmac.compare_digest(body.password, expected):
+        raise HTTPException(status_code=401, detail="Invalid password")
+
+    session['user'] = {
+        'id': 'test-user',
+        'email': 'test@letterwriter.dev',
+        'name': 'Test User',
+        'picture': None,
+        'provider': 'test',
+    }
+    return {"status": "ok", "user": session['user']}

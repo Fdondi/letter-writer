@@ -20,7 +20,7 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
-        "https://localhost:8443",
+        "[REDACTED]",
         "https://localhost",
         "https://example.com"
     ]
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # Google OAuth
     GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_OAUTH_SECRET", "")
-    GOOGLE_REDIRECT_URI: str = "https://localhost:8443/accounts/google/login/callback/" # Default for local dev
+    GOOGLE_REDIRECT_URI: str = "[REDACTED]/accounts/google/login/callback/" # Default for local dev
 
     # Firestore
     GOOGLE_CLOUD_PROJECT: Optional[str] = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("FIRESTORE_PROJECT_ID")
@@ -39,6 +39,9 @@ class Settings(BaseSettings):
 
     # BigQuery (for Cost Analytics)
     BIGQUERY_DATASET: str = os.getenv("BIGQUERY_DATASET", "letter_writer_costs")
+
+    # Test authentication (set TEST_AUTH_PASSWORD in .env to enable /api/auth/test-login/)
+    TEST_AUTH_PASSWORD: Optional[str] = os.getenv("TEST_AUTH_PASSWORD")
 
     # Session
     SESSION_SECRET_KEY: str = SECRET_KEY  # Reuse secret key for session signing

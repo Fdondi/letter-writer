@@ -264,7 +264,7 @@ class SessionMiddleware(BaseHTTPMiddleware):
                 max_age=self.max_age,
                 httponly=True,
                 samesite="lax",
-                secure=True # Always secure for now, maybe config?
+                secure=settings.ENVIRONMENT != "development",
             )
         
         return response
