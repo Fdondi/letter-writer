@@ -1,4 +1,5 @@
 from typing import List, Optional
+import logging
 import typer
 from google.cloud import firestore
 from google.cloud.firestore_v1.vector import Vector
@@ -6,7 +7,8 @@ from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
 from openai import OpenAI
 
 from .config import EMBED_MODEL
-from .firestore_store import get_collection, get_firestore_client
+
+logger = logging.getLogger(__name__)
 
 
 def embed(text: str, client: OpenAI) -> Vector:
@@ -43,7 +45,10 @@ def upsert_documents(collection, doc_data_list: List[dict]) -> None:
     if not doc_data_list:
         return
     
-    batch = get_firestore_client().batch()
+    firestore_client = getattr(collection, "_client", None)
+    if firestore_client is None:
+        raise RuntimeError("Collection reference does not expose a Firestore client")
+    batch = firestore_client.batch()
     batch_count = 0
     max_batch_size = 500  # Firestore batch limit
     
@@ -62,7 +67,7 @@ def upsert_documents(collection, doc_data_list: List[dict]) -> None:
         # Commit batch if we reach the limit
         if batch_count >= max_batch_size:
             batch.commit()
-            batch = get_firestore_client().batch()
+            batch = firestore_client.batch()
             batch_count = 0
     
     # Commit remaining documents
@@ -75,7 +80,10 @@ def delete_documents(collection, ids: List[str]) -> None:
     if not ids:
         return
     
-    batch = get_firestore_client().batch()
+    firestore_client = getattr(collection, "_client", None)
+    if firestore_client is None:
+        raise RuntimeError("Collection reference does not expose a Firestore client")
+    batch = firestore_client.batch()
     batch_count = 0
     max_batch_size = 500
     
@@ -86,7 +94,7 @@ def delete_documents(collection, ids: List[str]) -> None:
         
         if batch_count >= max_batch_size:
             batch.commit()
-            batch = get_firestore_client().batch()
+            batch = firestore_client.batch()
             batch_count = 0
     
     if batch_count > 0:
@@ -110,19 +118,31 @@ def query_vector_similarity(
     Returns:
         List of documents (as dicts) with similarity scores
     """
-    print(f"[RAG] query_vector_similarity: collection={collection.id}, limit={limit}, vector_len={len(vector) if vector else 0}")
+    collection_name = getattr(collection, "id", getattr(collection, "_parent", None) and getattr(collection._parent, "id", "query"))
+    logger.debug(
+        "[RAG] query_vector_similarity: collection=%s, limit=%s, vector_len=%s",
+        collection_name,
+        limit,
+        len(vector) if vector else 0,
+    )
     
     # Diagnostic: check collection state
     try:
         sample = list(collection.limit(3).stream())
-        print(f"[RAG] diagnostic: collection has docs={len(sample) > 0} (sampled {len(sample)})")
+        logger.debug("[RAG] diagnostic: collection has docs=%s (sampled %s)", len(sample) > 0, len(sample))
         for s in sample:
             d = s.to_dict()
             has_vec = "vector" in d and d["vector"] is not None
             vec_len = len(d["vector"]) if has_vec and hasattr(d["vector"], "__len__") else "N/A"
-            print(f"[RAG] diagnostic: doc={s.id}, has_vector={has_vec}, vector_len={vec_len}, company={d.get('company_name_original', d.get('company_name', '?'))}")
+            logger.debug(
+                "[RAG] diagnostic: doc=%s, has_vector=%s, vector_len=%s, company=%s",
+                s.id,
+                has_vec,
+                vec_len,
+                d.get("company_name_original", d.get("company_name", "?")),
+            )
     except Exception as diag_err:
-        print(f"[RAG] diagnostic failed: {diag_err}")
+        logger.warning("[RAG] diagnostic failed: %s", diag_err)
     
     # Firestore vector search uses find_nearest on collection
     # Note: This requires a vector index to be created first via Console or gcloud
@@ -144,9 +164,13 @@ def query_vector_similarity(
         doc_dicts.append(doc_dict)
     
     if len(doc_dicts) < limit:
-        print(f"[RAG] WARNING: query_vector_similarity returned {len(doc_dicts)} docs, expected up to {limit}")
+        logger.warning(
+            "[RAG] query_vector_similarity returned %s docs, expected up to %s",
+            len(doc_dicts),
+            limit,
+        )
     else:
-        print(f"[RAG] query_vector_similarity returned {len(doc_dicts)} docs")
+        logger.debug("[RAG] query_vector_similarity returned %s docs", len(doc_dicts))
     
     return doc_dicts
 

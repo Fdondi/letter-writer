@@ -1,6 +1,7 @@
 from typing import Dict, Any, List, Optional, Set
 from datetime import datetime
 import logging
+from letter_writer.cost_tracker import get_all_model_pricing
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,17 @@ def get_background_models(user_data: Dict[str, Any]) -> List[str]:
     models_data = user_data.get("background_models")
     models = unwrap_for_response("background_models", models_data) or []
     models = _validate_model_ids(models) if models else []
+    if models:
+        try:
+            searchable_models = get_all_model_pricing(search_only=True)
+            searchable_ids = {
+                f"{m['vendor_key']}/{m['id']}"
+                for vendor_models in searchable_models.values()
+                for m in vendor_models
+            }
+            models = [mid for mid in models if mid in searchable_ids]
+        except Exception as e:
+            logger.warning("Failed to validate background models against searchable list: %s", e)
     return models if models else list(DEFAULT_BACKGROUND_MODELS)
 
 def unwrap_for_response(field_name: str, field_data: Any) -> Any:

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { USER_MONTHLY_COST_EVENT } from "../utils/apiHelpers";
 
 /**
  * Displays the user's total API cost for the current month.
@@ -13,10 +14,18 @@ export default function CostDisplay({ onNavigate }) {
 
   useEffect(() => {
     fetchCost();
-    
-    // Refresh every 5 minutes
-    const interval = setInterval(fetchCost, 5 * 60 * 1000);
-    return () => clearInterval(interval);
+
+    const handleCostUpdate = (event) => {
+      const nextCost = event?.detail?.value;
+      if (typeof nextCost === "number" && !Number.isNaN(nextCost)) {
+        setCost(nextCost);
+        setError(null);
+        setLoading(false);
+      }
+    };
+
+    window.addEventListener(USER_MONTHLY_COST_EVENT, handleCostUpdate);
+    return () => window.removeEventListener(USER_MONTHLY_COST_EVENT, handleCostUpdate);
   }, []);
 
   const fetchCost = async () => {

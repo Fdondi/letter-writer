@@ -4,6 +4,17 @@
 
 // Cache CSRF token to avoid fetching it on every request
 let csrfToken = null;
+export const USER_MONTHLY_COST_EVENT = "user-monthly-cost-updated";
+
+export function publishUserMonthlyCost(payload) {
+  const monthlyCost = payload?.user_monthly_cost;
+  if (typeof monthlyCost !== "number" || Number.isNaN(monthlyCost)) {
+    return;
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(USER_MONTHLY_COST_EVENT, { detail: { value: monthlyCost } }));
+  }
+}
 
 /**
  * Get CSRF token from server or cookie.
@@ -185,6 +196,7 @@ export async function fetchWithHeartbeat(url, options = {}, restoreConfig = null
           throw new Error(JSON.parse(retryText).detail || `Request failed: ${url}`);
         }
         const retryData = JSON.parse(retryText);
+        publishUserMonthlyCost(retryData);
         return {
           status: retryRes.status,
           data: retryData,
@@ -255,6 +267,7 @@ export async function fetchWithHeartbeat(url, options = {}, restoreConfig = null
   }
   
   const data = await res.json();
+  publishUserMonthlyCost(data);
   return {
     status: res.status,
     data,

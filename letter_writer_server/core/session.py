@@ -41,11 +41,20 @@ def _load_from_filesystem(session_key: str) -> Optional[Dict[str, Any]]:
 def _save_to_filesystem(session_key: str, data: Dict[str, Any]) -> None:
     try:
         file_path = _get_session_file_path(session_key)
+        # Directory can disappear in container restarts/cleanup windows.
+        file_path.parent.mkdir(parents=True, exist_ok=True)
         # Write to temp file then rename for atomicity
         tmp_path = file_path.with_suffix('.tmp')
         with open(tmp_path, 'wb') as f:
             pickle.dump(data, f)
-        tmp_path.rename(file_path)
+        try:
+            tmp_path.rename(file_path)
+        except FileNotFoundError:
+            # Race-safe retry: ensure parent exists and rewrite temp once.
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(tmp_path, 'wb') as f:
+                pickle.dump(data, f)
+            tmp_path.rename(file_path)
     except Exception as e:
         logger.error(f"Failed to save session {session_key} to filesystem: {e}")
 

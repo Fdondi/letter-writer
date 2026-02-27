@@ -8,6 +8,9 @@ This module defines the schema as code, making it:
 """
 
 from typing import Dict, Any, List
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Table configuration
 TABLE_CONFIG = {
@@ -166,25 +169,31 @@ OPTIONS(
 
 def print_schema_documentation():
     """Print schema documentation in markdown format."""
-    print(f"# BigQuery Table: `{TABLE_CONFIG['dataset']}.{TABLE_CONFIG['table']}`")
-    print()
-    print(f"{TABLE_CONFIG['description']}")
-    print()
-    print("## Schema")
-    print()
-    print("| Column | Type | Mode | Description |")
-    print("|--------|------|------|-------------|")
+    logger.info("# BigQuery Table: `%s.%s`", TABLE_CONFIG["dataset"], TABLE_CONFIG["table"])
+    logger.info("")
+    logger.info("%s", TABLE_CONFIG["description"])
+    logger.info("")
+    logger.info("## Schema")
+    logger.info("")
+    logger.info("| Column | Type | Mode | Description |")
+    logger.info("|--------|------|------|-------------|")
     for field in SCHEMA:
-        print(f"| `{field['name']}` | {field['type']} | {field['mode']} | {field.get('description', '')} |")
-    print()
-    print("## Partitioning")
-    print()
-    print(f"- **Type**: {TABLE_CONFIG['partitioning']['type']}")
-    print(f"- **Field**: `{TABLE_CONFIG['partitioning']['field']}`")
-    print()
-    print("## Clustering")
-    print()
-    print(f"- **Fields**: `{', '.join(TABLE_CONFIG['clustering'])}`")
+        logger.info(
+            "| `%s` | %s | %s | %s |",
+            field["name"],
+            field["type"],
+            field["mode"],
+            field.get("description", ""),
+        )
+    logger.info("")
+    logger.info("## Partitioning")
+    logger.info("")
+    logger.info("- **Type**: %s", TABLE_CONFIG["partitioning"]["type"])
+    logger.info("- **Field**: `%s`", TABLE_CONFIG["partitioning"]["field"])
+    logger.info("")
+    logger.info("## Clustering")
+    logger.info("")
+    logger.info("- **Fields**: `%s`", ", ".join(TABLE_CONFIG["clustering"]))
 
 
 if __name__ == "__main__":
@@ -192,6 +201,6 @@ if __name__ == "__main__":
     
     if len(sys.argv) > 1 and sys.argv[1] == "--sql":
         project = sys.argv[2] if len(sys.argv) > 2 else "YOUR_PROJECT_ID"
-        print(get_create_table_sql(project))
+        logger.info("%s", get_create_table_sql(project))
     else:
         print_schema_documentation()

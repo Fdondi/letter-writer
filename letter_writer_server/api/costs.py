@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi import APIRouter, Request, HTTPException, Depends, Query
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 
@@ -68,8 +68,8 @@ async def get_daily_costs(request: Request, session: Session = Depends(get_sessi
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/models/")
-async def get_models_pricing():
+async def get_models_pricing(supports_search: bool = Query(False)):
     try:
-        return get_all_model_pricing()
+        return get_all_model_pricing(search_only=supports_search)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

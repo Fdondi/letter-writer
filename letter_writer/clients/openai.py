@@ -19,10 +19,10 @@ class OpenAIClient(BaseClient):
             model = model_size
         else:
             model = self.get_model_for_size(model_size)
-        if search:
-            if "gpt-4o" not in model:
-                typer.echo(f"[WARNING] ignoring requested model {model}, using gpt-4o-search-preview instead")
-            model = "gpt-4o-search-preview"
+        if search and "search" not in model:
+            typer.echo(
+                f"[WARNING] search requested for OpenAI model {model} without explicit search capability"
+            )
         typer.echo(f"[INFO] using OpenAI model {model}" + (" with search" if search else ""))
         response = self.client.chat.completions.create(
             model=model,
@@ -30,11 +30,16 @@ class OpenAIClient(BaseClient):
         )
         
         if response.usage:
+            details = getattr(response.usage, "prompt_tokens_details", None)
+            cached = int(getattr(details, "cached_tokens", 0) or 0)
             self.track_cost(
                 model,
                 response.usage.prompt_tokens,
                 response.usage.completion_tokens,
-                search_queries=1 if search else 0
+                search_queries=1 if search else 0,
+                cached_tokens=cached,
             )
-            
+            if cached:
+                typer.echo(f"[INFO] prompt cache hit: {cached} tokens")
+
         return response.choices[0].message.content.strip()

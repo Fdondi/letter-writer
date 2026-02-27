@@ -76,6 +76,7 @@ export default function LetterTabs({
   savingFinal = false,
   vendorFeedback = {},
   setVendorFeedback = () => {},
+  refineSamples = {}, // vendor -> [sampled draft vendors used as reference]
 }) {
   const [collapsed, setCollapsed] = useState([]);
   const [savedState, setSavedState] = useState("save_copy"); // "save_copy" | "copy"
@@ -131,6 +132,17 @@ export default function LetterTabs({
     setCollapsed((prev) =>
       prev.includes(vendor) ? prev.filter((v) => v !== vendor) : [...prev, vendor]
     );
+  };
+
+  const refineSampleTooltip = (vendor) => {
+    const samples = refineSamples?.[vendor];
+    if (!samples || samples.length === 0) return null;
+    const counts = {};
+    samples.forEach((s) => { counts[s] = (counts[s] || 0) + 1; });
+    const parts = Object.entries(counts)
+      .sort(([, a], [, b]) => b - a)
+      .map(([v, n]) => n > 1 ? `${v} ×${n}` : v);
+    return `Reference drafts used: ${parts.join(", ")}`;
   };
 
   const vendorKeys = Object.keys(vendorParagraphs);
@@ -841,14 +853,27 @@ export default function LetterTabs({
         flexShrink: 0,
         color: "var(--text-color)",
       }}>
-        <span style={{ fontWeight: 600 }}>{vendor}</span>
+        <span style={{ fontWeight: 600 }} title={refineSampleTooltip(vendor) || ""}>
+          {vendor}
+          {refineSamples?.[vendor]?.length > 0 && (
+            <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.85, textTransform: "none", marginTop: 1 }}>
+              refs: {(() => {
+                const counts = {};
+                refineSamples[vendor].forEach((s) => { counts[s] = (counts[s] || 0) + 1; });
+                return Object.entries(counts)
+                  .sort(([, a], [, b]) => b - a)
+                  .map(([sv, n]) => n > 1 ? `${sv} ×${n}` : sv)
+                  .join(", ");
+              })()}
+            </div>
+          )}
+        </span>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {vendorCosts?.[vendor] !== undefined && vendorCosts[vendor] > 0 && (
             <div style={{ fontSize: "11px", color: "rgba(255, 255, 255, 0.9)", textAlign: "right" }}>
               {vendorRefineCosts?.[vendor] !== undefined && vendorRefineCosts[vendor] > 0 && (
                 <div>${vendorRefineCosts[vendor].toFixed(4)}</div>
               )}
-              <div style={{ fontSize: "10px", opacity: 0.85 }}>Total: ${vendorCosts[vendor].toFixed(4)}</div>
             </div>
           )}
           {failedVendors?.[vendor] && (
@@ -1167,14 +1192,27 @@ export default function LetterTabs({
                   flexShrink: 0,
                 }}
               >
-                <span>{v}</span>
+                <span title={refineSampleTooltip(v) || ""}>
+                  {v}
+                  {refineSamples?.[v]?.length > 0 && (
+                    <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.85, textTransform: "none", marginTop: 1 }}>
+                      refs: {(() => {
+                        const counts = {};
+                        refineSamples[v].forEach((s) => { counts[s] = (counts[s] || 0) + 1; });
+                        return Object.entries(counts)
+                          .sort(([, a], [, b]) => b - a)
+                          .map(([sv, n]) => n > 1 ? `${sv} ×${n}` : sv)
+                          .join(", ");
+                      })()}
+                    </div>
+                  )}
+                </span>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   {vendorCosts && vendorCosts[v] !== undefined && vendorCosts[v] > 0 && (
                     <div style={{ fontSize: "11px", color: "rgba(255, 255, 255, 0.9)", textAlign: "right" }}>
                       {vendorRefineCosts[v] !== undefined && vendorRefineCosts[v] > 0 && (
                         <div>${vendorRefineCosts[v].toFixed(4)}</div>
                       )}
-                      <div style={{ fontSize: "10px", opacity: 0.85 }}>Total: ${vendorCosts[v].toFixed(4)}</div>
                     </div>
                   )}
                   {failedVendors[v] && (

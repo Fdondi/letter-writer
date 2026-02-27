@@ -1,16 +1,26 @@
 import json
 import logging
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from threading import Lock
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 from openai import OpenAI
 from langsmith import traceable
 
-from .config import TRACE_DIR
+from .config import TRACE_DIR, get_extraction_model
 from .clients.base import BaseClient, ModelSize
+from .skill_utils import core_skill_name as _core_skill_name
 
 logger = logging.getLogger(__name__)
+
+# In-memory cache for job extraction (no_requirements + key_competences) to avoid
+# repeated LLM calls when the same job is processed multiple times (e.g. multiple CVs).
+# Key: (job_text, need_labels, need_semantics_frozen). LRU eviction when at capacity.
+_EXTRACTION_CACHE: OrderedDict = OrderedDict()
+_EXTRACTION_CACHE_MAX = 64
+_EXTRACTION_CACHE_LOCK = Lock()
 
 
 class MissingCVError(Exception):
@@ -21,8 +31,9 @@ REQUIRED_SUFFIXES = ("NO COMMENT", "PLEASE FIX")
 # In agentic flow, agents may output SKIP or NO COMMENT to leave no feedback
 AGENTIC_SKIP_PHRASES = ("NO COMMENT", "SKIP")
 
-# Topic keys for per-topic agentic feedback (same as feedback dict keys)
-AGENTIC_TOPIC_KEYS = ("instruction", "accuracy", "precision", "company_fit", "user_fit", "human")
+# Topic keys for per-topic agentic feedback.
+# Order matters: downstream topics can review and challenge prior topics' top comments.
+AGENTIC_TOPIC_KEYS = ("instruction", "company_fit", "precision", "user_fit", "human", "accuracy")
 
 
 def _has_required_suffix(text: str) -> bool:
@@ -55,14 +66,18 @@ def _call_with_required_suffix(
         last_response = response.strip()
         if _has_required_suffix(last_response):
             return last_response
-        print(
-            f"[WARN] Missing required suffix in review response "
-            f"(attempt {attempt}/{max_retries}); retrying..."
+        logger.warning(
+            "Missing required suffix in review response (attempt %s/%s); retrying...",
+            attempt,
+            max_retries,
         )
 
     # As a final safety net, append PLEASE FIX to avoid false approval.
-    print(f"[WARN] Missing required suffix in review response "
-            f"(attempt {attempt}/{max_retries}); appending PLEASE FIX")
+    logger.warning(
+        "Missing required suffix in review response (attempt %s/%s); appending PLEASE FIX",
+        attempt,
+        max_retries,
+    )
     return f"{last_response}\nPLEASE FIX"
 
 
@@ -98,6 +113,22 @@ def _write_trace(trace_dir: Path | None, system: str, prompt: str, raw: str) -> 
         pass
 
 
+# Shared system for all job-extraction calls. Keeps the prompt prefix identical across
+# metadata vs competences so providers (e.g. OpenAI) can reuse cached prefix for the job.
+EXTRACTION_SYSTEM = (
+    "You are an assistant that extracts structured data from job descriptions. "
+    "You will receive a job description and a task. Follow the task exactly. "
+    "Respond with JSON only. Do not add any other keys or prose."
+)
+
+_JOB_PREFIX = "Job description:\n"
+
+
+def _get_extraction_model_name() -> str:
+    """Resolve model used for extraction-style calls."""
+    return get_extraction_model()
+
+
 @traceable(run_type="chain", name="extract_job_metadata_no_requirements")
 def extract_job_metadata_no_requirements(
     job_text: str,
@@ -105,23 +136,16 @@ def extract_job_metadata_no_requirements(
     trace_dir: Path | None = None,
 ) -> Dict[str, Any]:
     """Extract job metadata except key competences (company, role, location, etc.). No CV needed."""
-    system = (
-        "You are an assistant that extracts a concise job summary from a job description. "
-        "Return strict JSON with these keys only: company_name, job_title, location, language, salary, point_of_contact. "
-        "Stick to one language unless it's really mixed. A few english words don't make english a language used. "
-        "Use null for unknown values. "
-        "For point_of_contact, extract if present: name, role (their role in the company), contact_details (email, phone, etc.), and notes (any note about them or how to contact them). "
-        "If no point of contact is found, set point_of_contact to null. "
-        "Do not add any additional keys or prose."
+    task = (
+        "Task: Extract the following fields as JSON: company_name, job_title, location, language, salary, point_of_contact. "
+        "Stick to one language unless it's really mixed. Use null for unknown values. "
+        "For point_of_contact, extract if present: name, role (their role in the company), contact_details (email, phone, etc.), and notes. "
+        "If no point of contact is found, set point_of_contact to null."
     )
-    prompt = (
-        "Job description:\n"
-        f"{job_text}\n\n"
-        "Respond with JSON only. Example format:\n"
-        '{"company_name":"Acme","job_title":"Senior Engineer","location":"Remote","language":"English","salary":"€80-100k","point_of_contact":{"name":"John Doe","role":"HR Manager","contact_details":"john.doe@acme.com","notes":"Please contact via email"}}'
-    )
-    raw = client.call(ModelSize.TINY, system, [prompt])
-    _write_trace(trace_dir, system, prompt, raw)
+    example = '{"company_name":"Acme","job_title":"Senior Engineer","location":"Remote","language":"English","salary":"€80-100k","point_of_contact":{"name":"John Doe","role":"HR Manager","contact_details":"john.doe@acme.com","notes":"Please contact via email"}}'
+    prompt = f"{_JOB_PREFIX}{job_text}\n\n{task}\n\nRespond with JSON only. Example format:\n{example}"
+    raw = client.call(_get_extraction_model_name(), EXTRACTION_SYSTEM, [prompt])
+    _write_trace(trace_dir, EXTRACTION_SYSTEM, prompt, raw)
 
     try:
         data = json.loads(raw)
@@ -175,7 +199,7 @@ def extract_key_competences(
     ``need_categories``: JSON keys to use; order preserved. Default DEFAULT_NEED_SEMANTICS.keys().
     ``need_semantics``: {category: "short description"} for prompt; merged over DEFAULT_NEED_SEMANTICS.
     """
-    cats = need_categories or tuple(DEFAULT_NEED_SEMANTICS.keys())  
+    cats = need_categories or tuple(DEFAULT_NEED_SEMANTICS.keys())
     semantics = {**DEFAULT_NEED_SEMANTICS, **(need_semantics or {})}
     keys_str = ", ".join(cats)
     example = json.dumps({k: ["C++", "git"] if k == cats[0] else [] for k in cats}, separators=(",", ":"))
@@ -185,25 +209,18 @@ def extract_key_competences(
         if semantics.get(c) and str(semantics[c]).strip()
     ]
     semantic = (" " + "; ".join(parts) + ". ") if parts else ""
-    system = (
-        "You are an assistant that extracts key competences or requirements from a job description. "
-        f"Return strict JSON with keys exactly: {keys_str}. "
+    task = (
+        f"Task: Extract key competences as JSON with keys exactly: {keys_str}. "
         "Each value is an array of strings (competences). Use empty arrays [] if none in that category. "
         f"Assign each competence to the most appropriate category.{semantic}"
-        "Keep each competence short and specific (e.g. 'C++', 'fluent German', 'git'). "
-        "Pay attention to separate competences that are ANDed. 'German and English' is ['German', 'English'],  "
-        "but 'Object oriented languages like C++ or Java' is a single competence, 'Object oriented programming'. "
-        "Do not include intensity modifiers, like 'Good' or 'Fluent'. That goes into the importance."
-        "Do not add any other keys or prose."
+        "Output the skill name only, without level or proficiency modifiers: e.g. 'C++', 'German', 'git'. "
+        "Do not include words like 'fluent', 'proficient', 'basic', 'language proficiency'—they describe level, not the skill. "
+        "Separate competences that are ANDed: 'German and English' is ['German', 'English']. "
+        "Single competence for alternatives: 'like C++ or Java' -> one competence."
     )
-    prompt = (
-        "Job description:\n"
-        f"{job_text}\n\n"
-        "Respond with JSON only. Example format:\n"
-        f"{example}"
-    )
-    raw = client.call(ModelSize.TINY, system, [prompt])
-    _write_trace(trace_dir, system, prompt, raw)
+    prompt = f"{_JOB_PREFIX}{job_text}\n\n{task}\n\nRespond with JSON only. Example format:\n{example}"
+    raw = client.call(_get_extraction_model_name(), EXTRACTION_SYSTEM, [prompt])
+    _write_trace(trace_dir, EXTRACTION_SYSTEM, prompt, raw)
 
     try:
         data = json.loads(raw)
@@ -214,7 +231,8 @@ def extract_key_competences(
     for key in cats:
         val = data.get(key)
         if isinstance(val, list):
-            out[key] = [str(x).strip() for x in val if str(x).strip()]
+            core_skills = [_core_skill_name(str(x).strip()) for x in val if str(x).strip()]
+            out[key] = [s for s in core_skills if s]
         else:
             out[key] = []
     return out
@@ -284,7 +302,7 @@ def grade_competence_cv_match(
         "Respond with JSON only. Example format:\n"
         f"{example_str}"
     )
-    raw = client.call(ModelSize.TINY, system, [prompt])
+    raw = client.call(_get_extraction_model_name(), system, [prompt])
     _write_trace(trace_dir, system, prompt, raw)
 
     try:
@@ -340,23 +358,36 @@ def extract_job_metadata(
         no_req_dir = Path(base_dir, "no_requirements") if base_dir else None
         comp_dir = Path(base_dir, "competences") if base_dir else None
 
-        def run_no_requirements():
-            return extract_job_metadata_no_requirements(job_text, client, no_req_dir)
+        cache_key = (job_text, need_labels, frozenset(need_semantics.items()))
+        with _EXTRACTION_CACHE_LOCK:
+            if cache_key in _EXTRACTION_CACHE:
+                _EXTRACTION_CACHE.move_to_end(cache_key)
+                meta, by_category = _EXTRACTION_CACHE[cache_key]
+            else:
+                meta, by_category = None, None
+        if meta is None or by_category is None:
+            def run_no_requirements():
+                return extract_job_metadata_no_requirements(job_text, client, no_req_dir)
 
-        def run_competences():
-            return extract_key_competences(
-                job_text,
-                client,
-                comp_dir,
-                need_categories=need_labels,
-                need_semantics=need_semantics,
-            )
+            def run_competences():
+                return extract_key_competences(
+                    job_text,
+                    client,
+                    comp_dir,
+                    need_categories=need_labels,
+                    need_semantics=need_semantics,
+                )
 
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            f_no = ex.submit(run_no_requirements)
-            f_comp = ex.submit(run_competences)
-            meta = f_no.result()
-            by_category = f_comp.result()
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                f_no = ex.submit(run_no_requirements)
+                f_comp = ex.submit(run_competences)
+                meta = f_no.result()
+                by_category = f_comp.result()
+            with _EXTRACTION_CACHE_LOCK:
+                _EXTRACTION_CACHE[cache_key] = (meta, by_category)
+                _EXTRACTION_CACHE.move_to_end(cache_key)
+                while len(_EXTRACTION_CACHE) > _EXTRACTION_CACHE_MAX:
+                    _EXTRACTION_CACHE.popitem(last=False)
 
         flat_pairs = _flatten_competences_by_category(
             by_category, category_order=need_labels
@@ -418,7 +449,7 @@ def extract_job_metadata(
         "Respond with JSON only. Example format:\n"
         '{"company_name":"Acme","job_title":"Senior Engineer","location":"Remote","language":"English","salary":"€80-100k","requirements":["Python","AWS"],"point_of_contact":{"name":"John Doe","role":"HR Manager","contact_details":"john.doe@acme.com","notes":"Please contact via email"}}'
     )
-    raw = client.call(ModelSize.TINY, system, [prompt])
+    raw = client.call(_get_extraction_model_name(), system, [prompt])
     if trace_dir is not None:
         trace_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -803,7 +834,10 @@ def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
     ]
     
     if not rewritten_examples:
-        print(f"none of {', '.join(ex.get('company_name','?') for ex in examples)} have AI letters, skipping")
+        logger.info(
+            "none of %s have AI letters, skipping",
+            ", ".join(ex.get("company_name", "?") for ex in examples),
+        )
         return "NO COMMENT"
 
     examples_formatted = "\n\n".join(
@@ -1003,7 +1037,7 @@ def rewrite_letter(
         had_feedback = True
         prompt += "========== Human Feedback:\n" + human_feedback + "\n==========\n"
     if not had_feedback:
-        print("No feedback provided, returning original letter.")
+        logger.info("No feedback provided, returning original letter.")
         return original_letter
     
     prompt += (
@@ -1015,7 +1049,7 @@ def rewrite_letter(
     (trace_dir / "rewrite_prompt.txt").write_text(prompt, encoding="utf-8")
     revised_letter = client.call(ModelSize.XLARGE, system, [prompt])
     if "NO REVISIONS" in revised_letter:
-        print("No revisions needed, returning original letter.")
+        logger.info("No revisions needed, returning original letter.")
         return original_letter
     return revised_letter 
 

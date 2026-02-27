@@ -1,6 +1,9 @@
 IP = "192.168.56.1"
+import logging
 
 from qdrant_client import QdrantClient
+
+logger = logging.getLogger(__name__)
 
 client = QdrantClient(host=IP, port=6333)
 
@@ -11,4 +14,4 @@ res = client.scroll(
 )
 
 filenames = [point.payload.get("filename") for point in res[0] if point.payload]
-print(filenames)
+logger.info("%s", filenames)

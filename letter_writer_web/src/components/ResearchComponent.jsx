@@ -20,7 +20,7 @@ export default function ResearchComponent({
 
   // Fetch available models on mount
   useEffect(() => {
-    fetch("/api/costs/models/")
+    fetch("/api/costs/models/?supports_search=true")
       .then((r) => r.ok ? r.json() : null)
       .then((data) => { if (data) setAllModels(data); })
       .catch(() => {});
@@ -56,10 +56,10 @@ export default function ResearchComponent({
 
   // Trigger effect
   useEffect(() => {
-    if (externalTrigger && query) {
+    if (externalTrigger && (query || "").trim()) {
       runResearch(Array.from(vendors));
     }
-  }, [externalTrigger]);
+  }, [externalTrigger, query, context?.job_text, type, vendors]);
 
   const buildPayload = (models) => {
     const payload = {
@@ -67,7 +67,7 @@ export default function ResearchComponent({
       job_text: context.job_text,
     };
     if (type === "company") {
-      payload.company_name = query;
+      payload.company_name = query || "";
       payload.additional_company_info = context.additional_company_info;
     } else {
       payload.poc_name = query;
@@ -78,7 +78,7 @@ export default function ResearchComponent({
 
   // Run research for given model IDs; merges into existing results
   const runResearch = async (models, { merge = false } = {}) => {
-    if (!query || models.length === 0) return;
+    if (!(query || "").trim() || models.length === 0) return;
     setLoading(true);
     setLoadingModel(models.length === 1 ? models[0] : null);
     setError(null);
@@ -87,24 +87,40 @@ export default function ResearchComponent({
 
     try {
       const endpoint = type === "company" ? "/api/research/company/" : "/api/research/poc/";
-      const payload = buildPayload(models);
+      let selectedAny = false;
+      const errors = [];
 
-      const response = await fetchWithHeartbeat(endpoint, {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
+      const runOneModel = async (modelId) => {
+        const payload = buildPayload([modelId]);
+        const response = await fetchWithHeartbeat(endpoint, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        const data = response.data || {};
+        const entry = data.results?.[modelId] || data.results?.[Object.keys(data.results || {})[0]];
+        if (!entry) return;
 
-      const data = response.data;
-      if (data.results) {
-        const newResults = merge ? { ...results, ...data.results } : data.results;
-        setResults(newResults);
-        // Auto-select the first new result
-        const newKey = Object.keys(data.results)[0];
-        if (newKey) {
-          setSelectedVendor(newKey);
-          const res = data.results[newKey];
-          onResultSelected?.(res.report, res.top_docs);
+        setResults((prev) => ({ ...(prev || {}), [modelId]: entry }));
+        if (!selectedAny) {
+          selectedAny = true;
+          setSelectedVendor(modelId);
+          onResultSelected?.(entry.report, entry.top_docs, data.source || null, data.resolved_name || null);
         }
+      };
+
+      if (models.length === 1) {
+        await runOneModel(models[0]);
+      } else {
+        const settled = await Promise.allSettled(models.map((m) => runOneModel(m)));
+        settled.forEach((res, idx) => {
+          if (res.status === "rejected") {
+            errors.push(`${models[idx]}: ${res.reason?.message || String(res.reason)}`);
+          }
+        });
+      }
+
+      if (errors.length > 0) {
+        setError(`Some models failed: ${errors.join(" | ")}`);
       }
     } catch (e) {
       console.error("Research error:", e);
@@ -161,7 +177,7 @@ export default function ResearchComponent({
         {!results ? (
           <button
             onClick={() => runResearch(Array.from(vendors))}
-            disabled={loading || !query}
+            disabled={loading || !(query || "").trim()}
             style={{
               padding: "4px 12px",
               fontSize: "12px",
@@ -169,7 +185,7 @@ export default function ResearchComponent({
               color: "var(--button-text)",
               border: "1px solid var(--border-color)",
               borderRadius: 4,
-              cursor: loading || !query ? "default" : "pointer",
+              cursor: loading || !(query || "").trim() ? "default" : "pointer",
               whiteSpace: "nowrap",
             }}
           >
@@ -178,7 +194,7 @@ export default function ResearchComponent({
         ) : (
           <select
             value=""
-            disabled={loading || !query}
+            disabled={loading || !(query || "").trim()}
             onChange={(e) => {
               const modelId = e.target.value;
               if (modelId) handleRetryWithModel(modelId);

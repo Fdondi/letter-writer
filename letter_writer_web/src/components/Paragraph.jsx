@@ -47,6 +47,7 @@ export default function Paragraph({
   const [editText, setEditText] = useState(paragraph.text);
   const [isCopyMode, setIsCopyMode] = useState(false);
   const [cursorPosition, setCursorPosition] = useState(null);
+  const [editorHeight, setEditorHeight] = useState(null);
   
   // Local state (used if not controlled)
   const [localViewLanguage, setLocalViewLanguage] = useState("source");
@@ -130,6 +131,7 @@ export default function Paragraph({
   const handleBlur = () => {
     setIsEditing(false);
     setCursorPosition(null);
+    setEditorHeight(null);
     handleTextChange(editText);
   };
 
@@ -141,6 +143,7 @@ export default function Paragraph({
       setEditText(paragraph.text);
       setIsEditing(false);
       setCursorPosition(null);
+      setEditorHeight(null);
     }
   };
 
@@ -210,6 +213,20 @@ export default function Paragraph({
       e.stopPropagation();
       setIsCopyMode(true);
     }
+  };
+
+  const startEditing = (e) => {
+    e.stopPropagation();
+    const textElement = textRef.current;
+    if (textElement) {
+      const rect = textElement.getBoundingClientRect();
+      setEditorHeight(Math.max(1, Math.ceil(rect.height)));
+    } else {
+      setEditorHeight(null);
+    }
+    const position = getCursorPositionFromClick(e, textElement);
+    setCursorPosition(position);
+    setIsEditing(true);
   };
 
   const handleMouseLeave = () => {
@@ -515,7 +532,8 @@ export default function Paragraph({
               onKeyDown={handleKeyDown}
               style={{
                 width: "100%",
-                minHeight: "120px", // Larger minimum height
+                minHeight: editorHeight ? `${editorHeight}px` : "120px",
+                height: editorHeight ? `${editorHeight}px` : undefined,
                 resize: "vertical",
                 border: "1px solid var(--border-color)",
                 borderRadius: 2,
@@ -524,7 +542,8 @@ export default function Paragraph({
                 fontSize: "inherit",
                 outline: "2px solid #007acc",
                 backgroundColor: 'var(--input-bg)',
-                color: 'var(--text-color)'
+                color: 'var(--text-color)',
+                boxSizing: "border-box"
               }}
               autoFocus
             />
@@ -532,11 +551,7 @@ export default function Paragraph({
             <div
               ref={textRef}
               onClick={(e) => {
-                e.stopPropagation();
-                // Calculate cursor position from click
-                const position = getCursorPositionFromClick(e, textRef.current);
-                setCursorPosition(position);
-                setIsEditing(true);
+                startEditing(e);
                 // If we are viewing a translation, populate edit text with the translation
                 // so the user edits what they see. This effectively "switches the original".
                 if (displayText !== paragraph.text) {
@@ -712,7 +727,8 @@ export default function Paragraph({
             onKeyDown={handleKeyDown}
             style={{
               width: "100%",
-              minHeight: "120px", // Larger minimum height
+              minHeight: editorHeight ? `${editorHeight}px` : "120px",
+              height: editorHeight ? `${editorHeight}px` : undefined,
               resize: "vertical",
               border: "1px solid var(--border-color)",
               borderRadius: 2,
@@ -721,7 +737,8 @@ export default function Paragraph({
               fontSize: "inherit",
               outline: "2px solid #007acc",
               backgroundColor: 'var(--input-bg)',
-              color: 'var(--text-color)'
+              color: 'var(--text-color)',
+              boxSizing: "border-box"
             }}
             autoFocus
           />
@@ -729,11 +746,7 @@ export default function Paragraph({
           <div
             ref={textRef}
             onClick={(e) => {
-              e.stopPropagation();
-              // Calculate cursor position from click
-              const position = getCursorPositionFromClick(e, textRef.current);
-              setCursorPosition(position);
-              setIsEditing(true);
+              startEditing(e);
               // If we are viewing a translation, populate edit text with the translation
               // so the user edits what they see.
               if (displayText !== paragraph.text) {

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import traceback
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -31,6 +31,8 @@ from .cost_tracker import track_api_cost
 from .retrieval import retrieve_similar_job_offers, select_top_documents
 from .session_store import get_session as get_session_from_store, save_session
 from .firestore_store import get_collection
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -146,7 +148,7 @@ def _update_cost(
 ) -> None:
     """Update state with cost from client, tracking by phase.
     If user_id and vendor_str are provided, also records cost via track_api_cost for Redis/BigQuery.
-    
+
     Args:
         state: The vendor phase state to update
         client: The AI client with cost/token counters
@@ -157,10 +159,19 @@ def _update_cost(
     cost = float(getattr(client, "total_cost", 0.0) or 0.0)
     input_tokens = int(getattr(client, "total_input_tokens", 0) or 0)
     output_tokens = int(getattr(client, "total_output_tokens", 0) or 0)
+    cached_tokens = int(getattr(client, "total_cached_tokens", 0) or 0)
     search_queries = int(getattr(client, "total_search_queries", 0) or 0)
-    
-    print(f"[DEBUG] _update_cost({phase}): cost={cost}, in={input_tokens}, out={output_tokens}, search={search_queries}")
-    
+
+    logger.debug(
+        "_update_cost(%s): cost=%s, in=%s, out=%s, cached=%s, search=%s",
+        phase,
+        cost,
+        input_tokens,
+        output_tokens,
+        cached_tokens,
+        search_queries,
+    )
+
     state.add_phase_cost(phase, cost, input_tokens, output_tokens, search_queries)
     if cost > 0 and user_id and vendor_str:
         track_api_cost(
@@ -168,6 +179,7 @@ def _update_cost(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             search_queries=search_queries if search_queries else None,
+            cached_tokens=cached_tokens if cached_tokens else None,
         )
 
 
@@ -185,6 +197,8 @@ def _reset_client_counters(client) -> None:
     client.total_cost = 0.0
     client.total_input_tokens = 0
     client.total_output_tokens = 0
+    if hasattr(client, "total_cached_tokens"):
+        client.total_cached_tokens = 0
     if hasattr(client, "total_search_queries"):
         client.total_search_queries = 0
 
@@ -222,7 +236,7 @@ def _run_background_phase(
     Reads common data, processes vendor-specific work, and saves only vendor data.
     Completely lock-free - vendors work in parallel.
     """
-    print(f"[PHASE] background -> start (vendor={vendor.value})")
+    logger.info("[PHASE] background -> start (vendor=%s)", vendor.value)
     
     # Extract common data
     job_text = common_data["job_text"]
@@ -234,8 +248,6 @@ def _run_background_phase(
     from .generation import MissingCVError
     if cv_text is None or not cv_text or not str(cv_text).strip():
         error_msg = f"CV text is missing or empty in session {session_id} - cannot proceed with background phase"
-        import logging
-        logger = logging.getLogger(__name__)
         logger.error(error_msg, extra={"session_id": session_id, "vendor": vendor.value, "cv_text": cv_text, "cv_text_type": type(cv_text).__name__})
         raise MissingCVError(error_msg)
     
@@ -261,8 +273,6 @@ def _run_background_phase(
     company_name = get_metadata_field(metadata, vendor, "company_name", "")
     
     # Debug: log metadata and company_name
-    import logging
-    logger = logging.getLogger(__name__)
     logger.info(f"_run_background_phase: vendor={vendor.value}")
     logger.info(f"_run_background_phase: metadata keys: {list(metadata.keys())}")
     logger.info(f"_run_background_phase: metadata['common']: {metadata.get('common', {})}")
@@ -279,10 +289,10 @@ def _run_background_phase(
     trace_dir = Path("trace", f"{company_name}.{vendor.value}.background")
     trace_dir.mkdir(parents=True, exist_ok=True)
     ai_client = get_client(vendor)
-    print(f"[PHASE] background -> {vendor.value} :: select_top_documents")
+    logger.info("[PHASE] background -> %s :: select_top_documents", vendor.value)
     result = select_top_documents(search_result, job_text, ai_client, trace_dir)
     top_docs = result["top_docs"]
-    print(f"[PHASE] background -> {vendor.value} :: company_research")
+    logger.info("[PHASE] background -> %s :: company_research", vendor.value)
     company_report = company_research(company_name, job_text, ai_client, trace_dir, point_of_contact=point_of_contact, additional_company_info=additional_company_info, search_instructions=search_instructions)
 
     state = VendorPhaseState(
@@ -324,10 +334,10 @@ def advance_to_draft(
         raise ValueError(f"Session {session_id} not found in database")
     
     # Debug: print session state to help diagnose issues
-    print(f"[DEBUG] advance_to_draft: session_id={session_id}, vendor={vendor.value}")
-    print(f"[DEBUG] session.vendors keys: {list(session.vendors.keys())}")
-    print(f"[DEBUG] session.vendors_list: {[v.value for v in session.vendors_list]}")
-    print(f"[DEBUG] session.metadata keys: {list(session.metadata.keys())}")
+    logger.debug("advance_to_draft: session_id=%s, vendor=%s", session_id, vendor.value)
+    logger.debug("session.vendors keys: %s", list(session.vendors.keys()))
+    logger.debug("session.vendors_list: %s", [v.value for v in session.vendors_list])
+    logger.debug("session.metadata keys: %s", list(session.metadata.keys()))
 
     state = session.vendors.get(vendor.value)
     if state is None:
@@ -400,7 +410,7 @@ def advance_to_draft(
         # Reset counters to track draft generation separately
         _reset_client_counters(ai_client)
         
-        print(f"[PHASE] draft -> {vendor.value} :: generate_letter (XLARGE)")
+        logger.info("[PHASE] draft -> %s :: generate_letter (XLARGE)", vendor.value)
         draft_letter = generate_letter(
             cv_text, top_docs, company_report, job_text, ai_client, trace_dir, style_instructions, additional_user_info
         )
@@ -410,7 +420,7 @@ def advance_to_draft(
         _reset_client_counters(ai_client)
         
         # Run checks on the draft so the user can review/override feedback before refinement
-        print(f"[PHASE] draft -> {vendor.value} :: running checks (TINY)")
+        logger.info("[PHASE] draft -> %s :: running checks (TINY)", vendor.value)
         with ThreadPoolExecutor(max_workers=5) as executor:
             instruction_future = executor.submit(instruction_check, draft_letter, ai_client, style_instructions)
             accuracy_future = executor.submit(accuracy_check, draft_letter, cv_text, ai_client, additional_user_info)
@@ -436,7 +446,7 @@ def advance_to_draft(
         _update_cost(state, ai_client, phase="feedback", user_id=user_id, vendor_str=vendor.value)
         
     except Exception:
-        traceback.print_exc()
+        logger.exception("advance_to_draft failed for vendor=%s session_id=%s", vendor.value, session.session_id)
         raise
 
     state.draft_letter = draft_letter
@@ -489,11 +499,8 @@ def advance_to_refinement(
     company_report = company_report_override or state.company_report or ""
     draft_letter = draft_override or state.draft_letter or ""
     if not draft_letter:
-        try:
-            raise ValueError("Missing draft letter for refinement")
-        except Exception:
-            traceback.print_exc()
-            raise ValueError("Missing draft letter for refinement")
+        logger.error("Missing draft letter for refinement (session_id=%s, vendor=%s)", session_id, vendor.value)
+        raise ValueError("Missing draft letter for refinement")
 
     state.company_report = company_report
     state.top_docs = top_docs
@@ -503,7 +510,7 @@ def advance_to_refinement(
 
     try:
         feedback = state.feedback or {}
-        print(f"[PHASE] refine -> {vendor.value} :: rewrite_letter (XLARGE)")
+        logger.info("[PHASE] refine -> %s :: rewrite_letter (XLARGE)", vendor.value)
         refined = rewrite_letter(
             draft_letter,
             feedback.get("instruction", ""),
@@ -517,10 +524,10 @@ def advance_to_refinement(
         )
 
         if fancy:
-            print(f"[PHASE] refine -> {vendor.value} :: fancy_letter")
+            logger.info("[PHASE] refine -> %s :: fancy_letter", vendor.value)
             refined = fancy_letter(refined, ai_client)
     except Exception:
-        traceback.print_exc()
+        logger.exception("advance_to_refinement failed for vendor=%s session_id=%s", vendor.value, session.session_id)
         raise
 
     state.draft_letter = draft_letter

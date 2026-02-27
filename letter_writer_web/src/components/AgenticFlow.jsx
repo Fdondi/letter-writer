@@ -9,14 +9,15 @@ import LanguageSelector from "./LanguageSelector";
 
 const FEEDBACK_DESCRIPTIONS = {
   instruction: "Style and tone vs instructions.",
-  accuracy: "Factual accuracy vs CV.",
-  precision: "Job requirements and company report.",
   company_fit: "Company values and culture.",
+  precision: "Job requirements and company report.",
   user_fit: "Match to your previous letters.",
   human: "Patterns from your past revisions.",
+  accuracy: "CV accuracy check (last word).",
 };
 
-const TOPIC_KEYS = ["instruction", "accuracy", "precision", "company_fit", "user_fit", "human"];
+const TOPIC_KEYS = ["instruction", "company_fit", "precision", "user_fit", "human", "accuracy"];
+const VOTE_COUNTDOWN_SECONDS = 15;
 
 const DRAFT_FIELD_ID = "agentic_draft";
 
@@ -84,6 +85,7 @@ function DraftWithTranslation({ draftText, translation }) {
 export default function AgenticFlow({
   agenticState,
   onFeedbackStart,
+  onVote,
   onRefine,
   onSuspend,
   onResume,
@@ -101,8 +103,11 @@ export default function AgenticFlow({
   const [draftCollapsed, setDraftCollapsed] = useState(false);
   const [feedbackCollapsed, setFeedbackCollapsed] = useState(false);
   const [draftTab, setDraftTab] = useState(null); // selected draft vendor tab
+  const [voteCountdown, setVoteCountdown] = useState(null);
   const startRef = useRef(Date.now());
   const pollInFlightRef = useRef(false);
+  const hasAutoStartedVoteRef = useRef(false);
+  const hasAutoStartedRefineRef = useRef(false);
   const status = agenticState?.status;
   const draftLetter = agenticState?.draft_letter;
   const draftLetters = agenticState?.draft_letters ?? (draftLetter != null && agenticState?.draft_vendor ? { [agenticState.draft_vendor]: draftLetter } : {});
@@ -115,21 +120,43 @@ export default function AgenticFlow({
   const feedbackSuspended = agenticState?.feedback_suspended === true;
   const topicMeta = agenticState?.topic_meta || {};
   const maxRounds = agenticState?.max_rounds ?? 3;
-  // Active = not done and not suspended. Button and editing when active count is 0.
+  const vendorErrors = agenticState?.vendor_errors || {};
+  const hasVendorErrors = Object.keys(vendorErrors).length > 0;
+  const draftVotes = agenticState?.draft_votes || null;
+  const hasVotes = draftVotes != null && Object.keys(draftVotes).length > 0;
+  // Active = not done. Button and editing when active count is 0.
   const activeTopicCount = TOPIC_KEYS.filter(
-    (topic) => !topicMeta[topic]?.done && !topicMeta[topic]?.suspended
+    (topic) => !topicMeta[topic]?.done
   ).length;
   const allTopicsInactive = activeTopicCount === 0;
   const canEditThreads = status === "feedback_done" || (status === "feedback" && allTopicsInactive);
   const canSuspendOrResume = status === "feedback";
-  const anyCanResume = canSuspendOrResume && Object.values(topicMeta).some((m) => m?.suspended && !m?.done);
+  const anyCanResume = canSuspendOrResume && feedbackSuspended;
+  const canVoteOnDrafts =
+    (status === "feedback_done" || (status === "feedback" && allTopicsInactive)) &&
+    !hasVotes &&
+    draftVendorList.length > 1 &&
+    Boolean(onVote);
+  const canAutoRefine =
+    (status === "feedback_done" || (status === "feedback" && allTopicsInactive)) &&
+    (hasVotes || draftVendorList.length <= 1) &&
+    Boolean(onRefine);
 
   const translation = useTranslation();
 
-  // Start feedback once when draft is ready (status feedback, round 0) and we have vendors
+  // Start feedback once when a fresh draft is ready (status feedback, round 0) and we have vendors.
+  // If a prior run ended, clear the one-shot guard so a new run can auto-start again.
+  useEffect(() => {
+    if (status !== "feedback" || ongoing === false) {
+      hasStartedFeedback.current = false;
+    }
+  }, [status, ongoing, draftLetter, draftVendorList]);
+
+  // Start feedback once when draft is ready.
   useEffect(() => {
     if (
       status !== "feedback" ||
+      ongoing === true ||
       (round !== 0 && round !== undefined) ||
       !feedbackVendors?.length ||
       hasStartedFeedback.current ||
@@ -181,6 +208,42 @@ export default function AgenticFlow({
       setFeedbackCollapsed(true);
     }
   }, [status]);
+
+  useEffect(() => {
+    if (!canVoteOnDrafts) {
+      setVoteCountdown(null);
+      hasAutoStartedVoteRef.current = false;
+      return;
+    }
+    if (voteCountdown == null && !hasAutoStartedVoteRef.current) {
+      setVoteCountdown(VOTE_COUNTDOWN_SECONDS);
+    }
+  }, [canVoteOnDrafts, voteCountdown]);
+
+  useEffect(() => {
+    if (!canVoteOnDrafts || voteCountdown == null || voteCountdown <= 0 || loading) return;
+    const timer = setTimeout(() => {
+      setVoteCountdown((prev) => (prev != null && prev > 0 ? prev - 1 : null));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [canVoteOnDrafts, voteCountdown, loading]);
+
+  useEffect(() => {
+    if (!canVoteOnDrafts || voteCountdown !== 0 || loading || hasAutoStartedVoteRef.current) return;
+    hasAutoStartedVoteRef.current = true;
+    setVoteCountdown(null);
+    onVote?.();
+  }, [canVoteOnDrafts, voteCountdown, loading, onVote]);
+
+  useEffect(() => {
+    if (!canAutoRefine) {
+      hasAutoStartedRefineRef.current = false;
+      return;
+    }
+    if (loading || hasAutoStartedRefineRef.current) return;
+    hasAutoStartedRefineRef.current = true;
+    onRefine?.(editedThreads ?? threadsFromState);
+  }, [canAutoRefine, loading, onRefine, editedThreads, threadsFromState]);
 
   // Default draft tab when draft vendors change
   useEffect(() => {
@@ -234,8 +297,10 @@ export default function AgenticFlow({
     });
   };
 
-  const handleRefine = async () => {
-    await onRefine(editedThreads ?? threadsFromState);
+  const handleVote = () => {
+    hasAutoStartedVoteRef.current = true;
+    setVoteCountdown(null);
+    onVote?.();
   };
 
   if (!agenticState && !loading) {
@@ -271,6 +336,31 @@ export default function AgenticFlow({
         </div>
       )}
 
+      {hasVendorErrors && !error && (
+        <div
+          style={{
+            padding: 12,
+            marginBottom: 16,
+            backgroundColor: "var(--warning-bg, #fef9c3)",
+            color: "var(--warning-text, #854d0e)",
+            borderRadius: 8,
+            border: "1px solid var(--warning-border, #fde047)",
+          }}
+        >
+          <strong>Some vendors were skipped:</strong>
+          <ul style={{ margin: "8px 0 0", paddingLeft: 20 }}>
+            {Object.entries(vendorErrors).map(([vendor, msg]) => (
+              <li key={vendor}>
+                <strong>{vendor}</strong>: {msg}
+              </li>
+            ))}
+          </ul>
+          <div style={{ marginTop: 8, fontSize: 13, opacity: 0.9 }}>
+            The flow continued with the other vendors. You can change models in Settings and try again for the failed ones.
+          </div>
+        </div>
+      )}
+
       <div style={{ marginBottom: 16, fontSize: 14, color: "var(--text-color)" }}>
         Status: <strong>{status}</strong>
         {status === "feedback" && ongoing === true && !feedbackSuspended && " · Generating feedback…"}
@@ -302,7 +392,7 @@ export default function AgenticFlow({
         </div>
       )}
 
-      {(status === "feedback" || status === "feedback_done" || status === "done") && draftVendorList.length > 0 && (
+      {(status === "draft" || status === "feedback" || status === "feedback_done" || status === "done") && draftVendorList.length > 0 && (
         <div
           style={{
             marginBottom: 12,
@@ -413,7 +503,7 @@ export default function AgenticFlow({
                   {ongoing === true && onSuspend && (
                     <button
                       type="button"
-                      onClick={() => onSuspend(true, null)}
+                      onClick={() => onSuspend()}
                       disabled={loading}
                       style={{
                         padding: "6px 12px",
@@ -431,7 +521,7 @@ export default function AgenticFlow({
                   {anyCanResume && onResume && (
                     <button
                       type="button"
-                      onClick={() => onResume(true, null)}
+                      onClick={() => onResume()}
                       disabled={loading}
                       style={{
                         padding: "6px 12px",
@@ -470,52 +560,116 @@ export default function AgenticFlow({
               <div
                 style={{
                   padding: "0 16px 16px",
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-                  gap: 16,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
                 }}
               >
-                {TOPIC_KEYS.map((topic) => (
-                  <AgenticThread
-                    key={topic}
-                    topic={topic}
-                    thread={threads[topic] || []}
-                    topicMeta={topicMeta[topic]}
-                    description={FEEDBACK_DESCRIPTIONS[topic]}
-                    vendorColors={vendorColors}
-                    translation={translation}
-                    canEdit={canEditThreads}
-                    canSuspend={canSuspendOrResume && ongoing === true}
-                    canResume={canSuspendOrResume && topicMeta[topic]?.suspended && !topicMeta[topic]?.done}
-                    onSuspend={() => onSuspend?.(false, [topic])}
-                    onResume={() => onResume?.(false, [topic])}
-                    onAddRound={onAddRound ? () => onAddRound(false, topic) : undefined}
-                    addRoundLoading={loading}
-                    onRemoveComment={handleRemoveComment}
-                    onEditComment={handleEditComment}
-                    onRemoveAddendum={handleRemoveAddendum}
-                    onEditAddendum={handleEditAddendum}
-                  />
+                {TOPIC_KEYS.map((topic, idx) => (
+                  <React.Fragment key={topic}>
+                    <AgenticThread
+                      topic={topic}
+                      thread={threads[topic] || []}
+                      topicMeta={topicMeta[topic]}
+                      description={FEEDBACK_DESCRIPTIONS[topic]}
+                      vendorColors={vendorColors}
+                      translation={translation}
+                      canEdit={canEditThreads}
+                      canSuspend={false}
+                      canResume={false}
+                      onSuspend={undefined}
+                      onResume={undefined}
+                      onAddRound={onAddRound ? () => onAddRound(false, topic) : undefined}
+                      addRoundLoading={loading}
+                      onRemoveComment={handleRemoveComment}
+                      onEditComment={handleEditComment}
+                      onRemoveAddendum={handleRemoveAddendum}
+                      onEditAddendum={handleEditAddendum}
+                    />
+                    {idx < TOPIC_KEYS.length - 1 && (
+                      <div
+                        aria-hidden
+                        style={{
+                          alignSelf: "center",
+                          color: "var(--secondary-text-color)",
+                          fontSize: 16,
+                          userSelect: "none",
+                        }}
+                      >
+                        ↓
+                      </div>
+                    )}
+                  </React.Fragment>
                 ))}
               </div>
               {(status === "feedback_done" || (status === "feedback" && allTopicsInactive)) && (
-                <div style={{ padding: "0 16px 16px", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                  <button
-                    type="button"
-                    onClick={handleRefine}
-                    disabled={loading}
-                    style={{
-                      padding: "8px 16px",
-                      backgroundColor: loading ? "var(--header-bg)" : "#16a34a",
-                      color: "white",
-                      border: "none",
-                      borderRadius: 6,
-                      cursor: loading ? "not-allowed" : "pointer",
-                      fontSize: 14,
-                    }}
-                  >
-                    {loading ? "Refining…" : "Use for final draft"}
-                  </button>
+                <div style={{ padding: "0 16px 16px" }}>
+                  {hasVotes && (
+                    <div
+                      style={{
+                        marginBottom: 12,
+                        padding: 12,
+                        backgroundColor: "var(--bg-color)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 8,
+                      }}
+                    >
+                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "var(--text-color)" }}>
+                        Vote results
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        {Object.entries(draftVotes)
+                          .sort(([, a], [, b]) => b - a)
+                          .map(([vendor, count]) => (
+                            <span
+                              key={vendor}
+                              style={{
+                                padding: "4px 10px",
+                                borderRadius: 12,
+                                fontSize: 12,
+                                fontWeight: 600,
+                                backgroundColor: vendorColors[vendor]
+                                  ? `${vendorColors[vendor]}33`
+                                  : "var(--panel-bg)",
+                                border: `1px solid ${vendorColors[vendor] || "var(--border-color)"}`,
+                                color: "var(--text-color)",
+                              }}
+                            >
+                              {vendor}: {count} vote{count !== 1 ? "s" : ""}
+                            </span>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                    {!hasVotes && draftVendorList.length > 1 && onVote && (
+                      <button
+                        type="button"
+                        onClick={handleVote}
+                        disabled={loading}
+                        style={{
+                          padding: "8px 16px",
+                          backgroundColor: loading ? "var(--header-bg)" : "#6366f1",
+                          color: "white",
+                          border: "none",
+                          borderRadius: 6,
+                          cursor: loading ? "not-allowed" : "pointer",
+                          fontSize: 14,
+                        }}
+                      >
+                        {loading
+                          ? "Voting…"
+                          : voteCountdown != null
+                            ? `Vote on drafts (${voteCountdown}s)`
+                            : "Vote on drafts"}
+                      </button>
+                    )}
+                    {(hasVotes || draftVendorList.length <= 1) && (
+                      <div style={{ fontSize: 13, color: "var(--secondary-text-color)" }}>
+                        {loading ? "Refining…" : "Preparing final draft…"}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </>

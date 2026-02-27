@@ -81,7 +81,21 @@ def _parse_price_field(val: Any) -> float:
     return 0.0
 
 
-def get_all_model_pricing() -> Dict[str, List[Dict[str, Any]]]:
+def _supports_search(vendor_key: str, model_id: str, model_cfg: Dict[str, Any], default_search: float) -> bool:
+    """Best-effort capability flag for model-level web search support."""
+    if vendor_key == "deepseeek":
+        return False
+    if vendor_key == "openai":
+        # OpenAI search support is model-specific in this codebase.
+        return "search" in model_id
+
+    model_search_raw = model_cfg.get("search")
+    if model_search_raw is not None:
+        return float(model_search_raw or 0.0) > 0.0
+    return default_search > 0.0
+
+
+def get_all_model_pricing(search_only: bool = False) -> Dict[str, List[Dict[str, Any]]]:
     """Load model pricing from all client JSON files.
 
     Returns:
@@ -101,6 +115,8 @@ def get_all_model_pricing() -> Dict[str, List[Dict[str, Any]]]:
         except Exception as e:
             logger.warning("Failed to load %s: %s", json_path, e)
             continue
+        defaults = cfg.get("defaults", {}) if isinstance(cfg, dict) else {}
+        default_search = float((defaults.get("search", 0.0) if isinstance(defaults, dict) else 0.0) or 0.0)
         models_cfg = cfg.get("models", {})
         if not isinstance(models_cfg, dict):
             continue
@@ -112,6 +128,9 @@ def get_all_model_pricing() -> Dict[str, List[Dict[str, Any]]]:
             output_price = _parse_price_field(model_cfg.get("output", 0.0))
             if input_price == 0 and output_price == 0:
                 continue
+            supports_search = _supports_search(vendor_key, model_id, model_cfg, default_search)
+            if search_only and not supports_search:
+                continue
             # Humanize model id for display: "claude-haiku-4-5" -> "Claude Haiku 4-5"
             name = model_id.replace("-", " ").title()
             models.append({
@@ -120,6 +139,7 @@ def get_all_model_pricing() -> Dict[str, List[Dict[str, Any]]]:
                 "vendor_key": vendor_key,  # e.g. "gemini", "grok" - for building composite IDs
                 "input": round(input_price, 2),
                 "output": round(output_price, 2),
+                "supports_search": supports_search,
             })
         if models:
             result[vendor_label] = models
@@ -336,16 +356,21 @@ def _track_in_memory(
     input_tokens: Optional[int] = None,
     output_tokens: Optional[int] = None,
     search_queries: Optional[int] = None,
+    cached_tokens: Optional[int] = None,
 ) -> None:
     """Track cost in memory (fallback when Redis unavailable).
-    
+
     Each request is stored with (user_id, phase, vendor) - aggregation happens in BigQuery.
     """
     with _memory_lock:
         # Update global total for quick pending cost display
         _memory_store["total"] += cost
-        
-        # Store request for BigQuery batch insert - this is the source of truth
+
+        # Merge cached_tokens into metadata so it is stored and reportable
+        meta = dict(metadata) if metadata else {}
+        if cached_tokens is not None and cached_tokens > 0:
+            meta["cached_tokens"] = cached_tokens
+
         request_data = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "user_id": user_id,
@@ -353,7 +378,7 @@ def _track_in_memory(
             "vendor": vendor,
             "cost": cost,
             "request_count": 1,
-            "metadata": metadata
+            "metadata": meta,
         }
         if input_tokens is not None:
             request_data["input_tokens"] = input_tokens
@@ -361,9 +386,9 @@ def _track_in_memory(
             request_data["output_tokens"] = output_tokens
         if search_queries is not None and search_queries > 0:
             request_data["search_queries"] = search_queries
-        if metadata and "character_count" in metadata:
-            request_data["character_count"] = metadata["character_count"]
-        
+        if meta and "character_count" in meta:
+            request_data["character_count"] = meta["character_count"]
+
         _memory_store["requests"].append(request_data)
 
 
@@ -377,25 +402,26 @@ def _track_in_redis(
     input_tokens: Optional[int] = None,
     output_tokens: Optional[int] = None,
     search_queries: Optional[int] = None,
+    cached_tokens: Optional[int] = None,
 ) -> None:
     """Track cost in Redis using atomic operations.
-    
+
     Each request is stored with (user_id, phase, vendor) - aggregation happens in BigQuery.
     Redis just keeps a running total for quick display and queues requests for batch insert.
     """
     import json
-    
+
     try:
         pipe = redis_client.pipeline()
-        
-        # Increment global total for quick pending cost display
+
         pipe.incrbyfloat(TOTAL_KEY, cost)
-        
-        # Increment per-user total for quick user cost display
         pipe.incrbyfloat(f"{USER_PREFIX}{user_id}:total", cost)
         pipe.sadd(f"{REDIS_PREFIX}users", user_id)
-        
-        # Store request for BigQuery batch insert - this is the source of truth
+
+        meta = dict(metadata) if metadata else {}
+        if cached_tokens is not None and cached_tokens > 0:
+            meta["cached_tokens"] = cached_tokens
+
         request_data = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "user_id": user_id,
@@ -403,7 +429,7 @@ def _track_in_redis(
             "vendor": vendor,
             "cost": cost,
             "request_count": 1,
-            "metadata": metadata
+            "metadata": meta,
         }
         if input_tokens is not None:
             request_data["input_tokens"] = input_tokens
@@ -411,17 +437,18 @@ def _track_in_redis(
             request_data["output_tokens"] = output_tokens
         if search_queries is not None and search_queries > 0:
             request_data["search_queries"] = search_queries
-        if metadata and "character_count" in metadata:
-            request_data["character_count"] = metadata["character_count"]
-        
+        if meta and "character_count" in meta:
+            request_data["character_count"] = meta["character_count"]
+
         pipe.rpush(f"{REDIS_PREFIX}requests", json.dumps(request_data))
-        
+
         pipe.execute()
-        
+
     except Exception as e:
         logger.warning("Redis cost track failed, falling back to memory: %s", e)
-        # Fall back to memory tracking
-        _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries)
+        _track_in_memory(
+            user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries, cached_tokens
+        )
 
 
 def track_api_cost(
@@ -433,11 +460,12 @@ def track_api_cost(
     input_tokens: Optional[int] = None,
     output_tokens: Optional[int] = None,
     search_queries: Optional[int] = None,
+    cached_tokens: Optional[int] = None,
 ) -> None:
     """Track cost for an API call.
-    
+
     Uses Redis if available, otherwise falls back to in-memory tracking.
-    
+
     Args:
         user_id: User ID (required - all API calls require authentication)
         phase: Processing phase (background, draft, feedback, refine, translate, extract)
@@ -447,18 +475,24 @@ def track_api_cost(
         input_tokens: Number of input/prompt tokens (for AI services)
         output_tokens: Number of output/completion tokens (for AI services)
         search_queries: Number of web/grounding search calls (Gemini, Grok)
+        cached_tokens: Number of prompt tokens served from cache (e.g. OpenAI prompt cache)
     """
-    # Ensure flush thread is running
     _ensure_flush_thread()
-    
+
     redis_client = _get_redis_client()
-    
+
     try:
         if redis_client is not None:
-            _track_in_redis(redis_client, user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries)
+            _track_in_redis(
+                redis_client, user_id, phase, vendor, cost, metadata,
+                input_tokens, output_tokens, search_queries, cached_tokens,
+            )
             logger.info("Cost tracked (Redis): user_id=%s phase=%s vendor=%s cost=%.6f", user_id, phase, vendor, cost)
         else:
-            _track_in_memory(user_id, phase, vendor, cost, metadata, input_tokens, output_tokens, search_queries)
+            _track_in_memory(
+                user_id, phase, vendor, cost, metadata,
+                input_tokens, output_tokens, search_queries, cached_tokens,
+            )
             logger.info("Cost tracked (memory): user_id=%s phase=%s vendor=%s cost=%.6f", user_id, phase, vendor, cost)
     except Exception as e:
         logger.error("Cost tracking failed: user_id=%s phase=%s vendor=%s cost=%.6f error=%s", user_id, phase, vendor, cost, e)

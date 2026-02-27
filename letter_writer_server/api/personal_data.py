@@ -8,6 +8,7 @@ from letter_writer.generation import get_style_instructions, get_search_instruct
 from letter_writer.personal_data_sections import get_cv_revisions, get_models, get_background_models, get_agentic_draft_model, unwrap_for_response, wrap_new_field
 from letter_writer.personal_data_sections import get_style_instructions as get_user_style_instructions
 from letter_writer.personal_data_sections import get_search_instructions as get_user_search_instructions
+from letter_writer.cost_tracker import get_all_model_pricing
 from datetime import datetime, timezone
 
 router = APIRouter()
@@ -119,7 +120,15 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             session["metadata"]["common"]["selected_vendors"] = data["default_models"]
             
         if "default_background_models" in data:
-            updates["background_models"] = wrap_new_field("background_models", data["default_background_models"], now)
+            requested_models = data["default_background_models"] or []
+            searchable_models = get_all_model_pricing(search_only=True)
+            allowed_ids = {
+                f"{m['vendor_key']}/{m['id']}"
+                for models in searchable_models.values()
+                for m in models
+            }
+            valid_models = [mid for mid in requested_models if mid in allowed_ids]
+            updates["background_models"] = wrap_new_field("background_models", valid_models, now)
 
         if "agentic_draft_model" in data:
             val = data["agentic_draft_model"]

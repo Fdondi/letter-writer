@@ -2,7 +2,7 @@
  * Renders one topic's feedback thread: comments with subcomments, addendums, and vote counts.
  * When canEdit, shows Edit and Remove so user can adjust feedback before Refine.
  * Block color = author vendor (same palette as assembly). Shapes: root = speech bubble, addendum = red +, subcomment = thought bubble.
- * Status color (done/active/suspended) is only used for the status badge at the top.
+ * Status color (done/active) is only used for the status badge at the top.
  */
 import React, { useEffect, useState } from "react";
 import LanguageSelector from "./LanguageSelector";
@@ -48,7 +48,7 @@ function hue2rgb(p, q, t) {
 
 const topicLabels = {
   instruction: "Instruction",
-  accuracy: "Accuracy",
+  accuracy: "CV accuracy",
   precision: "Precision",
   company_fit: "Company fit",
   user_fit: "User fit",
@@ -58,14 +58,12 @@ const topicLabels = {
 function topicStatusLabel(meta) {
   if (!meta) return null;
   if (meta.done) return "Done";
-  if (meta.suspended) return "Suspended";
   return "Active";
 }
 
 function topicStatusColor(meta) {
   if (!meta) return "var(--secondary-text-color)";
   if (meta.done) return "#16a34a";
-  if (meta.suspended) return "#d97706";
   return "#0d9488";
 }
 
@@ -150,7 +148,10 @@ export default function AgenticThread({
   const label = topicLabels[topic] || topic;
   const meta = topicMeta || {};
   const statusLabel = topicStatusLabel(meta);
-  const messages = meta.messages ?? (thread?.length ?? 0);
+  const visibleThreadEntries = (thread || [])
+    .map((comment, index) => ({ comment, index }))
+    .filter(({ comment }) => !comment?.carried);
+  const messages = meta.messages ?? visibleThreadEntries.length;
   const turns = meta.round ?? 0;
 
   return (
@@ -257,7 +258,7 @@ export default function AgenticThread({
         </div>
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {!thread || thread.length === 0 ? (
+        {visibleThreadEntries.length === 0 ? (
           <div
             style={{
               fontSize: 12,
@@ -268,20 +269,20 @@ export default function AgenticThread({
             No comments yet.
           </div>
         ) : (
-          thread.map((comment, idx) => (
+          visibleThreadEntries.map(({ comment, index }) => (
             <CommentBlock
-              key={comment.id || comment.text?.slice(0, 20) || idx}
+              key={comment.id || comment.text?.slice(0, 20) || index}
               comment={comment}
-              commentIndex={idx}
+              commentIndex={index}
               topic={topic}
-              fieldId={translation ? `agentic_${topic}_${idx}` : null}
+              fieldId={translation ? `agentic_${topic}_${index}` : null}
               vendorColors={vendorColors}
               translation={translation}
               canEdit={canEdit}
-              onRemove={() => onRemoveComment?.(topic, idx)}
-              onEdit={(newText) => onEditComment?.(topic, idx, newText)}
-              onRemoveAddendum={onRemoveAddendum ? (addendumIndex) => onRemoveAddendum(topic, idx, addendumIndex) : undefined}
-              onEditAddendum={onEditAddendum ? (addendumIndex, newText) => onEditAddendum(topic, idx, addendumIndex, newText) : undefined}
+              onRemove={() => onRemoveComment?.(topic, index)}
+              onEdit={(newText) => onEditComment?.(topic, index, newText)}
+              onRemoveAddendum={onRemoveAddendum ? (addendumIndex) => onRemoveAddendum(topic, index, addendumIndex) : undefined}
+              onEditAddendum={onEditAddendum ? (addendumIndex, newText) => onEditAddendum(topic, index, addendumIndex, newText) : undefined}
             />
           ))
         )}
@@ -299,7 +300,9 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
   const [addendumEditText, setAddendumEditText] = useState("");
   const up = (comment.votes && comment.votes.up) || [];
   const down = (comment.votes && comment.votes.down) || [];
+  const abstain = (comment.votes && comment.votes.abstain) || [];
   const net = up.length - down.length;
+  const removed = Boolean(comment.removed) || down.length > 0;
 
   const rootRgb = colorToRgbString(vendorColors[comment.vendor] || null);
   const sourceText = comment.text || "";
@@ -332,24 +335,24 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
       style={{
         position: "relative",
         padding: 8,
-        paddingLeft: 12,
         backgroundColor: `rgba(${rootRgb}, ${ROOT_OPACITY})`,
         border: "1px solid var(--border-color)",
         borderRadius: 10,
         marginLeft: 10,
+        opacity: removed ? 0.75 : 1,
       }}
     >
-      {/* Speech bubble tail (left-facing) */}
+      {/* Speech bubble tail (downward, below box for full lateral space) */}
       <div
         style={{
           position: "absolute",
-          left: -8,
-          top: 20,
+          left: 20,
+          bottom: -8,
           width: 0,
           height: 0,
-          borderTop: "8px solid transparent",
-          borderBottom: "8px solid transparent",
-          borderRight: `8px solid rgba(${rootRgb}, ${ROOT_OPACITY})`,
+          borderLeft: "8px solid transparent",
+          borderRight: "8px solid transparent",
+          borderTop: `8px solid rgba(${rootRgb}, ${ROOT_OPACITY})`,
         }}
       />
       <div
@@ -382,6 +385,16 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
         >
           <span style={{ fontSize: 10 }}>{collapsed ? "▶" : "▼"}</span>
           <span>{comment.vendor}</span>
+          {comment.carried_from_topic && (
+            <span style={{ fontSize: 10, opacity: 0.8 }}>
+              from {topicLabels[comment.carried_from_topic] || comment.carried_from_topic}
+            </span>
+          )}
+          {removed && (
+            <span style={{ fontSize: 10, color: "#dc2626", fontWeight: 700 }}>
+              REMOVED
+            </span>
+          )}
         </button>
         <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {!editing && translation && fieldId && (
@@ -473,7 +486,14 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
       {(comment.addendums || []).length > 0 && (
         <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 6 }}>
           {(comment.addendums || []).map((a, i) => {
-            const addendumUp = (a.up && Array.isArray(a.up)) ? a.up.length : 0;
+            const addendumUpList = (a.up && Array.isArray(a.up)) ? a.up : [];
+            const addendumDownList = (a.down && Array.isArray(a.down)) ? a.down : [];
+            const addendumUp = addendumUpList.length;
+            const addendumDown = addendumDownList.length;
+            const addendumVoteTooltip = [
+              addendumUp ? `Up: ${addendumUpList.join(", ")}` : null,
+              addendumDown ? `Down: ${addendumDownList.join(", ")}` : null,
+            ].filter(Boolean).join(". ") || "No votes yet";
             const addendumRgb = colorToRgbString(vendorColors[a.vendor] || null);
             const addendumFieldId = fieldId ? `${fieldId}_addendum_${i}` : null;
             const isEditingAddendum = addendumEditingIndex === i;
@@ -544,6 +564,7 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
               <div
                 key={a.id || i}
                 style={{
+                  position: "relative",
                   fontSize: 12,
                   color: "var(--text-color)",
                   display: "flex",
@@ -551,10 +572,33 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
                   gap: 4,
                   backgroundColor: `rgba(${addendumRgb}, ${ADDENDUM_OPACITY})`,
                   borderRadius: 6,
-                  padding: "6px 8px",
+                  padding: "6px 8px 6px 14px",
                   minHeight: 32,
+                  overflow: "visible",
                 }}
               >
+                {/* Red + at edge: center on boundary main/addendum, arm in white, no layout space */}
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    transform: "translate(-50%, -50%)",
+                    width: 22,
+                    height: 22,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 16,
+                    fontWeight: 700,
+                    color: "#dc2626",
+                    lineHeight: 1,
+                    pointerEvents: "none",
+                  }}
+                  aria-hidden
+                >
+                  +
+                </div>
                 <TranslatableSlice
                   translation={translation}
                   fieldId={addendumFieldId}
@@ -579,36 +623,19 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
                       />
                     ) : (
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <div
-                          style={{
-                            width: 12,
-                            flexShrink: 0,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            fontSize: 14,
-                            fontWeight: 700,
-                            color: "#dc2626",
-                            lineHeight: 1,
-                            transform: "scale(2.2)",
-                          }}
-                          aria-hidden
-                        >
-                          +
-                        </div>
-                        <span style={{ flex: 1, marginLeft: 4 }}>
+                        <span style={{ flex: 1, minWidth: 0 }}>
                           <span style={{ fontWeight: 600, color: "var(--secondary-text-color)" }}>{a.vendor}:</span> {displayedText}
                         </span>
                         <span
                           style={{
                             fontSize: 11,
-                            color: addendumUp > 0 ? "#16a34a" : "var(--secondary-text-color)",
+                            color: addendumUp > addendumDown ? "#16a34a" : addendumDown > addendumUp ? "#dc2626" : "var(--secondary-text-color)",
                             flexShrink: 0,
                             fontWeight: 600,
                           }}
-                          title="Addendum upvotes (only positively upvoted addendums are used in the revision)"
+                          title={`${addendumVoteTooltip}. Only addendums with more up than down are used in the revision.`}
                         >
-                          ↑ {addendumUp}
+                          ↑ {addendumUp}  ↓ {addendumDown}
                         </span>
                       </div>
                     )
@@ -701,11 +728,23 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
           alignItems: "center",
         }}
       >
-        <span style={{ color: net > 0 ? "#16a34a" : "var(--secondary-text-color)" }}>
+        <span
+          style={{ color: net > 0 ? "#16a34a" : "var(--secondary-text-color)" }}
+          title={up.length ? `Up: ${up.join(", ")}` : "No upvotes"}
+        >
           ↑ {up.length}
         </span>
-        <span style={{ color: down.length > 0 ? "#dc2626" : "var(--secondary-text-color)" }}>
+        <span
+          style={{ color: down.length > 0 ? "#dc2626" : "var(--secondary-text-color)" }}
+          title={down.length ? `Down: ${down.join(", ")}` : "No downvotes"}
+        >
           ↓ {down.length}
+        </span>
+        <span
+          style={{ color: abstain.length > 0 ? "#0d9488" : "var(--secondary-text-color)" }}
+          title={abstain.length ? `Abstain: ${abstain.join(", ")}` : "No abstains"}
+        >
+          ⏭ {abstain.length}
         </span>
       </div>
         </>

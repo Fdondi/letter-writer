@@ -5,13 +5,14 @@ multiple feedback agents in random order per round, comments/subcomments/addendu
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import random
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,7 @@ def save_agentic_state(session, state: Dict[str, Any]) -> None:
 AGENTIC_STATE_RESPONSE_KEYS = (
     "status", "round", "draft_letter", "final_letter", "threads", "cost", "draft_vendor",
     "draft_letters", "final_letters", "feedback_suspended", "topic_meta", "max_rounds",
+    "vendor_errors", "draft_votes", "refine_samples",
 )
 
 
@@ -87,23 +89,20 @@ def _get_max_rounds(state: Optional[Dict[str, Any]]) -> int:
 
 
 def _build_topic_meta(state: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Build per-topic meta for UI: round, messages, suspended, done (round > max_rounds)."""
+    """Build per-topic meta for UI: round, messages, done (round > max_rounds)."""
     if not state:
         return {}
     threads = state.get("threads") or _empty_threads()
     cursors = state.get("topic_cursors") or {}
-    global_suspended = bool(state.get("feedback_suspended"))
     max_rounds = _get_max_rounds(state)
     out = {}
     for topic in AGENTIC_TOPIC_KEYS:
         cur = cursors.get(topic) or {}
         r = cur.get("round", 1)
-        suspended = global_suspended or bool(cur.get("suspended"))
         done = r > max_rounds
         out[topic] = {
             "round": r,
             "messages": len(threads.get(topic) or []),
-            "suspended": suspended,
             "done": done,
         }
     return out
@@ -121,28 +120,50 @@ def slim_agentic_state_for_response(state: Optional[Dict[str, Any]]) -> Optional
     return result
 
 
-def poll_response(state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Minimal poll response: threads, ongoing, status, feedback_suspended, topic_meta, and optionally draft_letters/final_letters.
+def _draft_letters_etag(draft_letters: Dict[str, Any]) -> str:
+    """Stable hash for draft_letters payload comparison across polls."""
+    payload = json.dumps(draft_letters, sort_keys=True, separators=(",", ":"))
+    return hashlib.md5(payload.encode("utf-8")).hexdigest()
+
+
+def poll_response(
+    state: Optional[Dict[str, Any]],
+    known_draft_letters_etag: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Minimal poll response: per-topic threads-with-meta, ongoing, status, feedback_suspended, and optionally draft/final letters.
     ongoing is taken only from persisted state; it is set true until all topic threads have signalled done (or suspend/abort).
     """
     state = state or {}
-    threads = state.get("threads") or _empty_threads()
+    raw_threads = state.get("threads") or _empty_threads()
     ongoing = bool(state.get("feedback_ongoing"))
     status = state.get("status", STATUS_DRAFT)
     feedback_suspended = bool(state.get("feedback_suspended"))
     topic_meta = _build_topic_meta(state)
+    threads = {}
+    for topic in AGENTIC_TOPIC_KEYS:
+        threads[topic] = {
+            "thread": list(raw_threads.get(topic) or []),
+            "round": (topic_meta.get(topic) or {}).get("round", 1),
+            "messages": (topic_meta.get(topic) or {}).get("messages", len(raw_threads.get(topic) or [])),
+            "done": (topic_meta.get(topic) or {}).get("done", False),
+        }
     out = {
         "threads": threads,
         "ongoing": ongoing,
         "status": status,
         "feedback_suspended": feedback_suspended,
-        "topic_meta": topic_meta,
         "max_rounds": _get_max_rounds(state),
     }
-    if state.get("draft_letters"):
-        out["draft_letters"] = state["draft_letters"]
+    draft_letters = state.get("draft_letters") or {}
+    if draft_letters:
+        draft_letters_etag = _draft_letters_etag(draft_letters)
+        out["draft_letters_etag"] = draft_letters_etag
+        if not known_draft_letters_etag or known_draft_letters_etag != draft_letters_etag:
+            out["draft_letters"] = draft_letters
     if state.get("final_letters"):
         out["final_letters"] = state["final_letters"]
+    if state.get("draft_votes"):
+        out["draft_votes"] = state["draft_votes"]
     return out
 
 
@@ -181,24 +202,228 @@ def _ensure_addendum_id(a: Dict, comment_idx: int, addendum_idx: int) -> Dict:
     return a
 
 
-def _format_thread_for_prompt(thread: List[Dict], topic: str) -> str:
-    """Format current thread (comments + addendums + votes + subcomments) for the prompt."""
+def _comment_acted_vendors(c: Dict) -> set:
+    """Vendors who have acted on this comment (voted, subcommented, or added an addendum)."""
+    acted = set()
+    v = c.get("votes") or {}
+    acted.update(v.get("up") or [])
+    acted.update(v.get("down") or [])
+    acted.update(v.get("abstain") or [])
+    for s in c.get("subcomments", []):
+        if s.get("vendor"):
+            acted.add(s["vendor"])
+    for a in c.get("addendums", []):
+        if a.get("vendor"):
+            acted.add(a["vendor"])
+    return acted
+
+
+def _is_comment_removed(c: Dict[str, Any]) -> bool:
+    """A comment is removed forever for downstream use once any downvote is registered."""
+    if c.get("removed"):
+        return True
+    down = c.get("votes", {}).get("down", [])
+    return len(down) > 0
+
+
+def _comment_score(c: Dict[str, Any]) -> float:
+    """Ranking heuristic for 'top comments' carry-over."""
+    votes = c.get("votes") or {}
+    up = len(votes.get("up") or [])
+    down = len(votes.get("down") or [])
+    pos_add = 0
+    for a in c.get("addendums", []):
+        if len(a.get("up") or []) > len(a.get("down") or []):
+            pos_add += 1
+    return float((up - down) + 0.25 * len(c.get("subcomments") or []) + 0.35 * pos_add)
+
+
+def _clone_comment_for_carryover(c: Dict[str, Any], *, carry_topic: str, carry_id: str) -> Dict[str, Any]:
+    """Clone comment payload so downstream topics can vote/comment/add on prior-topic comments."""
+    addendums = []
+    for a in (c.get("addendums") or []):
+        addendums.append({
+            "id": a.get("id"),
+            "vendor": a.get("vendor"),
+            "text": a.get("text", ""),
+            "up": list(a.get("up") or []),
+            "down": list(a.get("down") or []),
+        })
+    subcomments = []
+    for s in (c.get("subcomments") or []):
+        subcomments.append({
+            "id": s.get("id"),
+            "vendor": s.get("vendor"),
+            "text": s.get("text", ""),
+        })
+    votes = c.get("votes") or {}
+    return {
+        "id": carry_id,
+        "vendor": c.get("vendor"),
+        "text": c.get("text", ""),
+        "addendums": addendums,
+        "subcomments": subcomments,
+        "votes": {
+            "up": list(votes.get("up") or []),
+            "down": list(votes.get("down") or []),
+            "abstain": list(votes.get("abstain") or []),
+        },
+        "removed": bool(c.get("removed")) or len(votes.get("down") or []) > 0,
+        "carried_from_topic": carry_topic,
+        "carried_from_comment_id": c.get("id"),
+        "carried": True,
+    }
+
+
+def get_prior_topic_top_comments(
+    threads: Dict[str, List[Dict[str, Any]]],
+    topic: str,
+    *,
+    max_per_topic: int = 3,
+) -> List[Dict[str, Any]]:
+    """Return top surviving comments from topics that come before `topic`."""
+    out: List[Dict[str, Any]] = []
+    try:
+        topic_index = AGENTIC_TOPIC_KEYS.index(topic)
+    except ValueError:
+        return out
+    for prev_topic in AGENTIC_TOPIC_KEYS[:topic_index]:
+        candidates = []
+        for c in (threads.get(prev_topic) or []):
+            if _is_comment_removed(c):
+                continue
+            candidates.append(c)
+        candidates.sort(key=_comment_score, reverse=True)
+        for c in candidates[:max_per_topic]:
+            out.append(_clone_comment_for_carryover(
+                c,
+                carry_topic=prev_topic,
+                carry_id=f"{prev_topic}:{c.get('id') or str(uuid.uuid4())[:8]}",
+            ))
+    return out
+
+
+def seed_thread_with_prior_topic_comments(
+    thread: List[Dict[str, Any]],
+    prior_comments: List[Dict[str, Any]],
+) -> None:
+    """Inject prior-topic top comments once so current topic can vote/comment/add to them."""
+    existing = {c.get("id") for c in thread if c.get("id")}
+    for c in prior_comments:
+        cid = c.get("id")
+        if not cid or cid in existing:
+            continue
+        thread.append(c)
+        existing.add(cid)
+
+
+def merge_carryover_updates_and_strip(
+    topic_thread: List[Dict[str, Any]],
+    threads: Dict[str, List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """
+    Persist carry-over comment interactions back to their source topic, then remove
+    carry-over clones from the current topic thread so users only see local comments.
+    """
+
+    def _clone_addendums(addendums: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        cloned: List[Dict[str, Any]] = []
+        for a in addendums or []:
+            na = dict(a)
+            na["up"] = list(na.get("up") or [])
+            na["down"] = list(na.get("down") or [])
+            cloned.append(na)
+        return cloned
+
+    def _clone_subcomments(subcomments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [dict(s) for s in (subcomments or [])]
+
+    visible_thread: List[Dict[str, Any]] = []
+    for comment in topic_thread:
+        if not comment.get("carried"):
+            visible_thread.append(comment)
+            continue
+
+        source_topic = comment.get("carried_from_topic")
+        source_comment_id = comment.get("carried_from_comment_id")
+        if not source_topic or not source_comment_id:
+            continue
+
+        source_thread = threads.get(source_topic) or []
+        source = next((c for c in source_thread if c.get("id") == source_comment_id), None)
+        if source is None:
+            continue
+
+        source["addendums"] = _clone_addendums(comment.get("addendums") or [])
+        source["subcomments"] = _clone_subcomments(comment.get("subcomments") or [])
+        votes = comment.get("votes") or {}
+        source["votes"] = {
+            "up": list(votes.get("up") or []),
+            "down": list(votes.get("down") or []),
+            "abstain": list(votes.get("abstain") or []),
+        }
+        source["removed"] = bool(comment.get("removed")) or len(source["votes"]["down"]) > 0
+
+    return visible_thread
+
+
+def format_prior_topic_comments_for_prompt(prior_comments: List[Dict[str, Any]]) -> str:
+    """Compact formatter for prior-topic carry-over comments."""
+    if not prior_comments:
+        return "(No prior-topic carry-over comments.)"
+    lines: List[str] = []
+    for i, c in enumerate(prior_comments):
+        label = _topic_label(c.get("carried_from_topic", "unknown"))
+        lines.append(f"- [{label}] id={c.get('id', f'pc{i}')} by {c.get('vendor', '?')}: {c.get('text', '')}")
+        for a in (c.get("addendums") or []):
+            lines.append(
+                f"  Addendum by {a.get('vendor', '?')} (up={len(a.get('up') or [])}, down={len(a.get('down') or [])}): {a.get('text', '')}"
+            )
+        for s in (c.get("subcomments") or []):
+            lines.append(f"  Reply by {s.get('vendor', '?')}: {s.get('text', '')}")
+    return "\n".join(lines)
+
+
+def _format_thread_for_prompt(thread: List[Dict], topic: str, feedback_vendors: Optional[List[str]] = None) -> str:
+    """Format current thread for the prompt: effective comment text (with incorporated addendums), new addendums, open vs finalized."""
     if not thread:
         return "(No comments yet.)"
+    vendor_set = set(feedback_vendors or [])
     lines = []
     for i, c in enumerate(thread):
         cid = c.get("id", f"c{i}")
-        lines.append(f"--- Comment {i+1} [id={cid}] by {c.get('vendor', '?')} ---")
-        lines.append(c.get("text", ""))
+        is_removed = _is_comment_removed(c)
+        acted = _comment_acted_vendors(c)
+        is_open = (not is_removed) and (not vendor_set or (acted < vendor_set))
+        status = "REMOVED" if is_removed else ("OPEN" if is_open else "FINALIZED")
+        lines.append(f"--- Comment {i+1} [id={cid}] [{status}] by {c.get('vendor', '?')} ---")
+        if c.get("carried"):
+            lines.append(
+                f"[Carried from previous topic: {c.get('carried_from_topic', '?')}, original_comment_id={c.get('carried_from_comment_id', '?')}]"
+            )
+        # Effective text: comment + addendums that have positive net votes (incorporated)
+        effective_parts = [c.get("text", "")]
+        new_addendum_lines = []
         for ai, a in enumerate(c.get("addendums", [])):
             _ensure_addendum_id(a, i, ai)
             aup = a.get("up") or []
-            lines.append(f"  Addendum [id={a.get('id')}] by {a.get('vendor', '?')} (upvotes={len(aup)}): {a.get('text', '')}")
+            adown = a.get("down") or []
+            if len(aup) > len(adown):
+                effective_parts.append(f"  [Incorporated addendum] {a.get('text', '')}")
+            else:
+                new_addendum_lines.append(f"  New addendum [id={a.get('id')}] by {a.get('vendor', '?')} (up={len(aup)}, down={len(adown)}): {a.get('text', '')}")
+        lines.append("\n".join(effective_parts))
+        if new_addendum_lines:
+            lines.append("  New addendums (you must upvote or downvote each):")
+            lines.extend(new_addendum_lines)
         for s in c.get("subcomments", []):
             lines.append(f"  Reply by {s.get('vendor', '?')}: {s.get('text', '')}")
         up = c.get("votes", {}).get("up", [])
         down = c.get("votes", {}).get("down", [])
-        lines.append(f"  Votes: up={len(up)} {up}, down={len(down)} {down}")
+        lines.append(f"  Comment votes: up={len(up)} {up}, down={len(down)} {down}")
+        abstain = c.get("votes", {}).get("abstain", [])
+        if abstain:
+            lines.append(f"  Comment abstain={len(abstain)} {abstain}")
         lines.append("")
     return "\n".join(lines).strip()
 
@@ -207,8 +432,14 @@ def _agentic_feedback_prompt_first_agent(topic: str, context: str, topic_label: 
     """System and user prompt for the first agent (no existing comments)."""
     system = (
         f"You are a feedback agent for the '{topic_label}' dimension of a cover letter. "
-        "You see the draft letter(s) and the relevant context. "
-        "If multiple proposals (one per vendor) are shown, you may suggest edits to one or say you prefer one vendor's choice over another. "
+        "You see the draft letter(s) and the relevant context.\n\n"
+        "RULES:\n"
+        "- Do NOT pick a 'best' draft or declare any single proposal the winner.\n"
+        "- Discuss specific strengths and weaknesses of each proposal.\n"
+        "- When praising or criticizing a passage, you MUST quote the exact words from the draft "
+        "(use quotation marks) so your comment is fully understandable on its own, even without "
+        "the original drafts.\n"
+        "- Suggest concrete changes where appropriate.\n\n"
         "If you have substantive feedback (issues or suggestions for the draft), write it in a single comment. "
         "If you have nothing to add, output exactly: NO COMMENT (or SKIP). "
         "Do not add anything after NO COMMENT or SKIP. "
@@ -216,37 +447,48 @@ def _agentic_feedback_prompt_first_agent(topic: str, context: str, topic_label: 
     )
     prompt = (
         context + "\n\n"
-        "Do you have any feedback on this draft for this dimension? "
+        "Discuss the strengths and weaknesses of each draft for this dimension. "
+        "Quote exact phrases when praising or criticizing. Do NOT pick a best draft. "
         "Reply with your comment, or with NO COMMENT (or SKIP) if you have nothing to add."
     )
     return system, prompt
 
 
 def _agentic_feedback_prompt_subsequent(
-    topic: str, context: str, thread_str: str, topic_label: str
+    topic: str, context: str, thread_str: str, topic_label: str, prior_topic_comments_str: str = ""
 ) -> tuple:
     """System and user prompt for agents that see existing comments."""
     system = (
         f"You are a feedback agent for the '{topic_label}' dimension. "
-        "You see the draft, context, and the current thread (comments, addendums, replies, votes).\n\n"
-        "Important distinction:\n"
-        "- Comments and subcomments (replies) are for ephemeral discussion: use them to agree, disagree, or clarify. "
-        "They are not passed to the draft revision. In subcomments it is fine to say 'I agree with that'; prefer novel insights when possible.\n"
-        "- Addendums are the only content passed to the draft revision. Only addendums that receive at least one upvote are considered. "
-        "Do NOT add a new addendum that repeats or rephrases another agent's suggestion—it is already in the thread. "
-        "If you agree with an existing addendum, upvote it by addendum_id (no new text). Do NOT add an addendum that only says you agree to incorporate another addition; that is redundant.\n"
-        "Add a new addendum ONLY when you have a significantly new, concrete, actionable revision suggestion (e.g. 'Add a sentence about X', "
-        "'Rephrase paragraph 2 to emphasize Y'). The addendum field must be a concrete draft revision suggestion, not meta-commentary.\n\n"
-        "You may: (1) add subcomments (replies) to any comment; (2) for each comment vote: upvote, upvote_addendum (with new addendum text or addendum_id to upvote existing), downvote, or none; "
-        "(3) optionally add one new top-level comment. "
-        "Respond with a single JSON object with keys: subcomments (list of {comment_id, text}), "
-        "votes (list of {comment_id, action, addendum?: string, addendum_id?: string}), new_comment (string or null). "
-        "Use comment 'id' for comment_id; use addendum 'id' for addendum_id when upvoting an existing addendum (omit addendum text in that case). "
-        "If you do nothing, return {\"subcomments\": [], \"votes\": [], \"new_comment\": null}."
+        "You see the draft, context, and the current thread. Comments marked [OPEN] require your action; [FINALIZED] comments are closed (all bots have already acted); [REMOVED] comments are visible for audit but must never be used downstream.\n\n"
+        "RULES:\n"
+        "- Do NOT pick a 'best' draft or declare any single proposal the winner.\n"
+        "- When praising or criticizing a passage, you MUST quote the exact words from the draft "
+        "(use quotation marks) so your comment is fully understandable on its own.\n"
+        "- Suggest concrete changes where appropriate.\n\n"
+        "Order of actions:\n"
+        "1) Optionally add one new top-level comment (only if you have an original, substantive point not already in the thread).\n"
+        "2) For each NEW addendum listed in the thread (those under 'New addendums (you must upvote or downvote each)'): you must either upvote or downvote it by addendum_id. No new addendum text when voting existing addendums.\n"
+        "3) For each OPEN top-level comment: choose exactly one of: upvote the comment, downvote the comment, abstain, add a subcomment, or add one addendum. Do not interact with FINALIZED or REMOVED comments.\n\n"
+        "Hard rule: if you downvote a top-level comment, that comment is removed forever from downstream rewrite inputs.\n\n"
+        "Abstain usage: use abstain only when the comment is not relevant to this topic.\n\n"
+        "Consistency rule: when prior-topic comments contradict evidence in this topic, downvote the inconsistent comment so it is removed from downstream use.\n\n"
+        "Anti-repetition: Do not add subcomments that only say 'I agree'. Do not add a top-level comment or addendum that repeats what is already said. If you have nothing original to add, only vote (upvote/downvote) and leave new_comment null and do not add addendum text. Adding an addendum invalidates the comment's existing votes (one more reason not to add one lightly). Only addendums with positive net votes are used in the draft revision.\n\n"
+        "Subcomments are for discussion (e.g. clarifying before an addendum); only add when non-redundant. New addendum = concrete, actionable revision suggestion (e.g. 'Add a sentence about X'); not meta-commentary.\n\n"
+        "JSON response: subcomments (list of {comment_id, text}), votes (list of {comment_id, action, addendum_id?: string, addendum?: string}), new_comment (string or null). "
+        "action is one of: upvote, downvote, abstain (comment-only), upvote_addendum (with addendum_id to upvote existing, or addendum text to create new). "
+        "Use comment 'id' for comment_id; addendum 'id' for addendum_id. For each new addendum you must include a vote with addendum_id and action upvote or downvote. For each open comment you must include one vote or one subcomment or one addendum."
     )
+    prior_section = ""
+    if prior_topic_comments_str:
+        prior_section = (
+            "========== Prior topics: top surviving comments ==========\n"
+            + prior_topic_comments_str + "\n\n"
+        )
     prompt = (
         context + "\n\n"
-        "========== Current thread ==========\n" + thread_str + "\n\n"
+        + prior_section
+        + "========== Current thread ==========\n" + thread_str + "\n\n"
         "Provide your response as JSON only (no markdown, no extra text)."
     )
     return system, prompt
@@ -262,10 +504,13 @@ def _call_agentic_feedback_agent(
     context: str,
     thread: List[Dict],
     trace_dir: Optional[Path],
+    feedback_vendors: Optional[List[str]] = None,
+    prior_topic_comments: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Call one feedback agent for one topic. Returns parsed actions: subcomments, votes, new_comment.
     For first agent (empty thread), we do a simple text response; for subsequent, we ask for JSON.
+    feedback_vendors is used to mark open vs finalized comments (finalized = all bots have acted).
     """
     client = get_client(ModelVendor(vendor))
     topic_label = _topic_label(topic)
@@ -277,8 +522,10 @@ def _call_agentic_feedback_agent(
             _log(f"AGENTIC {vendor} on {topic}: declined (NO COMMENT/SKIP)")
             return {"subcomments": [], "votes": [], "new_comment": None}
         return {"subcomments": [], "votes": [], "new_comment": raw}
-    thread_str = _format_thread_for_prompt(thread, topic)
-    system, prompt = _agentic_feedback_prompt_subsequent(topic, context, thread_str, topic_label)
+    thread_str = _format_thread_for_prompt(thread, topic, feedback_vendors)
+    system, prompt = _agentic_feedback_prompt_subsequent(
+        topic, context, thread_str, topic_label, prior_topic_comments_str=(prior_topic_comments or "")
+    )
     raw = client.call(ModelSize.TINY, system, [prompt])
     raw = (raw or "").strip()
     # Strip markdown code block if present
@@ -333,6 +580,8 @@ def _apply_agent_response(
                     break
         idx = id_to_idx.get(cid) if cid is not None else None
         if idx is not None:
+            if _is_comment_removed(thread[idx]):
+                continue
             if "subcomments" not in thread[idx]:
                 thread[idx]["subcomments"] = []
             thread[idx]["subcomments"].append({
@@ -348,26 +597,44 @@ def _apply_agent_response(
         idx = id_to_idx.get(cid) if cid is not None else None
         if idx is None:
             continue
+        if _is_comment_removed(thread[idx]):
+            continue
         action = (v.get("action") or "").lower()
+        if action == "abstain":
+            if "votes" not in thread[idx]:
+                thread[idx]["votes"] = {"up": [], "down": [], "abstain": []}
+            if "abstain" not in thread[idx]["votes"]:
+                thread[idx]["votes"]["abstain"] = []
+            if vendor not in thread[idx]["votes"]["abstain"]:
+                thread[idx]["votes"]["abstain"].append(vendor)
+                changed = True
+            continue
         if "up" in action or action == "upvote":
             if "votes" not in thread[idx]:
-                thread[idx]["votes"] = {"up": [], "down": []}
+                thread[idx]["votes"] = {"up": [], "down": [], "abstain": []}
             if vendor not in thread[idx]["votes"]["up"]:
                 thread[idx]["votes"]["up"].append(vendor)
                 changed = True
             addendum_text = (v.get("addendum") or v.get("text") or "").strip()
             addendum_id = v.get("addendum_id") or v.get("addendumId")
             if addendum_id and not addendum_text:
-                # Upvote existing addendum
+                # Upvote existing addendum; if it becomes positive net, invalidate parent comment votes
                 loc = addendum_by_id.get(addendum_id)
                 if loc is not None:
                     ci, ai = loc
                     addendum = thread[ci]["addendums"][ai]
                     if "up" not in addendum:
                         addendum["up"] = []
+                    if "down" not in addendum:
+                        addendum["down"] = []
                     if vendor not in addendum["up"]:
                         addendum["up"].append(vendor)
                         changed = True
+                    if len(addendum["up"]) > len(addendum["down"]):
+                        # Addendum is now positive; invalidate existing votes on the top-level comment
+                        if thread[ci].get("votes"):
+                            thread[ci]["votes"] = {"up": [], "down": []}
+                            changed = True
             elif addendum_text and ("addendum" in action or "addendum" in v):
                 # New addendum (author counts as first upvote)
                 if "addendums" not in thread[idx]:
@@ -377,16 +644,37 @@ def _apply_agent_response(
                     "vendor": vendor,
                     "text": addendum_text,
                     "up": [vendor],
+                    "down": [],
                 }
                 thread[idx]["addendums"].append(new_a)
                 addendum_by_id[new_a["id"]] = (idx, len(thread[idx]["addendums"]) - 1)
                 changed = True
+                # New addendum is positive (author upvote); invalidate parent comment votes
+                if thread[idx].get("votes"):
+                    thread[idx]["votes"] = {"up": [], "down": []}
+                    changed = True
         elif "down" in action or action == "downvote":
-            if "votes" not in thread[idx]:
-                thread[idx]["votes"] = {"up": [], "down": []}
-            if vendor not in thread[idx]["votes"]["down"]:
-                thread[idx]["votes"]["down"].append(vendor)
-                changed = True
+            addendum_id = v.get("addendum_id") or v.get("addendumId")
+            if addendum_id:
+                loc = addendum_by_id.get(addendum_id)
+                if loc is not None:
+                    ci, ai = loc
+                    addendum = thread[ci]["addendums"][ai]
+                    if "down" not in addendum:
+                        addendum["down"] = []
+                    if vendor not in addendum["down"]:
+                        addendum["down"].append(vendor)
+                        changed = True
+            else:
+                if "votes" not in thread[idx]:
+                    thread[idx]["votes"] = {"up": [], "down": [], "abstain": []}
+                if vendor not in thread[idx]["votes"]["down"]:
+                    thread[idx]["votes"]["down"].append(vendor)
+                    changed = True
+                # Any downvote permanently removes the comment from downstream use.
+                if not thread[idx].get("removed"):
+                    thread[idx]["removed"] = True
+                    changed = True
     new_comment = response.get("new_comment")
     if new_comment and isinstance(new_comment, str) and new_comment.strip():
         thread.append({
@@ -394,8 +682,9 @@ def _apply_agent_response(
             "vendor": vendor,
             "text": new_comment.strip(),
             "addendums": [],
-            "votes": {"up": [], "down": []},
+            "votes": {"up": [], "down": [], "abstain": []},
             "subcomments": [],
+            "removed": False,
         })
         changed = True
     return changed
@@ -411,6 +700,180 @@ def _count_positive_comments(threads: Dict[str, List[Dict]]) -> int:
             if up > down:
                 n += 1
     return n
+
+
+def _format_all_threads_for_voting(threads: Dict[str, List[Dict]]) -> str:
+    """Format all discussion threads into a single string for the voting prompt."""
+    parts = []
+    for topic in AGENTIC_TOPIC_KEYS:
+        thread = threads.get(topic, [])
+        if not thread:
+            continue
+        label = _topic_label(topic)
+        parts.append(f"===== {label} Discussion =====")
+        for i, c in enumerate(thread):
+            parts.append(f"[{c.get('vendor', '?')}]: {c.get('text', '')}")
+            for a in c.get("addendums", []):
+                aup = len(a.get("up") or [])
+                adown = len(a.get("down") or [])
+                parts.append(f"  Addendum by {a.get('vendor', '?')} (up={aup}, down={adown}): {a.get('text', '')}")
+            for s in c.get("subcomments", []):
+                parts.append(f"  Reply by {s.get('vendor', '?')}: {s.get('text', '')}")
+        parts.append("")
+    return "\n".join(parts).strip()
+
+
+def _format_draft_letters_for_voting(draft_letters: Dict[str, str]) -> str:
+    """Format all draft letters for the voting prompt."""
+    parts = []
+    for vendor, letter in draft_letters.items():
+        parts.append(f"===== Draft by {vendor} =====\n{letter}\n")
+    return "\n".join(parts).strip()
+
+
+def _call_voting_agent(
+    vendor: str,
+    draft_letters: Dict[str, str],
+    threads: Dict[str, List[Dict]],
+    client=None,
+) -> List[str]:
+    """
+    Call one agent to vote for their top 3 favorite drafts.
+    Returns list of up to 3 vendor names (ordered by preference).
+    """
+    if client is None:
+        client = get_client(ModelVendor(vendor))
+    draft_vendors = list(draft_letters.keys())
+    drafts_str = _format_draft_letters_for_voting(draft_letters)
+    discussion_str = _format_all_threads_for_voting(threads)
+
+    system = (
+        "You are a voting agent. You have read multiple draft cover letters and a discussion "
+        "of their strengths and weaknesses. Now you must vote for your top 3 favorite drafts.\n\n"
+        "Consider that the chosen draft will be revised based on the discussion comments, "
+        "so a draft with fixable weaknesses may still be a strong candidate.\n\n"
+        "Respond with ONLY a JSON array of up to 3 vendor names, ordered from most to least preferred. "
+        "Example: [\"openai\", \"anthropic\", \"gemini\"]\n"
+        "No explanation, no markdown, just the JSON array."
+    )
+    prompt = (
+        drafts_str + "\n\n"
+        "===== Agent Discussion =====\n" + discussion_str + "\n\n"
+        f"The available draft vendors are: {json.dumps(draft_vendors)}\n\n"
+        "Vote for your top 3 favorites (JSON array of vendor names, most preferred first)."
+    )
+    raw = client.call(ModelSize.TINY, system, [prompt])
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        raw = "\n".join(lines)
+    try:
+        votes = json.loads(raw)
+        if isinstance(votes, list):
+            return [v for v in votes if isinstance(v, str) and v in draft_letters][:3]
+    except json.JSONDecodeError:
+        pass
+    _log(f"AGENTIC voting: {vendor} returned unparseable response: {raw[:200]}")
+    return []
+
+
+def run_agentic_voting(
+    session,
+    voting_vendors: List[str],
+) -> Dict[str, Any]:
+    """
+    After discussion, each vendor reads all drafts + discussion and votes for top 3.
+    Stores vote tallies in state['draft_votes'].
+    """
+    _require_session(session)
+    state = get_agentic_state(session)
+    if not state:
+        raise ValueError("Agentic state missing")
+    if state.get("status") not in (STATUS_FEEDBACK_DONE,) and state.get("feedback_ongoing") is not False:
+        raise ValueError("Voting requires feedback to be complete")
+    if state.get("status") != STATUS_FEEDBACK_DONE:
+        state["status"] = STATUS_FEEDBACK_DONE
+
+    draft_letters = state.get("draft_letters") or {}
+    threads = state.get("threads") or _empty_threads()
+
+    if not draft_letters or len(draft_letters) < 2:
+        _log("AGENTIC voting: fewer than 2 drafts, skipping vote (all get 1)")
+        state["draft_votes"] = {v: 1 for v in draft_letters}
+        save_agentic_state(session, state)
+        return state
+
+    vote_tallies: Dict[str, int] = {v: 0 for v in draft_letters}
+    total_cost = 0.0
+    user_id = _user_id(session)
+
+    def _one_vote(voter: str) -> Tuple[str, List[str], float]:
+        client = get_client(ModelVendor(voter))
+        top3 = _call_voting_agent(voter, draft_letters, threads, client=client)
+        cost = getattr(client, "total_cost", 0.0) or 0.0
+        return (voter, top3, cost)
+
+    with ThreadPoolExecutor(max_workers=min(len(voting_vendors), 4)) as executor:
+        futures = {executor.submit(_one_vote, v): v for v in voting_vendors}
+        for fut in as_completed(futures):
+            voter = futures[fut]
+            try:
+                voter, top3, cost = fut.result()
+                _log(f"AGENTIC voting: {voter} voted for {top3}")
+                for ranked_vendor in top3:
+                    vote_tallies[ranked_vendor] = vote_tallies.get(ranked_vendor, 0) + 1
+                total_cost += cost
+                if cost > 0:
+                    track_api_cost(user_id, "vote", voter, cost)
+            except Exception as e:
+                _log(f"AGENTIC voting error for {voter}: {e}")
+
+    state["draft_votes"] = vote_tallies
+    state["cost"] = state.get("cost", 0) + total_cost
+    save_agentic_state(session, state)
+    _log(f"AGENTIC voting complete: {vote_tallies}")
+    return state
+
+
+def _sample_drafts_for_vendor(
+    draft_letters: Dict[str, str],
+    draft_votes: Dict[str, int],
+    target_vendor: str,
+    num_agents: int,
+    n: int = 3,
+) -> List[str]:
+    """
+    Sample n draft vendors proportional to votes, with bias: target_vendor gets
+    +num_agents votes (as if every agent cast one extra vote for it).
+    Returns up to n unique vendor names (no duplicates).
+    """
+    vendors = list(draft_letters.keys())
+    if len(vendors) <= n:
+        return vendors
+
+    weights = []
+    for v in vendors:
+        w = draft_votes.get(v, 0)
+        if v == target_vendor:
+            w += num_agents
+        weights.append(max(w, 1))
+
+    # Weighted sample without replacement: preserve vote bias while ensuring
+    # we never include the same draft multiple times in reference examples.
+    sample_count = min(n, len(vendors))
+    chosen: List[str] = []
+    pool = list(zip(vendors, weights))
+    for _ in range(sample_count):
+        pool_vendors = [v for v, _ in pool]
+        pool_weights = [w for _, w in pool]
+        selected = random.choices(pool_vendors, weights=pool_weights, k=1)[0]
+        chosen.append(selected)
+        pool = [(v, w) for v, w in pool if v != selected]
+    return chosen
 
 
 def run_agentic_draft(
@@ -474,6 +937,11 @@ def run_agentic_draft(
     state["round"] = 0
     state["status"] = STATUS_FEEDBACK
     state["threads"] = _empty_threads()
+    state["feedback_ongoing"] = False
+    state["feedback_suspended"] = False
+    state.pop("topic_cursors", None)
+    state.pop("feedback_vendor_order", None)
+    state.pop("draft_votes", None)
     state["cost"] = state.get("cost", 0) + cost
     state["top_docs"] = top_docs
     state["company_report"] = company_report
@@ -544,6 +1012,7 @@ def run_agentic_draft_multi(
         style_instructions = session.get("style_instructions", "") or get_style_instructions()
 
     draft_letters_dict: Dict[str, str] = {}
+    vendor_errors: Dict[str, str] = {}
     total_cost = 0.0
 
     def _one_draft(vendor: str) -> Tuple[str, str, float]:
@@ -562,6 +1031,7 @@ def run_agentic_draft_multi(
         futures = {executor.submit(_one_draft, v): v for v in draft_vendors}
         user_id = _user_id(session)
         for fut in as_completed(futures):
+            vendor = futures[fut]
             try:
                 vendor, letter, cost = fut.result()
                 draft_letters_dict[vendor] = letter
@@ -569,16 +1039,33 @@ def run_agentic_draft_multi(
                 if cost > 0:
                     track_api_cost(user_id, "draft", vendor, cost)
             except Exception as e:
-                _log(f"AGENTIC draft error for vendor {futures[fut]}: {e}")
-                raise
+                err_msg = str(e)
+                _log(f"AGENTIC draft error for vendor {vendor}: {e}")
+                vendor_errors[vendor] = err_msg
 
+    if not draft_letters_dict:
+        # All vendors failed: raise so the client gets an error response
+        if vendor_errors:
+            combined = "; ".join(f"{v}: {msg}" for v, msg in vendor_errors.items())
+            raise RuntimeError(combined)
+        raise ValueError("No draft letters produced")
+
+    # Use first successful vendor as primary
+    first_success = next(v for v in draft_vendors if v in draft_letters_dict)
     state = _ensure_agentic_state(session)
     state["draft_letters"] = draft_letters_dict
-    state["draft_letter"] = draft_letters_dict.get(first_vendor) or ""
-    state["draft_vendor"] = first_vendor
+    state["draft_letter"] = draft_letters_dict.get(first_success) or ""
+    state["draft_vendor"] = first_success
+    if vendor_errors:
+        state["vendor_errors"] = vendor_errors
     state["round"] = 0
     state["status"] = STATUS_FEEDBACK
     state["threads"] = _empty_threads()
+    state["feedback_ongoing"] = False
+    state["feedback_suspended"] = False
+    state.pop("topic_cursors", None)
+    state.pop("feedback_vendor_order", None)
+    state.pop("draft_votes", None)
     state["cost"] = state.get("cost", 0) + total_cost
     state["top_docs"] = top_docs
     state["company_report"] = company_report
@@ -629,17 +1116,27 @@ def run_agentic_feedback_round(
             draft_letters=draft_letters_multi if len(draft_letters_multi) > 0 else None,
         )
         thread = list(threads.get(topic, []))
+        prior_comments = get_prior_topic_top_comments(threads, topic)
+        seed_thread_with_prior_topic_comments(thread, prior_comments)
+        prior_comments_text = format_prior_topic_comments_for_prompt(prior_comments)
         order = list(feedback_vendors)
         random.shuffle(order)
         for vendor in order:
             try:
                 _log(f"AGENTIC feedback round {round_num}: topic={topic} vendor={vendor}")
-                response = _call_agentic_feedback_agent(vendor, topic, context, thread, trace_dir)
+                response = _call_agentic_feedback_agent(
+                    vendor,
+                    topic,
+                    context,
+                    thread,
+                    trace_dir,
+                    prior_topic_comments=prior_comments_text,
+                )
                 if _apply_agent_response(thread, vendor, response):
                     any_change = True
             except Exception as e:
                 _log(f"AGENTIC feedback agent error topic={topic} vendor={vendor}: {e}")
-        threads[topic] = thread
+        threads[topic] = merge_carryover_updates_and_strip(thread, threads)
         state["threads"] = threads
         save_agentic_state(session, state)
 
@@ -676,6 +1173,7 @@ def start_agentic_feedback(session, feedback_vendors: List[str]) -> Dict[str, An
     state = get_agentic_state(session)
     if not state or state.get("status") != STATUS_FEEDBACK:
         raise ValueError("Agentic state missing or not in feedback phase")
+    state["feedback_suspended"] = False
     state["feedback_ongoing"] = True
     state["last_poll_at"] = time.time()
     state["round"] = state.get("round", 0) + 1
@@ -729,11 +1227,14 @@ def _run_one_topic_agent(
     context: str,
     thread_copy: List[Dict],
     trace_dir: Path,
+    prior_topic_comments_text: str = "",
 ) -> Tuple[str, List[Dict]]:
     """Run one feedback agent for one topic (used in thread pool). Writes only to thread_copy; returns (topic, thread)."""
     try:
         _log(f"AGENTIC topic={topic} vendor={vendor}")
-        response = _call_agentic_feedback_agent(vendor, topic, context, thread_copy, trace_dir)
+        response = _call_agentic_feedback_agent(
+            vendor, topic, context, thread_copy, trace_dir, prior_topic_comments=prior_topic_comments_text
+        )
         _apply_agent_response(thread_copy, vendor, response)
     except Exception as e:
         _log(f"AGENTIC feedback agent error topic={topic} vendor={vendor}: {e}")
@@ -746,16 +1247,29 @@ def _run_one_topic_sequential(
     thread: List[Dict],
     vendor_order: List[str],
     trace_dir: Path,
-) -> Tuple[str, List[Dict]]:
+    prior_topic_comments_text: str = "",
+    should_abort: Optional[Callable[[], bool]] = None,
+) -> Tuple[str, List[Dict], bool]:
     """Run all vendors for one topic sequentially so each agent sees previous addendums. Returns (topic, updated_thread)."""
     for vendor in vendor_order:
+        if should_abort is not None and should_abort():
+            _log(f"AGENTIC topic={topic}: abort before vendor={vendor} due to stale polling heartbeat")
+            return (topic, thread, False)
         try:
             _log(f"AGENTIC topic={topic} vendor={vendor} (sequential)")
-            response = _call_agentic_feedback_agent(vendor, topic, context, thread, trace_dir)
+            response = _call_agentic_feedback_agent(
+                vendor,
+                topic,
+                context,
+                thread,
+                trace_dir,
+                feedback_vendors=vendor_order,
+                prior_topic_comments=prior_topic_comments_text,
+            )
             _apply_agent_response(thread, vendor, response)
         except Exception as e:
             _log(f"AGENTIC feedback agent error topic={topic} vendor={vendor}: {e}")
-    return (topic, thread)
+    return (topic, thread, True)
 
 
 def run_agentic_feedback_step(
@@ -819,6 +1333,8 @@ def run_agentic_feedback_step(
         order = cur.get("vendor_order") or []
         if not order:
             continue
+        prior_comments = get_prior_topic_top_comments(threads, topic)
+        prior_comments_text = format_prior_topic_comments_for_prompt(prior_comments)
         context = get_agentic_topic_context(
             topic, draft_letter, cv_text, company_report, job_text, top_docs,
             style_instructions, additional_user_info,
@@ -828,12 +1344,22 @@ def run_agentic_feedback_step(
         thread_copy = []
         for c in (threads.get(topic) or []):
             nc = dict(c)
-            nc["addendums"] = list(nc.get("addendums") or [])
+            nc["addendums"] = []
+            for a in (nc.get("addendums") or []):
+                na = dict(a)
+                na["up"] = list(na.get("up") or [])
+                na["down"] = list(na.get("down") or [])
+                nc["addendums"].append(na)
             nc["subcomments"] = list(nc.get("subcomments") or [])
             v = nc.get("votes") or {}
-            nc["votes"] = {"up": list(v.get("up", [])), "down": list(v.get("down", []))}
+            nc["votes"] = {
+                "up": list(v.get("up", [])),
+                "down": list(v.get("down", [])),
+                "abstain": list(v.get("abstain", [])),
+            }
             thread_copy.append(nc)
-        work.append((topic, context, thread_copy, order, trace_dir))
+        seed_thread_with_prior_topic_comments(thread_copy, prior_comments)
+        work.append((topic, context, thread_copy, order, trace_dir, prior_comments_text))
 
     if not work:
         # No topics have vendor_order (shouldn't happen after init). Advance rounds and re-check.
@@ -861,12 +1387,12 @@ def run_agentic_feedback_step(
     # Run each topic's full vendor sequence in parallel (within a topic, vendors run sequentially and see prior addendums)
     with ThreadPoolExecutor(max_workers=len(AGENTIC_TOPIC_KEYS)) as executor:
         futures = {
-            executor.submit(_run_one_topic_sequential, t, c, th, order, trace_dir): t
-            for (t, c, th, order, trace_dir) in work
+            executor.submit(_run_one_topic_sequential, t, c, th, order, trace_dir, prior_text): t
+            for (t, c, th, order, trace_dir, prior_text) in work
         }
         for fut in as_completed(futures):
-            topic, updated_thread = fut.result()
-            threads[topic] = updated_thread
+            topic, updated_thread, _ = fut.result()
+            threads[topic] = merge_carryover_updates_and_strip(updated_thread, threads)
             cur = topic_cursors[topic]
             cur["vendor_index"] = 0
             cur["round"] = cur.get("round", 1) + 1
@@ -904,7 +1430,8 @@ def run_agentic_feedback_step(
 def run_agentic_refine(session, threads_override: Optional[Dict[str, List[Dict]]] = None) -> Dict[str, Any]:
     """
     Collect all positive-vote comments and addendums, then produce one final letter per vendor.
-    When draft_letters has multiple vendors, each vendor's draft is rewritten with the same feedback.
+    For each vendor, 3 draft examples are sampled proportional to votes (with same-vendor bias)
+    and included in the rewrite prompt so the rewriter can draw from the best drafts.
     Allow when status is feedback_done OR when feedback has stopped (feedback_ongoing false).
     If threads_override is provided, use it instead of state threads (e.g. user-edited).
     """
@@ -927,28 +1454,29 @@ def run_agentic_refine(session, threads_override: Optional[Dict[str, List[Dict]]
     if threads_override is not None:
         state["threads"] = threads
 
+    draft_votes = state.get("draft_votes") or {}
+    feedback_vendors = state.get("feedback_vendor_order") or list(draft_letters.keys())
+    num_agents = len(feedback_vendors)
+
     parts = []
     for topic in AGENTIC_TOPIC_KEYS:
         thread = threads.get(topic, [])
         for c in thread:
             up = len(c.get("votes", {}).get("up", []))
             down = len(c.get("votes", {}).get("down", []))
-            if up <= down:
+            if _is_comment_removed(c):
+                continue
+            if up == 0:
                 continue
             label = _topic_label(topic)
             parts.append(f"[{label}] {c.get('text', '')}")
             for a in c.get("addendums", []):
-                aup = a.get("up")
-                if aup is not None and len(aup) == 0:
+                aup = a.get("up") or []
+                adown = a.get("down") or []
+                if len(aup) <= len(adown):
                     continue
                 parts.append(f"  Addendum: {a.get('text', '')}")
     combined = "\n\n".join(parts) if parts else ""
-    instruction_fb = combined
-    accuracy_fb = "NO COMMENT"
-    precision_fb = "NO COMMENT"
-    company_fit_fb = "NO COMMENT"
-    user_fit_fb = "NO COMMENT"
-    human_fb = "NO COMMENT"
 
     trace_dir = Path("trace", "agentic.refine")
     trace_dir.mkdir(parents=True, exist_ok=True)
@@ -963,6 +1491,7 @@ def run_agentic_refine(session, threads_override: Optional[Dict[str, List[Dict]]
         return state
 
     user_id = _user_id(session)
+    refine_samples: Dict[str, List[str]] = {}
     for vendor, d_letter in draft_letters.items():
         if not d_letter.strip():
             final_letters_dict[vendor] = d_letter
@@ -970,11 +1499,30 @@ def run_agentic_refine(session, threads_override: Optional[Dict[str, List[Dict]]
         if not combined.strip():
             final_letters_dict[vendor] = d_letter
             continue
+
+        if draft_votes and len(draft_letters) > 1:
+            sampled_vendors = _sample_drafts_for_vendor(
+                draft_letters, draft_votes, vendor, num_agents, n=3
+            )
+            refine_samples[vendor] = sampled_vendors
+            _log(f"AGENTIC refine {vendor}: sampled drafts from {sampled_vendors} (votes={draft_votes})")
+            reference_block = "\n\n".join(
+                f"===== Reference draft by {sv} =====\n{draft_letters[sv]}"
+                for sv in sampled_vendors if draft_letters.get(sv)
+            )
+            instruction_fb = (
+                f"===== Reference drafts (sampled by vote, consider drawing from their strengths) =====\n"
+                f"{reference_block}\n\n"
+                f"===== Discussion feedback =====\n{combined}"
+            )
+        else:
+            instruction_fb = combined
+
         ai_client = get_client(ModelVendor(vendor))
         final_letter = rewrite_letter(
             d_letter,
-            instruction_fb, accuracy_fb, precision_fb,
-            company_fit_fb, user_fit_fb, human_fb,
+            instruction_fb, "NO COMMENT", "NO COMMENT",
+            "NO COMMENT", "NO COMMENT", "NO COMMENT",
             ai_client, trace_dir,
         )
         final_letters_dict[vendor] = final_letter
@@ -986,6 +1534,8 @@ def run_agentic_refine(session, threads_override: Optional[Dict[str, List[Dict]]
     first_v = list(final_letters_dict.keys())[0] if final_letters_dict else draft_vendor
     state["final_letters"] = final_letters_dict
     state["final_letter"] = final_letters_dict.get(first_v) or final_letters_dict.get(draft_vendor) or ""
+    if refine_samples:
+        state["refine_samples"] = refine_samples
     state["status"] = STATUS_DONE
     state["cost"] = state.get("cost", 0) + total_cost
     save_agentic_state(session, state)

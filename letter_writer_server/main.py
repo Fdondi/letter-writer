@@ -4,9 +4,17 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# Ensure agentic and API logs are visible (e.g. when running: podman logs letter-writer-backend)
+from letter_writer.config import get_log_level
+
+# Configure root logging once so INFO logs are emitted by default.
+logging.basicConfig(
+    level=get_log_level(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
+# Keep package-level loggers aligned with configured root level.
 for _name in ("letter_writer", "letter_writer_server"):
-    logging.getLogger(_name).setLevel(logging.INFO)
+    logging.getLogger(_name).setLevel(get_log_level())
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from starlette.middleware.sessions import SessionMiddleware as StarletteSessionMiddleware
 # Use our custom session middleware instead

@@ -18,7 +18,7 @@ import CompetencesList from "./components/CompetencesList";
 import ResearchComponent from "./components/ResearchComponent";
 import SimilarOffersCarousel from "./components/SimilarOffersCarousel";
 import { splitIntoParagraphs } from "./utils/split";
-import { fetchWithHeartbeat, retryApiCall, initializeCsrfToken, getCsrfToken } from "./utils/apiHelpers";
+import { fetchWithHeartbeat, retryApiCall, initializeCsrfToken, getCsrfToken, publishUserMonthlyCost } from "./utils/apiHelpers";
 import { showNotification } from "./utils/apiNotifications";
 import { phases as phaseModules } from "./components/phases";
 import { translateText } from "./utils/translate";
@@ -70,6 +70,7 @@ export default function App({ flow = "vendor" }) {
     notes: "",
     company: "",
   });
+  const [showPointOfContact, setShowPointOfContact] = useState(false);
   const [additionalUserInfo, setAdditionalUserInfo] = useState("");
   const [additionalCompanyInfo, setAdditionalCompanyInfo] = useState("");
   const [showAdditionalInfo, setShowAdditionalInfo] = useState(false);
@@ -99,6 +100,13 @@ export default function App({ flow = "vendor" }) {
   const [vendorFeedback, setVendorFeedback] = useState({}); // vendor -> { rating, comment }
 
   const showInput = flow === "vendor" ? vendorStage === "input" : agenticStage === "input";
+  const hasPointOfContactData = useMemo(() => (
+    Boolean(pointOfContact.name?.trim()) ||
+    Boolean(pointOfContact.role?.trim()) ||
+    Boolean(pointOfContact.contact_details?.trim()) ||
+    Boolean(pointOfContact.notes?.trim()) ||
+    Boolean(pointOfContact.company?.trim())
+  ), [pointOfContact]);
 
   // Agentic (per-topic) flow state
   const [agenticState, setAgenticState] = useState(null);
@@ -120,6 +128,12 @@ export default function App({ flow = "vendor" }) {
   // Triggers for auto-research
   const [triggerCompanyResearch, setTriggerCompanyResearch] = useState(0);
   const [triggerPocResearch, setTriggerPocResearch] = useState(0);
+
+  // Company extraction → countdown → research flow
+  const [companyExtractionResult, setCompanyExtractionResult] = useState(null);
+  const [companyResearchCountdown, setCompanyResearchCountdown] = useState(null);
+  const [companyAutoResearchBlocked, setCompanyAutoResearchBlocked] = useState(false);
+  const [companyResearchNotification, setCompanyResearchNotification] = useState(null);
   
   // Translation state for job text
   const { enabledLanguages } = useLanguages();
@@ -172,6 +186,12 @@ export default function App({ flow = "vendor" }) {
         setCheckingAuth(false);
       });
   }, []);
+
+  useEffect(() => {
+    if (!hasPointOfContactData) {
+      setShowPointOfContact(false);
+    }
+  }, [hasPointOfContactData]);
   
 
 
@@ -418,6 +438,22 @@ export default function App({ flow = "vendor" }) {
   // Note: We no longer need to reload when switching tabs since SettingsPage
   // now updates the shared state directly when saving
 
+  // Company research countdown: tick every second, auto-trigger at 0
+  useEffect(() => {
+    if (companyResearchCountdown === null || companyResearchCountdown <= 0) return;
+    const timer = setTimeout(() => {
+      setCompanyResearchCountdown((prev) => (prev !== null && prev > 0 ? prev - 1 : null));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [companyResearchCountdown]);
+
+  useEffect(() => {
+    if (companyResearchCountdown === 0 && !companyAutoResearchBlocked) {
+      setCompanyResearchCountdown(null);
+      setTriggerCompanyResearch(Date.now());
+    }
+  }, [companyResearchCountdown, companyAutoResearchBlocked]);
+
   // NOW we can do conditional returns (after all hooks are declared)
   
   // While checking authentication or if not authenticated, show loading/login
@@ -527,13 +563,69 @@ export default function App({ flow = "vendor" }) {
         : Math.random().toString(36).slice(2);
     setPhaseSessionId(sessionId);
     
+    // Reset countdown/notification state
+    setCompanyResearchCountdown(null);
+    setCompanyAutoResearchBlocked(false);
+    setCompanyResearchNotification(null);
+    setCompanyExtractionResult(null);
+
+    // Fire company metadata extraction (Part 3) in parallel — stateless, any worker.
+    const companyExtractPromise = jobText.trim()
+      ? fetchWithHeartbeat("/api/research/company/extract/", {
+          method: "POST",
+          body: JSON.stringify({ job_text: jobText }),
+        }).catch((err) => {
+          console.warn("Company extraction failed:", err);
+          return null;
+        })
+      : Promise.resolve(null);
+
+    // Handle company extraction result whenever it arrives (may be before or after skills).
+    companyExtractPromise.then((res) => {
+      const ext = res?.data?.extraction;
+      if (!ext) return;
+      setCompanyExtractionResult(ext);
+      // Only fill fields the user hasn't manually entered yet.
+      if (ext.company_name) setCompanyName((prev) => (prev.trim() ? prev : ext.company_name));
+      if (ext.job_title) setJobTitle((prev) => (prev.trim() ? prev : ext.job_title));
+      if (ext.location) setLocation((prev) => (prev.trim() ? prev : ext.location));
+      if (ext.language) setLanguage((prev) => (prev.trim() ? prev : ext.language));
+      if (ext.salary) setSalary((prev) => (prev.trim() ? prev : ext.salary));
+      if (ext.point_of_contact) {
+        setPointOfContact((prev) => {
+          const hasManual = prev.name || prev.role || prev.contact_details || prev.notes || prev.company;
+          if (hasManual) return prev;
+          return {
+            name: ext.point_of_contact.name || "",
+            role: ext.point_of_contact.role || "",
+            contact_details: ext.point_of_contact.contact_details || "",
+            notes: ext.point_of_contact.notes || "",
+            company: ext.point_of_contact.company || "",
+          };
+        });
+        setShowPointOfContact(true);
+        setTriggerPocResearch(Date.now());
+      }
+      // Update extractedData with company metadata (merges with skills data when that arrives)
+      setExtractedData((prev) => ({
+        ...(prev || {}),
+        company_name: ext.company_name || prev?.company_name || "",
+        job_title: ext.job_title || prev?.job_title || "",
+        location: ext.location || prev?.location || "",
+        language: ext.language || prev?.language || "",
+        salary: ext.salary || prev?.salary || "",
+        point_of_contact: ext.point_of_contact || prev?.point_of_contact || null,
+      }));
+      // Start 15-second countdown before auto-launching background research
+      setCompanyResearchCountdown(15);
+    });
+
     try {
       const scaleConfig = getScaleConfig();
       const result = await fetchWithHeartbeat("/api/extract/", {
         method: "POST",
         body: JSON.stringify({
           job_text: jobText,
-          session_id: sessionId,
           scale_config: {
             need: scaleConfig.need,
             level: scaleConfig.level,
@@ -543,22 +635,6 @@ export default function App({ flow = "vendor" }) {
       });
       const data = result.data;
       const extracted = data.extraction || {};
-      // Similar previous job offers came back in parallel with extraction
-      if (data.similar_documents && data.similar_documents.length > 0) {
-        setAllSearchResults(data.similar_documents);
-      }
-      // LLM-reranked top docs (also from extraction, independent of company research)
-      if (data.top_docs && data.top_docs.length > 0) {
-        setSelectedTopDocs(data.top_docs);
-        // Auto-select LLM picks
-        const llmIds = new Set(data.top_docs.map(d => d.id || d.company_name).filter(Boolean));
-        setSelectedDocIds(llmIds);
-      }
-      if (extracted.company_name) setCompanyName(extracted.company_name);
-      if (extracted.job_title) setJobTitle(extracted.job_title);
-      if (extracted.location) setLocation(extracted.location);
-      if (extracted.language) setLanguage(extracted.language);
-      if (extracted.salary) setSalary(extracted.salary);
       const comp = extracted.competences;
       const cfg = getScaleConfig();
       if (comp && typeof comp === "object" && Object.keys(comp).length > 0) {
@@ -587,40 +663,26 @@ export default function App({ flow = "vendor" }) {
         setCompetences({});
         setCompetenceOverrides({});
       }
-      // Only update point of contact if extraction found it, otherwise preserve manual input
-      if (extracted.point_of_contact) {
-        setPointOfContact({
-          name: extracted.point_of_contact.name || "",
-          role: extracted.point_of_contact.role || "",
-          contact_details: extracted.point_of_contact.contact_details || "",
-          notes: extracted.point_of_contact.notes || "",
-          company: extracted.point_of_contact.company || "",
-        });
-      }
-      // If no point_of_contact in extraction, keep existing manual input (don't clear it)
-      // Store extracted data to detect if user modified it later
-      // For point_of_contact, use extracted value if present, otherwise use current state (preserves manual input)
-      const currentPoc = (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null;
-      setExtractedData({
-        company_name: extracted.company_name || companyName,
-        job_title: extracted.job_title || jobTitle,
-        location: extracted.location || location,
-        language: extracted.language || language,
-        salary: extracted.salary || salary,
+      // Store extracted data (skills portion; company metadata merged by companyExtractPromise)
+      setExtractedData((prev) => ({
+        ...(prev || {}),
         requirements: extracted.requirements || requirements,
         competences: extracted.competences ?? {},
-        point_of_contact: extracted.point_of_contact || currentPoc,
         job_text: jobText,
         additional_user_info: additionalUserInfo,
         additional_company_info: additionalCompanyInfo,
-      });
+      }));
 
-      // Trigger research if data is available
-      if (extracted.company_name || companyName) {
-        setTriggerCompanyResearch(Date.now());
+      // Similar docs and top docs come from the single extract call.
+      const similarDocs = data.similar_documents || [];
+      const topDocs = data.top_docs || [];
+      if (similarDocs.length > 0) {
+        setAllSearchResults(similarDocs);
       }
-      if (extracted.point_of_contact?.name || currentPoc?.name) {
-        setTriggerPocResearch(Date.now());
+      if (topDocs.length > 0) {
+        setSelectedTopDocs(topDocs);
+        const llmIds = new Set(topDocs.map((d) => d.id || d.company_name).filter(Boolean));
+        setSelectedDocIds(llmIds);
       }
 
     } catch (e) {
@@ -645,6 +707,16 @@ export default function App({ flow = "vendor" }) {
       return "Network error: Unable to connect to server. Please check your connection.";
     }
     
+    // Provider/API error format: "Error code: 400 - {'error': {'message': 'Your credit...'}}" (Python repr or JSON)
+    const providerMessageMatch = errorStr.match(/(?:'message'|"message")\s*:\s*'((?:[^'\\]|\\.)*)'/);
+    if (providerMessageMatch) {
+      return providerMessageMatch[1].replace(/\\'/g, "'").trim() || errorStr;
+    }
+    const providerMessageDouble = errorStr.match(/(?:'message'|"message")\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (providerMessageDouble) {
+      return providerMessageDouble[1].replace(/\\"/g, '"').trim() || errorStr;
+    }
+
     // Try to extract JSON detail from error string
     try {
       // Handle "API error occurred: Status XXX. Body: {...}" format
@@ -665,6 +737,7 @@ export default function App({ flow = "vendor" }) {
       const parsed = JSON.parse(errorStr);
       if (parsed.detail) return parsed.detail;
       if (parsed.message) return parsed.message;
+      if (parsed.error?.message) return parsed.error.message;
     } catch (e) {
       // Not JSON, continue with original string
     }
@@ -974,9 +1047,6 @@ export default function App({ flow = "vendor" }) {
     setPhaseSessions({});
     
     const vendorList = Array.from(selectedVendors);
-    // Session should already be initialized on mount, but ensure it exists
-    // Track if we're creating a new session (phaseSessionId was null)
-    const isNewSession = !phaseSessionId;
     const initialSessionId = phaseSessionId || (
       typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
@@ -995,69 +1065,32 @@ export default function App({ flow = "vendor" }) {
       }
     }
 
-    // Check if data was modified after extraction
-    const currentData = {
-      company_name: companyName,
-      job_title: jobTitle,
-      location: location,
-      language: language,
-      salary: salary,
-      requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
-      job_text: jobText,
-      point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
-      additional_user_info: additionalUserInfo || "",
-      additional_company_info: additionalCompanyInfo || "",
-    };
-    const dataModified = !extractedData || 
-      extractedData.company_name !== currentData.company_name ||
-      extractedData.job_title !== currentData.job_title ||
-      extractedData.location !== currentData.location ||
-      extractedData.language !== currentData.language ||
-      extractedData.salary !== currentData.salary ||
-      extractedData.additional_user_info !== currentData.additional_user_info ||
-      extractedData.additional_company_info !== currentData.additional_company_info ||
-      JSON.stringify(extractedData.requirements) !== JSON.stringify(currentData.requirements) ||
-      extractedData.job_text !== currentData.job_text ||
-      JSON.stringify(extractedData.point_of_contact || null) !== JSON.stringify(currentData.point_of_contact);
+    // Always populate session with current state before starting drafts.
+    try {
+      const sessionPayload = {
+        session_id: initialSessionId,
+        job_text: jobText,
+        company_name: companyName,
+        job_title: jobTitle,
+        location: location,
+        language: language,
+        salary: salary,
+        requirements: (Array.isArray(requirements) ? requirements : requirements ? [requirements] : []).filter(Boolean),
+        point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
+        additional_user_info: additionalUserInfo || "",
+        additional_company_info: additionalCompanyInfo || "",
+      };
+      if (Object.keys(competences).length > 0) sessionPayload.competences = competences;
 
-    // Update common session data if:
-    // - This is a new session (e.g., after clicking "Back to Input"), OR
-    // - No extraction was called (extractedData is null), OR
-    // - User modified data after extraction
-    // Wait for it to complete before starting draft phases
-    // Call session endpoint if:
-    // 1. This is a new session (needs to be populated with data), OR
-    // 2. Data was modified after extraction, OR
-    // 3. No extraction was called (user manually input data)
-    const shouldUpdateSession = isNewSession || dataModified || !extractedData;
-    if (shouldUpdateSession) {
-      try {
-        // Send individual fields that the user sees in the webpage
-        const sessionPayload = {
-          session_id: initialSessionId,
-          job_text: jobText,
-          company_name: companyName,
-          job_title: jobTitle,
-          location: location,
-          language: language,
-          salary: salary,
-          requirements: (Array.isArray(requirements) ? requirements : requirements ? [requirements] : []).filter(Boolean),
-          point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
-          additional_user_info: additionalUserInfo || "",
-          additional_company_info: additionalCompanyInfo || "",
-        };
-        if (Object.keys(competences).length > 0) sessionPayload.competences = competences;
-
-        await fetchWithHeartbeat("/api/phases/session/", {
-          method: "POST",
-          body: JSON.stringify(sessionPayload),
-        });
-      } catch (e) {
-        console.error("Failed to update session data:", e);
-        setError("Failed to update session data. Please try again.");
-        setLoading(false);
-        return;
-      }
+      await fetchWithHeartbeat("/api/phases/session/", {
+        method: "POST",
+        body: JSON.stringify(sessionPayload),
+      });
+    } catch (e) {
+      console.error("Failed to update session data:", e);
+      setError("Failed to update session data. Please try again.");
+      setLoading(false);
+      return;
     }
 
     // Save competence ratings to profile (after user modifications) for future extractions and CV appendix
@@ -1151,51 +1184,32 @@ export default function App({ flow = "vendor" }) {
         console.error("Failed to initialize session:", e);
       }
     }
-    const currentData = {
-      company_name: companyName,
-      job_title: jobTitle,
-      location: location,
-      language: language,
-      salary: salary,
-      requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
-      job_text: jobText,
-      point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
-      additional_user_info: additionalUserInfo || "",
-      additional_company_info: additionalCompanyInfo || "",
-    };
-    const dataModified = !extractedData ||
-      extractedData.company_name !== currentData.company_name ||
-      extractedData.job_title !== currentData.job_title ||
-      extractedData.job_text !== currentData.job_text ||
-      JSON.stringify(extractedData.point_of_contact || null) !== JSON.stringify(currentData.point_of_contact);
-    const shouldUpdateSession = !phaseSessionId || dataModified || !extractedData;
-    if (shouldUpdateSession) {
-      try {
-        const sessionPayload = {
-          session_id: initialSessionId,
-          job_text: jobText,
-          company_name: companyName,
-          job_title: jobTitle,
-          location: location,
-          language: language,
-          salary: salary,
-          requirements: (Array.isArray(requirements) ? requirements : requirements ? [requirements] : []).filter(Boolean),
-          point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
-          additional_user_info: additionalUserInfo || "",
-          additional_company_info: additionalCompanyInfo || "",
-        };
-        if (Object.keys(competences).length > 0) sessionPayload.competences = competences;
-        await fetchWithHeartbeat("/api/phases/session/", {
-          method: "POST",
-          body: JSON.stringify(sessionPayload),
-        });
-      } catch (e) {
-        console.error("Failed to update session:", e);
-        setAgenticError("Failed to update session. Please try again.");
-        setAgenticLoading(false);
-        setAgenticStage("input");
-        return;
-      }
+    // Always populate session with current state before starting agentic flow.
+    try {
+      const sessionPayload = {
+        session_id: initialSessionId,
+        job_text: jobText,
+        company_name: companyName,
+        job_title: jobTitle,
+        location: location,
+        language: language,
+        salary: salary,
+        requirements: (Array.isArray(requirements) ? requirements : requirements ? [requirements] : []).filter(Boolean),
+        point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
+        additional_user_info: additionalUserInfo || "",
+        additional_company_info: additionalCompanyInfo || "",
+      };
+      if (Object.keys(competences).length > 0) sessionPayload.competences = competences;
+      await fetchWithHeartbeat("/api/phases/session/", {
+        method: "POST",
+        body: JSON.stringify(sessionPayload),
+      });
+    } catch (e) {
+      console.error("Failed to update session:", e);
+      setAgenticError("Failed to update session. Please try again.");
+      setAgenticLoading(false);
+      setAgenticStage("input");
+      return;
     }
     // Save competence ratings to profile (same as phased flow) for future extractions and CV appendix
     const ratingsToSave = buildCompetenceRatingsForProfile(
@@ -1230,8 +1244,8 @@ export default function App({ flow = "vendor" }) {
       setAgenticStage("agentic");
     } catch (e) {
       console.error("Agentic draft error", e);
-      setAgenticError(e?.message || String(e));
-      setAgenticStage("input");
+      setAgenticError(extractErrorMessage(e));
+      // Keep user on agentic flow so they see the error and can retry or change settings
     } finally {
       setAgenticLoading(false);
     }
@@ -1239,19 +1253,53 @@ export default function App({ flow = "vendor" }) {
 
   const fetchAgenticPoll = async () => {
     try {
-      const res = await fetch("/api/phases/agentic/feedback/poll/", { credentials: "include" });
+      const normalizeAgenticThreads = (threadsPayload = {}, topicMetaPayload = {}) => {
+        const threadsOut = {};
+        const topicMetaOut = {};
+        Object.entries(threadsPayload || {}).forEach(([topic, value]) => {
+          if (Array.isArray(value)) {
+            threadsOut[topic] = value;
+            return;
+          }
+          if (value && typeof value === "object") {
+            if (Array.isArray(value.thread)) {
+              threadsOut[topic] = value.thread;
+              topicMetaOut[topic] = {
+                round: value.round ?? 1,
+                messages: value.messages ?? value.thread.length,
+                done: value.done === true,
+              };
+              return;
+            }
+            threadsOut[topic] = [];
+            return;
+          }
+          threadsOut[topic] = [];
+        });
+        return { threads: threadsOut, topicMeta: { ...(topicMetaPayload || {}), ...topicMetaOut } };
+      };
+
+      const currentDraftEtag = agenticState?.draft_letters_etag;
+      const pollUrl = currentDraftEtag
+        ? `/api/phases/agentic/feedback/poll/?draft_letters_etag=${encodeURIComponent(currentDraftEtag)}`
+        : "/api/phases/agentic/feedback/poll/";
+      const res = await fetch(pollUrl, { credentials: "include" });
       if (!res.ok) return false;
       const data = await res.json();
+      publishUserMonthlyCost(data);
+      const normalized = normalizeAgenticThreads(data.threads || {}, data.topic_meta || {});
       setAgenticState((prev) => ({
         ...(prev || {}),
-        threads: data.threads || {},
+        threads: normalized.threads,
         status: data.status ?? prev?.status,
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
-        topic_meta: data.topic_meta || {},
+        topic_meta: normalized.topicMeta,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
+        ...(data.draft_letters_etag && { draft_letters_etag: data.draft_letters_etag }),
         ...(data.draft_letters && { draft_letters: data.draft_letters }),
         ...(data.final_letters && { final_letters: data.final_letters }),
+        ...(data.draft_votes && { draft_votes: data.draft_votes }),
       }));
       return data.ongoing === true;
     } catch (e) {
@@ -1276,13 +1324,35 @@ export default function App({ flow = "vendor" }) {
         throw new Error(err.detail || res.statusText);
       }
       const data = await res.json();
+      publishUserMonthlyCost(data);
+      const normalized = (() => {
+        const threadsOut = {};
+        const topicMetaOut = {};
+        Object.entries(data.threads || {}).forEach(([topic, value]) => {
+          if (Array.isArray(value)) {
+            threadsOut[topic] = value;
+            return;
+          }
+          if (value && typeof value === "object" && Array.isArray(value.thread)) {
+            threadsOut[topic] = value.thread;
+            topicMetaOut[topic] = {
+              round: value.round ?? 1,
+              messages: value.messages ?? value.thread.length,
+              done: value.done === true,
+            };
+            return;
+          }
+          threadsOut[topic] = [];
+        });
+        return { threads: threadsOut, topicMeta: { ...(data.topic_meta || {}), ...topicMetaOut } };
+      })();
       setAgenticState((prev) => ({
         ...(prev || {}),
-        threads: data.threads || {},
+        threads: normalized.threads,
         status: data.status ?? "feedback",
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
-        topic_meta: data.topic_meta || {},
+        topic_meta: normalized.topicMeta,
       }));
     } catch (e) {
       setAgenticError(e?.message || String(e));
@@ -1291,14 +1361,14 @@ export default function App({ flow = "vendor" }) {
     }
   };
 
-  const handleAgenticSuspend = async (all = true, topics = null) => {
+  const handleAgenticSuspend = async () => {
     setAgenticLoading(true);
     setAgenticError(null);
     try {
       const res = await fetch("/api/phases/agentic/feedback/suspend/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(all ? { all: true } : { topics: topics || [] }),
+        body: JSON.stringify({ all: true }),
         credentials: "include",
       });
       if (!res.ok) {
@@ -1306,13 +1376,35 @@ export default function App({ flow = "vendor" }) {
         throw new Error(err.detail || res.statusText);
       }
       const data = await res.json();
+      publishUserMonthlyCost(data);
+      const normalized = (() => {
+        const threadsOut = {};
+        const topicMetaOut = {};
+        Object.entries(data.threads || {}).forEach(([topic, value]) => {
+          if (Array.isArray(value)) {
+            threadsOut[topic] = value;
+            return;
+          }
+          if (value && typeof value === "object" && Array.isArray(value.thread)) {
+            threadsOut[topic] = value.thread;
+            topicMetaOut[topic] = {
+              round: value.round ?? 1,
+              messages: value.messages ?? value.thread.length,
+              done: value.done === true,
+            };
+            return;
+          }
+          threadsOut[topic] = [];
+        });
+        return { threads: threadsOut, topicMeta: { ...(data.topic_meta || {}), ...topicMetaOut } };
+      })();
       setAgenticState((prev) => ({
         ...(prev || {}),
-        threads: data.threads || {},
+        threads: normalized.threads,
         status: data.status ?? prev?.status,
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
-        topic_meta: data.topic_meta || {},
+        topic_meta: normalized.topicMeta,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
       }));
     } catch (e) {
@@ -1322,14 +1414,14 @@ export default function App({ flow = "vendor" }) {
     }
   };
 
-  const handleAgenticResume = async (all = true, topics = null) => {
+  const handleAgenticResume = async () => {
     setAgenticLoading(true);
     setAgenticError(null);
     try {
       const res = await fetch("/api/phases/agentic/feedback/resume/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(all ? { all: true } : { topics: topics || [] }),
+        body: JSON.stringify({ all: true }),
         credentials: "include",
       });
       if (!res.ok) {
@@ -1337,13 +1429,35 @@ export default function App({ flow = "vendor" }) {
         throw new Error(err.detail || res.statusText);
       }
       const data = await res.json();
+      publishUserMonthlyCost(data);
+      const normalized = (() => {
+        const threadsOut = {};
+        const topicMetaOut = {};
+        Object.entries(data.threads || {}).forEach(([topic, value]) => {
+          if (Array.isArray(value)) {
+            threadsOut[topic] = value;
+            return;
+          }
+          if (value && typeof value === "object" && Array.isArray(value.thread)) {
+            threadsOut[topic] = value.thread;
+            topicMetaOut[topic] = {
+              round: value.round ?? 1,
+              messages: value.messages ?? value.thread.length,
+              done: value.done === true,
+            };
+            return;
+          }
+          threadsOut[topic] = [];
+        });
+        return { threads: threadsOut, topicMeta: { ...(data.topic_meta || {}), ...topicMetaOut } };
+      })();
       setAgenticState((prev) => ({
         ...(prev || {}),
-        threads: data.threads || {},
+        threads: normalized.threads,
         status: data.status ?? prev?.status,
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
-        topic_meta: data.topic_meta || {},
+        topic_meta: normalized.topicMeta,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
       }));
     } catch (e) {
@@ -1368,15 +1482,67 @@ export default function App({ flow = "vendor" }) {
         throw new Error(err.detail || res.statusText);
       }
       const data = await res.json();
+      publishUserMonthlyCost(data);
+      const normalized = (() => {
+        const threadsOut = {};
+        const topicMetaOut = {};
+        Object.entries(data.threads || {}).forEach(([topic, value]) => {
+          if (Array.isArray(value)) {
+            threadsOut[topic] = value;
+            return;
+          }
+          if (value && typeof value === "object" && Array.isArray(value.thread)) {
+            threadsOut[topic] = value.thread;
+            topicMetaOut[topic] = {
+              round: value.round ?? 1,
+              messages: value.messages ?? value.thread.length,
+              done: value.done === true,
+            };
+            return;
+          }
+          threadsOut[topic] = [];
+        });
+        return { threads: threadsOut, topicMeta: { ...(data.topic_meta || {}), ...topicMetaOut } };
+      })();
       setAgenticState((prev) => ({
         ...(prev || {}),
-        threads: data.threads || {},
+        threads: normalized.threads,
         status: data.status ?? prev?.status,
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
-        topic_meta: data.topic_meta || {},
+        topic_meta: normalized.topicMeta,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
       }));
+    } catch (e) {
+      setAgenticError(e?.message || String(e));
+    } finally {
+      setAgenticLoading(false);
+    }
+  };
+
+  const handleAgenticVote = async () => {
+    if (!vendorsList.length) return;
+    setAgenticLoading(true);
+    setAgenticError(null);
+    try {
+      const res = await fetch("/api/phases/agentic/vote/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ voting_vendors: vendorsList }),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || res.statusText);
+      }
+      const data = await res.json();
+      publishUserMonthlyCost(data);
+      if (data?.agentic_update != null) {
+        setAgenticState((prev) => ({
+          ...(prev || {}),
+          ...data.agentic_update,
+        }));
+      }
     } catch (e) {
       setAgenticError(e?.message || String(e));
     } finally {
@@ -1395,7 +1561,12 @@ export default function App({ flow = "vendor" }) {
       }
       const res = await fetchWithHeartbeat("/api/phases/agentic/refine/", opts);
       if (res.isHeartbeat) return;
-      if (res.data?.agentic_state != null) setAgenticState(res.data.agentic_state);
+      if (res.data?.agentic_update != null) {
+        setAgenticState((prev) => ({
+          ...(prev || {}),
+          ...res.data.agentic_update,
+        }));
+      }
     } catch (e) {
       setAgenticError(e?.message || String(e));
     } finally {
@@ -1722,6 +1893,200 @@ export default function App({ flow = "vendor" }) {
             )}
           </div>
           
+          <div style={{ marginTop: 20, padding: 15, border: "1px solid var(--border-color)", borderRadius: 8, backgroundColor: "var(--input-bg)" }}>
+             <h3 style={{ marginTop: 0, fontSize: "16px", fontWeight: 600 }}>Company & Job Details</h3>
+             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div>
+                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Job Title *</label>
+                        <input type="text" value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Job title" />
+                    </div>
+                    <div>
+                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Company Name</label>
+                        <input type="text" value={companyName} onChange={(e) => setCompanyName(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Company name" />
+                    </div>
+                    <div>
+                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Location</label>
+                        <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Location" />
+                    </div>
+                    <div>
+                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Language</label>
+                        <input type="text" value={language} onChange={(e) => setLanguage(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Language" />
+                    </div>
+                    <div>
+                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Salary</label>
+                        <input type="text" value={salary} onChange={(e) => setSalary(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Salary range" />
+                    </div>
+                </div>
+                <div>
+                    {/* Countdown banner after company extraction (Part 3) completes */}
+                    {companyResearchCountdown !== null && companyResearchCountdown > 0 && (
+                      <div style={{
+                        padding: "8px 12px",
+                        marginBottom: 8,
+                        borderRadius: 4,
+                        border: "1px solid #5b9bd5",
+                        backgroundColor: "rgba(91, 155, 213, 0.1)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        fontSize: 13,
+                      }}>
+                        <span>
+                          Extracted: <strong>{companyExtractionResult?.company_name || companyName || "—"}</strong>
+                          {companyExtractionResult?.job_title ? ` — ${companyExtractionResult.job_title}` : ""}
+                          {companyExtractionResult?.location ? ` (${companyExtractionResult.location})` : ""}
+                          {". "}Background research in <strong>{companyResearchCountdown}s</strong>…
+                        </span>
+                        <button
+                          onClick={() => {
+                            setCompanyResearchCountdown(null);
+                            setCompanyAutoResearchBlocked(true);
+                            setCompanyResearchNotification("Auto-research paused. Edit details above, then click \"Start Research\" below.");
+                          }}
+                          style={{
+                            padding: "3px 10px",
+                            fontSize: 12,
+                            border: "1px solid var(--border-color)",
+                            borderRadius: 4,
+                            backgroundColor: "var(--bg-color)",
+                            color: "var(--text-color)",
+                            cursor: "pointer",
+                            whiteSpace: "nowrap",
+                            marginLeft: 12,
+                          }}
+                        >
+                          Edit first
+                        </button>
+                      </div>
+                    )}
+                    {companyAutoResearchBlocked && companyResearchNotification && (
+                      <div style={{
+                        padding: "6px 12px",
+                        marginBottom: 8,
+                        borderRadius: 4,
+                        border: "1px solid #d4a843",
+                        backgroundColor: "rgba(212, 168, 67, 0.1)",
+                        fontSize: 12,
+                        color: "var(--text-color)",
+                      }}>
+                        {companyResearchNotification}
+                      </div>
+                    )}
+                    {/* Research result notification */}
+                    {!companyAutoResearchBlocked && companyResearchNotification && companyResearchCountdown === null && (
+                      <div style={{
+                        padding: "6px 12px",
+                        marginBottom: 8,
+                        borderRadius: 4,
+                        border: `1px solid ${companyResearchNotification.includes("cached") || companyResearchNotification.includes("similar") ? "#5a9e6f" : "#5b9bd5"}`,
+                        backgroundColor: companyResearchNotification.includes("cached") || companyResearchNotification.includes("similar") ? "rgba(90, 158, 111, 0.1)" : "rgba(91, 155, 213, 0.1)",
+                        fontSize: 12,
+                        color: "var(--text-color)",
+                      }}>
+                        {companyResearchNotification}
+                      </div>
+                    )}
+                    <ResearchComponent 
+                        label="Company Research"
+                        type="company"
+                        query={companyName}
+                        context={{ job_text: jobText, additional_company_info: additionalCompanyInfo }}
+                        vendors={backgroundModels}
+                        onResultSelected={(report, topDocs, source, resolvedName) => {
+                            setSelectedCompanyReport(report);
+                            setSelectedTopDocs(topDocs);
+                            if (topDocs && topDocs.length > 0) {
+                              const llmIds = new Set(topDocs.map(d => d.id || d.company_name).filter(Boolean));
+                              setSelectedDocIds(llmIds);
+                            }
+                            // Show notification based on how the research was resolved
+                            if (source === "cache") {
+                              setCompanyResearchNotification(`Found cached research for "${resolvedName || companyName}".`);
+                            } else if (source === "similar") {
+                              setCompanyResearchNotification(`Found similar company "${resolvedName}", using existing research.`);
+                            } else {
+                              setCompanyResearchNotification(`New research completed for "${companyName}".`);
+                            }
+                            setCompanyAutoResearchBlocked(false);
+                        }}
+                        externalTrigger={triggerCompanyResearch}
+                    />
+                </div>
+             </div>
+          </div>
+
+          <div style={{ marginTop: 20, padding: 15, border: "1px solid var(--border-color)", borderRadius: 8, backgroundColor: "var(--input-bg)" }}>
+             <button
+               onClick={() => setShowPointOfContact(!showPointOfContact)}
+               style={{
+                 width: "100%",
+                 display: "flex",
+                 justifyContent: "space-between",
+                 alignItems: "center",
+                 marginTop: 0,
+                 marginBottom: 0,
+                 padding: 0,
+                 fontSize: "16px",
+                 fontWeight: 600,
+                 color: "var(--text-color)",
+                 background: "transparent",
+                 border: "none",
+                 cursor: "pointer",
+                 textAlign: "left",
+               }}
+               aria-expanded={showPointOfContact}
+               aria-label={showPointOfContact ? "Collapse point of contact" : "Expand point of contact"}
+             >
+               <span>Point of Contact</span>
+               <span style={{ fontSize: 12, opacity: 0.8 }}>{showPointOfContact ? "▲" : "▼"}</span>
+             </button>
+             {!hasPointOfContactData && (
+               <p style={{ margin: "6px 0 0", fontSize: 12, color: "var(--secondary-text-color)" }}>
+                 Empty - collapsed by default.
+               </p>
+             )}
+             {showPointOfContact && (
+             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginTop: 10 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Name</label>
+                    <input type="text" value={pointOfContact.name} onChange={(e) => setPointOfContact({ ...pointOfContact, name: e.target.value })} style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Contact name" />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Role</label>
+                    <input type="text" value={pointOfContact.role} onChange={(e) => setPointOfContact({ ...pointOfContact, role: e.target.value })} style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Role in company" />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Contact Details</label>
+                    <input type="text" value={pointOfContact.contact_details} onChange={(e) => setPointOfContact({ ...pointOfContact, contact_details: e.target.value })} style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Email, phone, etc." />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Company (if intermediary)</label>
+                    <input type="text" value={pointOfContact.company} onChange={(e) => setPointOfContact({ ...pointOfContact, company: e.target.value })} style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Intermediary company" />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Notes</label>
+                    <textarea value={pointOfContact.notes} onChange={(e) => setPointOfContact({ ...pointOfContact, notes: e.target.value })} style={{ width: "100%", height: 48, padding: 6, fontSize: 13, resize: "vertical", backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Notes about contact" />
+                  </div>
+                </div>
+                <div>
+                    <ResearchComponent 
+                        label="POC Research"
+                        type="poc"
+                        query={pointOfContact.name}
+                        context={{ job_text: jobText, company_name: companyName }}
+                        vendors={backgroundModels}
+                        onResultSelected={(report, topDocs) => {
+                            setSelectedPocReport(report);
+                        }}
+                        externalTrigger={triggerPocResearch}
+                    />
+                </div>
+             </div>
+             )}
+          </div>
+
           {/* Two-column layout: Similar offers (left) | Competences (right) */}
           <div style={{ marginTop: 20, display: "grid", gridTemplateColumns: "1fr 1fr", gridTemplateRows: "minmax(0, 1fr)", gap: 16, height: "min(80vh, 600px)" }}>
             {/* Left column: Similar previous job offers from RAG */}
@@ -1789,94 +2154,6 @@ export default function App({ flow = "vendor" }) {
                 />
               </div>
             </div>
-          </div>
-
-          <div style={{ marginTop: 20, padding: 15, border: "1px solid var(--border-color)", borderRadius: 8, backgroundColor: "var(--input-bg)" }}>
-             <h3 style={{ marginTop: 0, fontSize: "16px", fontWeight: 600 }}>Company & Job Details</h3>
-             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    <div>
-                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Job Title *</label>
-                        <input type="text" value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Job title" />
-                    </div>
-                    <div>
-                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Company Name</label>
-                        <input type="text" value={companyName} onChange={(e) => setCompanyName(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Company name" />
-                    </div>
-                    <div>
-                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Location</label>
-                        <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Location" />
-                    </div>
-                    <div>
-                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Language</label>
-                        <input type="text" value={language} onChange={(e) => setLanguage(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Language" />
-                    </div>
-                    <div>
-                        <label style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Salary</label>
-                        <input type="text" value={salary} onChange={(e) => setSalary(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }} placeholder="Salary range" />
-                    </div>
-                </div>
-                <div>
-                    <ResearchComponent 
-                        label="Company Research"
-                        type="company"
-                        query={companyName}
-                        context={{ job_text: jobText, additional_company_info: additionalCompanyInfo }}
-                        vendors={backgroundModels}
-                        onResultSelected={(report, topDocs) => {
-                            setSelectedCompanyReport(report);
-                            setSelectedTopDocs(topDocs);
-                            // Auto-select LLM-picked doc IDs (overlay onto carousel)
-                            if (topDocs && topDocs.length > 0) {
-                              const llmIds = new Set(topDocs.map(d => d.id || d.company_name).filter(Boolean));
-                              setSelectedDocIds(llmIds);
-                            }
-                        }}
-                        externalTrigger={triggerCompanyResearch}
-                    />
-                </div>
-             </div>
-          </div>
-
-          <div style={{ marginTop: 20, padding: 15, border: "1px solid var(--border-color)", borderRadius: 8, backgroundColor: "var(--input-bg)" }}>
-             <h3 style={{ marginTop: 0, fontSize: "16px", fontWeight: 600 }}>Point of Contact</h3>
-             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div>
-                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Name</label>
-                    <input type="text" value={pointOfContact.name} onChange={(e) => setPointOfContact({ ...pointOfContact, name: e.target.value })} style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Contact name" />
-                  </div>
-                  <div>
-                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Role</label>
-                    <input type="text" value={pointOfContact.role} onChange={(e) => setPointOfContact({ ...pointOfContact, role: e.target.value })} style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Role in company" />
-                  </div>
-                  <div>
-                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Contact Details</label>
-                    <input type="text" value={pointOfContact.contact_details} onChange={(e) => setPointOfContact({ ...pointOfContact, contact_details: e.target.value })} style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Email, phone, etc." />
-                  </div>
-                  <div>
-                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Company (if intermediary)</label>
-                    <input type="text" value={pointOfContact.company} onChange={(e) => setPointOfContact({ ...pointOfContact, company: e.target.value })} style={{ width: "100%", padding: 6, fontSize: 13, backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Intermediary company" />
-                  </div>
-                  <div>
-                    <label style={{ display: "block", marginBottom: 2, fontSize: "12px", fontWeight: 600 }}>Notes</label>
-                    <textarea value={pointOfContact.notes} onChange={(e) => setPointOfContact({ ...pointOfContact, notes: e.target.value })} style={{ width: "100%", height: 48, padding: 6, fontSize: 13, resize: "vertical", backgroundColor: "var(--bg-color)", color: "var(--text-color)", border: "1px solid var(--border-color)", borderRadius: 4 }} placeholder="Notes about contact" />
-                  </div>
-                </div>
-                <div>
-                    <ResearchComponent 
-                        label="POC Research"
-                        type="poc"
-                        query={pointOfContact.name}
-                        context={{ job_text: jobText, company_name: companyName }}
-                        vendors={backgroundModels}
-                        onResultSelected={(report, topDocs) => {
-                            setSelectedPocReport(report);
-                        }}
-                        externalTrigger={triggerPocResearch}
-                    />
-                </div>
-             </div>
           </div>
           
           <div style={{ marginTop: 20, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -2021,6 +2298,7 @@ export default function App({ flow = "vendor" }) {
             <AgenticFlow
               agenticState={agenticState}
               onFeedbackStart={handleAgenticFeedbackStart}
+              onVote={handleAgenticVote}
               onRefine={handleAgenticRefine}
               onSuspend={handleAgenticSuspend}
               onResume={handleAgenticResume}
@@ -2123,6 +2401,7 @@ export default function App({ flow = "vendor" }) {
                 savingFinal={flow === "agentic" ? agenticSavingFinal : savingFinal}
                 vendorFeedback={vendorFeedback}
                 setVendorFeedback={setVendorFeedback}
+                refineSamples={flow === "agentic" ? (agenticState?.refine_samples || {}) : {}}
               />
             </div>
           )}
@@ -2282,6 +2561,7 @@ export default function App({ flow = "vendor" }) {
           vendors={vendors}
           selectedVendors={selectedVendors}
           setSelectedVendors={setSelectedVendors}
+          setBackgroundModels={setBackgroundModels}
           onCompetenceScalesChange={() => setCompetenceScaleConfig(getScaleConfig())}
         />
       </OverlayPanel>

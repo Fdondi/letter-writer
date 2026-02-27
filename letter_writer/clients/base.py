@@ -1,8 +1,11 @@
 import json
+import logging
 import sys
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List
+
+logger = logging.getLogger(__name__)
 
 
 class ModelVendor(Enum):
@@ -27,6 +30,7 @@ class BaseClient:
         self.total_cost = 0.0
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+        self.total_cached_tokens = 0
         self.total_search_queries = 0
         self._costs_cache: dict | None = None
         self._last_mtime: float = 0.0
@@ -48,9 +52,9 @@ class BaseClient:
             # File is new or changed, reload it
             self._costs_cache = json.loads(config_path.read_text(encoding="utf-8"))
             self._last_mtime = mtime
-            # print(f"[INFO] Reloaded config for {self.__class__.__name__}")
+            # logger.info("Reloaded config for %s", self.__class__.__name__)
         except Exception as e:
-            print(f"[WARN] Failed to load cost config for {self.__class__.__name__}: {e}")
+            logger.warning("Failed to load cost config for %s: %s", self.__class__.__name__, e)
             if self._costs_cache is None:
                 self._costs_cache = {}
         return self._costs_cache
@@ -94,32 +98,52 @@ class BaseClient:
 
         models_cfg = cfg.get("models", {})
         if not isinstance(models_cfg, dict):
-            return {"input": 0.0, "output": 0.0, "search": default_search}
+            return {"input": 0.0, "output": 0.0, "search": default_search, "input_cached_mult": 0.5}
 
         model_cfg = models_cfg.get(model_name, {})
         if not isinstance(model_cfg, dict):
-            return {"input": 0.0, "output": 0.0, "search": default_search}
+            return {"input": 0.0, "output": 0.0, "search": default_search, "input_cached_mult": 0.5}
+
+        defaults = cfg.get("defaults", {}) or {}
+        if not isinstance(defaults, dict):
+            defaults = {}
+        cached_mult = float(model_cfg.get("input_cached_mult", defaults.get("input_cached_mult", 0.5)) or 0.5)
 
         return {
             "input": float(model_cfg.get("input", 0.0) or 0.0),
             "output": float(model_cfg.get("output", 0.0) or 0.0),
             "search": float(model_cfg.get("search", default_search) or 0.0),
+            "input_cached_mult": cached_mult,
         }
 
-    def track_cost(self, model_name: str, input_tokens: int, output_tokens: int, search_queries: int = 0):
-        """Calculate and accumulate cost and token counts for a request."""
+    def track_cost(
+        self,
+        model_name: str,
+        input_tokens: int,
+        output_tokens: int,
+        search_queries: int = 0,
+        cached_tokens: int = 0,
+    ):
+        """Calculate and accumulate cost and token counts for a request.
+
+        When cached_tokens > 0, the cached portion is charged at input_cached_mult (default 0.5)
+        of the normal input price (e.g. OpenAI prompt cache discount).
+        """
         costs = self.get_model_cost(model_name)
 
-        # Costs are per 1M tokens
-        input_cost = (input_tokens / 1_000_000) * costs["input"]
+        # Input: uncached full price, cached at discount
+        uncached = max(0, input_tokens - cached_tokens)
+        mult = costs.get("input_cached_mult", 0.5)
+        input_cost = (uncached / 1_000_000) * costs["input"] + (
+            (cached_tokens / 1_000_000) * costs["input"] * mult
+        )
         output_cost = (output_tokens / 1_000_000) * costs["output"]
-
-        # Search costs are per 1000 queries
         search_cost = (search_queries / 1_000) * costs["search"]
 
         self.total_cost += input_cost + output_cost + search_cost
         self.total_input_tokens += input_tokens
         self.total_output_tokens += output_tokens
+        self.total_cached_tokens += cached_tokens
         self.total_search_queries += search_queries
 
     def call(self, model_size: ModelSize | str, system: str, messages: List[Dict], search: bool = False) -> str:

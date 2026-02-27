@@ -1,5 +1,6 @@
 import json
-from typing import List, Dict
+import logging
+from typing import List, Dict, Optional
 from pathlib import Path
 from openai import OpenAI
 import typer
@@ -14,13 +15,15 @@ import pandas as pd
 
 from pydantic import BaseModel, ValidationError
 
+logger = logging.getLogger(__name__)
+
 # Fields to strip from search results before sending to frontend
 _SEARCH_RESULT_STRIP_FIELDS = {"vector", "user_id", "blocks", "ai_letters", "negative_letter_text", "notes"}
 
 
 def sanitize_search_results(search_results: List[dict]) -> List[dict]:
     """Strip large/sensitive fields from Firestore document dicts for frontend display."""
-    print(f"[RAG] sanitize_search_results: input {len(search_results)} docs")
+    logger.debug("[RAG] sanitize_search_results: input %s docs", len(search_results))
     sanitized = []
     for doc in search_results:
         clean = {k: v for k, v in doc.items() if k not in _SEARCH_RESULT_STRIP_FIELDS}
@@ -34,7 +37,11 @@ def sanitize_search_results(search_results: List[dict]) -> List[dict]:
             elif ts_field in clean and hasattr(clean[ts_field], "to_datetime"):
                 clean[ts_field] = clean[ts_field].to_datetime().isoformat()
         sanitized.append(clean)
-    print(f"[RAG] sanitize_search_results: output {len(sanitized)} docs, keys sample: {list(sanitized[0].keys()) if sanitized else 'N/A'}")
+    logger.debug(
+        "[RAG] sanitize_search_results: output %s docs, keys sample: %s",
+        len(sanitized),
+        list(sanitized[0].keys()) if sanitized else "N/A",
+    )
     return sanitized
 
 class ScoreRow(BaseModel):
@@ -53,7 +60,12 @@ def delete_documents(collection, doc_ids: List[str]):
     for doc_id in doc_ids:
         collection.document(doc_id).delete()
 
-def retrieve_similar_job_offers(job_text: str, collection, openai_client: OpenAI) -> List[dict]:
+def retrieve_similar_job_offers(
+    job_text: str,
+    collection,
+    openai_client: OpenAI,
+    user_id: Optional[str] = None,
+) -> List[dict]:
     """Retrieve similar job offers based on the input job text using Firestore vector search.
     
     Args:
@@ -64,12 +76,21 @@ def retrieve_similar_job_offers(job_text: str, collection, openai_client: OpenAI
     Returns:
         List of document dicts (Firestore returns full documents directly)
     """
-    print(f"[RAG] retrieve_similar_job_offers: job_text length={len(job_text)}, collection={collection.id}")
+    collection_name = getattr(collection, "id", "query")
+    logger.debug(
+        "[RAG] retrieve_similar_job_offers: job_text length=%s, collection=%s, user_scoped=%s",
+        len(job_text),
+        collection_name,
+        bool(user_id),
+    )
     vector = embed(job_text, openai_client)
-    print(f"[RAG] embedding generated, vector length={len(vector)}")
-    # Firestore vector search returns full documents directly
-    results = query_vector_similarity(collection, vector, limit=7)
-    print(f"[RAG] retrieve_similar_job_offers: got {len(results)} results")
+    logger.debug("[RAG] embedding generated, vector length=%s", len(vector))
+    # Optional per-user scope for personal document similarity.
+    query_target = collection.where("user_id", "==", user_id) if user_id else collection
+    # Keep retrieval pool fixed to avoid unexpected document fan-out.
+    limit = 7
+    results = query_vector_similarity(query_target, vector, limit=limit)
+    logger.debug("[RAG] retrieve_similar_job_offers: got %s results", len(results))
     return results
 
 
@@ -91,9 +112,9 @@ def select_top_documents(
     Returns:
         List of top documents with scores
     """
-    print(f"[RAG] select_top_documents: input {len(search_result)} docs")
+    logger.debug("[RAG] select_top_documents: input %s docs", len(search_result))
     if not search_result:
-        print(f"[RAG] select_top_documents: empty input, returning empty")
+        logger.debug("[RAG] select_top_documents: empty input, returning empty")
         return {"top_docs": [], "all_scores": {}}
 
     retrieved_docs: Dict[str, dict] = {}
@@ -111,9 +132,12 @@ def select_top_documents(
                 )
             retrieved_docs[normalized_company] = doc
 
-    print(f"[RAG] select_top_documents: {len(retrieved_docs)} unique companies after dedup, sending to rerank")
+    logger.debug(
+        "[RAG] select_top_documents: %s unique companies after dedup, sending to rerank",
+        len(retrieved_docs),
+    )
     top_docs = rerank_documents(job_text, retrieved_docs, ai_client, trace_dir)
-    print(f"[RAG] select_top_documents: reranking returned {len(top_docs)} scored docs")
+    logger.debug("[RAG] select_top_documents: reranking returned %s scored docs", len(top_docs))
 
     # Validate that all reranked company names exist in retrieved_docs
     missing_names = [name for name in top_docs.keys() if name not in retrieved_docs]

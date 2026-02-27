@@ -15,6 +15,7 @@ Requirements:
 
 import os
 import sys
+import logging
 from pathlib import Path
 
 # Add the letter_writer module to the path
@@ -30,12 +31,14 @@ from letter_writer.cost_tracker import (
     _get_redis_client,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def test_translation_cost_calculation():
     """Test translation cost calculation."""
-    print("=" * 60)
-    print("Testing Translation Cost Calculation")
-    print("=" * 60)
+    logger.info("%s", "=" * 60)
+    logger.info("Testing Translation Cost Calculation")
+    logger.info("%s", "=" * 60)
     
     # Test cases: (character_count, expected_cost)
     test_cases = [
@@ -50,36 +53,36 @@ def test_translation_cost_calculation():
     
     for char_count, expected_cost in test_cases:
         cost = calculate_translation_cost(char_count)
-        print(f"{char_count:>10,} characters -> ${cost:>8.4f} (expected: ${expected_cost:.4f})")
+        logger.info("%10s characters -> $%8.4f (expected: $%.4f)", f"{char_count:,}", cost, expected_cost)
         assert abs(cost - expected_cost) < 0.0001, f"Cost mismatch: {cost} != {expected_cost}"
     
-    print("\n✓ All translation cost calculations passed!\n")
+    logger.info("\n%s\n", "✓ All translation cost calculations passed!")
 
 
 def test_storage_backend():
     """Test storage backend detection."""
-    print("=" * 60)
-    print("Testing Storage Backend")
-    print("=" * 60)
+    logger.info("%s", "=" * 60)
+    logger.info("Testing Storage Backend")
+    logger.info("%s", "=" * 60)
     
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-    print(f"Redis URL: {redis_url}\n")
+    logger.info("Redis URL: %s\n", redis_url)
     
     client = _get_redis_client()
     if client is None:
-        print("ℹ Redis not available - using in-memory fallback")
-        print("  To use Redis: start Redis or set REDIS_URL environment variable\n")
+        logger.warning("Redis not available - using in-memory fallback")
+        logger.warning("To use Redis: start Redis or set REDIS_URL environment variable\n")
         return "memory"
     
-    print("✓ Redis connection successful!\n")
+    logger.info("✓ Redis connection successful!\n")
     return "redis"
 
 
 def test_cost_tracking(storage_type):
     """Test cost tracking functionality."""
-    print("=" * 60)
-    print(f"Testing Cost Tracking ({storage_type})")
-    print("=" * 60)
+    logger.info("%s", "=" * 60)
+    logger.info("Testing Cost Tracking (%s)", storage_type)
+    logger.info("%s", "=" * 60)
     
     # Track some example costs
     examples = [
@@ -111,7 +114,7 @@ def test_cost_tracking(storage_type):
         },
     ]
     
-    print(f"Tracking example API costs ({storage_type})...\n")
+    logger.info("Tracking example API costs (%s)...\n", storage_type)
     for example in examples:
         track_api_cost(
             user_id=example["user_id"],
@@ -121,119 +124,119 @@ def test_cost_tracking(storage_type):
             metadata=example.get("metadata"),
             search_queries=example.get("search_queries"),
         )
-        print(f"  ✓ Tracked: {example['phase']}/{example['vendor']} - ${example['cost']:.4f}")
+        logger.info("  ✓ Tracked: %s/%s - $%.4f", example["phase"], example["vendor"], example["cost"])
     
-    print("\n✓ Cost tracking completed!\n")
+    logger.info("\n%s\n", "✓ Cost tracking completed!")
 
 
 def test_cost_summary():
     """Test cost summary retrieval."""
-    print("=" * 60)
-    print("Pending Cost Summary")
-    print("=" * 60)
+    logger.info("%s", "=" * 60)
+    logger.info("Pending Cost Summary")
+    logger.info("%s", "=" * 60)
     
     summary = get_cost_summary()
     
-    print(f"Storage: {summary.get('storage', 'unknown')}")
-    print(f"Total Cost: ${summary['total_cost']:.4f}")
-    print(f"Pending Requests: {summary.get('pending_requests', 0)}")
-    print()
+    logger.info("Storage: %s", summary.get("storage", "unknown"))
+    logger.info("Total Cost: $%.4f", summary["total_cost"])
+    logger.info("Pending Requests: %s", summary.get("pending_requests", 0))
+    logger.info("")
     
     if summary.get('by_service'):
-        print("Costs by Service:")
-        print("-" * 60)
+        logger.info("Costs by Service:")
+        logger.info("%s", "-" * 60)
         for service, data in summary['by_service'].items():
-            print(f"  {service:30s} ${data['total_cost']:>8.4f} ({data['request_count']:>4} requests)")
-        print()
+            logger.info("  %-30s $%8.4f (%4s requests)", service, data["total_cost"], data["request_count"])
+        logger.info("")
     
     if summary.get('by_user'):
-        print("Costs by User:")
-        print("-" * 60)
+        logger.info("Costs by User:")
+        logger.info("%s", "-" * 60)
         for user_id, user_data in summary['by_user'].items():
-            print(f"  {user_id}: ${user_data['total_cost']:.4f}")
+            logger.info("  %s: $%.4f", user_id, user_data["total_cost"])
             for service, service_data in user_data.get('by_service', {}).items():
-                print(f"    - {service:28s} ${service_data['total_cost']:>8.4f} ({service_data['request_count']:>4} requests)")
-        print()
+                logger.info("    - %-28s $%8.4f (%4s requests)", service, service_data["total_cost"], service_data["request_count"])
+        logger.info("")
     
-    print("✓ Cost summary retrieved successfully!\n")
+    logger.info("✓ Cost summary retrieved successfully!\n")
 
 
 def test_bigquery_flush(skip_if_no_credentials=True):
     """Test flushing costs to BigQuery."""
-    print("=" * 60)
-    print("BigQuery Flush Test")
-    print("=" * 60)
+    logger.info("%s", "=" * 60)
+    logger.info("BigQuery Flush Test")
+    logger.info("%s", "=" * 60)
     
     # Check if BigQuery credentials are available
     if skip_if_no_credentials:
         project = os.environ.get("BIGQUERY_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
         if not project:
-            print("⚠ Skipping BigQuery flush - no credentials")
-            print("  Set BIGQUERY_PROJECT or GOOGLE_CLOUD_PROJECT to enable\n")
+            logger.warning("Skipping BigQuery flush - no credentials")
+            logger.warning("Set BIGQUERY_PROJECT or GOOGLE_CLOUD_PROJECT to enable\n")
             return
     
-    print("Flushing costs to BigQuery...")
+    logger.info("Flushing costs to BigQuery...")
     result = flush_costs_to_bigquery(reset_after_flush=True)
     
-    print(f"Status: {result.get('status')}")
+    logger.info("Status: %s", result.get("status"))
     if result.get('status') == 'success':
-        print(f"Rows inserted: {result.get('rows_inserted', 0)}")
-        print(f"Total cost flushed: ${result.get('total_cost_flushed', 0):.4f}")
+        logger.info("Rows inserted: %s", result.get("rows_inserted", 0))
+        logger.info("Total cost flushed: $%.4f", result.get("total_cost_flushed", 0))
     elif result.get('status') == 'skipped':
-        print(f"Reason: {result.get('reason')}")
+        logger.warning("Reason: %s", result.get("reason"))
     else:
-        print(f"Error: {result.get('error')}")
+        logger.error("Error: %s", result.get("error"))
         if result.get('rows_pending'):
-            print(f"Rows pending: {result.get('rows_pending')}")
+            logger.error("Rows pending: %s", result.get("rows_pending"))
     
-    print()
+    logger.info("")
 
 
 def test_bigquery_query(skip_if_no_credentials=True):
     """Test querying costs from BigQuery."""
-    print("=" * 60)
-    print("BigQuery Query Test")
-    print("=" * 60)
+    logger.info("%s", "=" * 60)
+    logger.info("BigQuery Query Test")
+    logger.info("%s", "=" * 60)
     
     # Check if BigQuery credentials are available
     if skip_if_no_credentials:
         project = os.environ.get("BIGQUERY_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
         if not project:
-            print("⚠ Skipping BigQuery query - no credentials")
-            print("  Set BIGQUERY_PROJECT or GOOGLE_CLOUD_PROJECT to enable\n")
+            logger.warning("Skipping BigQuery query - no credentials")
+            logger.warning("Set BIGQUERY_PROJECT or GOOGLE_CLOUD_PROJECT to enable\n")
             return
     
-    print("Querying user costs from BigQuery...")
+    logger.info("Querying user costs from BigQuery...")
     user_result = get_user_monthly_cost("test_user_123", months_back=1)
     
     if user_result.get("error"):
-        print(f"  Error: {user_result.get('error')}")
+        logger.error("  Error: %s", user_result.get("error"))
     else:
-        print(f"  User: {user_result.get('user_id')}")
-        print(f"  Total Cost: ${user_result.get('total_cost', 0):.4f}")
-        print(f"  Total Requests: {user_result.get('total_requests', 0)}")
+        logger.info("  User: %s", user_result.get("user_id"))
+        logger.info("  Total Cost: $%.4f", user_result.get("total_cost", 0))
+        logger.info("  Total Requests: %s", user_result.get("total_requests", 0))
     
-    print("\nQuerying global costs from BigQuery...")
+    logger.info("\nQuerying global costs from BigQuery...")
     global_result = get_global_monthly_cost(months_back=1)
     
     if global_result.get("error"):
-        print(f"  Error: {global_result.get('error')}")
+        logger.error("  Error: %s", global_result.get("error"))
     else:
-        print(f"  Total Cost: ${global_result.get('total_cost', 0):.4f}")
-        print(f"  Total Requests: {global_result.get('total_requests', 0)}")
+        logger.info("  Total Cost: $%.4f", global_result.get("total_cost", 0))
+        logger.info("  Total Requests: %s", global_result.get("total_requests", 0))
         if global_result.get("by_service"):
-            print("  By Service:")
+            logger.info("  By Service:")
             for service, data in global_result["by_service"].items():
-                print(f"    - {service}: ${data['total_cost']:.4f}")
+                logger.info("    - %s: $%.4f", service, data["total_cost"])
     
-    print()
+    logger.info("")
 
 
 def main():
     """Run all tests."""
-    print("\n" + "=" * 60)
-    print("COST TRACKING TEST SUITE")
-    print("=" * 60 + "\n")
+    logger.info("\n%s", "=" * 60)
+    logger.info("COST TRACKING TEST SUITE")
+    logger.info("%s\n", "=" * 60)
     
     try:
         test_translation_cost_calculation()
@@ -244,29 +247,27 @@ def main():
         test_bigquery_flush(skip_if_no_credentials=True)
         test_bigquery_query(skip_if_no_credentials=True)
         
-        print("=" * 60)
-        print("ALL TESTS COMPLETED! ✓")
-        print("=" * 60 + "\n")
+        logger.info("%s", "=" * 60)
+        logger.info("ALL TESTS COMPLETED! ✓")
+        logger.info("%s\n", "=" * 60)
         
         if storage_type == "redis":
-            print("Cost tracking is using Redis for fast atomic operations.")
+            logger.info("Cost tracking is using Redis for fast atomic operations.")
         else:
-            print("Cost tracking is using in-memory storage (Redis unavailable).")
+            logger.info("Cost tracking is using in-memory storage (Redis unavailable).")
         
-        print("Costs are flushed to BigQuery:")
-        print("  - On letter completion")
-        print("  - Every 30 minutes (configurable via COST_FLUSH_INTERVAL_SECONDS)")
-        print("  - On server shutdown")
-        print()
-        print("BigQuery table: {project}.{dataset}.api_costs")
-        print("  - Partitioned by: month (timestamp)")
-        print("  - Clustered by: user_id, service")
-        print()
+        logger.info("Costs are flushed to BigQuery:")
+        logger.info("  - On letter completion")
+        logger.info("  - Every 30 minutes (configurable via COST_FLUSH_INTERVAL_SECONDS)")
+        logger.info("  - On server shutdown")
+        logger.info("")
+        logger.info("BigQuery table: {project}.{dataset}.api_costs")
+        logger.info("  - Partitioned by: month (timestamp)")
+        logger.info("  - Clustered by: user_id, service")
+        logger.info("")
         
     except Exception as e:
-        print(f"\n❌ Test failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("\nTest failed: %s", e)
         return 1
     
     return 0

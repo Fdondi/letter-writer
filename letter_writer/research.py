@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from concurrent.futures import ThreadPoolExecutor
@@ -10,7 +11,15 @@ from langsmith import traceable
 
 from .client import get_client
 from .clients.base import ModelVendor, ModelSize, BaseClient
-from .firestore_store import get_company_info, save_company_info, get_collection, get_poc_info, save_poc_info
+from .firestore_store import (
+    get_company_info,
+    save_company_info,
+    get_collection,
+    get_poc_info,
+    save_poc_info,
+    save_company_alias,
+    search_similar_companies,
+)
 from .generation import company_research
 from .retrieval import retrieve_similar_job_offers, select_top_documents
 
@@ -33,14 +42,40 @@ def _parse_model_str(model_str: str) -> Tuple[ModelVendor, str | ModelSize]:
     return vendor, ModelSize.LARGE
 
 
+def _norm_company(s: str) -> str:
+    return " ".join((s or "").strip().lower().split())
+
+
+def _looks_like_same_company(query: str, candidate: str) -> bool:
+    """Heuristic decision for aliasing query company to an existing cached company."""
+    q = _norm_company(query)
+    c = _norm_company(candidate)
+    if not q or not c:
+        return False
+    if q == c:
+        return True
+    if len(q) >= 5 and (q in c or c in q):
+        return True
+    ratio = SequenceMatcher(a=q, b=c).ratio()
+    if ratio >= 0.86:
+        return True
+    q_tokens = set(q.replace("-", " ").split())
+    c_tokens = set(c.replace("-", " ").split())
+    if q_tokens and c_tokens:
+        jaccard = len(q_tokens & c_tokens) / len(q_tokens | c_tokens)
+        if jaccard >= 0.8:
+            return True
+    return False
+
+
 @traceable(run_type="chain", name="perform_web_search")
 def perform_web_search(query: str) -> str:
     """Perform a web search using a capable model (OpenAI for now)."""
     try:
-        # Use OpenAI for reliable web search
+        # Use an explicit search-capable OpenAI model.
         client = get_client(ModelVendor.OPENAI)
         system = "You are a research assistant. Perform a comprehensive web search for the user's query and return a detailed summary of the findings, including key facts, recent news, and relevant context."
-        return client.call(ModelSize.LARGE, system, [query], search=True)
+        return client.call("gpt-5-search-api", system, [query], search=True)
     except Exception as e:
         logger.error(f"Web search failed: {e}")
         return ""
@@ -49,37 +84,77 @@ def perform_web_search(query: str) -> str:
 @traceable(run_type="chain", name="perform_company_research")
 def perform_company_research(
     company_name: str,
-    user_id: str,
     models: List[str],
     job_text: str,
     additional_company_info: str = "",
-) -> Dict[str, dict]:
+) -> Dict[str, Any]:
     """
     Perform company research using one or more models.
     Checks for cached data (< 6 months old) and reuses it if available.
     
     Returns:
-        Dict[str, dict]: Map of model_id -> { "report": str, "top_docs": list }
+        {"results": Dict[model_id, {...}], "source": "cache"|"similar"|"new",
+         "resolved_name": str}
     """
     if not company_name:
-        return {}
+        return {"results": {}, "source": "new", "resolved_name": company_name}
 
-    # 1. Check cache
-    cached_info = get_company_info(company_name, user_id)
+    # 1. Check exact cache first.
+    cached_info = get_company_info(company_name)
+    matched_company_name = company_name
+    matched_doc_id = None
     previous_context = ""
-    
-    # If we have valid cache for requested models, we might return it?
-    # But usually we want fresh research if cache is old.
-    # Also, we need to return results for ALL requested models.
-    # If cache has some models but not others, or old data...
-    
-    # Simplified logic:
-    # - If cache is fresh (< 6 months), return it (all available reports).
-    # - If cache is old, use it as context for new research.
+    found_via_search = False
+    logger.debug(
+        "[RESEARCH] Exact cache lookup for '%s': %s",
+        company_name,
+        "HIT" if cached_info else "MISS",
+    )
+
+    # 1b. If exact is missing, try vector-similar companies and decide if one matches.
+    if not cached_info:
+        try:
+            candidates = search_similar_companies(company_name, limit=5)
+        except Exception as e:
+            logger.warning("Company vector lookup failed for '%s': %s", company_name, e)
+            candidates = []
+        chosen = None
+        for c in candidates:
+            candidate_name = c.get("company_name") or ""
+            if _looks_like_same_company(company_name, candidate_name):
+                chosen = c
+                break
+        logger.debug("[RESEARCH] Vector search for '%s': %s candidates", company_name, len(candidates))
+        for c in candidates:
+            cname = c.get("company_name", "?")
+            logger.debug(
+                "[RESEARCH]   candidate: '%s' - match=%s",
+                cname,
+                _looks_like_same_company(company_name, cname),
+            )
+        if chosen is not None:
+            matched_company_name = chosen.get("company_name") or company_name
+            matched_doc_id = chosen.get("id")
+            cached_info = chosen
+            found_via_search = True
+            logger.info(
+                "[RESEARCH] Matched '%s' -> '%s' (doc_id=%s)",
+                company_name,
+                matched_company_name,
+                matched_doc_id,
+            )
+            if matched_doc_id:
+                try:
+                    save_company_alias(
+                        alias_company_name=company_name,
+                        canonical_doc_id=str(matched_doc_id),
+                        canonical_company_name=matched_company_name,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to save company alias '%s' -> '%s': %s", company_name, matched_doc_id, e)
     
     if cached_info:
         updated_at = cached_info.get("updated_at")
-        # Ensure updated_at is timezone-aware
         if isinstance(updated_at, str):
             try:
                 updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
@@ -87,27 +162,36 @@ def perform_company_research(
                 updated_at = None
         
         if updated_at:
-            # Check if fresh (less than 6 months old)
             cutoff = datetime.now(timezone.utc) - timedelta(days=180)
             cached_reports = cached_info.get("reports", {})
-            # Only use cache if it covers ALL requested models
             requested_set = set(models)
             cached_set = set(cached_reports.keys())
             cache_covers_request = requested_set.issubset(cached_set)
             
             if updated_at > cutoff and cache_covers_request:
-                logger.info(f"Using cached company research for {company_name} (covers requested models)")
-                # Return only the requested model results from cache
-                return {k: v for k, v in cached_reports.items() if k in requested_set}
+                source = "similar" if found_via_search else "cache"
+                logger.info(
+                    "Using cached company research for '%s' (resolved to '%s', source=%s)",
+                    company_name, matched_company_name, source,
+                )
+                return {
+                    "results": {k: v for k, v in cached_reports.items() if k in requested_set},
+                    "source": source,
+                    "resolved_name": matched_company_name,
+                }
             else:
                 if not cache_covers_request:
-                    logger.info(f"Cached research for {company_name} doesn't cover requested models "
-                                f"(cached: {cached_set}, requested: {requested_set}). Re-running.")
+                    logger.info(
+                        "Cached research for '%s' (resolved to '%s') doesn't cover requested models "
+                        "(cached: %s, requested: %s). Re-running.",
+                        company_name, matched_company_name, cached_set, requested_set,
+                    )
                 else:
-                    logger.info(f"Cached research for {company_name} is older than 6 months. Using as context.")
-                # Use the most recent report as context (pick first available)
+                    logger.info(
+                        "Cached research for '%s' (resolved to '%s') is older than 6 months. Using as context.",
+                        company_name, matched_company_name,
+                    )
                 if cached_reports:
-                    # Pick a report, preferably a long one
                     best_report = max(cached_reports.values(), key=lambda x: len(x.get("report", "")), default={})
                     previous_context = best_report.get("report", "")
 
@@ -185,15 +269,14 @@ def perform_company_research(
             results[m_str] = data
 
     # 3. Save to cache
-    save_company_info(company_name, {"reports": results}, user_id)
+    save_company_info(company_name, {"reports": results})
     
-    return results
+    return {"results": results, "source": "new", "resolved_name": company_name}
 
 
 @traceable(run_type="chain", name="perform_poc_research")
 def perform_poc_research(
     poc_name: str,
-    user_id: str,
     models: List[str],
     company_name: str,
     job_text: str = "",
@@ -206,7 +289,7 @@ def perform_poc_research(
         return {}
 
     # 1. Check cache
-    cached_info = get_poc_info(company_name, poc_name, user_id)
+    cached_info = get_poc_info(company_name, poc_name)
     previous_context = ""
     
     if cached_info:
@@ -293,6 +376,6 @@ def perform_poc_research(
             results[m_str] = data
 
     # 3. Save to cache
-    save_poc_info(company_name, poc_name, {"reports": results}, user_id)
+    save_poc_info(company_name, poc_name, {"reports": results})
     
     return results

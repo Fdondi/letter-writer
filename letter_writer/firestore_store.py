@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 from typing import Iterable, List, Optional
 from uuid import uuid4
 
 from google.cloud import firestore
 
 from .config import env_default
+from .vector_store import embed, query_vector_similarity
 
 
 def get_firestore_client() -> firestore.Client:
@@ -221,12 +223,43 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
     """
     
     now = datetime.now(timezone.utc)
-    doc_id = data.get("id") or data.get("document_id") or data.get("_id") or str(uuid4())
     company_name_raw = data.get("company_name") or data.get("company")
     # Normalize company_name by stripping whitespace and lowercasing
     company_name = company_name_raw.strip().lower() if company_name_raw else None
-    
     role = data.get("role")
+    job_text_normalized = (data.get("job_text") or "").strip()
+
+    # Stable dedupe key for the same application. This lets repeated "create" calls
+    # update the same document instead of creating duplicate UUID documents.
+    fingerprint_parts = [
+        str(user_id or "").strip().lower(),
+        str(company_name or "").strip().lower(),
+        str(role or "").strip().lower(),
+        job_text_normalized,
+    ]
+    application_fingerprint = hashlib.sha256("\n".join(fingerprint_parts).encode("utf-8")).hexdigest()
+
+    requested_doc_id = data.get("id") or data.get("document_id") or data.get("_id")
+    doc_id = requested_doc_id
+    dedupe_existing_data = None
+    if not doc_id:
+        # If caller does a create without ID, reuse an existing equivalent
+        # application for this user (even legacy docs without fingerprint).
+        for candidate in collection.where("user_id", "==", user_id).stream():
+            candidate_data = candidate.to_dict() or {}
+            candidate_company = ((candidate_data.get("company_name_original") or candidate_data.get("company_name") or "").strip().lower())
+            candidate_role = (candidate_data.get("role") or "").strip().lower()
+            candidate_job_text = (candidate_data.get("job_text") or "").strip()
+            if (
+                candidate_company == str(company_name or "").strip().lower()
+                and candidate_role == str(role or "").strip().lower()
+                and candidate_job_text == job_text_normalized
+            ):
+                doc_id = candidate.id
+                dedupe_existing_data = candidate_data
+                break
+        if not doc_id:
+            doc_id = str(uuid4())
     
     ai_letters = _prepare_ai_letters(data.get("ai_letters"))
     requirements = data.get("requirements")
@@ -239,9 +272,11 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
 
     doc_ref = collection.document(doc_id)
     
-    if allow_update:
+    effective_allow_update = allow_update or (dedupe_existing_data is not None)
+
+    if effective_allow_update:
         existing_doc = doc_ref.get()
-        existing_data = existing_doc.to_dict() if existing_doc.exists else None
+        existing_data = dedupe_existing_data or (existing_doc.to_dict() if existing_doc.exists else None)
         
         # Security check: ensure user_id matches on update
         if existing_data and existing_data.get("user_id") != user_id:
@@ -276,13 +311,14 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
         "user_id": user_id,  # Always store user_id
         "company_name": company_name,
         "company_name_original": data.get("company_name") or data.get("company"),  # Store original for display
+        "application_fingerprint": application_fingerprint,
         "role": role,
         "location": data.get("location"),
         "language": data.get("language"),
         "salary": data.get("salary"),
         "requirements": requirements_value,
         "date_applied": data.get("date_applied"),
-        "job_text": (data.get("job_text") or "").strip(),
+        "job_text": job_text_normalized,
         "letter_text": (data.get("letter_text") or "").strip(),
         "negative_letter_text": (data.get("negative_letter_text") or "").strip() if data.get("negative_letter_text") else None,
         "blocks": data.get("blocks") or [],
@@ -298,7 +334,7 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
         base["vector"] = data["vector"]
     
     # Upsert document
-    doc_ref.set(base, merge=allow_update)
+    doc_ref.set(base, merge=effective_allow_update)
     
     # Get the stored document
     stored_doc = doc_ref.get()
@@ -495,20 +531,29 @@ def get_companies_collection():
     return client.collection("companies")
 
 
-def save_company_info(company_name: str, data: dict, user_id: str, vector: Optional[List[float]] = None) -> dict:
+def _normalize_company_doc_id(company_name: str) -> str:
+    """Normalize company name into a global company document ID."""
+    return company_name.strip().lower().replace(" ", "_")
+
+
+def _normalize_poc_key(poc_name: str) -> str:
+    """Normalize point-of-contact name into a stable nested key."""
+    return poc_name.strip().lower().replace(" ", "_")
+
+
+def save_company_info(company_name: str, data: dict, vector: Optional[List[float]] = None) -> dict:
     """Save company research data.
     
     Args:
         company_name: Company name (used as ID after normalization)
         data: Data to save (reports, etc.)
-        user_id: User ID (for ownership/scoping)
         vector: Optional vector embedding for fuzzy search
     """
-    if not company_name or not user_id:
-        raise ValueError("company_name and user_id are required")
+    if not company_name:
+        raise ValueError("company_name is required")
     
-    # Normalize name for ID
-    doc_id = f"{user_id}_{company_name.strip().lower().replace(' ', '_')}"
+    # Global company-level cache key (not user-scoped).
+    doc_id = _normalize_company_doc_id(company_name)
     
     collection = get_companies_collection()
     
@@ -517,52 +562,116 @@ def save_company_info(company_name: str, data: dict, user_id: str, vector: Optio
     update_data = {
         "id": doc_id,
         "company_name": company_name,
-        "user_id": user_id,
         "updated_at": datetime.now(timezone.utc),
         **data
     }
     
-    # Add vector if provided
-    if vector is not None:
-        from google.cloud.firestore_v1.vector import Vector
-        update_data["vector"] = Vector(vector)
+    # Add vector (provided or generated from company name) for similarity lookup.
+    try:
+        vec = vector
+        if vec is None:
+            from openai import OpenAI
+            openai_client = OpenAI()
+            vec = embed(company_name, openai_client)
+        if vec is not None:
+            from google.cloud.firestore_v1.vector import Vector
+            update_data["vector"] = vec if isinstance(vec, Vector) else Vector(vec)
+    except Exception:
+        # Vector enrichment is best-effort and should not block company cache writes.
+        pass
     
     collection.document(doc_id).set(update_data, merge=True)
     return update_data
 
 
-def get_company_info(company_name: str, user_id: str) -> Optional[dict]:
+def _resolve_company_doc_id(doc_id: str, *, max_hops: int = 3) -> str:
+    """Resolve alias redirects in companies collection to canonical document id."""
+    collection = get_companies_collection()
+    current = doc_id
+    hops = 0
+    while hops < max_hops:
+        snap = collection.document(current).get()
+        if not snap.exists:
+            return current
+        data = snap.to_dict() or {}
+        alias_for = data.get("alias_for")
+        if not alias_for or alias_for == current:
+            return current
+        current = str(alias_for)
+        hops += 1
+    return current
+
+
+def save_company_alias(alias_company_name: str, canonical_doc_id: str, canonical_company_name: Optional[str] = None) -> dict:
+    """Save an alias redirect entry pointing alias -> canonical root company doc.
+
+    Alias documents also store a vector so they can participate in vector search.
+    """
+    if not alias_company_name or not canonical_doc_id:
+        raise ValueError("alias_company_name and canonical_doc_id are required")
+
+    alias_id = _normalize_company_doc_id(alias_company_name)
+    canonical_root_id = _resolve_company_doc_id(str(canonical_doc_id))
+    if alias_id == canonical_root_id:
+        return {"id": alias_id, "alias_for": canonical_root_id}
+
+    collection = get_companies_collection()
+    payload = {
+        "id": alias_id,
+        "company_name": alias_company_name,
+        "alias_for": canonical_root_id,
+        "canonical_company_name": canonical_company_name or "",
+        "updated_at": datetime.now(timezone.utc),
+    }
+
+    # Add vector for alias names so vector search can match aliases too.
+    try:
+        from openai import OpenAI
+        openai_client = OpenAI()
+        payload["vector"] = embed(alias_company_name, openai_client)
+    except Exception:
+        pass
+
+    collection.document(alias_id).set(payload, merge=True)
+    return payload
+
+
+def get_company_info(company_name: str) -> Optional[dict]:
     """Get company research data.
     
     Args:
         company_name: Company name
-        user_id: User ID
     """
-    if not company_name or not user_id:
-        raise ValueError("company_name and user_id are required")
+    if not company_name:
+        raise ValueError("company_name is required")
         
-    doc_id = f"{user_id}_{company_name.strip().lower().replace(' ', '_')}"
+    requested_id = _normalize_company_doc_id(company_name)
+    doc_id = _resolve_company_doc_id(requested_id)
     collection = get_companies_collection()
     doc = collection.document(doc_id).get()
     if doc.exists:
-        return doc.to_dict()
+        out = doc.to_dict()
+        if requested_id != doc_id and out is not None:
+            out = dict(out)
+            out["resolved_from_alias"] = requested_id
+            out["resolved_to"] = doc_id
+        return out
     return None
 
 
-def save_poc_info(company_name: str, poc_name: str, data: dict, user_id: str) -> dict:
+def save_poc_info(company_name: str, poc_name: str, data: dict) -> dict:
     """Save POC research data into the company document.
     
     Args:
         company_name: Company name (parent document)
         poc_name: POC name
         data: Data to save
-        user_id: User ID
     """
-    if not company_name or not poc_name or not user_id:
-        raise ValueError("company_name, poc_name, and user_id are required")
+    if not company_name or not poc_name:
+        raise ValueError("company_name and poc_name are required")
         
-    company_id = f"{user_id}_{company_name.strip().lower().replace(' ', '_')}"
-    poc_key = poc_name.strip().lower().replace(' ', '_')
+    company_id = _normalize_company_doc_id(company_name)
+    poc_key = _normalize_poc_key(poc_name)
     
     collection = get_companies_collection()
     
@@ -582,7 +691,6 @@ def save_poc_info(company_name: str, poc_name: str, data: dict, user_id: str) ->
         },
         # Ensure parent fields exist
         "company_name": company_name,
-        "user_id": user_id,
         "updated_at": datetime.now(timezone.utc)
     }
     
@@ -590,19 +698,18 @@ def save_poc_info(company_name: str, poc_name: str, data: dict, user_id: str) ->
     return update_data["pocs"][poc_key]
 
 
-def get_poc_info(company_name: str, poc_name: str, user_id: str) -> Optional[dict]:
+def get_poc_info(company_name: str, poc_name: str) -> Optional[dict]:
     """Get POC research data from company document.
     
     Args:
         company_name: Company name
         poc_name: POC name
-        user_id: User ID
     """
-    if not company_name or not poc_name or not user_id:
-        raise ValueError("company_name, poc_name, and user_id are required")
+    if not company_name or not poc_name:
+        raise ValueError("company_name and poc_name are required")
         
-    company_id = f"{user_id}_{company_name.strip().lower().replace(' ', '_')}"
-    poc_key = poc_name.strip().lower().replace(' ', '_')
+    company_id = _resolve_company_doc_id(_normalize_company_doc_id(company_name))
+    poc_key = _normalize_poc_key(poc_name)
     
     collection = get_companies_collection()
     doc = collection.document(company_id).get()
@@ -612,6 +719,54 @@ def get_poc_info(company_name: str, poc_name: str, user_id: str) -> Optional[dic
         pocs = data.get("pocs", {})
         return pocs.get(poc_key)
     return None
+
+
+def search_similar_companies(company_name: str, *, limit: int = 5) -> List[dict]:
+    """Return vector-similar canonical company docs for the input name.
+
+    Alias docs are allowed to match (they have vectors), but returned results are
+    flattened to canonical root docs and deduplicated by canonical id.
+    """
+    if not company_name:
+        return []
+
+    collection = get_companies_collection()
+    from openai import OpenAI
+    openai_client = OpenAI()
+    query_vec = embed(company_name, openai_client)
+
+    # Over-fetch a bit so deduplication to canonical ids still yields useful results.
+    candidates = query_vector_similarity(collection, query_vec, limit=max(limit * 3, 10))
+
+    out: List[dict] = []
+    seen_canonical_ids = set()
+    for c in candidates:
+        candidate_id = str(c.get("id") or "")
+        if not candidate_id:
+            continue
+
+        canonical_id = _resolve_company_doc_id(candidate_id)
+        if canonical_id in seen_canonical_ids:
+            continue
+
+        # If candidate is an alias, return its canonical root doc instead.
+        if canonical_id != candidate_id:
+            snap = collection.document(canonical_id).get()
+            if not snap.exists:
+                continue
+            canonical = snap.to_dict() or {}
+            canonical["id"] = canonical_id
+            canonical["matched_via_alias"] = candidate_id
+            canonical["matched_alias_name"] = c.get("company_name")
+            out.append(canonical)
+        else:
+            out.append(c)
+
+        seen_canonical_ids.add(canonical_id)
+        if len(out) >= limit:
+            break
+
+    return out
 
 
 def documents_by_ids(collection, ids: List[str], user_id: Optional[str] = None) -> List[dict]:

@@ -1,9 +1,11 @@
 from letter_writer.client import get_client, ModelVendor, ModelSize
+import logging
 import os
 import pytest
 from dotenv import load_dotenv
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 # Test data
 SYSTEM_PROMPT = "You are a helpful assistant. Keep responses brief and to the point."
@@ -20,7 +22,7 @@ def test_openai_client_tiny_no_search():
     )
     assert response is not None
     assert len(response) > 0
-    print(f"OpenAI tiny no search response: {response[:100]}...")
+    logger.info("OpenAI tiny no search response: %s...", response[:100])
 
 def test_openai_client_tiny_with_search():
     """Test OpenAI client with tiny model with search"""
@@ -33,7 +35,7 @@ def test_openai_client_tiny_with_search():
     )
     assert response is not None
     assert len(response) > 0
-    print(f"OpenAI tiny with search response: {response[:100]}...")
+    logger.info("OpenAI tiny with search response: %s...", response[:100])
 
 def test_anthropic_client_tiny_no_search():
     """Test Anthropic client with tiny model without search"""
@@ -46,7 +48,7 @@ def test_anthropic_client_tiny_no_search():
     )
     assert response is not None
     assert len(response) > 0
-    print(f"Anthropic tiny no search response: {response[:100]}...")
+    logger.info("Anthropic tiny no search response: %s...", response[:100])
 
 def test_anthropic_client_tiny_with_search():
     """Test Anthropic client with tiny model with search"""
@@ -59,7 +61,7 @@ def test_anthropic_client_tiny_with_search():
     )
     assert response is not None
     assert len(response) > 0
-    print(f"Anthropic tiny with search response: {response[:100]}...")
+    logger.info("Anthropic tiny with search response: %s...", response[:100])
 
 def test_gemini_client_tiny_no_search():
     """Test Gemini client with tiny model without search"""
@@ -72,7 +74,7 @@ def test_gemini_client_tiny_no_search():
     )
     assert response is not None
     assert len(response) > 0
-    print(f"Gemini tiny no search response: {response[:100]}...")
+    logger.info("Gemini tiny no search response: %s...", response[:100])
 
 def test_gemini_client_tiny_with_search():
     """Test Gemini client with tiny model with search"""
@@ -85,7 +87,7 @@ def test_gemini_client_tiny_with_search():
     )
     assert response is not None
     assert len(response) > 0
-    print(f"Gemini tiny with search response: {response[:100]}...")
+    logger.info("Gemini tiny with search response: %s...", response[:100])
 
 def test_mistral_client_tiny_no_search():
     """Test Mistral client with tiny model without search"""
@@ -102,7 +104,7 @@ def test_mistral_client_tiny_no_search():
     )
     assert response is not None
     assert len(response) > 0
-    print(f"Mistral tiny no search response: {response[:100]}...")
+    logger.info("Mistral tiny no search response: %s...", response[:100])
 
 def test_mistral_client_tiny_with_search():
     """Test Mistral client with tiny model with search"""
@@ -119,7 +121,7 @@ def test_mistral_client_tiny_with_search():
     )
     assert response is not None
     assert len(response) > 0
-    print(f"Mistral tiny with search response: {response[:100]}...")
+    logger.info("Mistral tiny with search response: %s...", response[:100])
 
 def test_grok_client_tiny_no_search():
     """Test Grok client with tiny model without search"""
@@ -136,7 +138,7 @@ def test_grok_client_tiny_no_search():
     )
     assert response is not None
     assert len(response) > 0
-    print(f"Grok tiny no search response: {response[:100]}...")
+    logger.info("Grok tiny no search response: %s...", response[:100])
 
 def test_grok_client_tiny_with_search():
     """Test Grok client with tiny model with search (should warn and proceed without search)"""
@@ -153,7 +155,7 @@ def test_grok_client_tiny_with_search():
     )
     assert response is not None
     assert len(response) > 0
-    print(f"Grok tiny with search response: {response[:100]}...")
+    logger.info("Grok tiny with search response: %s...", response[:100])
 
 def test_deepseek_client_tiny_no_search():
     """Test DeepSeek client with tiny model without search"""
@@ -166,7 +168,7 @@ def test_deepseek_client_tiny_no_search():
     )
     assert response is not None
     assert len(response) > 0
-    print(f"DeepSeek tiny no search response: {response[:100]}...")
+    logger.info("DeepSeek tiny no search response: %s...", response[:100])
 
 def test_deepseek_client_tiny_with_search():
     
@@ -179,7 +181,7 @@ def test_deepseek_client_tiny_with_search():
     )
     assert response is not None
     assert len(response) > 0
-    print(f"DeepSeek tiny with search response: {response[:100]}...")
+    logger.info("DeepSeek tiny with search response: %s...", response[:100])
 
 def test_client_factory():
     """Test that get_client returns the correct client type for each vendor"""

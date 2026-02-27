@@ -4,7 +4,13 @@ import LanguageConfig from "./LanguageConfig";
 import CompetenceScaleSettings from "./CompetenceScaleSettings";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
 
-export default function SettingsPage({ vendors = [], selectedVendors, setSelectedVendors, onCompetenceScalesChange }) {
+export default function SettingsPage({
+  vendors = [],
+  selectedVendors,
+  setSelectedVendors,
+  setBackgroundModels,
+  onCompetenceScalesChange,
+}) {
   const { languages, saveDefaults, setLanguages } = useLanguages();
   const [savingLanguages, setSavingLanguages] = useState(false);
   const [defaultModels, setDefaultModels] = useState(new Set());
@@ -27,7 +33,7 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
         
         // Fetch available models
         try {
-            const modelsRes = await fetch("/api/costs/models/");
+            const modelsRes = await fetch("/api/costs/models/?supports_search=true");
             if (modelsRes.ok) {
                 const modelsData = await modelsRes.json();
                 setAvailableModels(modelsData || {});
@@ -144,6 +150,10 @@ export default function SettingsPage({ vendors = [], selectedVendors, setSelecte
           default_background_models: modelsArray,
         }),
       });
+      // Keep compose state in sync so research uses the new model set immediately.
+      if (setBackgroundModels) {
+        setBackgroundModels(new Set(modelsArray));
+      }
     } catch (e) {
       setError("Failed to save background research models");
     } finally {
