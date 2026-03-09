@@ -296,8 +296,7 @@ def write_cover_letter(
     *,
     path: Optional[Path] = None,
     job_text: Optional[str] = None,
-    cv: Path = Path(env_default("CV_PATH", "cv.md")),
-    cv_text: Optional[str] = None,
+    cv_text: str,
     company_name: Optional[str] = None,
     out: Optional[Path] = None,
     model_vendor: Optional[ModelVendor] = None,
@@ -314,10 +313,8 @@ def write_cover_letter(
         Path to job description text file (fallback if *job_text* not given).
     job_text : Optional[str]
         Raw job description text. If given, *path* can be omitted.
-    cv : Path
-        Path to CV file (fallback if *cv_text* not given).
-    cv_text : Optional[str]
-        Raw CV text overriding the *cv* file.
+    cv_text : str
+        Raw CV text.
     company_name : str, optional
         Company name; if omitted and *path* given, it is derived from path stem.
     out : Path, optional
@@ -341,8 +338,8 @@ def write_cover_letter(
             logger(f"[INFO] Using newest file in folder: {path}")
         job_text = path.read_text(encoding="utf-8")
 
-    if cv_text is None:
-        cv_text = cv.read_text(encoding="utf-8")
+    if not str(cv_text).strip():
+        raise ValueError("cv_text is required")
 
     # Determine company name
     if company_name is None:

@@ -19,37 +19,15 @@ Set up the required API keys as environment variables (or in a `.env` file):
 - `MISTRAL_API_KEY`: Required for Mistral models (optional)
 - `XAI_API_KEY`: Required for Grok models (optional)
 
-### CV File
+### CV Source
 
-The application needs access to your CV file. Configure it by setting `CV_PATH` in your `.env` file.
+For the web application, CV content is loaded from Firestore (`cv_revisions`) and stored in session state.
 
-**For Docker users**: 
+- `docker-compose.yml` no longer mounts `cv-external` or sets `CV_PATH`.
+- There is no implicit file fallback in Docker runtime.
+- Upload/edit CV content via the Personal Data API/UI.
 
-The `docker-compose.yml` file automatically overrides `CV_PATH` to use the Docker-appropriate path (`cv-external/Experience.md`), so you don't need to change your `.env` file. The CV directory is mounted at `/app/cv-external` in the container.
-
-If your CV is in a different location, update the volume mount and `CV_PATH` environment variable in `docker-compose.yml`.
-
-**For local users**: You can use either a relative or absolute path:
-
-```
-CV_PATH=cv.md
-```
-
-Or:
-```
-CV_PATH=C:/path/to/your/cv.md
-```
-
-**Important**: 
-- **In Docker**: The path must be relative to the project root (the entire project is mounted at `/app`). If your CV is outside the project directory, you need to either:
-  1. Copy it into the project directory, or
-  2. Mount the external directory in `docker-compose.yml` and use a path relative to that mount point
-- Make sure the file exists at the specified path
-- Use forward slashes `/` in paths (works on both Windows and Linux)
-
-The default is `cv.md` in the project root if `CV_PATH` is not set.
-
-**Note**: The web interface currently uses the CV file from `CV_PATH`. To use a different CV, update the `.env` file and restart the backend.
+CLI usage still supports file-based CV input, but it must be provided explicitly with `--cv`.
 
 ### Qdrant
 
@@ -235,7 +213,7 @@ Commands can be specified in sequence one after the other.
 
 ### For `process_job`
 
-- `--cv=<path>`: path to the user's CV in text form; markdown recommended. Default: `cv.md`.
+- `--cv=<path>`: required path to the user's CV in text form; markdown recommended.
 - `--openai-key=<key>`: OpenAI API key
 - `--company-name=<str>`: company to write the letter for. If not provided, defaults to the stem of the job description filename
 - `--refine=<bool>`: Whether to try to improve the letter through feedback. 

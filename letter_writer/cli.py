@@ -43,7 +43,7 @@ def refresh(
 @app.command()
 def process_job(
     path: Path = typer.Argument(..., help="Path to the file containing the job description."),
-    cv: Path = typer.Option(Path(env_default("CV_PATH", "cv.md")), help="Path to user's CV in text/markdown."),
+    cv: Path = typer.Option(..., help="Path to user's CV in text/markdown."),
     company_name: Optional[str] = typer.Option(env_default("COMPANY_NAME"), help="Company name. Defaults to job description filename stem."),
     out: Optional[Path] = typer.Option(None, help="Output path for the generated letter."),
     model_vendor: Optional[ModelVendor] = typer.Option(None, help="Model vendor. Default: all"),
@@ -55,7 +55,7 @@ def process_job(
     try:
         write_cover_letter(
             path=path,
-            cv=cv,
+            cv_text=cv.read_text(encoding="utf-8"),
             company_name=company_name,
             out=out,
             model_vendor=model_vendor,
