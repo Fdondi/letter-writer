@@ -140,9 +140,20 @@ export default function LetterTabs({
     const counts = {};
     samples.forEach((s) => { counts[s] = (counts[s] || 0) + 1; });
     const parts = Object.entries(counts)
-      .sort(([, a], [, b]) => b - a)
+      .sort(([a], [b]) => a.localeCompare(b))
       .map(([v, n]) => n > 1 ? `${v} ×${n}` : v);
     return `Reference drafts used: ${parts.join(", ")}`;
+  };
+
+  const refineRefsText = (vendor) => {
+    const samples = refineSamples?.[vendor];
+    if (!samples || samples.length === 0) return "";
+    const counts = {};
+    samples.forEach((s) => { counts[s] = (counts[s] || 0) + 1; });
+    return Object.entries(counts)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([sv, n]) => (n > 1 ? `${sv} ×${n}` : sv))
+      .join(", ");
   };
 
   const vendorKeys = Object.keys(vendorParagraphs);
@@ -855,25 +866,18 @@ export default function LetterTabs({
       }}>
         <span style={{ fontWeight: 600 }} title={refineSampleTooltip(vendor) || ""}>
           {vendor}
-          {refineSamples?.[vendor]?.length > 0 && (
-            <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.85, textTransform: "none", marginTop: 1 }}>
-              refs: {(() => {
-                const counts = {};
-                refineSamples[vendor].forEach((s) => { counts[s] = (counts[s] || 0) + 1; });
-                return Object.entries(counts)
-                  .sort(([, a], [, b]) => b - a)
-                  .map(([sv, n]) => n > 1 ? `${sv} ×${n}` : sv)
-                  .join(", ");
-              })()}
-            </div>
-          )}
         </span>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 8, flexDirection: "column" }}>
           {vendorCosts?.[vendor] !== undefined && vendorCosts[vendor] > 0 && (
             <div style={{ fontSize: "11px", color: "rgba(255, 255, 255, 0.9)", textAlign: "right" }}>
               {vendorRefineCosts?.[vendor] !== undefined && vendorRefineCosts[vendor] > 0 && (
                 <div>${vendorRefineCosts[vendor].toFixed(4)}</div>
               )}
+            </div>
+          )}
+          {refineSamples?.[vendor]?.length > 0 && (
+            <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.9, textTransform: "none", textAlign: "right", maxWidth: "100%" }}>
+              refs: {refineRefsText(vendor)}
             </div>
           )}
           {failedVendors?.[vendor] && (
@@ -1194,25 +1198,18 @@ export default function LetterTabs({
               >
                 <span title={refineSampleTooltip(v) || ""}>
                   {v}
-                  {refineSamples?.[v]?.length > 0 && (
-                    <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.85, textTransform: "none", marginTop: 1 }}>
-                      refs: {(() => {
-                        const counts = {};
-                        refineSamples[v].forEach((s) => { counts[s] = (counts[s] || 0) + 1; });
-                        return Object.entries(counts)
-                          .sort(([, a], [, b]) => b - a)
-                          .map(([sv, n]) => n > 1 ? `${sv} ×${n}` : sv)
-                          .join(", ");
-                      })()}
-                    </div>
-                  )}
                 </span>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "flex-end", gap: 8, flexDirection: "column" }}>
                   {vendorCosts && vendorCosts[v] !== undefined && vendorCosts[v] > 0 && (
                     <div style={{ fontSize: "11px", color: "rgba(255, 255, 255, 0.9)", textAlign: "right" }}>
                       {vendorRefineCosts[v] !== undefined && vendorRefineCosts[v] > 0 && (
                         <div>${vendorRefineCosts[v].toFixed(4)}</div>
                       )}
+                    </div>
+                  )}
+                  {refineSamples?.[v]?.length > 0 && (
+                    <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.9, textTransform: "none", textAlign: "right", maxWidth: "100%" }}>
+                      refs: {refineRefsText(v)}
                     </div>
                   )}
                   {failedVendors[v] && (

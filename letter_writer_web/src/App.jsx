@@ -830,30 +830,51 @@ export default function App({ flow = "vendor" }) {
       setAgenticSaveError("Job description is required to save");
       throw new Error("Job description is required to save");
     }
-    // Build ai_letters like vendor flow: one entry per vendor with that vendor's letter text,
-    // so saved documents have the same structure and AI letters are stored under user data.
+    // Build ai_letters like vendor flow so analytics/replay fields stay consistent.
     const finalLetters = agenticState?.final_letters || {};
-    const vendorKeys = Object.keys(finalLetters).filter(Boolean);
+    const paragraphs = Array.isArray(agenticFinalParagraphs) ? agenticFinalParagraphs : [];
+    const vendorsFromParagraphs = paragraphs
+      .map((p) => p?.vendor)
+      .filter((v) => typeof v === "string" && v.trim().length > 0);
+    const vendorKeys = Array.from(
+      new Set([...Object.keys(finalLetters).filter(Boolean), ...vendorsFromParagraphs])
+    );
     const totalCost = agenticState?.cost ?? null;
     const costPerVendor = vendorKeys.length ? (totalCost != null ? totalCost / vendorKeys.length : null) : totalCost;
+    const correctionsByVendor = {};
+    paragraphs.forEach((p) => {
+      if (!p?.vendor) return;
+      if (p.originalText === undefined || p.text === p.originalText) return;
+      if (!correctionsByVendor[p.vendor]) correctionsByVendor[p.vendor] = [];
+      const diffs = createTextDiff(p.originalText || "", p.text || "");
+      if (Array.isArray(diffs) && diffs.length > 0) {
+        correctionsByVendor[p.vendor].push(...diffs);
+      }
+    });
     const aiLetters = vendorKeys.length > 0
       ? vendorKeys.map((vendor) => ({
           vendor,
-          text: (finalLetters[vendor] || "").trim(),
+          text: (
+            finalLetters[vendor] ||
+            paragraphs
+              .filter((p) => p?.vendor === vendor)
+              .map((p) => p?.text || "")
+              .join("\n\n")
+          ).trim(),
           cost: costPerVendor,
-          rating: null,
-          comment: "",
-          chunks_used: 1,
-          user_corrections: [],
+          rating: vendorFeedback[vendor]?.rating || null,
+          comment: vendorFeedback[vendor]?.comment || "",
+          chunks_used: paragraphs.filter((p) => p?.vendor === vendor).length,
+          user_corrections: correctionsByVendor[vendor] || [],
         }))
       : [
           {
             vendor: agenticState?.draft_vendor || "agentic",
             text: letterText.trim(),
             cost: totalCost,
-            rating: null,
+            rating: vendorFeedback[agenticState?.draft_vendor || "agentic"]?.rating || null,
             comment: "",
-            chunks_used: 1,
+            chunks_used: 0,
             user_corrections: [],
           },
         ];

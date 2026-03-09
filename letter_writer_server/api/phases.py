@@ -681,6 +681,7 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
             trace_dir,
             prior_comments_text,
             should_abort=_abort_for_stale_poll,
+            round_num=int(cur.get("round") or 1),
         )
 
         if not topic_completed:

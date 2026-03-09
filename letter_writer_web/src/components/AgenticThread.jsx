@@ -141,6 +141,7 @@ export default function AgenticThread({
   onAddRound,
   addRoundLoading = false,
   onRemoveComment,
+  onReinstateComment,
   onEditComment,
   onRemoveAddendum,
   onEditAddendum,
@@ -280,6 +281,7 @@ export default function AgenticThread({
               translation={translation}
               canEdit={canEdit}
               onRemove={() => onRemoveComment?.(topic, index)}
+              onReinstate={() => onReinstateComment?.(topic, index)}
               onEdit={(newText) => onEditComment?.(topic, index, newText)}
               onRemoveAddendum={onRemoveAddendum ? (addendumIndex) => onRemoveAddendum(topic, index, addendumIndex) : undefined}
               onEditAddendum={onEditAddendum ? (addendumIndex, newText) => onEditAddendum(topic, index, addendumIndex, newText) : undefined}
@@ -291,7 +293,7 @@ export default function AgenticThread({
   );
 }
 
-function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, translation, canEdit, onRemove, onEdit, onRemoveAddendum, onEditAddendum }) {
+function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, translation, canEdit, onRemove, onReinstate, onEdit, onRemoveAddendum, onEditAddendum }) {
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(comment.text || "");
   const [collapsed, setCollapsed] = useState(false); // top-level comment starts open
@@ -303,6 +305,27 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
   const abstain = (comment.votes && comment.votes.abstain) || [];
   const net = up.length - down.length;
   const removed = Boolean(comment.removed) || down.length > 0;
+  const votesByRoundRaw = comment.votes_by_round && typeof comment.votes_by_round === "object"
+    ? comment.votes_by_round
+    : null;
+  const roundVoteRows = votesByRoundRaw
+    ? Object.entries(votesByRoundRaw)
+        .map(([roundKey, data]) => {
+          const roundNum = Number(roundKey);
+          const upList = Array.isArray(data?.up) ? data.up : [];
+          const downList = Array.isArray(data?.down) ? data.down : [];
+          const abstainList = Array.isArray(data?.abstain) ? data.abstain : [];
+          const reasons = data?.reasons && typeof data.reasons === "object" ? data.reasons : {};
+          return { round: Number.isFinite(roundNum) ? roundNum : roundKey, upList, downList, abstainList, reasons };
+        })
+        .sort((a, b) => Number(a.round) - Number(b.round))
+    : [{
+        round: Number(comment.created_round) || 1,
+        upList: up,
+        downList: down,
+        abstainList: abstain,
+        reasons: {},
+      }];
 
   const rootRgb = colorToRgbString(vendorColors[comment.vendor] || null);
   const sourceText = comment.text || "";
@@ -434,21 +457,40 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); onRemove?.(); }}
-              title="Remove"
+              title={removed ? "Keep removed" : "Remove"}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
                 padding: "4px",
-                cursor: "pointer",
+                cursor: removed ? "not-allowed" : "pointer",
                 border: "1px solid var(--border-color)",
                 borderRadius: 4,
                 background: "#fef2f2",
                 color: "#b91c1c",
               }}
+              disabled={removed}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
             </button>
+            {removed && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onReinstate?.(); }}
+                title="Reinstate comment"
+                style={{
+                  fontSize: 11,
+                  padding: "2px 6px",
+                  cursor: "pointer",
+                  border: "1px solid #16a34a",
+                  borderRadius: 4,
+                  background: "#dcfce7",
+                  color: "#166534",
+                }}
+              >
+                Reinstate
+              </button>
+            )}
             </>
           )}
         </span>
@@ -724,27 +766,46 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
           marginTop: 6,
           fontSize: 11,
           display: "flex",
-          gap: 8,
-          alignItems: "center",
+          gap: 4,
+          alignItems: "flex-start",
+          flexDirection: "column",
         }}
       >
-        <span
-          style={{ color: net > 0 ? "#16a34a" : "var(--secondary-text-color)" }}
-          title={up.length ? `Up: ${up.join(", ")}` : "No upvotes"}
-        >
-          ↑ {up.length}
-        </span>
-        <span
-          style={{ color: down.length > 0 ? "#dc2626" : "var(--secondary-text-color)" }}
-          title={down.length ? `Down: ${down.join(", ")}` : "No downvotes"}
-        >
-          ↓ {down.length}
-        </span>
-        <span
-          style={{ color: abstain.length > 0 ? "#0d9488" : "var(--secondary-text-color)" }}
-          title={abstain.length ? `Abstain: ${abstain.join(", ")}` : "No abstains"}
-        >
-          ⏭ {abstain.length}
+        {roundVoteRows.map((row, idx) => {
+          const upCount = row.upList.length;
+          const downCount = row.downList.length;
+          const abstainCount = row.abstainList.length;
+          const reasons = row.reasons || {};
+          const reasonLines = Object.entries(reasons)
+            .map(([vendor, reason]) => `${vendor}: ${reason}`)
+            .filter((line) => line.trim() !== "");
+          const tooltipParts = [
+            upCount ? `Up: ${row.upList.join(", ")}` : null,
+            downCount ? `Down: ${row.downList.join(", ")}` : null,
+            abstainCount ? `Abstain: ${row.abstainList.join(", ")}` : null,
+            reasonLines.length ? `Why:\n${reasonLines.join("\n")}` : null,
+          ].filter(Boolean);
+          const tooltip = tooltipParts.length ? tooltipParts.join("\n\n") : "No votes";
+          return (
+            <div
+              key={`${comment.id || commentIndex}_round_${row.round}_${idx}`}
+              title={tooltip}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                color: "var(--secondary-text-color)",
+              }}
+            >
+              <span style={{ fontWeight: 700, color: "var(--text-color)" }}>R{row.round}</span>
+              <span style={{ color: upCount > downCount ? "#16a34a" : "var(--secondary-text-color)" }}>↑ {upCount}</span>
+              <span style={{ color: downCount > 0 ? "#dc2626" : "var(--secondary-text-color)" }}>↓ {downCount}</span>
+              <span style={{ color: abstainCount > 0 ? "#0d9488" : "var(--secondary-text-color)" }}>⏭ {abstainCount}</span>
+            </div>
+          );
+        })}
+        <span style={{ fontSize: 10, color: net > 0 ? "#16a34a" : "var(--secondary-text-color)" }}>
+          Net: {net}
         </span>
       </div>
         </>

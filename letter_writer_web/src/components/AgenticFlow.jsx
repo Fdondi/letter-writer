@@ -254,8 +254,51 @@ export default function AgenticFlow({
   const handleRemoveComment = (topic, commentIndex) => {
     setEditedThreads((prev) => {
       const base = prev ?? threadsFromState;
-      const list = [...(base[topic] || [])];
-      list.splice(commentIndex, 1);
+      const list = (base[topic] || []).map((comment, idx) => {
+        if (idx !== commentIndex) return comment;
+        const votes = comment?.votes || {};
+        return {
+          ...comment,
+          removed: true,
+          votes: {
+            up: Array.isArray(votes.up) ? [...votes.up] : [],
+            down: Array.isArray(votes.down) ? [...votes.down] : [],
+            abstain: Array.isArray(votes.abstain) ? [...votes.abstain] : [],
+          },
+        };
+      });
+      return { ...base, [topic]: list };
+    });
+  };
+
+  const handleReinstateComment = (topic, commentIndex) => {
+    setEditedThreads((prev) => {
+      const base = prev ?? threadsFromState;
+      const list = (base[topic] || []).map((comment, idx) => {
+        if (idx !== commentIndex) return comment;
+        const votes = comment?.votes || {};
+        const votesByRoundRaw = comment?.votes_by_round || {};
+        const votesByRound = {};
+        Object.entries(votesByRoundRaw).forEach(([roundKey, bucket]) => {
+          if (!bucket || typeof bucket !== "object") return;
+          votesByRound[roundKey] = {
+            up: Array.isArray(bucket.up) ? [...bucket.up] : [],
+            down: [],
+            abstain: Array.isArray(bucket.abstain) ? [...bucket.abstain] : [],
+            reasons: bucket.reasons && typeof bucket.reasons === "object" ? { ...bucket.reasons } : {},
+          };
+        });
+        return {
+          ...comment,
+          removed: false,
+          votes: {
+            up: Array.isArray(votes.up) ? [...votes.up] : [],
+            down: [],
+            abstain: Array.isArray(votes.abstain) ? [...votes.abstain] : [],
+          },
+          votes_by_round: votesByRound,
+        };
+      });
       return { ...base, [topic]: list };
     });
   };
@@ -582,6 +625,7 @@ export default function AgenticFlow({
                       onAddRound={onAddRound ? () => onAddRound(false, topic) : undefined}
                       addRoundLoading={loading}
                       onRemoveComment={handleRemoveComment}
+                      onReinstateComment={handleReinstateComment}
                       onEditComment={handleEditComment}
                       onRemoveAddendum={handleRemoveAddendum}
                       onEditAddendum={handleEditAddendum}
