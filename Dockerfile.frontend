@@ -5,10 +5,10 @@ WORKDIR /app
 # Copy package files
 COPY letter_writer_web/package*.json ./
 
-# Install dependencies
-# Using npm install instead of npm ci to allow updating package-lock.json
+# Install dependencies deterministically from lockfile.
+# Rebuild esbuild to ensure JS wrapper and native binary versions match in-container.
 RUN --mount=type=cache,target=/root/.npm \
-    npm install
+    npm ci --include=optional && npm rebuild esbuild
 
 # Copy application code
 COPY letter_writer_web/ ./
@@ -16,7 +16,7 @@ COPY letter_writer_web/ ./
 # Build static assets
 RUN npm run build
 
-FROM nginx:1.29-alpine
+FROM nginx:1.29.5-alpine
 
 WORKDIR /usr/share/nginx/html
 
