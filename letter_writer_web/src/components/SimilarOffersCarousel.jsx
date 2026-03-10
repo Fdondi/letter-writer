@@ -33,10 +33,34 @@ export default function SimilarOffersCarousel({
     return new Set(Object.keys(llmScoreMap));
   }, [llmScoreMap]);
 
+  const llmBriefMap = useMemo(() => {
+    const map = {};
+    (topDocs || []).forEach((d) => {
+      const id = d.id || d.company_name;
+      if (!id) return;
+      map[id] = {
+        similarities: Array.isArray(d.similarities) ? d.similarities : [],
+        differences: Array.isArray(d.differences) ? d.differences : [],
+      };
+    });
+    return map;
+  }, [topDocs]);
+
   // Score for display: doc.score from backend (all scored) or llmScoreMap fallback
   const getScore = (d) => {
     const id = d.id || d.company_name;
     return d.score ?? (id ? llmScoreMap[id] : undefined);
+  };
+
+  const getBrief = (d) => {
+    const id = d.id || d.company_name;
+    const localSimilarities = Array.isArray(d.similarities) ? d.similarities : [];
+    const localDifferences = Array.isArray(d.differences) ? d.differences : [];
+    if (localSimilarities.length > 0 || localDifferences.length > 0) {
+      return { similarities: localSimilarities, differences: localDifferences };
+    }
+    if (id && llmBriefMap[id]) return llmBriefMap[id];
+    return { similarities: [], differences: [] };
   };
 
   if (!allSearchResults || allSearchResults.length === 0) {
@@ -65,6 +89,7 @@ export default function SimilarOffersCarousel({
   const isLlmSelected = llmSelectedIds.has(docId);
   const score = getScore(doc);
   const isUserSelected = selectedDocIds.has(docId);
+  const brief = getBrief(doc);
 
   const goLeft = () => setCurrentIndex((prev) => (prev - 1 + total) % total);
   const goRight = () => setCurrentIndex((prev) => (prev + 1) % total);
@@ -236,6 +261,40 @@ export default function SimilarOffersCarousel({
             lineHeight: 1.4,
           }}>
             {jobText}
+          </div>
+        )}
+        {(brief.similarities.length > 0 || brief.differences.length > 0) && (
+          <div
+            style={{
+              marginTop: 8,
+              fontSize: 11,
+              padding: 6,
+              backgroundColor: "var(--bg-color)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 4,
+              lineHeight: 1.4,
+            }}
+          >
+            {brief.similarities.length > 0 && (
+              <div style={{ marginBottom: brief.differences.length > 0 ? 6 : 0 }}>
+                <div style={{ fontWeight: 600, marginBottom: 2 }}>Similarities</div>
+                <ul style={{ margin: 0, paddingLeft: 16 }}>
+                  {brief.similarities.map((point, i) => (
+                    <li key={`sim-${i}`}>{point}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {brief.differences.length > 0 && (
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 2 }}>Differences</div>
+                <ul style={{ margin: 0, paddingLeft: 16 }}>
+                  {brief.differences.map((point, i) => (
+                    <li key={`diff-${i}`}>{point}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
       </div>

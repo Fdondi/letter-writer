@@ -228,11 +228,13 @@ async def extract_job(request: Request, data: ExtractRequest, session: Session =
 
             # Collect reranking results
             all_scores = {}
+            all_briefs = {}
             if rerank_future:
                 try:
                     result = rerank_future.result()
                     top_docs = result["top_docs"]
                     all_scores = result.get("all_scores", {})
+                    all_briefs = result.get("all_briefs", {})
                     logger.info("[EXTRACT] LLM reranking selected %s top docs", len(top_docs))
                 except Exception as rerank_err:
                     logger.warning("[EXTRACT] LLM reranking failed: %s", rerank_err)
@@ -241,6 +243,10 @@ async def extract_job(request: Request, data: ExtractRequest, session: Session =
                 company = (doc.get("company_name_original") or doc.get("company_name") or "").strip()
                 if company and company in all_scores:
                     doc["score"] = all_scores[company]
+                if company and company in all_briefs:
+                    brief = all_briefs[company] or {}
+                    doc["similarities"] = brief.get("similarities", [])
+                    doc["differences"] = brief.get("differences", [])
 
         if extraction:
             if "metadata" not in session:

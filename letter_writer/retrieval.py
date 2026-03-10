@@ -13,7 +13,7 @@ from .firestore_store import get_collection
 
 import pandas as pd
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +48,23 @@ class ScoreRow(BaseModel):
     company_name: str
     comment: str
     score: int
+    similarities: List[str] = Field(default_factory=list)
+    differences: List[str] = Field(default_factory=list)
 
 class ScoreTable(BaseModel):
     scores: List[ScoreRow]
+
+
+def _normalize_points(points: List[str]) -> List[str]:
+    """Keep up to 4 short non-empty points for UI display."""
+    out: List[str] = []
+    for p in points or []:
+        text = str(p).strip()
+        if text:
+            out.append(text)
+        if len(out) >= 4:
+            break
+    return out
 
 def delete_documents(collection, doc_ids: List[str]):
     """Delete documents by their IDs."""
@@ -136,14 +150,14 @@ def select_top_documents(
         "[RAG] select_top_documents: %s unique companies after dedup, sending to rerank",
         len(retrieved_docs),
     )
-    top_docs = rerank_documents(job_text, retrieved_docs, ai_client, trace_dir)
-    logger.debug("[RAG] select_top_documents: reranking returned %s scored docs", len(top_docs))
+    reranked_docs = rerank_documents(job_text, retrieved_docs, ai_client, trace_dir)
+    logger.debug("[RAG] select_top_documents: reranking returned %s scored docs", len(reranked_docs))
 
     # Validate that all reranked company names exist in retrieved_docs
-    missing_names = [name for name in top_docs.keys() if name not in retrieved_docs]
+    missing_names = [name for name in reranked_docs.keys() if name not in retrieved_docs]
     if missing_names:
         expected_names = sorted(retrieved_docs.keys())
-        got_names = sorted(top_docs.keys())
+        got_names = sorted(reranked_docs.keys())
         error_msg = (
             f"Mismatch between reranked company names and retrieved documents. "
             f"Missing from retrieved_docs: {missing_names}. "
@@ -157,26 +171,38 @@ def select_top_documents(
             f"Got from reranking (from top_docs): {got_names}\n"
             f"Missing names: {missing_names}\n"
             f"Retrieved docs count: {len(retrieved_docs)}\n"
-            f"Reranked docs count: {len(top_docs)}\n"
+            f"Reranked docs count: {len(reranked_docs)}\n"
         )
         (trace_dir / "error_mismatch.txt").write_text(error_log, encoding="utf-8")
         raise ValueError(error_msg)
 
     # top_docs: top 3 for LLM picks; all_scores: company_name -> score for display
-    top3_items = list(top_docs.items())[:3]
+    top3_items = list(reranked_docs.items())[:3]
     top_docs_list = [
         {
             "id": retrieved_docs[name].get("id", ""),
             "company_name": name,
-            "score": score,
+            "score": details["score"],
+            "similarities": details.get("similarities", []),
+            "differences": details.get("differences", []),
+            "comment": details.get("comment", ""),
         }
-        for name, score in top3_items
+        for name, details in top3_items
     ]
-    return {"top_docs": top_docs_list, "all_scores": dict(top_docs)}
+    all_scores = {name: details["score"] for name, details in reranked_docs.items()}
+    all_briefs = {
+        name: {
+            "similarities": details.get("similarities", []),
+            "differences": details.get("differences", []),
+            "comment": details.get("comment", ""),
+        }
+        for name, details in reranked_docs.items()
+    }
+    return {"top_docs": top_docs_list, "all_scores": all_scores, "all_briefs": all_briefs}
 
 @traceable(run_type="chain", name="rerank_documents")
 def rerank_documents(job_text: str, docs: dict, ai_client: BaseClient, trace_dir: Path) -> dict:
-    """Ask the model to score docs and return top 3 as dicts with company_name and score."""
+    """Ask the model to score docs and return company_name -> detail dict."""
     
     # Prepare mapping of doc id -> company_name for scoring
     mapping = {i: {"company_name": name, "job_text": data["job_text"]} for i, (name, data) in enumerate(docs.items())}
@@ -193,6 +219,10 @@ def rerank_documents(job_text: str, docs: dict, ai_client: BaseClient, trace_dir
         "- 4 = Some overlap, but signiticantly different jobs (Example: Frontend vs Backend programmer)\n"
         "- 2 = Only the most basic tools and duties are shared (Example: Programmer vs Data Scientist) \n\n"
         "If the job description is not similar to the original, score it 1. \n\n"
+        "For each job, include:\n"
+        "- similarities: 1 to 4 short bullet-like points\n"
+        "- differences: 1 to 4 short bullet-like points\n"
+        "Keep points concise and specific.\n\n"
         f"Return a JSON object matching the schema: {ScoreTable.model_json_schema()}. "
         "Return ONLY the JSON object, no wrappers.\n\n"
     )
@@ -215,5 +245,13 @@ def rerank_documents(job_text: str, docs: dict, ai_client: BaseClient, trace_dir
     score_table.sort_values(by="score", ascending=False, inplace=True)
     score_table.to_json(trace_dir / "retrieved_docs.json", orient="records", indent=2)
 
-    # return all scored docs as dict company_name -> score (top 3 used for picks, all for display)
-    return {row["company_name"]: row["score"] for _, row in score_table.iterrows()}
+    # return all scored docs as dict company_name -> details (top 3 used for picks, all for display)
+    out = {}
+    for _, row in score_table.iterrows():
+        out[row["company_name"]] = {
+            "score": int(row["score"]),
+            "comment": row.get("comment", ""),
+            "similarities": _normalize_points(row.get("similarities", [])),
+            "differences": _normalize_points(row.get("differences", [])),
+        }
+    return out
