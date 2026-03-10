@@ -7,7 +7,7 @@ export default defineConfig({
     port: 5173,
     host: true, // Allow external connections (needed for Docker)
     proxy: {
-      // Proxy API requests to Django during development
+      // Proxy API requests to the backend during development
       // In Docker, this will proxy to the backend service
       // For local dev, use http://localhost:8000
       "/api": {

@@ -44,11 +44,8 @@ export default function LoginPage() {
       alert(
         "Google OAuth is not available.\n\n" +
         "Required setup:\n" +
-        "1. Install django-allauth: pip install django-allauth>=0.57.0\n" +
-        "2. Rebuild Docker image: docker-compose build backend\n" +
-        "3. Run migrations: docker-compose exec backend python manage.py migrate\n" +
-        "4. Set OAuth credentials in .env: GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_SECRET\n" +
-        "5. Configure Site domain in Django admin or shell"
+        "1. Set OAuth credentials in .env: GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_SECRET\n" +
+        "2. Rebuild backend image and restart the backend container"
       );
       return;
     }

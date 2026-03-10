@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 
 /**
- * Simple Google OAuth login button using django-allauth.
+ * Simple Google OAuth account button.
  * 
  * To use Google OAuth:
  * 1. Create OAuth 2.0 credentials in Google Cloud Console: https://console.cloud.google.com/apis/credentials

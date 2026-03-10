@@ -22,7 +22,7 @@ export function publishUserMonthlyCost(payload) {
  * @returns {Promise<string>} CSRF token
  */
 export async function getCsrfToken() {
-  // Try to get from cookie first (Django sets csrftoken cookie)
+  // Try to get from cookie first (backend sets csrftoken cookie)
   if (typeof document !== 'undefined') {
     const cookies = document.cookie.split(';');
     for (let cookie of cookies) {

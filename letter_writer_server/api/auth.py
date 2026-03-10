@@ -6,6 +6,9 @@ from letter_writer_server.core.session import Session, get_session
 
 router = APIRouter()
 
+def _oauth_is_configured() -> bool:
+    return bool(settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET)
+
 oauth = OAuth()
 oauth.register(
     name='google',
@@ -20,6 +23,11 @@ oauth.register(
 
 @router.get("/login/")
 async def login(request: Request):
+    if not _oauth_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Google OAuth is not configured. Missing GOOGLE_OAUTH_CLIENT_ID or GOOGLE_OAUTH_SECRET."
+        )
     redirect_uri = settings.GOOGLE_REDIRECT_URI
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
@@ -66,10 +74,11 @@ async def get_current_user(session: Session = Depends(get_session)):
 @router.get("/status/")
 async def auth_status(session: Session = Depends(get_session)):
     user = session.get('user')
+    auth_available = _oauth_is_configured()
     return {
         "authenticated": bool(user),
         "user": user,
-        "auth_available": True,
+        "auth_available": auth_available,
         "cors_available": True
     }
 

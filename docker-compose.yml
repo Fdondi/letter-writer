@@ -11,11 +11,15 @@ services:
       - ./letters:/app/letters
       - ./trace:/app/trace
       - ./jobs:/app/jobs
-      # Mount Google Cloud credentials file for Firestore access
-      # Set GOOGLE_APPLICATION_CREDENTIALS_HOST to the host path of your service account JSON
-      # If not set, defaults to ./gcloud-credentials.json in the project root
-      # Note: For Podman (rootless), the file must be readable by your user (e.g., chmod 600 or 644)
-      - ${GOOGLE_APPLICATION_CREDENTIALS_HOST:-./gcloud-credentials.json}:/app/gcloud-credentials.json:ro
+      # Mount Google Cloud credentials file for Firestore access.
+      # IMPORTANT: source must be a real JSON file (not a directory).
+      # create_host_path: false prevents Docker from auto-creating a directory when the file is missing.
+      - type: bind
+        source: ${GOOGLE_APPLICATION_CREDENTIALS_HOST:-./gcloud-credentials.json}
+        target: /app/gcloud-credentials.json
+        read_only: true
+        bind:
+          create_host_path: false
     # Run production ASGI server (or with periodic py-spy flamegraphs when RUN_WITH_PYSPY=1)
     command: sh -c "if [ -n \"$$RUN_WITH_PYSPY\" ]; then ( interval=$${PYSPY_INTERVAL:-60}; duration=$${PYSPY_DURATION:-30}; while true; do sleep $$interval; py-spy record -p 1 -d $$duration -o /app/trace/py-spy-$$(date +%s).svg --format flamegraph 2>/dev/null || true; done ) & exec python -m uvicorn letter_writer_server.main:app --host 0.0.0.0 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips '*'; else exec uvicorn letter_writer_server.main:app --host 0.0.0.0 --port 8000 --workers ${GUNICORN_WORKERS:-3} --proxy-headers --forwarded-allow-ips '*'; fi"
     environment:
@@ -23,13 +27,8 @@ services:
       - RUN_WITH_PYSPY=${RUN_WITH_PYSPY:-}
       - PYSPY_INTERVAL=${PYSPY_INTERVAL:-60}
       - PYSPY_DURATION=${PYSPY_DURATION:-30}
-      # DJANGO_DEBUG should be false in production
-      # DJANGO_ALLOWED_HOSTS should include your public domain(s)
-      # DJANGO_SECRET_KEY must be set in .env file
-      - DJANGO_DEBUG=${DJANGO_DEBUG:-false}
-      - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS}
-      - DJANGO_SESSION_COOKIE_SECURE=${DJANGO_SESSION_COOKIE_SECURE:-true}
-      - DJANGO_CSRF_COOKIE_SECURE=${DJANGO_CSRF_COOKIE_SECURE:-true}
+      # APP_SECRET_KEY must be set in .env file
+      - APP_SECRET_KEY=${APP_SECRET_KEY}
       # Firestore connection (uses Application Default Credentials)
       # The credentials file is mounted at /app/gcloud-credentials.json
       - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}

@@ -53,7 +53,7 @@ async def get_personal_data(session: Session = Depends(get_session)):
     agentic_draft_model = get_agentic_draft_model(user_data)
     min_column_width = user_data.get("min_column_width")
     
-    # Process revisions to ISO format... (omitted detailed implementation for brevity, assume similar to Django view)
+    # Process revisions to ISO format... (omitted detailed implementation for brevity)
     response_revisions = []
     latest_content = ""
     # ...

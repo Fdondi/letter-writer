@@ -263,10 +263,10 @@ async def background_phase(vendor: str, data: BackgroundPhaseRequest, request: R
         # Run actual background phase
         # Note: _run_background_phase expects session_id. 
         # But we need to make sure session_store.load_session_common_data works with FastAPI request
-        # In Django it used request.session. Here load_session_common_data needs adaptation or use explicit data passing.
+        # Historically this used request.session in a Django code path.
         # But wait, session_store.py uses set_current_request(request) and then request.session.
         # So as long as request.state.session exists and has dict interface, it *should* work if session_store reads from request.session.
-        # However, Django session object has specific methods. My Session class mimics dict.
+        # The previous session object had framework-specific methods; our Session class mimics dict.
         # session_store.py:
         # request = get_current_request()
         # session = request.session

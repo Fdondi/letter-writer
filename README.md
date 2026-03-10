@@ -42,7 +42,7 @@ In case the text the lettter is within boilerplate (for example, a `.tex` source
 
 ## Running the Application
 
-The application consists of a Django backend, a React frontend, and Qdrant vector database. You can run them either locally or using Docker.
+The application consists of a FastAPI backend, a React frontend, and Qdrant vector database. You can run them either locally or using Docker.
 
 ### Option 1: Using Docker (Recommended)
 
@@ -54,7 +54,7 @@ docker-compose up
 
 This will start:
 - **Qdrant** vector database on port `6333` (uses your existing data volume)
-- **Django backend** on port `8000`
+- **FastAPI backend** on port `8000`
 - **React frontend** on port `5173`
 
 **Note**: The docker-compose configuration uses your existing Qdrant data volume (`letter-writer_qdrant_storage`). If you've already initialized Qdrant with your data, it will be available immediately. If you need to stop your existing Qdrant container first, you can do so - docker-compose will start a new one using the same data.
@@ -126,12 +126,12 @@ docker-compose exec backend python -m letter_writer refresh --jobs-source-folder
 - Node.js 20+ installed
 - Qdrant running (see Qdrant section below)
 
-#### Backend (Django)
+#### Backend (FastAPI)
 
 From the project root directory, run:
 
 ```bash
-python letter_writer_server/manage.py runserver
+python -m uvicorn letter_writer_server.main:app --host 0.0.0.0 --port 8000
 ```
 
 The backend will start on `http://localhost:8000` by default.
@@ -151,7 +151,7 @@ Then start the development server:
 npm run dev
 ```
 
-The frontend will start on `http://localhost:5173` by default. The Vite dev server is configured to proxy API requests from `/api` to the Django backend at `http://localhost:8000`.
+The frontend will start on `http://localhost:5173` by default. The Vite dev server is configured to proxy API requests from `/api` to the backend at `http://localhost:8000`.
 
 #### Qdrant (Local)
 
