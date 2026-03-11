@@ -1,14 +1,14 @@
-import { diffWords } from 'diff';
+import { diffSentences, diffWords } from 'diff';
 
 /**
- * Creates a compact diff representation of text changes.
- * Detects multiple separate change regions within a paragraph.
+ * Creates a sentence-focused diff representation of text changes.
+ * Detects separate changed sentence regions within a paragraph.
  * 
  * @param {string} original - Original text
  * @param {string} edited - Edited text
  * @returns {Array} Array of diff objects, or empty array if no changes.
  *   Each diff: {type: 'diff'|'full', original: string, edited: string}
- *   If >20% changed overall, returns single full paragraph diff.
+ *   If >50% changed overall, returns single full paragraph diff.
  */
 export function createTextDiff(original, edited) {
   if (!original || !edited) {
@@ -63,8 +63,9 @@ export function createTextDiff(original, edited) {
     return [{ type: 'full', original, edited }];
   }
 
-  // Find all separate change regions from the diff
-  const changeRegions = findAllChangeRegions(wordDiff);
+  // Prefer sentence-level regions so persisted corrections include full changed sentences.
+  const sentenceDiff = diffSentences(original, edited);
+  const changeRegions = findSentenceChangeRegions(sentenceDiff);
   
   if (changeRegions.length === 0) {
     return [];
@@ -79,73 +80,63 @@ export function createTextDiff(original, edited) {
 }
 
 /**
- * Find all separate change regions from a word diff.
- * Uses the diff library's output to identify separate change regions.
- * The diff library returns parts in sequence: unchanged, removed, added, unchanged, etc.
- * Adjacent removed+added parts represent a single replacement change.
+ * Find separate changed sentence regions from a sentence diff.
+ * Adjacent removed+added parts are grouped as one change region.
  * 
- * @param {Array} wordDiff - Output from diffWords()
+ * @param {Array} sentenceDiff - Output from diffSentences()
  * @returns {Array} Array of change region objects, each with:
  *   {originalChanged: string, editedChanged: string}
  */
-function findAllChangeRegions(wordDiff) {
+function findSentenceChangeRegions(sentenceDiff) {
   const regions = [];
   
   let originalChanged = '';
   let editedChanged = '';
   
-  for (let i = 0; i < wordDiff.length; i++) {
-    const part = wordDiff[i];
+  const closeRegion = () => {
+    const originalTrimmed = originalChanged.trim();
+    const editedTrimmed = editedChanged.trim();
+    if (originalTrimmed || editedTrimmed) {
+      regions.push({
+        originalChanged: originalTrimmed,
+        editedChanged: editedTrimmed,
+      });
+    }
+    originalChanged = '';
+    editedChanged = '';
+  };
+
+  for (let i = 0; i < sentenceDiff.length; i++) {
+    const part = sentenceDiff[i];
+    const value = part.value;
     
     if (part.removed) {
-      // Removed text - start or continue a change region
-      originalChanged += (originalChanged ? ' ' : '') + part.value.trim();
+      originalChanged += value;
       
-      // Check if next part is added (replacement case)
-      if (i + 1 < wordDiff.length && wordDiff[i + 1].added) {
-        continue; // Will process added part next
+      // Keep region open if next part is another change chunk.
+      if (i + 1 < sentenceDiff.length && sentenceDiff[i + 1].added) {
+        continue;
       }
       
     } else if (part.added) {
-      // Added text - usually part of a replacement (after removed)
-      editedChanged += (editedChanged ? ' ' : '') + part.value.trim();
+      editedChanged += value;
       
-      // Check if next part is unchanged or end - close region
-      if (i + 1 >= wordDiff.length || (!wordDiff[i + 1].removed && !wordDiff[i + 1].added)) {
-        // Close the region
-        if (originalChanged || editedChanged) {
-          regions.push({
-            originalChanged: originalChanged.trim(),
-            editedChanged: editedChanged.trim(),
-          });
-        }
-        
-        // Reset for next region
-        originalChanged = '';
-        editedChanged = '';
+      // Close when next part is unchanged or end of array.
+      if (i + 1 >= sentenceDiff.length || (!sentenceDiff[i + 1].removed && !sentenceDiff[i + 1].added)) {
+        closeRegion();
       }
       
     } else {
-      // Unchanged text - if we have an open change region, close it
+      // Unchanged text closes any open change region.
       if (originalChanged || editedChanged) {
-        regions.push({
-          originalChanged: originalChanged.trim(),
-          editedChanged: editedChanged.trim(),
-        });
-        
-        // Reset
-        originalChanged = '';
-        editedChanged = '';
+        closeRegion();
       }
     }
   }
   
-  // Close any remaining open region at the end
+  // Close remaining region at end.
   if (originalChanged || editedChanged) {
-    regions.push({
-      originalChanged: originalChanged.trim(),
-      editedChanged: editedChanged.trim(),
-    });
+    closeRegion();
   }
   
   return regions;
