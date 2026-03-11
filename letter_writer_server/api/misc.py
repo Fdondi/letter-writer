@@ -19,12 +19,34 @@ from letter_writer.service import write_cover_letter, refresh_repository
 from letter_writer.firestore_store import get_collection, upsert_document, get_user_data
 from letter_writer.retrieval import embed, retrieve_similar_job_offers, select_top_documents, sanitize_search_results
 from letter_writer.personal_data_sections import get_models
+from letter_writer.personal_data_sections import get_competence_ratings
 from letter_writer.spam_prevention import get_in_flight_requests, clear_in_flight_requests
 from letter_writer_server.api.cost_utils import with_user_monthly_cost
 from openai import OpenAI
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _level_label_for_rating(level_labels: tuple[str, ...], level_cfg: Dict[str, Any], rating: int) -> str:
+    """Map numeric rating (1..5) to the closest configured level label."""
+    if not level_labels:
+        return "Brief experience"
+    target = max(1, min(5, int(rating)))
+    if isinstance(level_cfg, dict) and level_cfg:
+        best_label = level_labels[0]
+        best_delta = float("inf")
+        for label in level_labels:
+            raw = level_cfg.get(label)
+            if isinstance(raw, (int, float)):
+                delta = abs(float(raw) - float(target))
+                if delta < best_delta:
+                    best_delta = delta
+                    best_label = label
+        if best_delta != float("inf"):
+            return best_label
+    idx = max(0, min(target - 1, len(level_labels) - 1))
+    return level_labels[idx]
 
 class ExtractRequest(BaseModel):
     job_text: str
@@ -140,7 +162,8 @@ async def extract_job(request: Request, data: ExtractRequest, session: Session =
                         seen.add(skill)
                         flat_pairs.append((skill, cat))
 
-            existing = user_data.get("competence_ratings") or {}
+            # Read from current wrapped "competences" field, with legacy fallback.
+            existing = get_competence_ratings(user_data) or user_data.get("competence_ratings") or {}
             existing_lookup = {}
             for k, v in existing.items():
                 if isinstance(v, (int, float)) and 1 <= v <= 5:
@@ -153,8 +176,7 @@ async def extract_job(request: Request, data: ExtractRequest, session: Session =
             for skill, _need in flat_pairs:
                 norm_skill = " ".join((skill or "").strip().lower().split())
                 if norm_skill in existing_lookup:
-                    idx = max(0, min(existing_lookup[norm_skill] - 1, len(level_labels) - 1))
-                    matched_levels[skill] = level_labels[idx]
+                    matched_levels[skill] = _level_label_for_rating(level_labels, level_cfg, existing_lookup[norm_skill])
                 else:
                     unmatched.append(skill)
             return flat_pairs, matched_levels, unmatched

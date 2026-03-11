@@ -37,6 +37,8 @@ function generateColors(vendors) {
   }, {});
 }
 
+const AGENTIC_TOPICS = ["instruction", "company_fit", "precision", "user_fit", "human", "accuracy"];
+
 export default function App({ flow = "vendor" }) {
   const navigate = useNavigate();
   const navLocation = useLocation();
@@ -116,6 +118,74 @@ export default function App({ flow = "vendor" }) {
   const [agenticSavingFinal, setAgenticSavingFinal] = useState(false);
   const [agenticSaveError, setAgenticSaveError] = useState(null);
   const [agenticFinalParagraphs, setAgenticFinalParagraphs] = useState([]);
+
+  const normalizeAgenticThreads = useCallback((threadsPayload = {}, topicMetaPayload = {}) => {
+    const threadsOut = AGENTIC_TOPICS.reduce((acc, topic) => ({ ...acc, [topic]: [] }), {});
+    const topicMetaOut = {
+      ...(topicMetaPayload && typeof topicMetaPayload === "object" ? topicMetaPayload : {}),
+    };
+
+    const assignTopic = (topicKey, rawValue) => {
+      if (!topicKey || typeof topicKey !== "string") return;
+      const topic = topicKey.trim();
+      if (!topic) return;
+      if (!(topic in threadsOut)) threadsOut[topic] = [];
+
+      if (Array.isArray(rawValue)) {
+        threadsOut[topic] = rawValue;
+        return;
+      }
+
+      if (!rawValue || typeof rawValue !== "object") {
+        threadsOut[topic] = [];
+        return;
+      }
+
+      const candidateThread = Array.isArray(rawValue.thread)
+        ? rawValue.thread
+        : Array.isArray(rawValue.comments)
+          ? rawValue.comments
+          : Array.isArray(rawValue.messages)
+            ? rawValue.messages
+            : [];
+      threadsOut[topic] = candidateThread;
+
+      const round = rawValue.round;
+      const done = rawValue.done;
+      const messages = rawValue.messages_count ?? rawValue.count ?? rawValue.messages;
+      if (round != null || done != null || messages != null) {
+        topicMetaOut[topic] = {
+          ...(topicMetaOut[topic] || {}),
+          ...(round != null && { round }),
+          ...(messages != null && { messages: Number.isFinite(Number(messages)) ? Number(messages) : candidateThread.length }),
+          ...(done != null && { done: done === true }),
+        };
+      }
+    };
+
+    if (Array.isArray(threadsPayload)) {
+      threadsPayload.forEach((entry) => {
+        if (!entry || typeof entry !== "object") return;
+        const topic = entry.topic || entry.key || entry.name;
+        const value = entry.thread ?? entry.comments ?? entry.messages ?? entry;
+        assignTopic(topic, value);
+      });
+    } else if (threadsPayload && typeof threadsPayload === "object") {
+      Object.entries(threadsPayload).forEach(([topic, value]) => assignTopic(topic, value));
+    }
+
+    return { threads: threadsOut, topicMeta: topicMetaOut };
+  }, []);
+
+  const normalizeAgenticState = useCallback((state) => {
+    if (!state || typeof state !== "object") return state;
+    const normalized = normalizeAgenticThreads(state.threads || {}, state.topic_meta || {});
+    return {
+      ...state,
+      threads: normalized.threads,
+      topic_meta: normalized.topicMeta,
+    };
+  }, [normalizeAgenticThreads]);
   
   // Research state
   const [selectedCompanyReport, setSelectedCompanyReport] = useState(null);
@@ -383,22 +453,8 @@ export default function App({ flow = "vendor" }) {
       .catch((e) => setError(String(e)));
   }, []);
 
-  // Load full agentic state once when showing agentic view and state is missing (e.g. refresh)
-  useEffect(() => {
-    if (agenticStage !== "agentic" || agenticState != null) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/phases/agentic/state/", { credentials: "include" });
-        if (!res.ok || cancelled) return;
-        const data = await res.json();
-        if (data.agentic_state != null && !cancelled) setAgenticState(data.agentic_state);
-      } catch (e) {
-        if (!cancelled) console.warn("Failed to fetch agentic state:", e);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [agenticStage, agenticState]);
+  // Intentionally no agentic rehydration on route enter/refresh.
+  // Starting a flow must always use the current form inputs only.
 
   // Notify only when agentic feedback actually completes (ongoing becomes false), not on start or every poll
   const agenticOngoingRef = useRef(undefined);
@@ -453,6 +509,21 @@ export default function App({ flow = "vendor" }) {
       setTriggerCompanyResearch(Date.now());
     }
   }, [companyResearchCountdown, companyAutoResearchBlocked]);
+
+  const hasUnsavedGeneratedWork = useMemo(() => {
+    if (documentId) return false;
+    const hasVendorOutput = Object.values(letters || {}).some(
+      (text) => typeof text === "string" && text.trim().length > 0
+    );
+    const draftLetters = agenticState?.draft_letters || {};
+    const finalLetters = agenticState?.final_letters || {};
+    const hasAgenticOutput =
+      (typeof agenticState?.draft_letter === "string" && agenticState.draft_letter.trim().length > 0) ||
+      (typeof agenticState?.final_letter === "string" && agenticState.final_letter.trim().length > 0) ||
+      Object.values(draftLetters).some((text) => typeof text === "string" && text.trim().length > 0) ||
+      Object.values(finalLetters).some((text) => typeof text === "string" && text.trim().length > 0);
+    return hasVendorOutput || hasAgenticOutput;
+  }, [documentId, letters, agenticState]);
 
   // NOW we can do conditional returns (after all hooks are declared)
   
@@ -1187,6 +1258,7 @@ export default function App({ flow = "vendor" }) {
     setAgenticLoading(true);
     setAgenticError(null);
     setError(null);
+    setAgenticState(null);
     navigate("/flows/agentic", { state: { startAgentic: true } });
     setAgenticStage("agentic");
     const initialSessionId = phaseSessionId || (
@@ -1261,7 +1333,7 @@ export default function App({ flow = "vendor" }) {
         setAgenticLoading(false);
         return;
       }
-      setAgenticState(res.data?.agentic_state ?? null);
+      setAgenticState(normalizeAgenticState(res.data?.agentic_state ?? null));
       setAgenticStage("agentic");
     } catch (e) {
       console.error("Agentic draft error", e);
@@ -1274,37 +1346,7 @@ export default function App({ flow = "vendor" }) {
 
   const fetchAgenticPoll = async () => {
     try {
-      const normalizeAgenticThreads = (threadsPayload = {}, topicMetaPayload = {}) => {
-        const threadsOut = {};
-        const topicMetaOut = {};
-        Object.entries(threadsPayload || {}).forEach(([topic, value]) => {
-          if (Array.isArray(value)) {
-            threadsOut[topic] = value;
-            return;
-          }
-          if (value && typeof value === "object") {
-            if (Array.isArray(value.thread)) {
-              threadsOut[topic] = value.thread;
-              topicMetaOut[topic] = {
-                round: value.round ?? 1,
-                messages: value.messages ?? value.thread.length,
-                done: value.done === true,
-              };
-              return;
-            }
-            threadsOut[topic] = [];
-            return;
-          }
-          threadsOut[topic] = [];
-        });
-        return { threads: threadsOut, topicMeta: { ...(topicMetaPayload || {}), ...topicMetaOut } };
-      };
-
-      const currentDraftEtag = agenticState?.draft_letters_etag;
-      const pollUrl = currentDraftEtag
-        ? `/api/phases/agentic/feedback/poll/?draft_letters_etag=${encodeURIComponent(currentDraftEtag)}`
-        : "/api/phases/agentic/feedback/poll/";
-      const res = await fetch(pollUrl, { credentials: "include" });
+      const res = await fetch("/api/phases/agentic/feedback/poll/", { credentials: "include" });
       if (!res.ok) return false;
       const data = await res.json();
       publishUserMonthlyCost(data);
@@ -1317,7 +1359,6 @@ export default function App({ flow = "vendor" }) {
         feedback_suspended: data.feedback_suspended,
         topic_meta: normalized.topicMeta,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
-        ...(data.draft_letters_etag && { draft_letters_etag: data.draft_letters_etag }),
         ...(data.draft_letters && { draft_letters: data.draft_letters }),
         ...(data.final_letters && { final_letters: data.final_letters }),
         ...(data.draft_votes && { draft_votes: data.draft_votes }),
@@ -1346,27 +1387,7 @@ export default function App({ flow = "vendor" }) {
       }
       const data = await res.json();
       publishUserMonthlyCost(data);
-      const normalized = (() => {
-        const threadsOut = {};
-        const topicMetaOut = {};
-        Object.entries(data.threads || {}).forEach(([topic, value]) => {
-          if (Array.isArray(value)) {
-            threadsOut[topic] = value;
-            return;
-          }
-          if (value && typeof value === "object" && Array.isArray(value.thread)) {
-            threadsOut[topic] = value.thread;
-            topicMetaOut[topic] = {
-              round: value.round ?? 1,
-              messages: value.messages ?? value.thread.length,
-              done: value.done === true,
-            };
-            return;
-          }
-          threadsOut[topic] = [];
-        });
-        return { threads: threadsOut, topicMeta: { ...(data.topic_meta || {}), ...topicMetaOut } };
-      })();
+      const normalized = normalizeAgenticThreads(data.threads || {}, data.topic_meta || {});
       setAgenticState((prev) => ({
         ...(prev || {}),
         threads: normalized.threads,
@@ -1398,27 +1419,7 @@ export default function App({ flow = "vendor" }) {
       }
       const data = await res.json();
       publishUserMonthlyCost(data);
-      const normalized = (() => {
-        const threadsOut = {};
-        const topicMetaOut = {};
-        Object.entries(data.threads || {}).forEach(([topic, value]) => {
-          if (Array.isArray(value)) {
-            threadsOut[topic] = value;
-            return;
-          }
-          if (value && typeof value === "object" && Array.isArray(value.thread)) {
-            threadsOut[topic] = value.thread;
-            topicMetaOut[topic] = {
-              round: value.round ?? 1,
-              messages: value.messages ?? value.thread.length,
-              done: value.done === true,
-            };
-            return;
-          }
-          threadsOut[topic] = [];
-        });
-        return { threads: threadsOut, topicMeta: { ...(data.topic_meta || {}), ...topicMetaOut } };
-      })();
+      const normalized = normalizeAgenticThreads(data.threads || {}, data.topic_meta || {});
       setAgenticState((prev) => ({
         ...(prev || {}),
         threads: normalized.threads,
@@ -1451,27 +1452,7 @@ export default function App({ flow = "vendor" }) {
       }
       const data = await res.json();
       publishUserMonthlyCost(data);
-      const normalized = (() => {
-        const threadsOut = {};
-        const topicMetaOut = {};
-        Object.entries(data.threads || {}).forEach(([topic, value]) => {
-          if (Array.isArray(value)) {
-            threadsOut[topic] = value;
-            return;
-          }
-          if (value && typeof value === "object" && Array.isArray(value.thread)) {
-            threadsOut[topic] = value.thread;
-            topicMetaOut[topic] = {
-              round: value.round ?? 1,
-              messages: value.messages ?? value.thread.length,
-              done: value.done === true,
-            };
-            return;
-          }
-          threadsOut[topic] = [];
-        });
-        return { threads: threadsOut, topicMeta: { ...(data.topic_meta || {}), ...topicMetaOut } };
-      })();
+      const normalized = normalizeAgenticThreads(data.threads || {}, data.topic_meta || {});
       setAgenticState((prev) => ({
         ...(prev || {}),
         threads: normalized.threads,
@@ -1504,27 +1485,7 @@ export default function App({ flow = "vendor" }) {
       }
       const data = await res.json();
       publishUserMonthlyCost(data);
-      const normalized = (() => {
-        const threadsOut = {};
-        const topicMetaOut = {};
-        Object.entries(data.threads || {}).forEach(([topic, value]) => {
-          if (Array.isArray(value)) {
-            threadsOut[topic] = value;
-            return;
-          }
-          if (value && typeof value === "object" && Array.isArray(value.thread)) {
-            threadsOut[topic] = value.thread;
-            topicMetaOut[topic] = {
-              round: value.round ?? 1,
-              messages: value.messages ?? value.thread.length,
-              done: value.done === true,
-            };
-            return;
-          }
-          threadsOut[topic] = [];
-        });
-        return { threads: threadsOut, topicMeta: { ...(data.topic_meta || {}), ...topicMetaOut } };
-      })();
+      const normalized = normalizeAgenticThreads(data.threads || {}, data.topic_meta || {});
       setAgenticState((prev) => ({
         ...(prev || {}),
         threads: normalized.threads,
@@ -1559,9 +1520,10 @@ export default function App({ flow = "vendor" }) {
       const data = await res.json();
       publishUserMonthlyCost(data);
       if (data?.agentic_update != null) {
+        const normalizedUpdate = normalizeAgenticState(data.agentic_update);
         setAgenticState((prev) => ({
           ...(prev || {}),
-          ...data.agentic_update,
+          ...normalizedUpdate,
         }));
       }
     } catch (e) {
@@ -1583,9 +1545,10 @@ export default function App({ flow = "vendor" }) {
       const res = await fetchWithHeartbeat("/api/phases/agentic/refine/", opts);
       if (res.isHeartbeat) return;
       if (res.data?.agentic_update != null) {
+        const normalizedUpdate = normalizeAgenticState(res.data.agentic_update);
         setAgenticState((prev) => ({
           ...(prev || {}),
-          ...res.data.agentic_update,
+          ...normalizedUpdate,
         }));
       }
     } catch (e) {
@@ -1732,8 +1695,11 @@ export default function App({ flow = "vendor" }) {
     setFailedVendors({});
     setError(null);
     setFinalParagraphs([]);
+    setAgenticFinalParagraphs([]);
     setDocumentId(null);
     setSavingFinal(false);
+    setAgenticSavingFinal(false);
+    setAgenticSaveError(null);
     setActiveTab("compose");
     setAssemblyVisible(true);
     // Keep extracted data and job text - don't clear them
@@ -1744,6 +1710,15 @@ export default function App({ flow = "vendor" }) {
     // setSalary("");
     // setRequirements([]);
     setExtractionError(null);
+    setSelectedCompanyReport(null);
+    setSelectedTopDocs(null);
+    setSelectedPocReport(null);
+    setAllSearchResults([]);
+    setSelectedDocIds(new Set());
+    setCompanyExtractionResult(null);
+    setCompanyResearchCountdown(null);
+    setCompanyAutoResearchBlocked(false);
+    setCompanyResearchNotification(null);
     
     // Initialize session when clicking back to ensure CV is loaded
     // This ensures CV is in session before starting phases again
@@ -1756,6 +1731,49 @@ export default function App({ flow = "vendor" }) {
       console.error("Failed to initialize session when going back:", e);
       // Continue anyway - session will be initialized when starting phases
     }
+  };
+
+  const handleCloseSessionAndRestart = async () => {
+    if (
+      hasUnsavedGeneratedWork &&
+      !window.confirm("Your unsaved work will be discarded. Continue?")
+    ) {
+      return;
+    }
+    try {
+      await fetchWithHeartbeat("/api/phases/clear/", {
+        method: "POST",
+      });
+    } catch (e) {
+      console.error("Failed to clear session:", e);
+      setError("Failed to close session. Please try again.");
+      return;
+    }
+    await resetForm();
+    setJobText("");
+    setCompanyName("");
+    setJobTitle("");
+    setLocation("");
+    setLanguage("");
+    setSalary("");
+    setRequirements([]);
+    setCompetences({});
+    setCompetenceOverrides({});
+    setPointOfContact({
+      name: "",
+      role: "",
+      contact_details: "",
+      notes: "",
+      company: "",
+    });
+    setAdditionalUserInfo("");
+    setAdditionalCompanyInfo("");
+    setShowPointOfContact(false);
+    setShowAdditionalInfo(false);
+    setExtractedData(null);
+    setJobTextTranslations({});
+    setJobTextViewLanguage("source");
+    setLastJobTextSnapshot("");
   };
 
   const vendorsList = Array.from(selectedVendors);
@@ -2254,6 +2272,21 @@ export default function App({ flow = "vendor" }) {
             }}
           >
             ← Back to Input
+          </button>
+          <button
+            type="button"
+            onClick={handleCloseSessionAndRestart}
+            style={{
+              padding: "8px 16px",
+              backgroundColor: "#b91c1c",
+              color: "white",
+              border: "1px solid #991b1b",
+              borderRadius: "4px",
+              cursor: "pointer",
+            }}
+            title="Clear current session and restart with a blank input form"
+          >
+            Close session and restart
           </button>
           {(flow === "vendor" && vendorStage === "assembly" && assemblyVisible) && (
             <div

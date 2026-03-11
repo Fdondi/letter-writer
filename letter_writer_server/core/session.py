@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 _SESSION_STORAGE: Dict[str, Dict[str, Any]] = {}
 _STORAGE_LOCK = Lock()
 SESSION_STORAGE_DIR = Path(os.environ.get("SESSION_STORAGE_DIR", "/tmp/fastapi_sessions"))
+AGENTIC_LAST_POLL_AT_KEY = "_agentic_last_poll_at"
 
 def _get_session_file_path(session_key: str) -> Path:
     SESSION_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -68,12 +69,11 @@ def _delete_from_filesystem(session_key: str) -> None:
 
 
 def get_agentic_last_poll_at_from_storage(session_key: str) -> float:
-    """Load session from filesystem and return agentic.last_poll_at (for abort-after-idle check)."""
+    """Load session from filesystem and return agentic heartbeat timestamp (for idle abort checks)."""
     data = _load_from_filesystem(session_key)
     if not data:
         return 0.0
-    agentic = data.get("agentic") or {}
-    return float(agentic.get("last_poll_at") or 0.0)
+    return float(data.get(AGENTIC_LAST_POLL_AT_KEY) or 0.0)
 
 
 def load_session_from_storage(session_key: str) -> Dict[str, Any]:
@@ -84,19 +84,40 @@ def load_session_from_storage(session_key: str) -> Dict[str, Any]:
 
 def save_session_to_storage(session_key: str, data: Dict[str, Any]) -> None:
     """Persist full session dict to disk (e.g. after background feedback step)."""
-    _save_to_filesystem(session_key, data)
+    lock_path = _get_lock_file_path(session_key)
+    try:
+        with open(lock_path, 'w') as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                _save_to_filesystem(session_key, data)
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        # Fallback best-effort write if lock acquisition fails unexpectedly.
+        _save_to_filesystem(session_key, data)
 
 
 def persist_agentic_last_poll_at(session_key: str, last_poll_at: float) -> None:
     """Record that the browser just polled (client still wants results). Persisted immediately
     on every poll so agent duration has no effect on the abort check."""
-    data = _load_from_filesystem(session_key)
-    if data is None:
-        data = {}
-    if "agentic" not in data:
-        data["agentic"] = {}
-    data["agentic"]["last_poll_at"] = last_poll_at
-    _save_to_filesystem(session_key, data)
+    lock_path = _get_lock_file_path(session_key)
+    try:
+        with open(lock_path, 'w') as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                data = _load_from_filesystem(session_key)
+                if data is None:
+                    data = {}
+                prev = float(data.get(AGENTIC_LAST_POLL_AT_KEY) or 0.0)
+                data[AGENTIC_LAST_POLL_AT_KEY] = max(prev, float(last_poll_at))
+                _save_to_filesystem(session_key, data)
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        data = _load_from_filesystem(session_key) or {}
+        prev = float(data.get(AGENTIC_LAST_POLL_AT_KEY) or 0.0)
+        data[AGENTIC_LAST_POLL_AT_KEY] = max(prev, float(last_poll_at))
+        _save_to_filesystem(session_key, data)
 
 
 def agentic_processing_lock_path(session_key: str) -> Path:
@@ -221,7 +242,8 @@ class SessionMiddleware(BaseHTTPMiddleware):
         
         # Save session if modified
         if request.state.session.modified:
-            lock_path = _get_lock_file_path(session_key)
+            active_session_key = request.state.session.session_key or session_key
+            lock_path = _get_lock_file_path(active_session_key)
             try:
                 with open(lock_path, 'w') as lock_file:
                     # File lock ensures cross-worker atomicity
@@ -231,7 +253,7 @@ class SessionMiddleware(BaseHTTPMiddleware):
                         # This is critical with multiple uvicorn workers — each worker's
                         # _SESSION_STORAGE is a separate process-local dict and goes stale
                         # as soon as another worker saves.
-                        existing_data = _load_from_filesystem(session_key) or {}
+                        existing_data = _load_from_filesystem(active_session_key) or {}
 
                         # Update expiration
                         existing_data['_expires_at'] = time.time() + self.max_age
@@ -259,22 +281,23 @@ class SessionMiddleware(BaseHTTPMiddleware):
                             else:
                                 existing_data[key] = value
                         
-                        _SESSION_STORAGE[session_key] = existing_data
-                        _save_to_filesystem(session_key, existing_data)
+                        _SESSION_STORAGE[active_session_key] = existing_data
+                        _save_to_filesystem(active_session_key, existing_data)
                     finally:
                         fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
             except Exception as e:
-                logger.error(f"Failed to save session {session_key}: {e}")
+                logger.error(f"Failed to save session {active_session_key}: {e}")
 
-            # Set cookie
-            response.set_cookie(
-                self.cookie_name,
-                self.signer.dumps(session_key),
-                max_age=self.max_age,
-                httponly=True,
-                samesite="lax",
-                secure=True # Always secure for now, maybe config?
-            )
+            # Set cookie unless endpoint requested invalidation (e.g., /api/phases/clear/).
+            if not getattr(request.state, "skip_session_cookie_set", False):
+                response.set_cookie(
+                    self.cookie_name,
+                    self.signer.dumps(active_session_key),
+                    max_age=self.max_age,
+                    httponly=True,
+                    samesite="lax",
+                    secure=True # Always secure for now, maybe config?
+                )
         
         return response
 

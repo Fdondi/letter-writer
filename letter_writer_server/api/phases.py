@@ -2,11 +2,12 @@ import asyncio
 import copy
 import logging
 import random
+import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
-from fastapi import APIRouter, Request, HTTPException, Depends, Body, Query
+from fastapi import APIRouter, Request, HTTPException, Depends, Body
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 
@@ -17,6 +18,8 @@ from letter_writer_server.core.session import (
     load_session_from_storage,
     save_session_to_storage,
     persist_agentic_last_poll_at,
+    try_acquire_agentic_lock,
+    release_agentic_lock,
 )
 from letter_writer.generation import AGENTIC_TOPIC_KEYS, get_agentic_topic_context, get_style_instructions
 from letter_writer.phased_service import get_metadata_field
@@ -37,7 +40,6 @@ from letter_writer.firestore_store import get_user_data
 from letter_writer.personal_data_sections import get_models, get_agentic_draft_model
 from letter_writer.agentic_service import (
     get_agentic_state,
-    save_agentic_state,
     run_agentic_draft,
     run_agentic_draft_multi,
     run_agentic_feedback_round,
@@ -58,6 +60,7 @@ from letter_writer.agentic_service import (
     DEFAULT_MAX_ROUNDS,
     POLL_ABORT_SECONDS,
     STATUS_DRAFT,
+    STATUS_FEEDBACK,
     STATUS_FEEDBACK_DONE,
 )
 
@@ -207,12 +210,17 @@ async def get_session_state(session: Session = Depends(get_session)):
 @router.post("/clear/")
 async def clear_session(session: Session = Depends(get_session)):
     old_id = session.session_key
+    user = session.get("user")
     session.clear()
+    if user:
+        session["user"] = user
+    # Rotate to a brand-new session id while keeping authenticated user context.
+    session.session_key = secrets.token_urlsafe(32)
     # Cost flush logic omitted for brevity/simplicity, can add later
     return {
         "status": "ok",
         "old_session_id": old_id,
-        "new_session_id": session.session_key, # This might be None until new request? No, middleware generates one.
+        "new_session_id": session.session_key,
         "message": "Session cleared successfully"
     }
 
@@ -431,8 +439,6 @@ async def agentic_feedback_start(data: AgenticRunRoundRequest, request: Request,
             # Establish a single heartbeat timestamp before worker launch so startup cannot race
             # against stale/zero heartbeat reads.
             start_poll_at = time.time()
-            state["last_poll_at"] = start_poll_at
-            save_agentic_state(session, state)
             persist_agentic_last_poll_at(session_key, start_poll_at)
             entry = _get_agentic_live(session_key)
             if entry is None:
@@ -562,15 +568,11 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
                 POLL_ABORT_SECONDS,
             )
             with meta_lock:
-                # Hard abort semantics: drop all feedback progress (past + future rounds).
-                state["threads"] = _empty_threads()
-                state["topic_cursors"] = {}
-                state["round"] = 0
+                # Non-destructive abort semantics: stop worker, preserve accumulated state.
                 state["feedback_ongoing"] = False
                 state["feedback_suspended"] = False
-                state["status"] = STATUS_DRAFT
-                state.pop("feedback_vendor_order", None)
-                state.pop("draft_votes", None)
+                if state.get("status") not in (STATUS_DRAFT, STATUS_FEEDBACK_DONE):
+                    state["status"] = STATUS_FEEDBACK
                 state["worker_running"] = False
                 _persist_agentic_from_live(session_key, state)
             return
@@ -686,15 +688,11 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
                 topic, updated_thread, topic_completed = fut.result()
                 if not topic_completed:
                     with meta_lock:
-                        # Hard abort semantics: discard partial feedback generated so far.
-                        state["threads"] = _empty_threads()
-                        state["topic_cursors"] = {}
-                        state["round"] = 0
+                        # Vendor loop interrupted (usually stale heartbeat): keep progress, stop worker.
                         state["feedback_ongoing"] = False
                         state["feedback_suspended"] = False
-                        state["status"] = STATUS_DRAFT
-                        state.pop("feedback_vendor_order", None)
-                        state.pop("draft_votes", None)
+                        if state.get("status") not in (STATUS_DRAFT, STATUS_FEEDBACK_DONE):
+                            state["status"] = STATUS_FEEDBACK
                         state["worker_running"] = False
                         _persist_agentic_from_live(session_key, state)
                     return
@@ -735,14 +733,11 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
             
             if _abort_for_stale_poll():
                 with meta_lock:
-                    state["threads"] = _empty_threads()
-                    state["topic_cursors"] = {}
-                    state["round"] = 0
+                    # Vendor loop interrupted (usually stale heartbeat): keep progress, stop worker.
                     state["feedback_ongoing"] = False
                     state["feedback_suspended"] = False
-                    state["status"] = STATUS_DRAFT
-                    state.pop("feedback_vendor_order", None)
-                    state.pop("draft_votes", None)
+                    if state.get("status") not in (STATUS_DRAFT, STATUS_FEEDBACK_DONE):
+                        state["status"] = STATUS_FEEDBACK
                     state["worker_running"] = False
                     _persist_agentic_from_live(session_key, state)
                 return
@@ -769,14 +764,11 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
             
             if not topic_completed:
                 with meta_lock:
-                    state["threads"] = _empty_threads()
-                    state["topic_cursors"] = {}
-                    state["round"] = 0
+                    # Vendor loop interrupted (usually stale heartbeat): keep progress, stop worker.
                     state["feedback_ongoing"] = False
                     state["feedback_suspended"] = False
-                    state["status"] = STATUS_DRAFT
-                    state.pop("feedback_vendor_order", None)
-                    state.pop("draft_votes", None)
+                    if state.get("status") not in (STATUS_DRAFT, STATUS_FEEDBACK_DONE):
+                        state["status"] = STATUS_FEEDBACK
                     state["worker_running"] = False
                     _persist_agentic_from_live(session_key, state)
                 return
@@ -791,15 +783,44 @@ def _persist_agentic_from_live(session_key: str, state: Dict[str, Any]) -> None:
     """Write live agentic state back to session on disk."""
     try:
         data = load_session_from_storage(session_key)
-        data["agentic"] = dict(state)
+        merged_state = dict(state)
+        # Heartbeat is stored separately from agentic state; never persist it here.
+        merged_state.pop("last_poll_at", None)
+        data["agentic"] = merged_state
         save_session_to_storage(session_key, data)
     except Exception as e:
         logger.exception("AGENTIC persist from live failed: %s", e)
 
 
+def _has_pending_feedback(state: Dict[str, Any]) -> bool:
+    max_rounds = int(state.get("max_rounds", DEFAULT_MAX_ROUNDS))
+    cursors = state.get("topic_cursors") or {}
+    for topic in AGENTIC_TOPIC_KEYS:
+        cur = (cursors.get(topic) or {})
+        try:
+            round_num = int(cur.get("round", 1) or 1)
+        except Exception:
+            round_num = 1
+        if round_num <= max_rounds:
+            return True
+    return False
+
+
+def _start_ordered_worker(session_key: str) -> None:
+    loop = asyncio.get_event_loop()
+    future = loop.run_in_executor(_feedback_executor, _run_ordered_feedback_loop, session_key)
+
+    def _on_done(f, sk=session_key):
+        try:
+            f.result()
+        except Exception:
+            logger.exception("AGENTIC ordered worker failed for session %s", sk)
+
+    future.add_done_callback(_on_done)
+
+
 @router.get("/agentic/feedback/poll/")
 async def agentic_feedback_poll(
-    draft_letters_etag: Optional[str] = Query(default=None),
     session: Session = Depends(get_session),
 ):
     logger.info("AGENTIC poll request")
@@ -808,13 +829,25 @@ async def agentic_feedback_poll(
         raise HTTPException(status_code=401, detail="Authentication required")
     session_key = session.session_key
     if not session_key:
-        return with_user_monthly_cost(poll_response(None, known_draft_letters_etag=draft_letters_etag), session)
+        return with_user_monthly_cost(poll_response(None), session)
     now = time.time()
     entry = _get_agentic_live(session_key)
     if entry:
         state = entry["state"]
         with entry["meta_lock"]:
             state["last_poll_at"] = now
+            should_auto_resume = (
+                state.get("status") == STATUS_FEEDBACK
+                and not bool(state.get("feedback_suspended"))
+                and not bool(state.get("feedback_ongoing"))
+                and not bool(state.get("worker_running"))
+                and _has_pending_feedback(state)
+            )
+            if should_auto_resume:
+                state["feedback_ongoing"] = True
+                state["worker_running"] = True
+                _persist_agentic_from_live(session_key, state)
+                _start_ordered_worker(session_key)
             snapshot = {
                 "threads": copy.deepcopy(state.get("threads") or _empty_threads()),
                 "topic_cursors": copy.deepcopy(state.get("topic_cursors") or {}),
@@ -849,16 +882,51 @@ async def agentic_feedback_poll(
             rounds_live,
         )
         return with_user_monthly_cost(
-            poll_response(snapshot, known_draft_letters_etag=draft_letters_etag),
+            poll_response(snapshot),
             session,
         )
     if "agentic" not in session:
         session["agentic"] = {}
-    session["agentic"]["last_poll_at"] = now
     persist_agentic_last_poll_at(session_key, now)
     try:
         persisted = load_session_from_storage(session_key) if session_key else None
         state = (persisted or {}).get("agentic") or get_agentic_state(session)
+        should_auto_resume = (
+            state
+            and state.get("status") == STATUS_FEEDBACK
+            and not bool(state.get("feedback_suspended"))
+            and not bool(state.get("feedback_ongoing"))
+            and _has_pending_feedback(state)
+        )
+        if should_auto_resume and try_acquire_agentic_lock(session_key, timeout_seconds=15.0):
+            try:
+                latest_payload = load_session_from_storage(session_key) if session_key else {}
+                latest = (latest_payload or {}).get("agentic") or {}
+                if latest:
+                    state = latest
+                if (
+                    state
+                    and state.get("status") == STATUS_FEEDBACK
+                    and not bool(state.get("feedback_suspended"))
+                    and not bool(state.get("feedback_ongoing"))
+                    and _has_pending_feedback(state)
+                ):
+                    state = dict(state)
+                    state["feedback_ongoing"] = True
+                    state["worker_running"] = True
+                    payload = latest_payload or {}
+                    payload["agentic"] = state
+                    save_session_to_storage(session_key, payload)
+                    with _agentic_live_store_lock:
+                        if _agentic_live_store.get(session_key) is None:
+                            _agentic_live_store[session_key] = {
+                                "state": state,
+                                "meta_lock": Lock(),
+                                "worker_running": True,
+                            }
+                            _start_ordered_worker(session_key)
+            finally:
+                release_agentic_lock(session_key)
         rounds_persisted = {
             t: int((((state or {}).get("topic_cursors") or {}).get(t) or {}).get("round", 1))
             for t in AGENTIC_TOPIC_KEYS
@@ -884,7 +952,7 @@ async def agentic_feedback_poll(
             rounds_session,
         )
     return with_user_monthly_cost(
-        poll_response(state, known_draft_letters_etag=draft_letters_etag),
+        poll_response(state),
         session,
     )
 

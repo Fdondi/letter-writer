@@ -14,6 +14,38 @@ from datetime import datetime, timezone
 router = APIRouter()
 
 
+def _normalize_competence_ratings(raw: Any) -> Dict[str, int]:
+    """Normalize incoming competence ratings to {skill: int 1..5}.
+
+    Accepts either:
+    - {"Python": 4, ...}
+    - {"ratings": {"Python": 4, ...}}  (legacy/nested payloads)
+    """
+    payload = raw
+    if isinstance(payload, dict) and "ratings" in payload and isinstance(payload.get("ratings"), dict):
+        payload = payload["ratings"]
+    if not isinstance(payload, dict):
+        return {}
+
+    normalized: Dict[str, int] = {}
+    for skill, value in payload.items():
+        key = str(skill or "").strip()
+        if not key:
+            continue
+        if isinstance(value, bool):
+            # bool is technically int in Python, but invalid for ratings.
+            continue
+        if not isinstance(value, (int, float)):
+            continue
+        n = int(round(float(value)))
+        if n < 1:
+            n = 1
+        elif n > 5:
+            n = 5
+        normalized[key] = n
+    return normalized
+
+
 def _append_cv_revision(user_id: str, content: str, source: str = "manual_edit") -> None:
     """Append a new CV revision to Firestore and update cache."""
     now = datetime.now(timezone.utc)
@@ -144,7 +176,9 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             session["search_instructions"] = data["search_instructions"]
         
         if "competence_ratings" in data:
-            updates["competences"] = wrap_new_field("competences", data["competence_ratings"], now)
+            normalized_ratings = _normalize_competence_ratings(data["competence_ratings"])
+            if normalized_ratings:
+                updates["competences"] = wrap_new_field("competences", normalized_ratings, now)
             
         if "content" in data and data["content"]:
             content = str(data["content"]).strip()

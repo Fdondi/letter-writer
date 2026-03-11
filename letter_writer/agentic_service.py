@@ -5,7 +5,6 @@ multiple feedback agents in random order per round, comments/subcomments/addendu
 from __future__ import annotations
 
 import json
-import hashlib
 import logging
 import random
 import time
@@ -120,15 +119,8 @@ def slim_agentic_state_for_response(state: Optional[Dict[str, Any]]) -> Optional
     return result
 
 
-def _draft_letters_etag(draft_letters: Dict[str, Any]) -> str:
-    """Stable hash for draft_letters payload comparison across polls."""
-    payload = json.dumps(draft_letters, sort_keys=True, separators=(",", ":"))
-    return hashlib.md5(payload.encode("utf-8")).hexdigest()
-
-
 def poll_response(
     state: Optional[Dict[str, Any]],
-    known_draft_letters_etag: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Minimal poll response: per-topic threads-with-meta, ongoing, status, feedback_suspended, and optionally draft/final letters.
     ongoing is taken only from persisted state; it is set true until all topic threads have signalled done (or suspend/abort).
@@ -156,10 +148,7 @@ def poll_response(
     }
     draft_letters = state.get("draft_letters") or {}
     if draft_letters:
-        draft_letters_etag = _draft_letters_etag(draft_letters)
-        out["draft_letters_etag"] = draft_letters_etag
-        if not known_draft_letters_etag or known_draft_letters_etag != draft_letters_etag:
-            out["draft_letters"] = draft_letters
+        out["draft_letters"] = draft_letters
     if state.get("final_letters"):
         out["final_letters"] = state["final_letters"]
     if state.get("draft_votes"):
@@ -202,9 +191,14 @@ def _ensure_addendum_id(a: Dict, comment_idx: int, addendum_idx: int) -> Dict:
     return a
 
 
-def _comment_acted_vendors(c: Dict) -> set:
-    """Vendors who have acted on this comment (voted, subcommented, or added an addendum)."""
-    acted = set()
+def _comment_acted_vendors(c: Dict[str, Any], topic: Optional[str] = None) -> set:
+    """Vendors who have acted on this comment for a topic."""
+    if topic:
+        by_topic = c.get("acted_by_topic") or {}
+        if isinstance(by_topic, dict):
+            return set(by_topic.get(topic) or [])
+        return set()
+    acted = set(c.get("acted_vendors") or [])
     v = c.get("votes") or {}
     acted.update(v.get("up") or [])
     acted.update(v.get("down") or [])
@@ -218,6 +212,43 @@ def _comment_acted_vendors(c: Dict) -> set:
     return acted
 
 
+def _comment_voted_vendors(c: Dict[str, Any], topic: Optional[str] = None) -> set:
+    """Vendors who already cast a top-level vote on this comment for a topic."""
+    if topic:
+        by_topic = c.get("voted_by_topic") or {}
+        if isinstance(by_topic, dict):
+            return set(by_topic.get(topic) or [])
+        return set()
+    voted = set(c.get("voted_vendors") or [])
+    votes = c.get("votes") or {}
+    voted.update(votes.get("up") or [])
+    voted.update(votes.get("down") or [])
+    voted.update(votes.get("abstain") or [])
+    for bucket in (c.get("votes_by_round") or {}).values():
+        if not isinstance(bucket, dict):
+            continue
+        voted.update(bucket.get("up") or [])
+        voted.update(bucket.get("down") or [])
+        voted.update(bucket.get("abstain") or [])
+    return voted
+
+
+def _mark_comment_acted(c: Dict[str, Any], vendor: str, topic: Optional[str] = None) -> bool:
+    """Persist that vendor already acted on this comment for this topic."""
+    changed = False
+    if topic:
+        by_topic = c.setdefault("acted_by_topic", {})
+        topic_acted = by_topic.setdefault(topic, [])
+        if vendor not in topic_acted:
+            topic_acted.append(vendor)
+            changed = True
+    acted = c.setdefault("acted_vendors", [])
+    if vendor not in acted:
+        acted.append(vendor)
+        changed = True
+    return changed
+
+
 def _sanitize_vote_reason(raw: Any) -> str:
     """Normalize optional model-provided vote rationale to a short one-liner."""
     if not isinstance(raw, str):
@@ -226,11 +257,15 @@ def _sanitize_vote_reason(raw: Any) -> str:
     return compact[:180]
 
 
-def _ensure_vote_round_bucket(c: Dict[str, Any], round_num: Optional[int]) -> Dict[str, Any]:
+def _ensure_vote_round_bucket(
+    c: Dict[str, Any],
+    round_num: Optional[int],
+    topic: Optional[str] = None,
+) -> Dict[str, Any]:
     """Return mutable per-round vote bucket for a comment."""
     rn = int(round_num or c.get("created_round") or 1)
     rounds = c.setdefault("votes_by_round", {})
-    key = str(rn)
+    key = f"{topic}::{rn}" if topic else str(rn)
     bucket = rounds.get(key)
     if not isinstance(bucket, dict):
         bucket = {}
@@ -239,6 +274,9 @@ def _ensure_vote_round_bucket(c: Dict[str, Any], round_num: Optional[int]) -> Di
     bucket.setdefault("down", [])
     bucket.setdefault("abstain", [])
     bucket.setdefault("reasons", {})
+    if topic:
+        bucket.setdefault("topic", topic)
+    bucket.setdefault("round", rn)
     return bucket
 
 
@@ -248,6 +286,7 @@ def _set_comment_vote_action(
     action: str,
     *,
     round_num: Optional[int] = None,
+    topic: Optional[str] = None,
     reason: str = "",
 ) -> bool:
     """
@@ -256,6 +295,9 @@ def _set_comment_vote_action(
     Keeps aggregate votes consistent (vendor appears in exactly one of up/down/abstain),
     and records a per-round snapshot + rationale for audit/UX.
     """
+    if vendor in _comment_voted_vendors(c, topic=topic):
+        return False
+
     if "votes" not in c or not isinstance(c.get("votes"), dict):
         c["votes"] = {"up": [], "down": [], "abstain": []}
     votes = c["votes"]
@@ -271,8 +313,10 @@ def _set_comment_vote_action(
     if vendor not in votes[action]:
         votes[action].append(vendor)
         changed = True
+    if _mark_comment_acted(c, vendor, topic=topic):
+        changed = True
 
-    bucket = _ensure_vote_round_bucket(c, round_num)
+    bucket = _ensure_vote_round_bucket(c, round_num, topic=topic)
     for k in ("up", "down", "abstain"):
         if vendor in bucket[k]:
             bucket[k].remove(vendor)
@@ -287,6 +331,17 @@ def _set_comment_vote_action(
         prev = bucket_reasons.get(vendor)
         if prev != clean_reason:
             bucket_reasons[vendor] = clean_reason
+            changed = True
+
+    voted_vendors = c.setdefault("voted_vendors", [])
+    if vendor not in voted_vendors:
+        voted_vendors.append(vendor)
+        changed = True
+    if topic:
+        voted_by_topic = c.setdefault("voted_by_topic", {})
+        topic_voted = voted_by_topic.setdefault(topic, [])
+        if vendor not in topic_voted:
+            topic_voted.append(vendor)
             changed = True
 
     return changed
@@ -341,6 +396,8 @@ def _clone_comment_for_carryover(c: Dict[str, Any], *, carry_topic: str, carry_i
             "down": list(bucket.get("down") or []),
             "abstain": list(bucket.get("abstain") or []),
             "reasons": dict(bucket.get("reasons") or {}),
+            "topic": bucket.get("topic"),
+            "round": bucket.get("round"),
         }
     return {
         "id": carry_id,
@@ -356,6 +413,14 @@ def _clone_comment_for_carryover(c: Dict[str, Any], *, carry_topic: str, carry_i
         "removed": bool(c.get("removed")) or len(votes.get("down") or []) > 0,
         "created_round": int(c.get("created_round") or 1),
         "votes_by_round": vote_rounds_out,
+        "acted_vendors": list(c.get("acted_vendors") or []),
+        "voted_vendors": list(c.get("voted_vendors") or []),
+        "acted_by_topic": {
+            str(k): list(v or []) for k, v in (c.get("acted_by_topic") or {}).items()
+        },
+        "voted_by_topic": {
+            str(k): list(v or []) for k, v in (c.get("voted_by_topic") or {}).items()
+        },
         "carried_from_topic": carry_topic,
         "carried_from_comment_id": c.get("id"),
         "carried": True,
@@ -449,6 +514,14 @@ def merge_carryover_updates_and_strip(
             "down": list(votes.get("down") or []),
             "abstain": list(votes.get("abstain") or []),
         }
+        source["acted_vendors"] = list(comment.get("acted_vendors") or [])
+        source["voted_vendors"] = list(comment.get("voted_vendors") or [])
+        source["acted_by_topic"] = {
+            str(k): list(v or []) for k, v in (comment.get("acted_by_topic") or {}).items()
+        }
+        source["voted_by_topic"] = {
+            str(k): list(v or []) for k, v in (comment.get("voted_by_topic") or {}).items()
+        }
         vote_rounds = comment.get("votes_by_round") or {}
         source["votes_by_round"] = {}
         for round_key, bucket in vote_rounds.items():
@@ -459,6 +532,8 @@ def merge_carryover_updates_and_strip(
                 "down": list(bucket.get("down") or []),
                 "abstain": list(bucket.get("abstain") or []),
                 "reasons": dict(bucket.get("reasons") or {}),
+                "topic": bucket.get("topic"),
+                "round": bucket.get("round"),
             }
         source["created_round"] = int(comment.get("created_round") or source.get("created_round") or 1)
         source["removed"] = bool(comment.get("removed")) or len(source["votes"]["down"]) > 0
@@ -483,8 +558,13 @@ def format_prior_topic_comments_for_prompt(prior_comments: List[Dict[str, Any]])
     return "\n".join(lines)
 
 
-def _format_thread_for_prompt(thread: List[Dict], topic: str, feedback_vendors: Optional[List[str]] = None) -> str:
-    """Format current thread for the prompt: effective comment text (with incorporated addendums), new addendums, open vs finalized."""
+def _format_thread_for_prompt(
+    thread: List[Dict],
+    topic: str,
+    feedback_vendors: Optional[List[str]] = None,
+    current_vendor: Optional[str] = None,
+) -> str:
+    """Format current thread for the prompt with per-vendor openness."""
     if not thread:
         return "(No comments yet.)"
     vendor_set = set(feedback_vendors or [])
@@ -492,8 +572,13 @@ def _format_thread_for_prompt(thread: List[Dict], topic: str, feedback_vendors: 
     for i, c in enumerate(thread):
         cid = c.get("id", f"c{i}")
         is_removed = _is_comment_removed(c)
-        acted = _comment_acted_vendors(c)
-        is_open = (not is_removed) and (not vendor_set or (acted < vendor_set))
+        acted = _comment_acted_vendors(c, topic=topic)
+        # Vendor-aware openness: for the current vendor, a comment is open only if they
+        # have not acted on it yet. Fallback keeps legacy all-vendors-open behavior.
+        if current_vendor:
+            is_open = (not is_removed) and (current_vendor not in acted)
+        else:
+            is_open = (not is_removed) and (not vendor_set or (acted < vendor_set))
         status = "REMOVED" if is_removed else ("OPEN" if is_open else "FINALIZED")
         lines.append(f"--- Comment {i+1} [id={cid}] [{status}] by {c.get('vendor', '?')} ---")
         if c.get("carried"):
@@ -622,7 +707,12 @@ def _call_agentic_feedback_agent(
             _log(f"AGENTIC {vendor} on {topic}: declined (NO COMMENT/SKIP)")
             return {"subcomments": [], "votes": [], "new_comment": None}
         return {"subcomments": [], "votes": [], "new_comment": raw}
-    thread_str = _format_thread_for_prompt(thread, topic, feedback_vendors)
+    thread_str = _format_thread_for_prompt(
+        thread,
+        topic,
+        feedback_vendors,
+        current_vendor=vendor,
+    )
     system, prompt = _agentic_feedback_prompt_subsequent(
         topic, context, thread_str, topic_label, prior_topic_comments_str=(prior_topic_comments or "")
     )
@@ -662,7 +752,9 @@ def _apply_agent_response(
     thread: List[Dict],
     vendor: str,
     response: Dict[str, Any],
+    topic: Optional[str] = None,
     round_num: Optional[int] = None,
+    new_comment_ids: Optional[List[str]] = None,
 ) -> bool:
     """
     Apply one agent's response to the thread. Returns True if any new content was added
@@ -681,6 +773,8 @@ def _apply_agent_response(
                     break
         idx = id_to_idx.get(cid) if cid is not None else None
         if idx is not None:
+            if vendor in _comment_acted_vendors(thread[idx], topic=topic):
+                continue
             if _is_comment_removed(thread[idx]):
                 continue
             if "subcomments" not in thread[idx]:
@@ -690,6 +784,7 @@ def _apply_agent_response(
                 "vendor": vendor,
                 "text": (sc.get("text") or sc.get("content") or "").strip(),
             })
+            _mark_comment_acted(thread[idx], vendor, topic=topic)
             changed = True
     for v in response.get("votes") or []:
         cid = v.get("comment_id")
@@ -697,6 +792,8 @@ def _apply_agent_response(
             cid = v.get("commentId")
         idx = id_to_idx.get(cid) if cid is not None else None
         if idx is None:
+            continue
+        if vendor in _comment_acted_vendors(thread[idx], topic=topic):
             continue
         if _is_comment_removed(thread[idx]):
             continue
@@ -707,6 +804,7 @@ def _apply_agent_response(
                 vendor,
                 "abstain",
                 round_num=round_num,
+                topic=topic,
                 reason=v.get("reason") or v.get("rationale") or "",
             ):
                 changed = True
@@ -717,6 +815,7 @@ def _apply_agent_response(
                 vendor,
                 "up",
                 round_num=round_num,
+                topic=topic,
                 reason=v.get("reason") or v.get("rationale") or "",
             ):
                 changed = True
@@ -776,6 +875,7 @@ def _apply_agent_response(
                     vendor,
                     "down",
                     round_num=round_num,
+                    topic=topic,
                     reason=v.get("reason") or v.get("rationale") or "",
                 ):
                     changed = True
@@ -785,18 +885,116 @@ def _apply_agent_response(
                     changed = True
     new_comment = response.get("new_comment")
     if new_comment and isinstance(new_comment, str) and new_comment.strip():
+        new_comment_id = str(uuid.uuid4())[:8]
         thread.append({
-            "id": str(uuid.uuid4())[:8],
+            "id": new_comment_id,
             "vendor": vendor,
             "text": new_comment.strip(),
             "addendums": [],
             "votes": {"up": [], "down": [], "abstain": []},
             "votes_by_round": {},
+            "acted_vendors": [],
+            "voted_vendors": [],
+            "acted_by_topic": {},
+            "voted_by_topic": {},
             "subcomments": [],
             "removed": False,
             "created_round": int(round_num or 1),
         })
+        if new_comment_ids is not None:
+            new_comment_ids.append(new_comment_id)
         changed = True
+    return changed
+
+
+def _filter_vote_only_response_for_comments(
+    response: Dict[str, Any],
+    allowed_comment_ids: List[str],
+) -> Dict[str, Any]:
+    """Keep only explicit top-level votes for allowed comments."""
+    allowed = set(allowed_comment_ids)
+    votes_out: List[Dict[str, Any]] = []
+    for v in (response or {}).get("votes") or []:
+        cid = v.get("comment_id")
+        if cid is None:
+            cid = v.get("commentId")
+        if cid not in allowed:
+            continue
+        action_raw = str(v.get("action") or "").lower()
+        if action_raw == "abstain":
+            action = "abstain"
+        elif action_raw == "upvote" or ("up" in action_raw and "down" not in action_raw):
+            action = "upvote"
+        elif action_raw == "downvote" or "down" in action_raw:
+            action = "downvote"
+        else:
+            continue
+        vote_row = {"comment_id": cid, "action": action}
+        reason = v.get("reason") or v.get("rationale")
+        if isinstance(reason, str) and reason.strip():
+            vote_row["reason"] = reason.strip()
+        votes_out.append(vote_row)
+    return {"subcomments": [], "votes": votes_out, "new_comment": None}
+
+
+def _run_immediate_vote_sweep_for_comments(
+    thread: List[Dict[str, Any]],
+    topic: str,
+    context: str,
+    vendors: List[str],
+    trace_dir: Path,
+    *,
+    prior_topic_comments_text: str = "",
+    source_vendor: Optional[str] = None,
+    comment_ids: Optional[List[str]] = None,
+    should_abort: Optional[Callable[[], bool]] = None,
+    round_num: Optional[int] = None,
+) -> bool:
+    """
+    Immediately call all AIs to vote on newly proposed comments.
+    We accept only explicit top-level votes on the target comments.
+    """
+    target_ids = [cid for cid in (comment_ids or []) if cid]
+    if not target_ids:
+        return False
+    changed = False
+    for voter in vendors:
+        if should_abort is not None and should_abort():
+            _log(f"AGENTIC topic={topic}: abort during immediate vote sweep before voter={voter}")
+            break
+        if source_vendor and voter == source_vendor:
+            # The proposing agent is called in normal sequence already; we do not auto-mark a vote.
+            continue
+        pending_for_voter = []
+        for c in thread:
+            cid = c.get("id")
+            if cid in target_ids and not _is_comment_removed(c) and voter not in _comment_acted_vendors(c, topic=topic):
+                pending_for_voter.append(cid)
+        if not pending_for_voter:
+            continue
+        try:
+            _log(f"AGENTIC immediate vote sweep: topic={topic} voter={voter} pending={pending_for_voter}")
+            raw_response = _call_agentic_feedback_agent(
+                voter,
+                topic,
+                context,
+                thread,
+                trace_dir,
+                feedback_vendors=vendors,
+                prior_topic_comments=prior_topic_comments_text,
+            )
+            vote_only_response = _filter_vote_only_response_for_comments(raw_response, pending_for_voter)
+            if _apply_agent_response(
+                thread,
+                voter,
+                vote_only_response,
+                topic=topic,
+                round_num=round_num,
+                new_comment_ids=None,
+            ):
+                changed = True
+        except Exception as e:
+            _log(f"AGENTIC immediate vote sweep error topic={topic} voter={voter}: {e}")
     return changed
 
 
@@ -1242,8 +1440,29 @@ def run_agentic_feedback_round(
                     trace_dir,
                     prior_topic_comments=prior_comments_text,
                 )
-                if _apply_agent_response(thread, vendor, response, round_num=round_num):
+                new_comment_ids: List[str] = []
+                if _apply_agent_response(
+                    thread,
+                    vendor,
+                    response,
+                    topic=topic,
+                    round_num=round_num,
+                    new_comment_ids=new_comment_ids,
+                ):
                     any_change = True
+                if new_comment_ids:
+                    if _run_immediate_vote_sweep_for_comments(
+                        thread,
+                        topic,
+                        context,
+                        order,
+                        trace_dir,
+                        prior_topic_comments_text=prior_comments_text,
+                        source_vendor=vendor,
+                        comment_ids=new_comment_ids,
+                        round_num=round_num,
+                    ):
+                        any_change = True
             except Exception as e:
                 _log(f"AGENTIC feedback agent error topic={topic} vendor={vendor}: {e}")
         threads[topic] = merge_carryover_updates_and_strip(thread, threads)
@@ -1346,7 +1565,7 @@ def _run_one_topic_agent(
         response = _call_agentic_feedback_agent(
             vendor, topic, context, thread_copy, trace_dir, prior_topic_comments=prior_topic_comments_text
         )
-        _apply_agent_response(thread_copy, vendor, response, round_num=round_num)
+        _apply_agent_response(thread_copy, vendor, response, topic=topic, round_num=round_num)
     except Exception as e:
         _log(f"AGENTIC feedback agent error topic={topic} vendor={vendor}: {e}")
     return (topic, thread_copy)
@@ -1378,7 +1597,28 @@ def _run_one_topic_sequential(
                 feedback_vendors=vendor_order,
                 prior_topic_comments=prior_topic_comments_text,
             )
-            _apply_agent_response(thread, vendor, response, round_num=round_num)
+            new_comment_ids: List[str] = []
+            _apply_agent_response(
+                thread,
+                vendor,
+                response,
+                topic=topic,
+                round_num=round_num,
+                new_comment_ids=new_comment_ids,
+            )
+            if new_comment_ids:
+                _run_immediate_vote_sweep_for_comments(
+                    thread,
+                    topic,
+                    context,
+                    vendor_order,
+                    trace_dir,
+                    prior_topic_comments_text=prior_topic_comments_text,
+                    source_vendor=vendor,
+                    comment_ids=new_comment_ids,
+                    should_abort=should_abort,
+                    round_num=round_num,
+                )
         except Exception as e:
             _log(f"AGENTIC feedback agent error topic={topic} vendor={vendor}: {e}")
     return (topic, thread, True)
@@ -1480,7 +1720,17 @@ def run_agentic_feedback_step(
                     "down": list(bucket.get("down") or []),
                     "abstain": list(bucket.get("abstain") or []),
                     "reasons": dict(bucket.get("reasons") or {}),
+                    "topic": bucket.get("topic"),
+                    "round": bucket.get("round"),
                 }
+            nc["acted_vendors"] = list(nc.get("acted_vendors") or [])
+            nc["voted_vendors"] = list(nc.get("voted_vendors") or [])
+            nc["acted_by_topic"] = {
+                str(k): list(v or []) for k, v in (nc.get("acted_by_topic") or {}).items()
+            }
+            nc["voted_by_topic"] = {
+                str(k): list(v or []) for k, v in (nc.get("voted_by_topic") or {}).items()
+            }
             thread_copy.append(nc)
         seed_thread_with_prior_topic_comments(thread_copy, prior_comments)
         work.append((topic, context, thread_copy, order, trace_dir, prior_comments_text, round_num))

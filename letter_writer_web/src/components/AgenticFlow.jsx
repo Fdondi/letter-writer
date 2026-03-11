@@ -286,6 +286,8 @@ export default function AgenticFlow({
             down: [],
             abstain: Array.isArray(bucket.abstain) ? [...bucket.abstain] : [],
             reasons: bucket.reasons && typeof bucket.reasons === "object" ? { ...bucket.reasons } : {},
+            topic: typeof bucket.topic === "string" ? bucket.topic : undefined,
+            round: Number.isFinite(Number(bucket.round)) ? Number(bucket.round) : undefined,
           };
         });
         return {
@@ -363,7 +365,7 @@ export default function AgenticFlow({
   }
 
   return (
-    <div style={{ padding: 16 }}>
+    <div style={{ padding: 16, overflowAnchor: "none" }}>
       {error && (
         <div
           style={{
@@ -606,6 +608,7 @@ export default function AgenticFlow({
                   display: "flex",
                   flexDirection: "column",
                   gap: 10,
+                  overflowAnchor: "none",
                 }}
               >
                 {TOPIC_KEYS.map((topic, idx) => (

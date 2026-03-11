@@ -73,7 +73,11 @@ def wrap_new_field(field_name: str, value: Any, updated_at: datetime) -> Dict[st
 def get_competence_ratings(user_data: Dict[str, Any]) -> Dict[str, int]:
     # Check "competences" field
     competences_data = user_data.get("competences")
-    return unwrap_for_response("competences", competences_data) or {}
+    unwrapped = unwrap_for_response("competences", competences_data) or {}
+    if isinstance(unwrapped, dict) and "ratings" in unwrapped and isinstance(unwrapped.get("ratings"), dict):
+        # Backward compatibility for nested shape: {"ratings": {...}}
+        return unwrapped.get("ratings") or {}
+    return unwrapped if isinstance(unwrapped, dict) else {}
 
 def get_style_instructions(user_data: Dict[str, Any]) -> str:
     # Prefer "style" (wrapped { value, updated_at }); fall back to "style_instructions" (legacy/alternate storage)

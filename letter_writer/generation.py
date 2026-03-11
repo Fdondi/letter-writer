@@ -326,6 +326,27 @@ def _normalize_skill(s: str) -> str:
     return " ".join((s or "").strip().lower().split())
 
 
+def _level_label_for_rating(level_labels: tuple[str, ...], level_cfg: Dict[str, Any], rating: int) -> str:
+    """Map numeric rating (1..5) to the closest configured level label."""
+    if not level_labels:
+        return "Brief experience"
+    target = max(1, min(5, int(rating)))
+    if isinstance(level_cfg, dict) and level_cfg:
+        best_label = level_labels[0]
+        best_delta = float("inf")
+        for label in level_labels:
+            raw = level_cfg.get(label)
+            if isinstance(raw, (int, float)):
+                delta = abs(float(raw) - float(target))
+                if delta < best_delta:
+                    best_delta = delta
+                    best_label = label
+        if best_delta != float("inf"):
+            return best_label
+    idx = max(0, min(target - 1, len(level_labels) - 1))
+    return level_labels[idx]
+
+
 @traceable(run_type="chain", name="extract_job_metadata")
 def extract_job_metadata(
     job_text: str,
@@ -411,9 +432,10 @@ def extract_job_metadata(
             norm = _normalize_skill(skill)
             if norm and norm in existing_lookup:
                 _, cv_fit = existing_lookup[norm]
-                # Convert numeric 1-5 to level label
-                idx = max(0, min(cv_fit - 1, len(level_labels) - 1))
-                matched_levels[skill] = level_labels[idx]
+                # Convert numeric 1-5 to closest configured level label.
+                matched_levels[skill] = _level_label_for_rating(
+                    level_labels, scale_config.get("level") if scale_config else {}, cv_fit
+                )
             else:
                 unmatched_skills.append(skill)
 
