@@ -25,7 +25,6 @@ class DocumentRequest(BaseModel):
     job_text: Optional[str] = None
     ai_letters: Optional[List[Dict[str, Any]]] = None
     letter_text: Optional[str] = None
-    vector: Optional[List[float]] = None
 
 @router.get("/")
 async def list_docs(request: Request, session: Session = Depends(get_session)):
@@ -114,12 +113,22 @@ async def update_doc(document_id: str, data: DocumentRequest, session: Session =
     doc_data = data.dict(exclude_unset=True)
     doc_data["id"] = document_id
     
-    # Ensure vector exists: generate from job_text if not already stored
-    if data.job_text and "vector" not in doc_data:
-        existing = get_document(collection, document_id, user_id=user['id'])
-        if not existing or not existing.get("vector"):
+    # Keep vector server-owned:
+    # - never trust/store client-provided vectors
+    # - recompute when job_text changes
+    # - backfill if vector is missing
+    existing = get_document(collection, document_id, user_id=user['id'])
+    if not existing:
+        raise HTTPException(status_code=404, detail="Not found")
+    existing_raw_snapshot = collection.document(document_id).get()
+    existing_raw = existing_raw_snapshot.to_dict() if existing_raw_snapshot.exists else {}
+    if data.job_text:
+        existing_job_text = (existing.get("job_text") or "").strip()
+        new_job_text = data.job_text.strip()
+        needs_reembed = (new_job_text != existing_job_text) or ("vector" not in existing_raw)
+        if needs_reembed:
             openai_client = OpenAI()
-            doc_data["vector"] = embed(data.job_text, openai_client)
+            doc_data["vector"] = embed(new_job_text, openai_client)
     
     try:
         updated = upsert_document(collection, doc_data, allow_update=True, user_id=user['id'])

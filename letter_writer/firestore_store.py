@@ -11,6 +11,10 @@ from .config import env_default
 from .vector_store import embed, query_vector_similarity
 
 
+# Internal-only fields that should never be exposed via /api/documents responses.
+_DOCUMENT_RESPONSE_STRIP_FIELDS = {"vector"}
+
+
 def get_firestore_client() -> firestore.Client:
     """Return a Firestore client using env defaults."""
     project_id = env_default("GOOGLE_CLOUD_PROJECT") or env_default("FIRESTORE_PROJECT_ID")
@@ -195,7 +199,7 @@ def serialize_document(doc_dict: dict, doc_id: str) -> dict:
     """Serialize a Firestore document to dict format."""
     if not doc_dict:
         return {}
-    result = dict(doc_dict)
+    result = {k: v for k, v in dict(doc_dict).items() if k not in _DOCUMENT_RESPONSE_STRIP_FIELDS}
     result["id"] = doc_id
     result["ai_letters"] = doc_dict.get("ai_letters") or []
     # Convert Firestore Timestamps to ISO format strings
