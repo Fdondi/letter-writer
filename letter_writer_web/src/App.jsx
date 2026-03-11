@@ -1359,9 +1359,6 @@ export default function App({ flow = "vendor" }) {
         feedback_suspended: data.feedback_suspended,
         topic_meta: normalized.topicMeta,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
-        ...(data.draft_letters && { draft_letters: data.draft_letters }),
-        ...(data.final_letters && { final_letters: data.final_letters }),
-        ...(data.draft_votes && { draft_votes: data.draft_votes }),
       }));
       return data.ongoing === true;
     } catch (e) {

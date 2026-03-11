@@ -139,21 +139,13 @@ def poll_response(
             "messages": (topic_meta.get(topic) or {}).get("messages", len(raw_threads.get(topic) or [])),
             "done": (topic_meta.get(topic) or {}).get("done", False),
         }
-    out = {
+    return {
         "threads": threads,
         "ongoing": ongoing,
         "status": status,
         "feedback_suspended": feedback_suspended,
         "max_rounds": _get_max_rounds(state),
     }
-    draft_letters = state.get("draft_letters") or {}
-    if draft_letters:
-        out["draft_letters"] = draft_letters
-    if state.get("final_letters"):
-        out["final_letters"] = state["final_letters"]
-    if state.get("draft_votes"):
-        out["draft_votes"] = state["draft_votes"]
-    return out
 
 
 def _empty_threads() -> Dict[str, List[Dict]]:
