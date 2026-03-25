@@ -12,7 +12,11 @@ class Settings(BaseSettings):
     
     # Security
     # Prefer APP_SECRET_KEY, keep DJANGO_SECRET_KEY as backward-compatible fallback.
-    SECRET_KEY: str = os.getenv("APP_SECRET_KEY") or os.getenv("DJANGO_SECRET_KEY", "your-super-secret-key-change-this")
+    SECRET_KEY: str = (
+        os.getenv("APP_SECRET_KEY")
+        or os.getenv("DJANGO_SECRET_KEY")
+        or "your-super-secret-key-change-this"
+    )
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 30  # 30 days
     
     # CORS

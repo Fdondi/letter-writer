@@ -351,7 +351,25 @@ export default function AgenticFlow({
   if (!agenticState && !loading) {
     return (
       <div style={{ padding: 20, color: "var(--secondary-text-color)" }}>
-        No agentic state. Start the agentic flow to see draft and feedback threads.
+        {error && (
+          <div
+            style={{
+              padding: 12,
+              marginBottom: 16,
+              backgroundColor: "#fef2f2",
+              color: "#b91c1c",
+              borderRadius: 8,
+              border: "1px solid #fecaca",
+            }}
+          >
+            {error}
+          </div>
+        )}
+        {!error && (
+          <span>
+            No agentic state. Start the agentic flow to see draft and feedback threads.
+          </span>
+        )}
       </div>
     );
   }

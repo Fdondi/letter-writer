@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Request, HTTPException, Depends
+from starlette.datastructures import UploadFile
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 
@@ -119,11 +120,13 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
         file = form.get('file')
         if not file:
             raise HTTPException(status_code=400, detail="No file provided")
+        if not isinstance(file, UploadFile):
+            raise HTTPException(status_code=400, detail="Invalid file upload")
         
-        content = await file.read()
+        file_bytes = await file.read()
         filename = file.filename or "upload"
         # For txt/md, decode as text; for PDF we'd need extraction
-        extracted_text = content.decode('utf-8', errors='replace')
+        extracted_text = file_bytes.decode('utf-8', errors='replace')
         
         # Save to Firestore as new revision
         _append_cv_revision(user_id, extracted_text, source=f"file_upload:{filename}")
@@ -139,7 +142,7 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             raise HTTPException(status_code=400, detail="Invalid JSON")
         
         user_doc_ref = get_personal_data_document(user_id)
-        updates = {"updated_at": datetime.utcnow()}
+        updates: Dict[str, Any] = {"updated_at": datetime.utcnow()}
         now = datetime.utcnow()
         
         if "default_languages" in data:
@@ -189,7 +192,7 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             user_doc_ref.set(updates, merge=True)
             update_user_data_cache(user_id, updates)
         
-        response = {"status": "ok"}
+        response: Dict[str, Any] = {"status": "ok"}
         if "content" in data and data["content"]:
             user_data = get_user_data(user_id, use_cache=True) or {}
             revisions = get_cv_revisions(user_data)

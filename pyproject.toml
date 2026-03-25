@@ -1,0 +1,17 @@
+[dependency-groups]
+dev = [
+  "mypy>=1.8.0",
+  "types-redis>=4.6.0",
+  "pre-commit>=4.0.0",
+]
+
+[tool.mypy]
+# If you change options here, update scripts/docker-typecheck.sh and scripts/docker-typecheck.ps1 (Docker cannot reliably mount pyproject.toml on Windows).
+python_version = "3.13"
+packages = ["letter_writer", "letter_writer_server"]
+ignore_missing_imports = true
+implicit_optional = true
+show_error_codes = true
+warn_unused_ignores = true
+disallow_untyped_defs = false
+check_untyped_defs = false

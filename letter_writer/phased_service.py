@@ -31,6 +31,7 @@ from .cost_tracker import track_api_cost
 from .retrieval import retrieve_similar_job_offers, select_top_documents
 from .session_store import get_session as get_session_from_store, save_session
 from .firestore_store import get_collection
+from .typed_shapes import TopDocument
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class PhaseCost:
 
 @dataclass
 class VendorPhaseState:
-    top_docs: List[dict] = field(default_factory=list)
+    top_docs: List[TopDocument] = field(default_factory=list)
     company_report: Optional[str] = None
     draft_letter: Optional[str] = None
     final_letter: Optional[str] = None
@@ -314,7 +315,7 @@ def advance_to_draft(
     session_id: str,
     vendor: ModelVendor,
     company_report_override: Optional[str] = None,
-    top_docs_override: Optional[List[dict]] = None,
+    top_docs_override: Optional[List[TopDocument]] = None,
     style_instructions: str = "",
     user_id: Optional[str] = None,
 ) -> VendorPhaseState:
@@ -467,7 +468,7 @@ def advance_to_refinement(
     draft_override: Optional[str] = None,
     feedback_override: Optional[Dict[str, str]] = None,
     company_report_override: Optional[str] = None,
-    top_docs_override: Optional[List[dict]] = None,
+    top_docs_override: Optional[List[TopDocument]] = None,
     fancy: bool = False,
     user_id: Optional[str] = None,
 ) -> VendorPhaseState:

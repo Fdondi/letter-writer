@@ -57,7 +57,7 @@ class BaseClient:
             logger.warning("Failed to load cost config for %s: %s", self.__class__.__name__, e)
             if self._costs_cache is None:
                 self._costs_cache = {}
-        return self._costs_cache
+        return self._costs_cache or {}
 
     @property
     def config(self) -> dict:
@@ -146,5 +146,11 @@ class BaseClient:
         self.total_cached_tokens += cached_tokens
         self.total_search_queries += search_queries
 
-    def call(self, model_size: ModelSize | str, system: str, messages: List[Dict], search: bool = False) -> str:
+    def call(
+        self,
+        model_size: ModelSize | str,
+        system: str,
+        user_messages: List[str],
+        search: bool = False,
+    ) -> str:
         raise NotImplementedError("Subclasses must implement this method")

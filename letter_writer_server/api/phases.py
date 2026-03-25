@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
 from fastapi import APIRouter, Request, HTTPException, Depends, Body
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, cast
 from pydantic import BaseModel
 
 from letter_writer_server.core.session import (
@@ -38,6 +38,7 @@ from letter_writer.generation import MissingCVError
 from letter_writer.session_store import load_session_common_data, check_session_exists
 from letter_writer.firestore_store import get_user_data
 from letter_writer.personal_data_sections import get_models, get_agentic_draft_model
+from letter_writer.typed_shapes import TopDocument
 from letter_writer.agentic_service import (
     get_agentic_state,
     run_agentic_draft,
@@ -93,6 +94,7 @@ class AgenticDraftRequest(BaseModel):
     draft_vendor: Optional[str] = None
     draft_vendors: Optional[List[str]] = None
     company_report: Optional[str] = None
+    # JSON bodies stay Dict[str, Any] at the boundary; cast to TopDocument in handlers (see typed_shapes).
     top_docs: Optional[List[Dict[str, Any]]] = None
     style_instructions: Optional[str] = None
     max_rounds: Optional[int] = None
@@ -259,14 +261,17 @@ async def background_phase(vendor: str, data: BackgroundPhaseRequest, request: R
     # Check session data availability
     if not session.get('job_text'):
         raise HTTPException(status_code=400, detail="Job text is missing")
+    session_key = session.session_key
+    if not session_key:
+        raise HTTPException(status_code=400, detail="No session")
     
     # Support overrides
     if data.company_report:
         vendor_state = VendorPhaseState(
-            top_docs=data.top_docs or [],
+            top_docs=cast(List[TopDocument], data.top_docs or []),
             company_report=data.company_report
         )
-        save_vendor_data(session.session_key, vendor, vendor_state)
+        save_vendor_data(session_key, vendor, vendor_state)
     else:
         # Run actual background phase
         # Note: _run_background_phase expects session_id. 
@@ -295,7 +300,7 @@ async def background_phase(vendor: str, data: BackgroundPhaseRequest, request: R
                 
             vendor_enum = ModelVendor(vendor)
             user_id = (user or {}).get("id") or "anonymous"
-            vendor_state = _run_background_phase(session.session_key, vendor_enum, common_data, user_id=user_id)
+            vendor_state = _run_background_phase(session_key, vendor_enum, common_data, user_id=user_id)
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -382,7 +387,7 @@ async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Se
                 session,
                 draft_vendors=draft_vendors,
                 company_report_override=data.company_report,
-                top_docs_override=data.top_docs,
+                top_docs_override=cast(Optional[List[TopDocument]], data.top_docs),
                 style_instructions=data.style_instructions or "",
                 max_rounds=max_rounds,
             )
@@ -405,7 +410,7 @@ async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Se
             session,
             draft_vendor=draft_vendor,
             company_report_override=data.company_report,
-            top_docs_override=data.top_docs,
+            top_docs_override=cast(Optional[List[TopDocument]], data.top_docs),
             style_instructions=data.style_instructions or "",
             max_rounds=max_rounds,
         )
@@ -751,7 +756,7 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
                 seed_thread_with_prior_topic_comments(sweep_thread, prior_comments)
                 
             prior_comments_text = format_prior_topic_comments_for_prompt(prior_comments)
-            initial_vote_comment_ids = [c.get("id") for c in prior_comments if c.get("id")]
+            initial_vote_comment_ids = [str(c.get("id")) for c in prior_comments if c.get("id")]
             _, sweep_updated_thread, topic_completed = _run_one_topic_sequential(
                 target_topic,
                 target_meta["context"],
@@ -872,10 +877,13 @@ async def agentic_feedback_poll(
                 if k in state:
                     snapshot[k] = state[k]
         persist_agentic_last_poll_at(session_key, now)
-        rounds_live = {
-            t: int(((snapshot.get("topic_cursors") or {}).get(t) or {}).get("round", 1))
-            for t in AGENTIC_TOPIC_KEYS
-        }
+        tc_raw = snapshot.get("topic_cursors")
+        tc = tc_raw if isinstance(tc_raw, dict) else {}
+        rounds_live = {}
+        for t in AGENTIC_TOPIC_KEYS:
+            cur_tc = tc.get(t)
+            cur_dict = cur_tc if isinstance(cur_tc, dict) else {}
+            rounds_live[t] = int(cur_dict.get("round", 1))
         logger.info(
             "AGENTIC poll source=live session=%s ongoing=%s status=%s rounds=%s",
             session_key,
@@ -1046,6 +1054,8 @@ async def agentic_feedback_resume(
     if not all_topics:
         raise HTTPException(status_code=400, detail="Provide all=true")
     session_key = session.session_key
+    if not session_key:
+        raise HTTPException(status_code=400, detail="No session")
     try:
         entry = _get_agentic_live(session_key) if session_key else None
         if entry:
@@ -1107,6 +1117,8 @@ async def agentic_rounds_add(
     if topic and topic not in AGENTIC_TOPIC_KEYS:
         raise HTTPException(status_code=400, detail=f"topic must be one of {AGENTIC_TOPIC_KEYS}")
     session_key = session.session_key
+    if not session_key:
+        raise HTTPException(status_code=400, detail="No session")
     try:
         entry = _get_agentic_live(session_key) if session_key else None
         if entry:
@@ -1137,7 +1149,7 @@ async def agentic_vote(data: AgenticVoteRequest, request: Request, session: Sess
     try:
         state = run_agentic_voting(session, voting_vendors=data.voting_vendors)
         # Voting only produces incremental data for the client (status + votes + optional cost).
-        response = {
+        response: Dict[str, Any] = {
             "status": "ok",
             "agentic_update": {
                 "status": state.get("status"),
@@ -1163,7 +1175,7 @@ async def agentic_refine(request: Request, session: Session = Depends(get_sessio
         threads_override = body.threads if body and body.threads is not None else None
         state = run_agentic_refine(session, threads_override=threads_override)
         # Refine produces final output; send only fields the client does not already have.
-        response = {
+        response: Dict[str, Any] = {
             "status": "ok",
             "agentic_update": {
                 "status": state.get("status"),

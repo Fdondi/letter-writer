@@ -14,15 +14,15 @@ app = typer.Typer(help="Cover letter customizator CLI.")
 
 @app.command()
 def refresh(
-    jobs_source_folder: Path = typer.Option(Path(env_default("JOBS_SOURCE_FOLDER", "examples")), help="Folder holding past job offers, used for the Firestore repo."),
-    jobs_source_suffix: str = typer.Option(env_default("JOBS_SOURCE_SUFFIX", ".txt")),
-    letters_source_folder: Path = typer.Option(Path(env_default("LETTERS_SOURCE_FOLDER", "examples")), help="Folder holding past cover letters, used for the Firestore repo."),
-    letters_source_suffix: str = typer.Option(env_default("LETTERS_SOURCE_SUFFIX", ".tex")),
-    letters_ignore_until: str = typer.Option(env_default("LETTERS_IGNORE_UNTIL", None)),
-    letters_ignore_after: str = typer.Option(env_default("LETTERS_IGNORE_AFTER", None)),
-    negative_letters_source_folder: Path = typer.Option(Path(env_default("NEGATIVE_LETTERS_SOURCE_FOLDER", "examples")),
+    jobs_source_folder: Path = typer.Option(Path(env_default("JOBS_SOURCE_FOLDER") or "examples"), help="Folder holding past job offers, used for the Firestore repo."),
+    jobs_source_suffix: str = typer.Option(env_default("JOBS_SOURCE_SUFFIX") or ".txt"),
+    letters_source_folder: Path = typer.Option(Path(env_default("LETTERS_SOURCE_FOLDER") or "examples"), help="Folder holding past cover letters, used for the Firestore repo."),
+    letters_source_suffix: str = typer.Option(env_default("LETTERS_SOURCE_SUFFIX") or ".tex"),
+    letters_ignore_until: Optional[str] = typer.Option(env_default("LETTERS_IGNORE_UNTIL", None)),
+    letters_ignore_after: Optional[str] = typer.Option(env_default("LETTERS_IGNORE_AFTER", None)),
+    negative_letters_source_folder: Path = typer.Option(Path(env_default("NEGATIVE_LETTERS_SOURCE_FOLDER") or "examples"),
                                                         help="Folder holding past cover letters that the AI produced, before being corrected by a human; used for the Firestore repo."),
-    negative_letters_source_suffix: str = typer.Option(env_default("NEGATIVE_LETTERS_SOURCE_SUFFIX", ".txt")),
+    negative_letters_source_suffix: str = typer.Option(env_default("NEGATIVE_LETTERS_SOURCE_SUFFIX") or ".txt"),
     clear: bool = typer.Option(False, help="Clear existing documents before rebuilding (Firestore: documents with same ID will be overwritten)."),
 ):
     """Refresh the example repository used for retrieval-augmented generation."""

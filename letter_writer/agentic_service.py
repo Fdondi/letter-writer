@@ -11,7 +11,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,34 @@ from .phased_service import get_metadata_field
 from .cost_tracker import track_api_cost
 from .retrieval import select_top_documents
 from .research import company_research
+from .typed_shapes import TopDocument
+
+
+def _top_docs_missing_letter_text(top_docs: Sequence[TopDocument]) -> bool:
+    if not top_docs:
+        return False
+    return any(not (d.get("letter_text") or "").strip() for d in top_docs)
+
+
+def _refresh_top_docs_from_session_search_if_needed(
+    session,
+    job_text: str,
+    metadata: dict,
+    vendor: str,
+    top_docs: List[TopDocument],
+) -> List[TopDocument]:
+    """Replace slim client top_docs with reranked docs that include job/letter text when possible."""
+    if not _top_docs_missing_letter_text(top_docs):
+        return top_docs
+    search_result = session.get("search_result", [])
+    if not search_result:
+        return top_docs
+    company_name = get_metadata_field(metadata, ModelVendor(vendor), "company_name", "Unknown")
+    trace_dir = Path("trace", f"{company_name}.agentic.top_docs_refresh")
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    ai_client = get_client(ModelVendor(vendor))
+    result = select_top_documents(search_result, job_text, ai_client, trace_dir)
+    return result.get("top_docs", []) or top_docs
 
 
 # Status values for agentic state
@@ -845,7 +873,7 @@ def _apply_agent_response(
                     "down": [],
                 }
                 thread[idx]["addendums"].append(new_a)
-                addendum_by_id[new_a["id"]] = (idx, len(thread[idx]["addendums"]) - 1)
+                addendum_by_id[str(new_a["id"])] = (idx, len(thread[idx]["addendums"]) - 1)
                 changed = True
                 # New addendum is positive (author upvote); invalidate parent comment votes
                 if thread[idx].get("votes"):
@@ -1188,7 +1216,7 @@ def run_agentic_draft(
     session,
     draft_vendor: str,
     company_report_override: Optional[str] = None,
-    top_docs_override: Optional[List[dict]] = None,
+    top_docs_override: Optional[List[TopDocument]] = None,
     style_instructions: str = "",
     max_rounds: int = DEFAULT_MAX_ROUNDS,
 ) -> Dict[str, Any]:
@@ -1200,7 +1228,7 @@ def run_agentic_draft(
     job_text = session.get("job_text", "")
     cv_text = session.get("cv_text", "")
     metadata = session.get("metadata", {})
-    top_docs = top_docs_override if top_docs_override is not None else []
+    top_docs: List[TopDocument] = list(top_docs_override) if top_docs_override else []
     company_report = company_report_override or ""
 
     if not company_report or not top_docs:
@@ -1222,8 +1250,11 @@ def run_agentic_draft(
                 point_of_contact=point_of_contact,
                 additional_company_info=additional_company_info,
                 search_instructions=get_search_instructions(),
-            )
-            company_report = company_report or ""
+            ) or ""
+
+    top_docs = _refresh_top_docs_from_session_search_if_needed(
+        session, job_text, metadata, draft_vendor, top_docs
+    )
 
     if not style_instructions:
         style_instructions = session.get("style_instructions", "") or get_style_instructions()
@@ -1268,7 +1299,7 @@ def run_agentic_draft_multi(
     session,
     draft_vendors: List[str],
     company_report_override: Optional[str] = None,
-    top_docs_override: Optional[List[dict]] = None,
+    top_docs_override: Optional[List[TopDocument]] = None,
     style_instructions: str = "",
     max_rounds: int = DEFAULT_MAX_ROUNDS,
 ) -> Dict[str, Any]:
@@ -1282,7 +1313,7 @@ def run_agentic_draft_multi(
     job_text = session.get("job_text", "")
     cv_text = session.get("cv_text", "")
     metadata = session.get("metadata", {})
-    top_docs = list(top_docs_override) if top_docs_override else []
+    top_docs: List[TopDocument] = list(top_docs_override) if top_docs_override else []
     company_report = company_report_override or ""
     first_vendor = draft_vendors[0]
 
@@ -1305,8 +1336,7 @@ def run_agentic_draft_multi(
                 point_of_contact=point_of_contact,
                 additional_company_info=additional_company_info,
                 search_instructions=get_search_instructions(),
-            )
-            company_report = company_report or ""
+            ) or ""
         # #region agent log
         try:
             import json
@@ -1315,6 +1345,10 @@ def run_agentic_draft_multi(
         except Exception:
             pass
         # #endregion
+
+    top_docs = _refresh_top_docs_from_session_search_if_needed(
+        session, job_text, metadata, first_vendor, top_docs
+    )
 
     if not style_instructions:
         style_instructions = session.get("style_instructions", "") or get_style_instructions()
@@ -1402,7 +1436,8 @@ def run_agentic_feedback_round(
     draft_letter = state.get("draft_letter") or ""
     draft_vendor = state.get("draft_vendor") or ""
     threads = state.get("threads") or _empty_threads()
-    top_docs = state.get("top_docs") or []
+    # top_docs persisted in agentic state: trusted as List[TopDocument] once draft has run.
+    top_docs = cast(List[TopDocument], state.get("top_docs") or [])
     company_report = state.get("company_report") or ""
     job_text = state.get("job_text") or ""
     cv_text = state.get("cv_text") or ""
@@ -1673,7 +1708,7 @@ def run_agentic_feedback_step(
     draft_letter = state.get("draft_letter") or ""
     draft_vendor = state.get("draft_vendor") or ""
     threads = state.get("threads") or _empty_threads()
-    top_docs = state.get("top_docs") or []
+    top_docs = cast(List[TopDocument], state.get("top_docs") or [])
     company_report = state.get("company_report") or ""
     job_text = state.get("job_text") or ""
     cv_text = state.get("cv_text") or ""
@@ -1706,7 +1741,7 @@ def run_agentic_feedback_step(
         round_num = int(cur.get("round") or 1)
         prior_comments = get_prior_topic_top_comments(threads, topic)
         prior_comments_text = format_prior_topic_comments_for_prompt(prior_comments)
-        initial_vote_comment_ids = [c.get("id") for c in prior_comments if c.get("id")]
+        initial_vote_comment_ids = [str(c.get("id")) for c in prior_comments if c.get("id")]
         context = get_agentic_topic_context(
             topic, draft_letter, cv_text, company_report, job_text, top_docs,
             style_instructions, additional_user_info,

@@ -1,18 +1,22 @@
 from __future__ import annotations
 
-from typing import List, Tuple, Any
+from typing import Any, List, Tuple, cast
 
 import typer
 from langsmith import traceable
 
 from .base import BaseClient, ModelSize
 
+genai: Any = None
+types: Any = None
 try:
-    from google import genai  # type: ignore
-    from google.genai import types  # type: ignore
+    from google import genai as _genai_mod
+    from google.genai import types as _types_mod
+
+    genai = _genai_mod
+    types = _types_mod
 except Exception:  # pragma: no cover
-    genai = None  # type: ignore
-    types = None  # type: ignore
+    pass
 
 
 class GeminiClient(BaseClient):
@@ -80,7 +84,15 @@ class GeminiClient(BaseClient):
             "search": float(model_cfg.get("search", default_search) or 0.0),
         }
 
-    def track_cost(self, model_name: str, input_tokens: int, output_tokens: int, search_queries: int = 0):
+    def track_cost(
+        self,
+        model_name: str,
+        input_tokens: int,
+        output_tokens: int,
+        search_queries: int = 0,
+        cached_tokens: int = 0,
+    ):
+        _ = cached_tokens  # Gemini path does not split cached vs uncached today; keep signature aligned with BaseClient.
         p = self._get_gemini_pricing(model_name)
 
         # Input/output measured against threshold independently.
@@ -137,7 +149,7 @@ class GeminiClient(BaseClient):
                 model=model_name,
                 config=types.GenerateContentConfig(
                     system_instruction=system,
-                    tools=tools,
+                    tools=cast(Any, tools),
                 ),
                 contents=validated_messages,
             )

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
-from typing import Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Union, cast
 from uuid import uuid4
 
 from google.cloud import firestore
+from google.cloud.firestore_v1.vector import Vector
 
 from .config import env_default
 from .vector_store import embed, query_vector_similarity
@@ -98,7 +99,7 @@ def get_user_data(user_id: str, use_cache: bool = True) -> dict:
     doc = doc_ref.get()
     
     if not doc.exists:
-        user_data = {}
+        user_data: Dict[str, Any] = {}
     else:
         user_data = doc.to_dict() or {}
     
@@ -545,7 +546,11 @@ def _normalize_poc_key(poc_name: str) -> str:
     return poc_name.strip().lower().replace(" ", "_")
 
 
-def save_company_info(company_name: str, data: dict, vector: Optional[List[float]] = None) -> dict:
+def save_company_info(
+    company_name: str,
+    data: dict,
+    vector: Optional[Union[List[float], Vector]] = None,
+) -> dict:
     """Save company research data.
     
     Args:
@@ -578,7 +583,6 @@ def save_company_info(company_name: str, data: dict, vector: Optional[List[float
             openai_client = OpenAI()
             vec = embed(company_name, openai_client)
         if vec is not None:
-            from google.cloud.firestore_v1.vector import Vector
             update_data["vector"] = vec if isinstance(vec, Vector) else Vector(vec)
     except Exception:
         # Vector enrichment is best-effort and should not block company cache writes.
@@ -699,7 +703,8 @@ def save_poc_info(company_name: str, poc_name: str, data: dict) -> dict:
     }
     
     collection.document(company_id).set(update_data, merge=True)
-    return update_data["pocs"][poc_key]
+    pocs_out = cast(Dict[str, Any], update_data["pocs"])
+    return pocs_out[poc_key]
 
 
 def get_poc_info(company_name: str, poc_name: str) -> Optional[dict]:
@@ -801,6 +806,8 @@ def documents_by_ids(collection, ids: List[str], user_id: Optional[str] = None) 
     for doc in docs:
         if doc.exists:
             doc_data = doc.to_dict()
+            if doc_data is None:
+                continue
             # Security check: only return documents belonging to the requesting user
             if doc_data.get("user_id") == user_id:
                 result.append(serialize_document(doc_data, doc.id))

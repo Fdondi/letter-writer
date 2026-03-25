@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import List, Dict, Optional
+from typing import Any, Dict, List, Optional
 from pathlib import Path
 from openai import OpenAI
 import typer
@@ -10,6 +10,7 @@ from .clients.base import BaseClient, ModelSize
 
 from .vector_store import embed, query_vector_similarity
 from .firestore_store import get_collection
+from .typed_shapes import DocBrief, RerankDetail, SelectTopDocumentsResult, TopDocument
 
 import pandas as pd
 
@@ -114,22 +115,22 @@ def select_top_documents(
     job_text: str,
     ai_client: BaseClient,
     trace_dir: Path,
-) -> List[dict]:
+) -> SelectTopDocumentsResult:
     """Select top documents from search results and rerank them.
-    
+
     Args:
         search_result: List of document dicts from Firestore (already full documents)
         job_text: Job description text
         ai_client: AI client for reranking
         trace_dir: Directory for tracing
-        
+
     Returns:
-        List of top documents with scores
+        ``{"top_docs": [...], "all_scores": {...}, "all_briefs": {...}}``
     """
     logger.debug("[RAG] select_top_documents: input %s docs", len(search_result))
     if not search_result:
         logger.debug("[RAG] select_top_documents: empty input, returning empty")
-        return {"top_docs": [], "all_scores": {}}
+        return {"top_docs": [], "all_scores": {}, "all_briefs": {}}
 
     retrieved_docs: Dict[str, dict] = {}
     for doc in search_result:
@@ -178,30 +179,39 @@ def select_top_documents(
 
     # top_docs: top 3 for LLM picks; all_scores: company_name -> score for display
     top3_items = list(reranked_docs.items())[:3]
-    top_docs_list = [
+    top_docs_list: List[TopDocument] = [
         {
             "id": retrieved_docs[name].get("id", ""),
             "company_name": name,
-            "score": details["score"],
-            "similarities": details.get("similarities", []),
-            "differences": details.get("differences", []),
-            "comment": details.get("comment", ""),
+            "score": int(details["score"]),
+            "similarities": list(details.get("similarities", [])),
+            "differences": list(details.get("differences", [])),
+            "comment": str(details.get("comment", "")),
+            # Required for letter generation (generate_letter); rerank output does not include these.
+            "job_text": (retrieved_docs[name].get("job_text") or ""),
+            "letter_text": (retrieved_docs[name].get("letter_text") or ""),
         }
         for name, details in top3_items
     ]
-    all_scores = {name: details["score"] for name, details in reranked_docs.items()}
-    all_briefs = {
+    all_scores: dict[str, int] = {name: int(details["score"]) for name, details in reranked_docs.items()}
+    all_briefs: dict[str, DocBrief] = {
         name: {
-            "similarities": details.get("similarities", []),
-            "differences": details.get("differences", []),
-            "comment": details.get("comment", ""),
+            "similarities": list(details.get("similarities", [])),
+            "differences": list(details.get("differences", [])),
+            "comment": str(details.get("comment", "")),
         }
         for name, details in reranked_docs.items()
     }
-    return {"top_docs": top_docs_list, "all_scores": all_scores, "all_briefs": all_briefs}
+    return {
+        "top_docs": top_docs_list,
+        "all_scores": all_scores,
+        "all_briefs": all_briefs,
+    }
 
 @traceable(run_type="chain", name="rerank_documents")
-def rerank_documents(job_text: str, docs: dict, ai_client: BaseClient, trace_dir: Path) -> dict:
+def rerank_documents(
+    job_text: str, docs: dict, ai_client: BaseClient, trace_dir: Path
+) -> Dict[str, RerankDetail]:
     """Ask the model to score docs and return company_name -> detail dict."""
     
     # Prepare mapping of doc id -> company_name for scoring
@@ -227,7 +237,7 @@ def rerank_documents(job_text: str, docs: dict, ai_client: BaseClient, trace_dir
         "Return ONLY the JSON object, no wrappers.\n\n"
     )
     prompt = "Original Job Description:\n" + job_text + "\n\nOther Descriptions (JSON):\n" + mapping_json
-    scores_json = ai_client.call(ModelSize.LARGE, system=system, user_messages=[prompt])
+    scores_json = ai_client.call(ModelSize.LARGE, system, [prompt])
 
     # remove wrapping '''json if present
     if scores_json.startswith("```json"):
@@ -246,11 +256,11 @@ def rerank_documents(job_text: str, docs: dict, ai_client: BaseClient, trace_dir
     score_table.to_json(trace_dir / "retrieved_docs.json", orient="records", indent=2)
 
     # return all scored docs as dict company_name -> details (top 3 used for picks, all for display)
-    out = {}
+    out: Dict[str, RerankDetail] = {}
     for _, row in score_table.iterrows():
-        out[row["company_name"]] = {
+        out[str(row["company_name"])] = {
             "score": int(row["score"]),
-            "comment": row.get("comment", ""),
+            "comment": str(row.get("comment", "")),
             "similarities": _normalize_points(row.get("similarities", [])),
             "differences": _normalize_points(row.get("differences", [])),
         }

@@ -1,6 +1,11 @@
 from pathlib import Path
+from typing import Optional
 
-def extract_letter_text(letter_path: Path, ignore_until: str, ignore_after: str) -> str:
+def extract_letter_text(
+    letter_path: Path,
+    ignore_until: Optional[str],
+    ignore_after: Optional[str],
+) -> str:
     """Extract letter text from file with optional content filtering."""
     letter_content = letter_path.read_text(encoding="utf-8")
     if ignore_until:

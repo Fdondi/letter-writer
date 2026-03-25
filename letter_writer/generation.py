@@ -4,14 +4,14 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from threading import Lock
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from pathlib import Path
-from openai import OpenAI
 from langsmith import traceable
 
 from .config import TRACE_DIR, get_extraction_model
 from .clients.base import BaseClient, ModelSize
 from .skill_utils import core_skill_name as _core_skill_name
+from .typed_shapes import TopDocument
 
 logger = logging.getLogger(__name__)
 
@@ -433,8 +433,11 @@ def extract_job_metadata(
             if norm and norm in existing_lookup:
                 _, cv_fit = existing_lookup[norm]
                 # Convert numeric 1-5 to closest configured level label.
+                level_map: Dict[str, Any] = (
+                    dict(scale_config.get("level") or {}) if scale_config else {}
+                )
                 matched_levels[skill] = _level_label_for_rating(
-                    level_labels, scale_config.get("level") if scale_config else {}, cv_fit
+                    level_labels, level_map, cv_fit
                 )
             else:
                 unmatched_skills.append(skill)
@@ -635,7 +638,16 @@ def company_research(
     return result
 
 @traceable(run_type="chain", name="generate_letter")
-def generate_letter(cv_text: str, examples: List[dict], company_report: str, job_text: str, client: BaseClient, trace_dir: Path, style_instructions: str = "", additional_user_info: str = "") -> str:
+def generate_letter(
+    cv_text: str,
+    examples: Sequence[TopDocument],
+    company_report: str,
+    job_text: str,
+    client: BaseClient,
+    trace_dir: Path,
+    style_instructions: str = "",
+    additional_user_info: str = "",
+) -> str:
     """Generate a personalized cover letter based on CV, examples, company report, and job description.
     
     Args:
@@ -661,10 +673,10 @@ def generate_letter(cv_text: str, examples: List[dict], company_report: str, job
         style_instructions = get_style_instructions()
 
     examples_formatted = "\n\n".join(
-        f"---- Example #{i+1} [estimated relevance: {ex['score']}/10] - {ex['company_name']} ----\n"
-        f"Job Description:\n{ex['job_text']}\n\n"
-        f"Cover Letter:\n{ex['letter_text']}\n\n"
-        for i, ex in enumerate(examples) if ex['letter_text']
+        f"---- Example #{i+1} [estimated relevance: {ex.get('score', 0)}/10] - {ex.get('company_name', '')} ----\n"
+        f"Job Description:\n{ex.get('job_text', '')}\n\n"
+        f"Cover Letter:\n{ex.get('letter_text', '')}\n\n"
+        for i, ex in enumerate(examples) if (ex.get("letter_text") or "").strip()
     )
     
     # Build system prompt with optional additional user info
@@ -787,7 +799,7 @@ def precision_check(letter: str, company_report: str, job_text: str, client: Bas
     return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 @traceable(run_type="chain", name="company_fit_check")
-def company_fit_check(letter: str, company_report: str, job_offer: str, client: OpenAI) -> str:
+def company_fit_check(letter: str, company_report: str, job_offer: str, client: BaseClient) -> str:
     """Check how well the cover letter aligns with the company's values, culture, tone, and needs."""
     system = (
         "You are a senior HR manager at the company. Evaluate how well the cover letter "
@@ -807,7 +819,7 @@ def company_fit_check(letter: str, company_report: str, job_offer: str, client: 
     return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
 
 @traceable(run_type="chain", name="user_fit_check")
-def user_fit_check(letter: str, examples: List[dict], client: OpenAI) -> str:
+def user_fit_check(letter: str, examples: Sequence[TopDocument], client: BaseClient) -> str:
     """Check how well the cover letter showcases the user's unique value proposition."""
     examples_formatted = "\n\n".join(
         f"---- Example #{i+1} - {ex['company_name']} ----\n"
@@ -847,7 +859,7 @@ def _format_correction(corr: dict) -> str:
         return f"  Original: {original}\n  Edited: {edited}"
 
 @traceable(run_type="chain", name="human_check")
-def human_check(letter: str, examples: List[dict], client: OpenAI) -> str:
+def human_check(letter: str, examples: Sequence[TopDocument], client: BaseClient) -> str:
     """Check the letter for consistency with the instructions."""
     rewritten_examples = [
         ex
@@ -931,7 +943,7 @@ def get_agentic_topic_context(
     cv_text: str,
     company_report: str,
     job_text: str,
-    top_docs: List[dict],
+    top_docs: Sequence[TopDocument],
     style_instructions: str = "",
     additional_user_info: str = "",
     draft_letters: Optional[dict] = None,
@@ -1029,7 +1041,7 @@ def rewrite_letter(
     company_fit_feedback: str,
     user_fit_feedback: str,
     human_feedback: str,
-    client: OpenAI,
+    client: BaseClient,
     trace_dir: Path
 ) -> str:
     """Rewrite the cover letter incorporating all feedback."""
@@ -1076,7 +1088,7 @@ def rewrite_letter(
     return revised_letter 
 
 @traceable(run_type="chain", name="fancy_letter")
-def fancy_letter(letter: str, client: OpenAI) -> str:
+def fancy_letter(letter: str, client: BaseClient) -> str:
     """Fancy up the letter with a fancy style."""
     system = (
         "You are an expert in writing cover letters. You will receive a cover letter. "

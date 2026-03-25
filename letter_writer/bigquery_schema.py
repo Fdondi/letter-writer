@@ -7,7 +7,7 @@ This module defines the schema as code, making it:
 - Self-documenting
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, cast
 import logging
 
 logger = logging.getLogger(__name__)
@@ -120,7 +120,7 @@ def get_bigquery_schema():
     ]
 
 
-def get_create_table_sql(project: str, dataset: str = None, table: str = None) -> str:
+def get_create_table_sql(project: str, dataset: Optional[str] = None, table: Optional[str] = None) -> str:
     """Generate CREATE TABLE SQL statement.
     
     Useful for manual table creation or documentation.
@@ -133,12 +133,12 @@ def get_create_table_sql(project: str, dataset: str = None, table: str = None) -
     Returns:
         SQL CREATE TABLE statement
     """
-    dataset = dataset or TABLE_CONFIG["dataset"]
-    table = table or TABLE_CONFIG["table"]
+    dataset = dataset or cast(str, TABLE_CONFIG["dataset"])
+    table = table or cast(str, TABLE_CONFIG["table"])
     table_id = f"`{project}.{dataset}.{table}`"
     
     # Build column definitions
-    columns = []
+    columns: List[str] = []
     for field in SCHEMA:
         col_def = f"  {field['name']} {field['type']}"
         if field["mode"] == "REQUIRED":
@@ -149,9 +149,10 @@ def get_create_table_sql(project: str, dataset: str = None, table: str = None) -
     
     columns_sql = ",\n".join(columns)
     
-    partition_field = TABLE_CONFIG["partitioning"]["field"]
-    partition_type = TABLE_CONFIG["partitioning"]["type"]
-    clustering_fields = ", ".join(TABLE_CONFIG["clustering"])
+    partitioning = cast(Dict[str, Any], TABLE_CONFIG["partitioning"])
+    partition_field = cast(str, partitioning["field"])
+    partition_type = cast(str, partitioning["type"])
+    clustering_fields = ", ".join(cast(List[str], TABLE_CONFIG["clustering"]))
     
     sql = f"""
 CREATE TABLE IF NOT EXISTS {table_id} (

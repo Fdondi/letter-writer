@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Union
 import logging
 import typer
 from google.cloud import firestore
@@ -103,7 +103,7 @@ def delete_documents(collection, ids: List[str]) -> None:
 
 def query_vector_similarity(
     collection,
-    vector: List[float],
+    vector: Union[List[float], Vector],
     limit: int = 7,
     vector_field: str = "vector",
 ) -> List[dict]:
@@ -147,9 +147,10 @@ def query_vector_similarity(
     # Firestore vector search uses find_nearest on collection
     # Note: This requires a vector index to be created first via Console or gcloud
     # Create vector query
+    query_vector = vector if isinstance(vector, Vector) else Vector(vector)
     vector_query = collection.find_nearest(
         vector_field=vector_field,
-        query_vector=Vector(vector),
+        query_vector=query_vector,
         distance_measure=DistanceMeasure.COSINE,
         limit=limit,
     )

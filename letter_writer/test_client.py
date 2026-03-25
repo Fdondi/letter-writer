@@ -1,4 +1,5 @@
-from letter_writer.client import get_client, ModelVendor, ModelSize
+from letter_writer.client import get_client
+from letter_writer.clients.base import ModelVendor, ModelSize
 import logging
 import os
 import pytest

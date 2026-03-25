@@ -34,7 +34,7 @@ _bigquery_lock = threading.Lock()
 
 # In-memory fallback storage (thread-safe)
 _memory_lock = threading.Lock()
-_memory_store = {
+_memory_store: Dict[str, Any] = {
     "total": 0.0,
     "services": {},  # service_name -> {"total": float, "count": int}
     "users": {},     # user_id -> {"total": float, "services": {service_name -> {"total": float, "count": int}}}

@@ -42,14 +42,16 @@ __all__ = [
 
 
 def refresh_repository(
-    jobs_source_folder: Path = Path(env_default("JOBS_SOURCE_FOLDER", "examples")),
-    jobs_source_suffix: str = env_default("JOBS_SOURCE_SUFFIX", ".txt"),
-    letters_source_folder: Path = Path(env_default("LETTERS_SOURCE_FOLDER", "examples")),
-    letters_source_suffix: str = env_default("LETTERS_SOURCE_SUFFIX", ".tex"),
+    jobs_source_folder: Path = Path(env_default("JOBS_SOURCE_FOLDER") or "examples"),
+    jobs_source_suffix: str = env_default("JOBS_SOURCE_SUFFIX") or ".txt",
+    letters_source_folder: Path = Path(env_default("LETTERS_SOURCE_FOLDER") or "examples"),
+    letters_source_suffix: str = env_default("LETTERS_SOURCE_SUFFIX") or ".tex",
     letters_ignore_until: Optional[str] = env_default("LETTERS_IGNORE_UNTIL", None),
     letters_ignore_after: Optional[str] = env_default("LETTERS_IGNORE_AFTER", None),
-    negative_letters_source_folder: Path = Path(env_default("NEGATIVE_LETTERS_SOURCE_FOLDER", "examples")),
-    negative_letters_source_suffix: str = env_default("NEGATIVE_LETTERS_SOURCE_SUFFIX", ".txt"),
+    negative_letters_source_folder: Path = Path(
+        env_default("NEGATIVE_LETTERS_SOURCE_FOLDER") or "examples"
+    ),
+    negative_letters_source_suffix: str = env_default("NEGATIVE_LETTERS_SOURCE_SUFFIX") or ".txt",
     clear: bool = False,
     logger=print,
 ):

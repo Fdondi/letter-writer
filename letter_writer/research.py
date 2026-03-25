@@ -192,7 +192,11 @@ def perform_company_research(
                         company_name, matched_company_name,
                     )
                 if cached_reports:
-                    best_report = max(cached_reports.values(), key=lambda x: len(x.get("report", "")), default={})
+                    best_report: Dict[str, Any] = max(
+                        cached_reports.values(),
+                        key=lambda x: len(x.get("report", "")),
+                        default={},
+                    )
                     previous_context = best_report.get("report", "")
 
     # 2. Perform new consolidated research (once)
@@ -316,7 +320,11 @@ def perform_poc_research(
                 else:
                     logger.info(f"Cached research for {poc_name} is older than 6 months. Using as context.")
                 if cached_reports:
-                    best_report = max(cached_reports.values(), key=lambda x: len(x.get("report", "")), default={})
+                    best_report: Dict[str, Any] = max(
+                        cached_reports.values(),
+                        key=lambda x: len(x.get("report", "")),
+                        default={},
+                    )
                     previous_context = best_report.get("report", "")
 
     # 2. Perform new research

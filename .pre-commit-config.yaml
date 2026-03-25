@@ -1,0 +1,13 @@
+# Install: pip install --group dev && pre-commit install  (needs pip 25.1+; see pyproject.toml [dependency-groups])
+# Requires Docker (same as scripts/docker-typecheck.sh). Skips image rebuild for speed; rebuild when needed:
+#   docker compose build backend
+
+repos:
+  - repo: local
+    hooks:
+      - id: letter-writer-mypy-docker
+        name: mypy (Docker, letter_writer + letter_writer_server)
+        entry: bash -c 'export SKIP_DOCKER_BUILD=1 && bash scripts/docker-typecheck.sh'
+        language: system
+        pass_filenames: false
+        files: ^(letter_writer|letter_writer_server)/.*\.py$
