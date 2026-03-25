@@ -71,6 +71,9 @@ STATUS_FEEDBACK_DONE = "feedback_done"
 STATUS_DONE = "done"
 
 DEFAULT_MAX_ROUNDS = 3
+# Server-side bounds for agentic feedback depth (client requests are clamped; persisted max_rounds is authoritative).
+AGENTIC_MIN_MAX_ROUNDS = 1
+AGENTIC_MAX_ROUNDS_CAP = 15
 MAX_POSITIVE_COMMENTS = 5
 MIN_ROUNDS_BEFORE_DONE = 2  # require at least 2 full rounds (2 interactions per vendor) before we can stop
 # If the client does not send a poll request for this many seconds, we abort (client likely left).
@@ -87,6 +90,69 @@ def _require_session(session) -> None:
 def _user_id(session) -> str:
     """Return authenticated user id for cost tracking, or 'anonymous'."""
     return (session.get("user") or {}).get("id") or "anonymous"
+
+
+def apply_server_max_rounds_policy(requested: Optional[int]) -> int:
+    """Clamp client-requested max_rounds to server policy. Persisted state uses this value only."""
+    if requested is None:
+        return DEFAULT_MAX_ROUNDS
+    try:
+        r = int(requested)
+    except (TypeError, ValueError):
+        logger.warning(
+            "agentic max_rounds invalid value %r; using default %s (server)",
+            requested,
+            DEFAULT_MAX_ROUNDS,
+        )
+        return DEFAULT_MAX_ROUNDS
+    if r < AGENTIC_MIN_MAX_ROUNDS:
+        logger.warning(
+            "agentic max_rounds %s below server minimum %s; clamped (server source of truth)",
+            r,
+            AGENTIC_MIN_MAX_ROUNDS,
+        )
+        return AGENTIC_MIN_MAX_ROUNDS
+    if r > AGENTIC_MAX_ROUNDS_CAP:
+        logger.warning(
+            "agentic max_rounds %s above server cap %s; clamped (server source of truth)",
+            r,
+            AGENTIC_MAX_ROUNDS_CAP,
+        )
+        return AGENTIC_MAX_ROUNDS_CAP
+    return r
+
+
+def warn_agentic_round_limit_issues(state: Optional[Dict[str, Any]]) -> None:
+    """Log warnings when topic cursors exceed backend limits or client draft hint vs server max_rounds."""
+    if not state:
+        return
+    mr = _get_max_rounds(state)
+    cursors = state.get("topic_cursors") or {}
+    hint = state.get("client_max_rounds_requested")
+    if hint is not None:
+        try:
+            h = int(hint)
+        except (TypeError, ValueError):
+            h = None
+        if h is not None and mr > h:
+            logger.warning(
+                "agentic persisted max_rounds=%s exceeds client draft hint %s (e.g. Add round); server is source of truth",
+                mr,
+                h,
+            )
+    for topic in AGENTIC_TOPIC_KEYS:
+        cur = cursors.get(topic) or {}
+        try:
+            r = int(cur.get("round", 1) or 1)
+        except Exception:
+            r = 1
+        if r > mr + 1:
+            logger.warning(
+                "agentic topic=%s cursor round=%s exceeds max_rounds=%s + 1 (unexpected; check worker)",
+                topic,
+                r,
+                mr,
+            )
 
 
 def get_agentic_state(session) -> Optional[Dict[str, Any]]:
@@ -113,6 +179,48 @@ def _get_max_rounds(state: Optional[Dict[str, Any]]) -> int:
     if not state:
         return DEFAULT_MAX_ROUNDS
     return int(state.get("max_rounds") or DEFAULT_MAX_ROUNDS)
+
+
+def feedback_rounds_exhausted(state: Optional[Dict[str, Any]]) -> bool:
+    """True when every topic cursor has round > max_rounds (same rule as topic_meta.done for all topics)."""
+    if not state:
+        return False
+    max_rounds = _get_max_rounds(state)
+    cursors = state.get("topic_cursors") or {}
+    for topic in AGENTIC_TOPIC_KEYS:
+        cur = cursors.get(topic) or {}
+        try:
+            r = int(cur.get("round", 1) or 1)
+        except Exception:
+            r = 1
+        if r <= max_rounds:
+            return False
+    return True
+
+
+def normalize_agentic_feedback_if_rounds_exhausted(state: Optional[Dict[str, Any]]) -> bool:
+    """If all topics are past max rounds but status/ongoing still say work is in progress, fix flags.
+
+    The ordered worker normally sets feedback_done when active_topics is empty; this covers races or
+    desync where the UI already shows every topic done but voting would still reject.
+    """
+    if not state:
+        return False
+    if not feedback_rounds_exhausted(state):
+        return False
+    if state.get("status") not in (STATUS_FEEDBACK, STATUS_FEEDBACK_DONE):
+        return False
+    changed = False
+    if state.get("feedback_ongoing"):
+        state["feedback_ongoing"] = False
+        changed = True
+    if state.get("worker_running"):
+        state["worker_running"] = False
+        changed = True
+    if state.get("status") == STATUS_FEEDBACK:
+        state["status"] = STATUS_FEEDBACK_DONE
+        changed = True
+    return changed
 
 
 def _build_topic_meta(state: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -1129,6 +1237,8 @@ def run_agentic_voting(
     state = get_agentic_state(session)
     if not state:
         raise ValueError("Agentic state missing")
+    if normalize_agentic_feedback_if_rounds_exhausted(state):
+        save_agentic_state(session, state)
     if state.get("status") not in (STATUS_FEEDBACK_DONE,) and state.get("feedback_ongoing") is not False:
         raise ValueError("Voting requires feedback to be complete")
     if state.get("status") != STATUS_FEEDBACK_DONE:
@@ -1218,7 +1328,7 @@ def run_agentic_draft(
     company_report_override: Optional[str] = None,
     top_docs_override: Optional[List[TopDocument]] = None,
     style_instructions: str = "",
-    max_rounds: int = DEFAULT_MAX_ROUNDS,
+    max_rounds: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Generate the draft letter with the given vendor and store agentic state.
@@ -1288,7 +1398,8 @@ def run_agentic_draft(
     state["cv_text"] = cv_text
     state["metadata"] = metadata
     state["style_instructions"] = style_instructions
-    state["max_rounds"] = max_rounds
+    state["client_max_rounds_requested"] = max_rounds
+    state["max_rounds"] = apply_server_max_rounds_policy(max_rounds)
     save_agentic_state(session, state)
     if cost > 0:
         track_api_cost(_user_id(session), "draft", draft_vendor, cost)
@@ -1301,7 +1412,7 @@ def run_agentic_draft_multi(
     company_report_override: Optional[str] = None,
     top_docs_override: Optional[List[TopDocument]] = None,
     style_instructions: str = "",
-    max_rounds: int = DEFAULT_MAX_ROUNDS,
+    max_rounds: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Generate one draft letter per selected vendor and store in state as draft_letters.
@@ -1415,7 +1526,8 @@ def run_agentic_draft_multi(
     state["cv_text"] = cv_text
     state["metadata"] = metadata
     state["style_instructions"] = style_instructions
-    state["max_rounds"] = max_rounds
+    state["client_max_rounds_requested"] = max_rounds
+    state["max_rounds"] = apply_server_max_rounds_policy(max_rounds)
     save_agentic_state(session, state)
     return state
 
@@ -1560,7 +1672,14 @@ def add_agentic_round_to_state(
 ) -> None:
     """Mutate state: add one round for all topics (increment max_rounds) or for one topic (decrement its round)."""
     if all_topics:
-        state["max_rounds"] = (state.get("max_rounds") or DEFAULT_MAX_ROUNDS) + 1
+        current = int(state.get("max_rounds") or DEFAULT_MAX_ROUNDS)
+        if current >= AGENTIC_MAX_ROUNDS_CAP:
+            logger.warning(
+                "agentic add round ignored: max_rounds already at server cap %s",
+                AGENTIC_MAX_ROUNDS_CAP,
+            )
+            return
+        state["max_rounds"] = current + 1
         return
     if topic and topic in AGENTIC_TOPIC_KEYS:
         if "topic_cursors" not in state or state["topic_cursors"] is None:
@@ -1888,6 +2007,8 @@ def run_agentic_refine(session, threads_override: Optional[Dict[str, List[Dict]]
     state = get_agentic_state(session)
     if not state:
         raise ValueError("Agentic state missing")
+    if normalize_agentic_feedback_if_rounds_exhausted(state):
+        save_agentic_state(session, state)
     if state.get("status") != STATUS_FEEDBACK_DONE and state.get("feedback_ongoing") is not False:
         raise ValueError("Agentic state missing or not in feedback_done phase")
     if state.get("status") != STATUS_FEEDBACK_DONE:

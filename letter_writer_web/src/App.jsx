@@ -186,7 +186,15 @@ export default function App({ flow = "vendor" }) {
       topic_meta: normalized.topicMeta,
     };
   }, [normalizeAgenticThreads]);
-  
+
+  /** Keep the Max rounds input aligned with persisted server `max_rounds` (poll, add round, draft, etc.). */
+  const syncAgenticMaxRoundsFromServer = useCallback((value) => {
+    if (value == null || value === "") return;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return;
+    setAgenticMaxRounds(n);
+  }, []);
+
   // Research state
   const [selectedCompanyReport, setSelectedCompanyReport] = useState(null);
   const [selectedTopDocs, setSelectedTopDocs] = useState(null);
@@ -1333,7 +1341,9 @@ export default function App({ flow = "vendor" }) {
         setAgenticLoading(false);
         return;
       }
-      setAgenticState(normalizeAgenticState(res.data?.agentic_state ?? null));
+      const nextAgentic = normalizeAgenticState(res.data?.agentic_state ?? null);
+      setAgenticState(nextAgentic);
+      if (nextAgentic?.max_rounds != null) syncAgenticMaxRoundsFromServer(nextAgentic.max_rounds);
       setAgenticStage("agentic");
     } catch (e) {
       console.error("Agentic draft error", e);
@@ -1360,6 +1370,7 @@ export default function App({ flow = "vendor" }) {
         topic_meta: normalized.topicMeta,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
       }));
+      if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
       return data.ongoing === true;
     } catch (e) {
       console.warn("Failed to poll agentic feedback:", e);
@@ -1392,7 +1403,9 @@ export default function App({ flow = "vendor" }) {
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
         topic_meta: normalized.topicMeta,
+        ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
       }));
+      if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
     } catch (e) {
       setAgenticError(e?.message || String(e));
     } finally {
@@ -1426,6 +1439,7 @@ export default function App({ flow = "vendor" }) {
         topic_meta: normalized.topicMeta,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
       }));
+      if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
     } catch (e) {
       setAgenticError(e?.message || String(e));
     } finally {
@@ -1459,6 +1473,7 @@ export default function App({ flow = "vendor" }) {
         topic_meta: normalized.topicMeta,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
       }));
+      if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
     } catch (e) {
       setAgenticError(e?.message || String(e));
     } finally {
@@ -1492,6 +1507,7 @@ export default function App({ flow = "vendor" }) {
         topic_meta: normalized.topicMeta,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
       }));
+      if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
     } catch (e) {
       setAgenticError(e?.message || String(e));
     } finally {
@@ -2236,9 +2252,9 @@ export default function App({ flow = "vendor" }) {
                 <input
                   type="number"
                   min={1}
-                  max={20}
+                  max={15}
                   value={agenticMaxRounds}
-                  onChange={(e) => setAgenticMaxRounds(Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 3)))}
+                  onChange={(e) => setAgenticMaxRounds(Math.max(1, Math.min(15, parseInt(e.target.value, 10) || 3)))}
                   style={{ width: 48, padding: "6px 8px", borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }}
                 />
               </label>

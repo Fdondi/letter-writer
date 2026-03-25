@@ -51,6 +51,8 @@ from letter_writer.agentic_service import (
     add_agentic_round,
     add_agentic_round_to_state,
     poll_response,
+    normalize_agentic_feedback_if_rounds_exhausted,
+    warn_agentic_round_limit_issues,
     _run_one_topic_sequential,
     _get_topic_cursors,
     _empty_threads,
@@ -379,7 +381,6 @@ async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Se
         raise HTTPException(status_code=401, detail="Authentication required")
     if not session.get("job_text"):
         raise HTTPException(status_code=400, detail="Job text is missing")
-    max_rounds = data.max_rounds if data.max_rounds is not None else DEFAULT_MAX_ROUNDS
     draft_vendors = [v for v in (data.draft_vendors or []) if v]
     if draft_vendors:
         try:
@@ -389,7 +390,7 @@ async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Se
                 company_report_override=data.company_report,
                 top_docs_override=cast(Optional[List[TopDocument]], data.top_docs),
                 style_instructions=data.style_instructions or "",
-                max_rounds=max_rounds,
+                max_rounds=data.max_rounds,
             )
             return with_user_monthly_cost({"status": "ok", "agentic_state": slim_agentic_state_for_response(state)}, session)
         except Exception as e:
@@ -412,7 +413,7 @@ async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Se
             company_report_override=data.company_report,
             top_docs_override=cast(Optional[List[TopDocument]], data.top_docs),
             style_instructions=data.style_instructions or "",
-            max_rounds=max_rounds,
+            max_rounds=data.max_rounds,
         )
         return with_user_monthly_cost({"status": "ok", "agentic_state": slim_agentic_state_for_response(state)}, session)
     except Exception as e:
@@ -855,6 +856,9 @@ async def agentic_feedback_poll(
                 state["worker_running"] = True
                 _persist_agentic_from_live(session_key, state)
                 _start_ordered_worker(session_key)
+            if normalize_agentic_feedback_if_rounds_exhausted(state):
+                _persist_agentic_from_live(session_key, state)
+            warn_agentic_round_limit_issues(state)
             snapshot = {
                 "threads": copy.deepcopy(state.get("threads") or _empty_threads()),
                 "topic_cursors": copy.deepcopy(state.get("topic_cursors") or {}),
@@ -961,6 +965,15 @@ async def agentic_feedback_poll(
             (state or {}).get("status"),
             rounds_session,
         )
+    if state and normalize_agentic_feedback_if_rounds_exhausted(state):
+        payload = load_session_from_storage(session_key) if session_key else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        payload["agentic"] = state
+        if session_key:
+            save_session_to_storage(session_key, payload)
+        session["agentic"] = state
+    warn_agentic_round_limit_issues(state)
     return with_user_monthly_cost(
         poll_response(state),
         session,
@@ -1126,6 +1139,7 @@ async def agentic_rounds_add(
             with entry["meta_lock"]:
                 add_agentic_round_to_state(state, all_topics=all_topics, topic=topic)
             _persist_agentic_from_live(session_key, state)
+            session["agentic"] = dict(state)
             return with_user_monthly_cost(poll_response(state), session)
         state = add_agentic_round(session, all_topics=all_topics, topic=topic)
         return with_user_monthly_cost(poll_response(state), session)

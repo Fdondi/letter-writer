@@ -124,21 +124,18 @@ export default function AgenticFlow({
   const hasVendorErrors = Object.keys(vendorErrors).length > 0;
   const draftVotes = agenticState?.draft_votes || null;
   const hasVotes = draftVotes != null && Object.keys(draftVotes).length > 0;
-  // Active = not done. Button and editing when active count is 0.
-  const activeTopicCount = TOPIC_KEYS.filter(
-    (topic) => !topicMeta[topic]?.done
-  ).length;
-  const allTopicsInactive = activeTopicCount === 0;
-  const canEditThreads = status === "feedback_done" || (status === "feedback" && allTopicsInactive);
+  // Per-topic topic_meta.done is for column labels only; completion UX follows poll `status` only.
+  const feedbackComplete = status === "feedback_done";
+  const canEditThreads = feedbackComplete;
   const canSuspendOrResume = status === "feedback";
   const anyCanResume = canSuspendOrResume && feedbackSuspended;
   const canVoteOnDrafts =
-    (status === "feedback_done" || (status === "feedback" && allTopicsInactive)) &&
+    feedbackComplete &&
     !hasVotes &&
     draftVendorList.length > 1 &&
     Boolean(onVote);
   const canAutoRefine =
-    (status === "feedback_done" || (status === "feedback" && allTopicsInactive)) &&
+    feedbackComplete &&
     (hasVotes || draftVendorList.length <= 1) &&
     Boolean(onRefine);
 
@@ -428,7 +425,7 @@ export default function AgenticFlow({
         Status: <strong>{status}</strong>
         {status === "feedback" && ongoing === true && !feedbackSuspended && " · Generating feedback…"}
         {status === "feedback" && feedbackSuspended && " · Suspended"}
-        {(status === "feedback_done" || (status === "feedback" && allTopicsInactive && !feedbackSuspended)) && " · Completed"}
+        {feedbackComplete && !feedbackSuspended && " · Completed"}
         {cost > 0 && ` · Cost: $${cost.toFixed(4)}`}
       </div>
 
@@ -667,7 +664,7 @@ export default function AgenticFlow({
                   </React.Fragment>
                 ))}
               </div>
-              {(status === "feedback_done" || (status === "feedback" && allTopicsInactive)) && (
+              {feedbackComplete && (
                 <div style={{ padding: "0 16px 16px" }}>
                   {hasVotes && (
                     <div
