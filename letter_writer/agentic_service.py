@@ -134,7 +134,7 @@ def poll_response(
     threads = {}
     for topic in AGENTIC_TOPIC_KEYS:
         threads[topic] = {
-            "thread": list(raw_threads.get(topic) or []),
+            "thread": [{**c, "removed": _is_comment_removed(c)} for c in (raw_threads.get(topic) or [])],
             "round": (topic_meta.get(topic) or {}).get("round", 1),
             "messages": (topic_meta.get(topic) or {}).get("messages", len(raw_threads.get(topic) or [])),
             "done": (topic_meta.get(topic) or {}).get("done", False),
@@ -340,11 +340,13 @@ def _set_comment_vote_action(
 
 
 def _is_comment_removed(c: Dict[str, Any]) -> bool:
-    """A comment is removed forever for downstream use once any downvote is registered."""
+    """A comment is removed if manually flagged OR downvotes are a strict majority."""
     if c.get("removed"):
         return True
-    down = c.get("votes", {}).get("down", [])
-    return len(down) > 0
+    votes = c.get("votes") or {}
+    up = len(votes.get("up") or [])
+    down = len(votes.get("down") or [])
+    return down > up
 
 
 def _comment_score(c: Dict[str, Any]) -> float:
@@ -402,7 +404,7 @@ def _clone_comment_for_carryover(c: Dict[str, Any], *, carry_topic: str, carry_i
             "down": list(votes.get("down") or []),
             "abstain": list(votes.get("abstain") or []),
         },
-        "removed": bool(c.get("removed")) or len(votes.get("down") or []) > 0,
+        "removed": _is_comment_removed(c),
         "created_round": int(c.get("created_round") or 1),
         "votes_by_round": vote_rounds_out,
         "acted_vendors": list(c.get("acted_vendors") or []),
@@ -528,7 +530,7 @@ def merge_carryover_updates_and_strip(
                 "round": bucket.get("round"),
             }
         source["created_round"] = int(comment.get("created_round") or source.get("created_round") or 1)
-        source["removed"] = bool(comment.get("removed")) or len(source["votes"]["down"]) > 0
+        source["removed"] = _is_comment_removed(comment)
 
     return visible_thread
 
@@ -646,9 +648,9 @@ def _agentic_feedback_prompt_subsequent(
         "1) Optionally add one new top-level comment (only if you have an original, substantive point not already in the thread).\n"
         "2) For each NEW addendum listed in the thread (those under 'New addendums (you must upvote or downvote each)'): you must either upvote or downvote it by addendum_id. No new addendum text when voting existing addendums.\n"
         "3) For each OPEN top-level comment: choose exactly one of: upvote the comment, downvote the comment, abstain, add a subcomment, or add one addendum. Do not interact with FINALIZED or REMOVED comments.\n\n"
-        "Hard rule: if you downvote a top-level comment, that comment is removed forever from downstream rewrite inputs.\n\n"
+        "Hard rule: a top-level comment is removed from downstream rewrite inputs only if downvotes become a strict majority over upvotes.\n\n"
         "Abstain usage: use abstain only when the comment is not relevant to this topic.\n\n"
-        "Consistency rule: when prior-topic comments contradict evidence in this topic, downvote the inconsistent comment so it is removed from downstream use.\n\n"
+        "Consistency rule: when prior-topic comments contradict evidence in this topic, downvote the inconsistent comment to push it toward majority-down removal.\n\n"
         "Anti-repetition: Do not add subcomments that only say 'I agree'. Do not add a top-level comment or addendum that repeats what is already said. If you have nothing original to add, only vote (upvote/downvote) and leave new_comment null and do not add addendum text. Adding an addendum invalidates the comment's existing votes (one more reason not to add one lightly). Only addendums with positive net votes are used in the draft revision.\n\n"
         "Subcomments are for discussion (e.g. clarifying before an addendum); only add when non-redundant. New addendum = concrete, actionable revision suggestion (e.g. 'Add a sentence about X'); not meta-commentary.\n\n"
         "JSON response: subcomments (list of {comment_id, text}), votes (list of {comment_id, action, reason?: string, addendum_id?: string, addendum?: string}), new_comment (string or null). "
@@ -871,10 +873,7 @@ def _apply_agent_response(
                     reason=v.get("reason") or v.get("rationale") or "",
                 ):
                     changed = True
-                # Any downvote permanently removes the comment from downstream use.
-                if not thread[idx].get("removed"):
-                    thread[idx]["removed"] = True
-                    changed = True
+                # Removal is decided by majority vote state (down > up); do not force-remove here.
     new_comment = response.get("new_comment")
     if new_comment and isinstance(new_comment, str) and new_comment.strip():
         new_comment_id = str(uuid.uuid4())[:8]
@@ -893,6 +892,15 @@ def _apply_agent_response(
             "removed": False,
             "created_round": int(round_num or 1),
         })
+        # Proposer implicitly backs their own new top-level comment.
+        _set_comment_vote_action(
+            thread[-1],
+            vendor,
+            "up",
+            round_num=round_num,
+            topic=topic,
+            reason="proposer",
+        )
         if new_comment_ids is not None:
             new_comment_ids.append(new_comment_id)
         changed = True
@@ -960,7 +968,7 @@ def _run_immediate_vote_sweep_for_comments(
         pending_for_voter = []
         for c in thread:
             cid = c.get("id")
-            if cid in target_ids and not _is_comment_removed(c) and voter not in _comment_acted_vendors(c, topic=topic):
+            if cid in target_ids and not c.get("removed") and voter not in _comment_acted_vendors(c, topic=topic):
                 pending_for_voter.append(cid)
         if not pending_for_voter:
             continue
@@ -1572,8 +1580,26 @@ def _run_one_topic_sequential(
     prior_topic_comments_text: str = "",
     should_abort: Optional[Callable[[], bool]] = None,
     round_num: Optional[int] = None,
+    initial_vote_comment_ids: Optional[List[str]] = None,
 ) -> Tuple[str, List[Dict], bool]:
     """Run all vendors for one topic sequentially so each agent sees previous addendums. Returns (topic, updated_thread)."""
+    # At topic start, force an explicit vote-only sweep on all carried comments so
+    # every vendor gets a chance to reassess prior-topic comments with new context.
+    target_ids = [cid for cid in (initial_vote_comment_ids or []) if cid]
+    if target_ids:
+        _run_immediate_vote_sweep_for_comments(
+            thread,
+            topic,
+            context,
+            vendor_order,
+            trace_dir,
+            prior_topic_comments_text=prior_topic_comments_text,
+            source_vendor=None,
+            comment_ids=target_ids,
+            should_abort=should_abort,
+            round_num=round_num,
+        )
+
     for vendor in vendor_order:
         if should_abort is not None and should_abort():
             _log(f"AGENTIC topic={topic}: abort before vendor={vendor} due to stale polling heartbeat")
@@ -1680,6 +1706,7 @@ def run_agentic_feedback_step(
         round_num = int(cur.get("round") or 1)
         prior_comments = get_prior_topic_top_comments(threads, topic)
         prior_comments_text = format_prior_topic_comments_for_prompt(prior_comments)
+        initial_vote_comment_ids = [c.get("id") for c in prior_comments if c.get("id")]
         context = get_agentic_topic_context(
             topic, draft_letter, cv_text, company_report, job_text, top_docs,
             style_instructions, additional_user_info,
@@ -1725,7 +1752,7 @@ def run_agentic_feedback_step(
             }
             thread_copy.append(nc)
         seed_thread_with_prior_topic_comments(thread_copy, prior_comments)
-        work.append((topic, context, thread_copy, order, trace_dir, prior_comments_text, round_num))
+        work.append((topic, context, thread_copy, order, trace_dir, prior_comments_text, round_num, initial_vote_comment_ids))
 
     if not work:
         # No topics have vendor_order (shouldn't happen after init). Advance rounds and re-check.
@@ -1753,12 +1780,33 @@ def run_agentic_feedback_step(
     # Run each topic's full vendor sequence in parallel (within a topic, vendors run sequentially and see prior addendums)
     with ThreadPoolExecutor(max_workers=len(AGENTIC_TOPIC_KEYS)) as executor:
         futures = {
-            executor.submit(_run_one_topic_sequential, t, c, th, order, trace_dir, prior_text, None, round_num): t
-            for (t, c, th, order, trace_dir, prior_text, round_num) in work
+            executor.submit(
+                _run_one_topic_sequential,
+                t,
+                c,
+                th,
+                order,
+                trace_dir,
+                prior_text,
+                None,
+                round_num,
+                initial_vote_ids,
+            ): t
+            for (t, c, th, order, trace_dir, prior_text, round_num, initial_vote_ids) in work
         }
+        # Collect all results first before merging, so we can process in AGENTIC_TOPIC_KEYS
+        # order. This prevents a race condition where a dependent topic (e.g. user_fit)
+        # finishes before its source topic (e.g. precision) and correctly merges votes back
+        # into threads["precision"], only for precision's result to then overwrite that with
+        # its thread_copy (which never saw user_fit's votes).
+        completed: Dict[str, List[Dict]] = {}
         for fut in as_completed(futures):
             topic, updated_thread, _ = fut.result()
-            threads[topic] = merge_carryover_updates_and_strip(updated_thread, threads)
+            completed[topic] = updated_thread
+        for topic in AGENTIC_TOPIC_KEYS:
+            if topic not in completed:
+                continue
+            threads[topic] = merge_carryover_updates_and_strip(completed[topic], threads)
             cur = topic_cursors[topic]
             cur["vendor_index"] = 0
             cur["round"] = cur.get("round", 1) + 1

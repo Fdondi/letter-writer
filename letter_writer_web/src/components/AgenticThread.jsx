@@ -306,6 +306,7 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
   const votesByRoundRaw = comment.votes_by_round && typeof comment.votes_by_round === "object"
     ? comment.votes_by_round
     : null;
+  const voteRows = [];
   const reasonLines = [];
   if (votesByRoundRaw) {
     Object.entries(votesByRoundRaw).forEach(([roundKey, data]) => {
@@ -315,22 +316,45 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
       const voteTopic = typeof data?.topic === "string" && data.topic.trim()
         ? data.topic
         : (topicFromKey || topic);
-      if (voteTopic !== topic) return;
-      (Array.isArray(data?.up) ? data.up : []).forEach((v) => up.add(v));
-      (Array.isArray(data?.down) ? data.down : []).forEach((v) => down.add(v));
-      (Array.isArray(data?.abstain) ? data.abstain : []).forEach((v) => abstain.add(v));
+      const upList = Array.isArray(data?.up) ? data.up : [];
+      const downList = Array.isArray(data?.down) ? data.down : [];
+      const abstainList = Array.isArray(data?.abstain) ? data.abstain : [];
+      upList.forEach((v) => up.add(v));
+      downList.forEach((v) => down.add(v));
+      abstainList.forEach((v) => abstain.add(v));
+      const roundFromKey = String(roundKey).includes("::")
+        ? Number(String(roundKey).split("::", 2)[1])
+        : Number(roundKey);
+      const roundNum = Number.isFinite(Number(data?.round))
+        ? Number(data.round)
+        : (Number.isFinite(roundFromKey) ? roundFromKey : null);
+      voteRows.push({
+        topic: voteTopic,
+        round: roundNum,
+        up: upList,
+        down: downList,
+        abstain: abstainList,
+      });
       const reasons = data?.reasons && typeof data.reasons === "object" ? data.reasons : {};
       Object.entries(reasons)
         .map(([vendor, reason]) => `${vendor}: ${reason}`)
         .filter((line) => line.trim() !== "")
-        .forEach((line) => reasonLines.push(line));
+        .forEach((line) => {
+          const voteTopicLabel = topicLabels[voteTopic] || voteTopic;
+          const roundTag = roundNum != null ? ` r${roundNum}` : "";
+          reasonLines.push(`[${voteTopicLabel}${roundTag}] ${line}`);
+        });
     });
   }
   // Legacy fallback for older sessions without topic-aware vote buckets.
   if (up.size === 0 && down.size === 0 && abstain.size === 0) {
-    ((comment.votes && comment.votes.up) || []).forEach((v) => up.add(v));
-    ((comment.votes && comment.votes.down) || []).forEach((v) => down.add(v));
-    ((comment.votes && comment.votes.abstain) || []).forEach((v) => abstain.add(v));
+    const legacyUp = (comment.votes && comment.votes.up) || [];
+    const legacyDown = (comment.votes && comment.votes.down) || [];
+    const legacyAbstain = (comment.votes && comment.votes.abstain) || [];
+    legacyUp.forEach((v) => up.add(v));
+    legacyDown.forEach((v) => down.add(v));
+    legacyAbstain.forEach((v) => abstain.add(v));
+    voteRows.push({ topic, round: null, up: legacyUp, down: legacyDown, abstain: legacyAbstain });
   }
   const upList = Array.from(up);
   const downList = Array.from(down);
@@ -339,7 +363,7 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
   const downCount = downList.length;
   const abstainCount = abstainList.length;
   const net = upCount - downCount;
-  const removed = Boolean(comment.removed) || downCount > 0;
+  const removed = Boolean(comment.removed);
 
   const rootRgb = colorToRgbString(vendorColors[comment.vendor] || null);
   const sourceText = comment.text || "";
@@ -785,27 +809,36 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
           flexDirection: "column",
         }}
       >
-        <div
-          title={[
-            upCount ? `Up: ${upList.join(", ")}` : null,
-            downCount ? `Down: ${downList.join(", ")}` : null,
-            abstainCount ? `Abstain: ${abstainList.join(", ")}` : null,
-            reasonLines.length ? `Why:\n${reasonLines.join("\n")}` : null,
-          ].filter(Boolean).join("\n\n") || "No votes"}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 8,
-            color: "var(--secondary-text-color)",
-          }}
-        >
-          <span style={{ fontWeight: 700, color: "var(--text-color)" }}>
-            {(topicLabels[topic] || topic)} vote:
-          </span>
-          <span style={{ color: upCount > downCount ? "#16a34a" : "var(--secondary-text-color)" }}>↑ {upCount}</span>
-          <span style={{ color: downCount > 0 ? "#dc2626" : "var(--secondary-text-color)" }}>↓ {downCount}</span>
-          <span style={{ color: abstainCount > 0 ? "#0d9488" : "var(--secondary-text-color)" }}>⏭ {abstainCount}</span>
-        </div>
+        {voteRows.map((row, idx) => {
+          const rowUp = Array.isArray(row.up) ? row.up : [];
+          const rowDown = Array.isArray(row.down) ? row.down : [];
+          const rowAbstain = Array.isArray(row.abstain) ? row.abstain : [];
+          const rowTopicLabel = topicLabels[row.topic] || row.topic;
+          return (
+            <div
+              key={`${row.topic || "unknown"}_${row.round ?? "na"}_${idx}`}
+              title={[
+                rowUp.length ? `Up: ${rowUp.join(", ")}` : null,
+                rowDown.length ? `Down: ${rowDown.join(", ")}` : null,
+                rowAbstain.length ? `Abstain: ${rowAbstain.join(", ")}` : null,
+                reasonLines.length ? `Why:\n${reasonLines.join("\n")}` : null,
+              ].filter(Boolean).join("\n\n") || "No votes"}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                color: "var(--secondary-text-color)",
+              }}
+            >
+              <span style={{ fontWeight: 700, color: "var(--text-color)" }}>
+                {rowTopicLabel} vote{row.round != null ? ` (r${row.round})` : ""}:
+              </span>
+              <span style={{ color: rowUp.length > rowDown.length ? "#16a34a" : "var(--secondary-text-color)" }}>↑ {rowUp.length}</span>
+              <span style={{ color: rowDown.length > 0 ? "#dc2626" : "var(--secondary-text-color)" }}>↓ {rowDown.length}</span>
+              <span style={{ color: rowAbstain.length > 0 ? "#0d9488" : "var(--secondary-text-color)" }}>⏭ {rowAbstain.length}</span>
+            </div>
+          );
+        })}
         <span style={{ fontSize: 10, color: net > 0 ? "#16a34a" : "var(--secondary-text-color)" }}>
           Net: {net}
         </span>

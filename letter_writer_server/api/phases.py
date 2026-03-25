@@ -751,6 +751,7 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
                 seed_thread_with_prior_topic_comments(sweep_thread, prior_comments)
                 
             prior_comments_text = format_prior_topic_comments_for_prompt(prior_comments)
+            initial_vote_comment_ids = [c.get("id") for c in prior_comments if c.get("id")]
             _, sweep_updated_thread, topic_completed = _run_one_topic_sequential(
                 target_topic,
                 target_meta["context"],
@@ -760,6 +761,7 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
                 prior_comments_text,
                 _abort_for_stale_poll,
                 target_meta["round_num"],
+                initial_vote_comment_ids=initial_vote_comment_ids,
             )
             
             if not topic_completed:

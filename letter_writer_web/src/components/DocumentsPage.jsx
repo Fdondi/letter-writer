@@ -37,7 +37,7 @@ export default function DocumentsPage() {
         params.append("role", roleSearch.trim());
       }
       const queryString = params.toString();
-      const url = `/api/documents${queryString ? `?${queryString}` : ""}`;
+      const url = `/api/documents/${queryString ? `?${queryString}` : ""}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
