@@ -1,5 +1,5 @@
 from .base import BaseClient, ModelSize
-from mistralai import Mistral
+from mistralai.client import Mistral
 from typing import List, Dict
 import os
 import typer
