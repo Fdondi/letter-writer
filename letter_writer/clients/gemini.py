@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, List, Tuple, cast
+from typing import Any, List, Tuple, cast, Dict, Optional
 
 import typer
 from langsmith import traceable
@@ -111,7 +111,14 @@ class GeminiClient(BaseClient):
         typer.echo(f"[DEBUG] track_cost called: in={input_tokens}, out={output_tokens}, totals: in={self.total_input_tokens}, out={self.total_output_tokens}")
 
     @traceable(run_type="llm", name="Gemini.call")
-    def call(self, model_size: ModelSize | str, system: str, user_messages: List[str], search: bool = False) -> str:
+    def call(
+        self,
+        model_size: ModelSize | str,
+        system: str,
+        user_messages: List[str],
+        search: bool = False,
+        response_format: Optional[Dict[str, Any]] = None,
+    ) -> str:
         if types is None:
             raise ImportError(
                 "Gemini client requires the 'google-genai' package. Install it to use Gemini models."
@@ -145,12 +152,17 @@ class GeminiClient(BaseClient):
             raise ValueError("No valid user messages provided to Gemini API (all were None or empty)")
 
         try:
+            schema = ((response_format or {}).get("json_schema") or {}).get("schema")
+            cfg: Dict[str, Any] = {
+                "system_instruction": system,
+                "tools": cast(Any, tools),
+            }
+            if schema:
+                cfg["response_mime_type"] = "application/json"
+                cfg["response_schema"] = cast(Any, schema)
             response = self.client.models.generate_content(
                 model=model_name,
-                config=types.GenerateContentConfig(
-                    system_instruction=system,
-                    tools=cast(Any, tools),
-                ),
+                config=types.GenerateContentConfig(**cfg),
                 contents=validated_messages,
             )
         except Exception as exc:

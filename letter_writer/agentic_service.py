@@ -80,6 +80,85 @@ MIN_ROUNDS_BEFORE_DONE = 2  # require at least 2 full rounds (2 interactions per
 # This is about browser not polling, not about agents taking long to respond.
 POLL_ABORT_SECONDS = 30
 
+PHASE_A1 = "a1_top_comments"
+PHASE_A2A = "a2a_subcomments"
+PHASE_A2B = "a2b_subcomments"
+PHASE_A3 = "a3_addendums"
+PHASE_B = "b_global_votes"
+
+SCHEMA_A1 = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "new_comment": {"type": ["string", "null"]},
+    },
+    "required": ["new_comment"],
+}
+
+SCHEMA_A2 = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "subcomments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "comment_id": {"type": "string"},
+                    "text": {"type": "string"},
+                },
+                "required": ["comment_id", "text"],
+            },
+        },
+    },
+    "required": ["subcomments"],
+}
+
+SCHEMA_A3 = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "addendums": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "comment_id": {"type": "string"},
+                    "text": {"type": "string"},
+                },
+                "required": ["comment_id", "text"],
+            },
+        },
+    },
+    "required": ["addendums"],
+}
+
+SCHEMA_B = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "votes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "topic": {"type": "string"},
+                    "target_type": {"type": "string", "enum": ["comment", "addendum"]},
+                    "comment_id": {"type": "string"},
+                    "addendum_id": {"type": ["string", "null"]},
+                    "action": {"type": "string", "enum": ["upvote", "downvote", "abstain"]},
+                    "reason": {"type": "string"},
+                },
+                "required": ["topic", "target_type", "comment_id", "action"],
+            },
+        },
+    },
+    "required": ["votes"],
+}
+
 
 def _require_session(session) -> None:
     """Raise if session is missing or invalid."""
@@ -223,23 +302,53 @@ def normalize_agentic_feedback_if_rounds_exhausted(state: Optional[Dict[str, Any
     return changed
 
 
+def agentic_topic_human_label(topic: str) -> str:
+    """Short display label for a topic key (matches frontend topic column titles)."""
+    return {
+        "instruction": "Instruction",
+        "company_fit": "Company fit",
+        "precision": "Precision",
+        "user_fit": "User fit",
+        "human": "Human",
+        "accuracy": "CV accuracy",
+    }.get(topic, topic)
+
+
+def clear_topic_feedback_wait(state: Optional[Dict[str, Any]]) -> None:
+    """Remove per-topic wait strings (worker progress); call when feedback worker stops."""
+    if not state:
+        return
+    state.pop("topic_feedback_wait", None)
+
+
 def _build_topic_meta(state: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Build per-topic meta for UI: round, messages, done (round > max_rounds)."""
+    """Build per-topic meta for UI: round, messages, done (round > max_rounds), optional waiting_for."""
     if not state:
         return {}
     threads = state.get("threads") or _empty_threads()
     cursors = state.get("topic_cursors") or {}
     max_rounds = _get_max_rounds(state)
+    wait_map = state.get("topic_feedback_wait") or {}
+    feedback_on = bool(state.get("feedback_ongoing"))
     out = {}
     for topic in AGENTIC_TOPIC_KEYS:
         cur = cursors.get(topic) or {}
         r = cur.get("round", 1)
         done = r > max_rounds
-        out[topic] = {
+        entry: Dict[str, Any] = {
             "round": r,
             "messages": len(threads.get(topic) or []),
             "done": done,
         }
+        wf = wait_map.get(topic)
+        if (
+            feedback_on
+            and not done
+            and isinstance(wf, str)
+            and wf.strip()
+        ):
+            entry["waiting_for"] = wf.strip()
+        out[topic] = entry
     return out
 
 
@@ -269,11 +378,13 @@ def poll_response(
     topic_meta = _build_topic_meta(state)
     threads = {}
     for topic in AGENTIC_TOPIC_KEYS:
+        tm = topic_meta.get(topic) or {}
         threads[topic] = {
             "thread": [{**c, "removed": _is_comment_removed(c)} for c in (raw_threads.get(topic) or [])],
-            "round": (topic_meta.get(topic) or {}).get("round", 1),
-            "messages": (topic_meta.get(topic) or {}).get("messages", len(raw_threads.get(topic) or [])),
-            "done": (topic_meta.get(topic) or {}).get("done", False),
+            "round": tm.get("round", 1),
+            "messages": tm.get("messages", len(raw_threads.get(topic) or [])),
+            "done": tm.get("done", False),
+            "waiting_for": tm.get("waiting_for"),
         }
     return {
         "threads": threads,
@@ -498,63 +609,9 @@ def _comment_score(c: Dict[str, Any]) -> float:
 
 
 def _clone_comment_for_carryover(c: Dict[str, Any], *, carry_topic: str, carry_id: str) -> Dict[str, Any]:
-    """Clone comment payload so downstream topics can vote/comment/add on prior-topic comments."""
-    addendums = []
-    for a in (c.get("addendums") or []):
-        addendums.append({
-            "id": a.get("id"),
-            "vendor": a.get("vendor"),
-            "text": a.get("text", ""),
-            "up": list(a.get("up") or []),
-            "down": list(a.get("down") or []),
-        })
-    subcomments = []
-    for s in (c.get("subcomments") or []):
-        subcomments.append({
-            "id": s.get("id"),
-            "vendor": s.get("vendor"),
-            "text": s.get("text", ""),
-        })
-    votes = c.get("votes") or {}
-    votes_by_round = c.get("votes_by_round") or {}
-    vote_rounds_out = {}
-    for round_key, bucket in votes_by_round.items():
-        if not isinstance(bucket, dict):
-            continue
-        vote_rounds_out[str(round_key)] = {
-            "up": list(bucket.get("up") or []),
-            "down": list(bucket.get("down") or []),
-            "abstain": list(bucket.get("abstain") or []),
-            "reasons": dict(bucket.get("reasons") or {}),
-            "topic": bucket.get("topic"),
-            "round": bucket.get("round"),
-        }
-    return {
-        "id": carry_id,
-        "vendor": c.get("vendor"),
-        "text": c.get("text", ""),
-        "addendums": addendums,
-        "subcomments": subcomments,
-        "votes": {
-            "up": list(votes.get("up") or []),
-            "down": list(votes.get("down") or []),
-            "abstain": list(votes.get("abstain") or []),
-        },
-        "removed": _is_comment_removed(c),
-        "created_round": int(c.get("created_round") or 1),
-        "votes_by_round": vote_rounds_out,
-        "acted_vendors": list(c.get("acted_vendors") or []),
-        "voted_vendors": list(c.get("voted_vendors") or []),
-        "acted_by_topic": {
-            str(k): list(v or []) for k, v in (c.get("acted_by_topic") or {}).items()
-        },
-        "voted_by_topic": {
-            str(k): list(v or []) for k, v in (c.get("voted_by_topic") or {}).items()
-        },
-        "carried_from_topic": carry_topic,
-        "carried_from_comment_id": c.get("id"),
-        "carried": True,
-    }
+    """Legacy carry-over disabled: cross-topic coordination now happens in global Phase B."""
+    _ = carry_topic, carry_id
+    return dict(c)
 
 
 def get_prior_topic_top_comments(
@@ -563,129 +620,32 @@ def get_prior_topic_top_comments(
     *,
     max_per_topic: int = 3,
 ) -> List[Dict[str, Any]]:
-    """Return top surviving comments from topics that come before `topic`."""
-    out: List[Dict[str, Any]] = []
-    try:
-        topic_index = AGENTIC_TOPIC_KEYS.index(topic)
-    except ValueError:
-        return out
-    for prev_topic in AGENTIC_TOPIC_KEYS[:topic_index]:
-        candidates = []
-        for c in (threads.get(prev_topic) or []):
-            if _is_comment_removed(c):
-                continue
-            candidates.append(c)
-        candidates.sort(key=_comment_score, reverse=True)
-        for c in candidates[:max_per_topic]:
-            out.append(_clone_comment_for_carryover(
-                c,
-                carry_topic=prev_topic,
-                carry_id=f"{prev_topic}:{c.get('id') or str(uuid.uuid4())[:8]}",
-            ))
-    return out
+    """Legacy carry-over disabled: return no pre-seeded prior-topic comments."""
+    _ = threads, topic, max_per_topic
+    return []
 
 
 def seed_thread_with_prior_topic_comments(
     thread: List[Dict[str, Any]],
     prior_comments: List[Dict[str, Any]],
 ) -> None:
-    """Inject prior-topic top comments once so current topic can vote/comment/add to them."""
-    existing = {c.get("id") for c in thread if c.get("id")}
-    for c in prior_comments:
-        cid = c.get("id")
-        if not cid or cid in existing:
-            continue
-        thread.append(c)
-        existing.add(cid)
+    """Legacy carry-over disabled."""
+    _ = thread, prior_comments
 
 
 def merge_carryover_updates_and_strip(
     topic_thread: List[Dict[str, Any]],
     threads: Dict[str, List[Dict[str, Any]]],
 ) -> List[Dict[str, Any]]:
-    """
-    Persist carry-over comment interactions back to their source topic, then remove
-    carry-over clones from the current topic thread so users only see local comments.
-    """
-
-    def _clone_addendums(addendums: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        cloned: List[Dict[str, Any]] = []
-        for a in addendums or []:
-            na = dict(a)
-            na["up"] = list(na.get("up") or [])
-            na["down"] = list(na.get("down") or [])
-            cloned.append(na)
-        return cloned
-
-    def _clone_subcomments(subcomments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        return [dict(s) for s in (subcomments or [])]
-
-    visible_thread: List[Dict[str, Any]] = []
-    for comment in topic_thread:
-        if not comment.get("carried"):
-            visible_thread.append(comment)
-            continue
-
-        source_topic = comment.get("carried_from_topic")
-        source_comment_id = comment.get("carried_from_comment_id")
-        if not source_topic or not source_comment_id:
-            continue
-
-        source_thread = threads.get(source_topic) or []
-        source = next((c for c in source_thread if c.get("id") == source_comment_id), None)
-        if source is None:
-            continue
-
-        source["addendums"] = _clone_addendums(comment.get("addendums") or [])
-        source["subcomments"] = _clone_subcomments(comment.get("subcomments") or [])
-        votes = comment.get("votes") or {}
-        source["votes"] = {
-            "up": list(votes.get("up") or []),
-            "down": list(votes.get("down") or []),
-            "abstain": list(votes.get("abstain") or []),
-        }
-        source["acted_vendors"] = list(comment.get("acted_vendors") or [])
-        source["voted_vendors"] = list(comment.get("voted_vendors") or [])
-        source["acted_by_topic"] = {
-            str(k): list(v or []) for k, v in (comment.get("acted_by_topic") or {}).items()
-        }
-        source["voted_by_topic"] = {
-            str(k): list(v or []) for k, v in (comment.get("voted_by_topic") or {}).items()
-        }
-        vote_rounds = comment.get("votes_by_round") or {}
-        source["votes_by_round"] = {}
-        for round_key, bucket in vote_rounds.items():
-            if not isinstance(bucket, dict):
-                continue
-            source["votes_by_round"][str(round_key)] = {
-                "up": list(bucket.get("up") or []),
-                "down": list(bucket.get("down") or []),
-                "abstain": list(bucket.get("abstain") or []),
-                "reasons": dict(bucket.get("reasons") or {}),
-                "topic": bucket.get("topic"),
-                "round": bucket.get("round"),
-            }
-        source["created_round"] = int(comment.get("created_round") or source.get("created_round") or 1)
-        source["removed"] = _is_comment_removed(comment)
-
-    return visible_thread
+    """Legacy carry-over disabled: return the topic thread unchanged."""
+    _ = threads
+    return list(topic_thread or [])
 
 
 def format_prior_topic_comments_for_prompt(prior_comments: List[Dict[str, Any]]) -> str:
-    """Compact formatter for prior-topic carry-over comments."""
-    if not prior_comments:
-        return "(No prior-topic carry-over comments.)"
-    lines: List[str] = []
-    for i, c in enumerate(prior_comments):
-        label = _topic_label(c.get("carried_from_topic", "unknown"))
-        lines.append(f"- [{label}] id={c.get('id', f'pc{i}')} by {c.get('vendor', '?')}: {c.get('text', '')}")
-        for a in (c.get("addendums") or []):
-            lines.append(
-                f"  Addendum by {a.get('vendor', '?')} (up={len(a.get('up') or [])}, down={len(a.get('down') or [])}): {a.get('text', '')}"
-            )
-        for s in (c.get("subcomments") or []):
-            lines.append(f"  Reply by {s.get('vendor', '?')}: {s.get('text', '')}")
-    return "\n".join(lines)
+    """Legacy carry-over disabled: no prior-topic injection text."""
+    _ = prior_comments
+    return "(Cross-topic carry-over disabled; global voting handles cross-topic interactions.)"
 
 
 def _format_thread_for_prompt(
@@ -866,6 +826,337 @@ def _call_agentic_feedback_agent(
     if new_comment and isinstance(new_comment, str) and is_agentic_skip(new_comment):
         new_comment = None
     return {"subcomments": subcomments, "votes": votes, "new_comment": new_comment}
+
+
+def _json_response_format(name: str, schema: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name,
+            "strict": True,
+            "schema": schema,
+        },
+    }
+
+
+def _parse_structured_json(raw: str) -> Dict[str, Any]:
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    try:
+        obj = json.loads(text)
+    except Exception:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _phase_prompt(
+    phase: str,
+    topic: str,
+    context: str,
+    thread_str: str = "",
+    global_threads_str: str = "",
+) -> Tuple[str, str]:
+    topic_label = _topic_label(topic)
+    if phase == PHASE_A1:
+        system = (
+            f"You are a feedback agent for '{topic_label}'. "
+            "Use only the provided response tool/schema. "
+            "Return one optional top-level comment or null."
+        )
+        prompt = (
+            context
+            + "\n\nOnly propose one substantive top-level comment for this topic. "
+            "If nothing substantive, return null."
+        )
+        return system, prompt
+    if phase in (PHASE_A2A, PHASE_A2B):
+        system = (
+            f"You are a feedback agent for '{topic_label}'. "
+            "Use only the provided response tool/schema. "
+            "You may only return subcomments."
+        )
+        prompt = (
+            context
+            + "\n\n========== Current topic thread ==========\n"
+            + thread_str
+            + "\n\nAdd only non-redundant subcomments to existing top-level comments."
+        )
+        return system, prompt
+    if phase == PHASE_A3:
+        system = (
+            f"You are a feedback agent for '{topic_label}'. "
+            "Use only the provided response tool/schema. "
+            "You may only return edit suggestions (addendums) attached to existing top-level comments."
+        )
+        prompt = (
+            context
+            + "\n\n========== Current topic thread ==========\n"
+            + thread_str
+            + "\n\nSuggest concrete edits as addendums for existing comments only."
+        )
+        return system, prompt
+    if phase == PHASE_B:
+        system = (
+            "You are a cross-topic voting agent. "
+            "Use only the provided response tool/schema. "
+            "Vote on comments/addendums from this and prior topics."
+        )
+        prompt = (
+            context
+            + "\n\n========== All topic threads ==========\n"
+            + global_threads_str
+            + "\n\nReturn only votes."
+        )
+        return system, prompt
+    return ("Use only the provided response tool/schema.", context)
+
+
+def call_agentic_phase_action(
+    *,
+    vendor: str,
+    phase: str,
+    topic: str,
+    context: str,
+    thread: Optional[List[Dict[str, Any]]] = None,
+    global_threads_str: str = "",
+) -> Dict[str, Any]:
+    client = get_client(ModelVendor(vendor))
+    if phase == PHASE_A1:
+        schema = SCHEMA_A1
+    elif phase in (PHASE_A2A, PHASE_A2B):
+        schema = SCHEMA_A2
+    elif phase == PHASE_A3:
+        schema = SCHEMA_A3
+    else:
+        schema = SCHEMA_B
+    thread_str = _format_thread_for_prompt(thread or [], topic, current_vendor=vendor) if thread is not None else ""
+    system, prompt = _phase_prompt(phase, topic, context, thread_str=thread_str, global_threads_str=global_threads_str)
+    raw = client.call(
+        ModelSize.TINY,
+        system,
+        [prompt],
+        response_format=_json_response_format(f"feedback_{phase}", schema),
+    )
+    data = _parse_structured_json(raw)
+    if phase == PHASE_A1:
+        val = data.get("new_comment")
+        return {"new_comment": val if isinstance(val, str) else None}
+    if phase in (PHASE_A2A, PHASE_A2B):
+        out = []
+        for s in data.get("subcomments") or []:
+            if not isinstance(s, dict):
+                continue
+            cid = s.get("comment_id")
+            text = (s.get("text") or "").strip()
+            if isinstance(cid, str) and text:
+                out.append({"comment_id": cid, "text": text})
+        return {"subcomments": out}
+    if phase == PHASE_A3:
+        out = []
+        for a in data.get("addendums") or []:
+            if not isinstance(a, dict):
+                continue
+            cid = a.get("comment_id")
+            text = (a.get("text") or "").strip()
+            if isinstance(cid, str) and text:
+                out.append({"comment_id": cid, "text": text})
+        return {"addendums": out}
+    out_votes = []
+    for v in data.get("votes") or []:
+        if not isinstance(v, dict):
+            continue
+        topic_key = v.get("topic")
+        target_type = v.get("target_type")
+        cid = v.get("comment_id")
+        action = str(v.get("action") or "").lower()
+        if not isinstance(topic_key, str) or not isinstance(cid, str):
+            continue
+        if target_type not in ("comment", "addendum"):
+            continue
+        if action not in ("upvote", "downvote", "abstain"):
+            continue
+        out_votes.append(
+            {
+                "topic": topic_key,
+                "target_type": target_type,
+                "comment_id": cid,
+                "addendum_id": v.get("addendum_id"),
+                "action": action,
+                "reason": str(v.get("reason") or ""),
+            }
+        )
+    return {"votes": out_votes}
+
+
+def apply_phase_a1_comment(
+    thread: List[Dict[str, Any]],
+    vendor: str,
+    new_comment: Optional[str],
+    *,
+    round_num: int,
+) -> bool:
+    text = (new_comment or "").strip()
+    if not text or is_agentic_skip(text):
+        return False
+    thread.append(
+        {
+            "id": str(uuid.uuid4())[:8],
+            "vendor": vendor,
+            "text": text,
+            "addendums": [],
+            "votes": {"up": [], "down": [], "abstain": []},
+            "votes_by_round": {},
+            "acted_vendors": [],
+            "voted_vendors": [],
+            "acted_by_topic": {},
+            "voted_by_topic": {},
+            "subcomments": [],
+            "removed": False,
+            "created_round": int(round_num or 1),
+        }
+    )
+    return True
+
+
+def apply_phase_subcomments(
+    thread: List[Dict[str, Any]],
+    vendor: str,
+    subcomments: List[Dict[str, Any]],
+) -> bool:
+    id_to_idx = {c.get("id"): i for i, c in enumerate(thread) if c.get("id")}
+    changed = False
+    for sc in subcomments or []:
+        cid = sc.get("comment_id")
+        idx = id_to_idx.get(cid)
+        if idx is None:
+            continue
+        if _is_comment_removed(thread[idx]):
+            continue
+        text = (sc.get("text") or "").strip()
+        if not text:
+            continue
+        thread[idx].setdefault("subcomments", []).append(
+            {"id": str(uuid.uuid4())[:8], "vendor": vendor, "text": text}
+        )
+        changed = True
+    return changed
+
+
+def apply_phase_addendums(
+    thread: List[Dict[str, Any]],
+    vendor: str,
+    addendums: List[Dict[str, Any]],
+) -> bool:
+    id_to_idx = {c.get("id"): i for i, c in enumerate(thread) if c.get("id")}
+    changed = False
+    for ad in addendums or []:
+        cid = ad.get("comment_id")
+        idx = id_to_idx.get(cid)
+        if idx is None:
+            continue
+        if _is_comment_removed(thread[idx]):
+            continue
+        text = (ad.get("text") or "").strip()
+        if not text:
+            continue
+        thread[idx].setdefault("addendums", []).append(
+            {
+                "id": str(uuid.uuid4())[:8],
+                "vendor": vendor,
+                "text": text,
+                "up": [],
+                "down": [],
+            }
+        )
+        changed = True
+    return changed
+
+
+def format_global_threads_for_voting(
+    threads: Dict[str, List[Dict[str, Any]]],
+    active_topics: List[str],
+) -> str:
+    lines: List[str] = []
+    for topic in AGENTIC_TOPIC_KEYS:
+        if topic not in active_topics:
+            continue
+        lines.append(f"===== Topic: {topic} =====")
+        for c in threads.get(topic) or []:
+            if _is_comment_removed(c):
+                continue
+            cid = c.get("id", "")
+            lines.append(f"Comment topic={topic} id={cid} by {c.get('vendor', '?')}: {c.get('text', '')}")
+            for a in c.get("addendums") or []:
+                aid = a.get("id", "")
+                lines.append(
+                    f"  Addendum topic={topic} comment_id={cid} addendum_id={aid} by {a.get('vendor', '?')}: {a.get('text', '')}"
+                )
+            for s in c.get("subcomments") or []:
+                lines.append(f"  Subcomment by {s.get('vendor', '?')}: {s.get('text', '')}")
+        lines.append("")
+    return "\n".join(lines).strip() or "(No comments)"
+
+
+def apply_global_votes_and_prune(
+    threads: Dict[str, List[Dict[str, Any]]],
+    votes_payloads: List[Tuple[str, Dict[str, Any]]],
+    *,
+    round_num: int,
+) -> None:
+    for vendor, payload in votes_payloads:
+        for vote in payload.get("votes") or []:
+            topic = vote.get("topic")
+            if topic not in threads:
+                continue
+            action = vote.get("action")
+            if action not in ("upvote", "downvote", "abstain"):
+                continue
+            thread = threads.get(topic) or []
+            c = next((x for x in thread if x.get("id") == vote.get("comment_id")), None)
+            if c is None or _is_comment_removed(c):
+                continue
+            target_type = vote.get("target_type")
+            if target_type == "comment":
+                mapped = "up" if action == "upvote" else ("down" if action == "downvote" else "abstain")
+                _set_comment_vote_action(
+                    c,
+                    vendor,
+                    mapped,
+                    round_num=round_num,
+                    topic=topic,
+                    reason=vote.get("reason") or "",
+                )
+                continue
+            addendum_id = vote.get("addendum_id")
+            if target_type == "addendum" and isinstance(addendum_id, str):
+                for a in c.get("addendums") or []:
+                    if a.get("id") != addendum_id:
+                        continue
+                    a.setdefault("up", [])
+                    a.setdefault("down", [])
+                    if action == "upvote" and vendor not in a["up"]:
+                        a["up"].append(vendor)
+                    if action == "downvote" and vendor not in a["down"]:
+                        a["down"].append(vendor)
+    for topic, thread in threads.items():
+        for c in thread:
+            if _is_comment_removed(c):
+                c["removed"] = True
+                continue
+            kept = []
+            for a in c.get("addendums") or []:
+                up = len(a.get("up") or [])
+                down = len(a.get("down") or [])
+                if down > up:
+                    continue
+                kept.append(a)
+            c["addendums"] = kept
 
 
 def _thread_addendum_by_id(thread: List[Dict]) -> Dict[str, Tuple[int, int]]:
@@ -1085,6 +1376,7 @@ def _run_immediate_vote_sweep_for_comments(
     comment_ids: Optional[List[str]] = None,
     should_abort: Optional[Callable[[], bool]] = None,
     round_num: Optional[int] = None,
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> bool:
     """
     Immediately call all AIs to vote on newly proposed comments.
@@ -1109,6 +1401,10 @@ def _run_immediate_vote_sweep_for_comments(
         if not pending_for_voter:
             continue
         try:
+            if on_progress:
+                on_progress(
+                    f"Vote-only LLM API ({voter}); comment id(s): {', '.join(pending_for_voter)}"
+                )
             _log(f"AGENTIC immediate vote sweep: topic={topic} voter={voter} pending={pending_for_voter}")
             raw_response = _call_agentic_feedback_agent(
                 voter,
@@ -1654,6 +1950,7 @@ def start_agentic_feedback(session, feedback_vendors: List[str]) -> Dict[str, An
     state["last_poll_at"] = time.time()
     state["round"] = state.get("round", 0) + 1
     state["feedback_vendor_order"] = list(feedback_vendors)  # persist for migration / reload
+    clear_topic_feedback_wait(state)
     # Each topic gets its own memory: independent round index and shuffled vendor order
     state["topic_cursors"] = {
         topic: {
@@ -1735,12 +2032,24 @@ def _run_one_topic_sequential(
     should_abort: Optional[Callable[[], bool]] = None,
     round_num: Optional[int] = None,
     initial_vote_comment_ids: Optional[List[str]] = None,
+    on_progress: Optional[Callable[[str], None]] = None,
+    phase_label: str = "",
 ) -> Tuple[str, List[Dict], bool]:
     """Run all vendors for one topic sequentially so each agent sees previous addendums. Returns (topic, updated_thread)."""
+
+    def _emit(detail: str) -> None:
+        if on_progress:
+            full = f"{phase_label} — {detail}" if phase_label else detail
+            on_progress(full)
+
     # At topic start, force an explicit vote-only sweep on all carried comments so
     # every vendor gets a chance to reassess prior-topic comments with new context.
     target_ids = [cid for cid in (initial_vote_comment_ids or []) if cid]
     if target_ids:
+        _emit(
+            f"Vote-only sweep: reconciling {len(target_ids)} carried comment(s) "
+            f"(one LLM call per vendor except skips)"
+        )
         _run_immediate_vote_sweep_for_comments(
             thread,
             topic,
@@ -1752,12 +2061,15 @@ def _run_one_topic_sequential(
             comment_ids=target_ids,
             should_abort=should_abort,
             round_num=round_num,
+            on_progress=_emit if on_progress else None,
         )
 
-    for vendor in vendor_order:
+    n_v = len(vendor_order)
+    for i, vendor in enumerate(vendor_order):
         if should_abort is not None and should_abort():
             _log(f"AGENTIC topic={topic}: abort before vendor={vendor} due to stale polling heartbeat")
             return (topic, thread, False)
+        _emit(f"Full feedback LLM API ({vendor}); step {i + 1}/{n_v} in vendor chain")
         try:
             _log(f"AGENTIC topic={topic} vendor={vendor} (sequential)")
             response = _call_agentic_feedback_agent(
@@ -1779,6 +2091,10 @@ def _run_one_topic_sequential(
                 new_comment_ids=new_comment_ids,
             )
             if new_comment_ids:
+                _emit(
+                    f"Vote-only sweep after new comment from {vendor}: "
+                    f"{len(new_comment_ids)} id(s); one LLM per other vendor"
+                )
                 _run_immediate_vote_sweep_for_comments(
                     thread,
                     topic,
@@ -1790,6 +2106,7 @@ def _run_one_topic_sequential(
                     comment_ids=new_comment_ids,
                     should_abort=should_abort,
                     round_num=round_num,
+                    on_progress=_emit if on_progress else None,
                 )
         except Exception as e:
             _log(f"AGENTIC feedback agent error topic={topic} vendor={vendor}: {e}")

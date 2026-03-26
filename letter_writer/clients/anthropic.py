@@ -1,6 +1,7 @@
+import json
 from .base import BaseClient, ModelSize
 from anthropic import Anthropic
-from typing import List, Dict
+from typing import List, Dict, Any, Optional
 import typer
 from langsmith import traceable
 
@@ -13,13 +14,50 @@ class ClaudeClient(BaseClient):
         return [{"role": "user", "content": [{"type": "text", "text": message}]} for message in user_messages]
 
     @traceable(run_type="llm", name="Anthropic.call")
-    def call(self, model_size: ModelSize | str, system: str, user_messages: List[str], search: bool = False) -> str:
+    def call(
+        self,
+        model_size: ModelSize | str,
+        system: str,
+        user_messages: List[str],
+        search: bool = False,
+        response_format: Optional[Dict[str, Any]] = None,
+    ) -> str:
         messages = self._format_messages(user_messages)
         if isinstance(model_size, str):
             model = model_size
         else:
             model = self.get_model_for_size(model_size)
         typer.echo(f"[INFO] using Anthropic model {model}" + (" with search" if search else ""))
+
+        if response_format and isinstance(response_format, dict):
+            schema = ((response_format.get("json_schema") or {}).get("schema") or {})
+            tool_name = ((response_format.get("json_schema") or {}).get("name") or "phase_output")
+            response = self.client.messages.create(
+                model=model,
+                system=system,
+                messages=messages,
+                tools=[{
+                    "name": tool_name,
+                    "description": "Return structured JSON response for the current phase.",
+                    "input_schema": schema,
+                }],
+                tool_choice={"type": "tool", "name": tool_name},
+                max_tokens=4000,
+            )
+            if response.usage:
+                self.track_cost(
+                    model,
+                    response.usage.input_tokens,
+                    response.usage.output_tokens,
+                    search_queries=0,
+                )
+            if response.content:
+                for block in response.content:
+                    if getattr(block, "type", None) == "tool_use":
+                        payload = getattr(block, "input", None)
+                        if isinstance(payload, dict):
+                            return json.dumps(payload)
+            return "{}"
         tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}] if search else []
         # Use 2048 for search, 8000 for everything else (letters, comments, etc.)
         max_tokens = 2048 if search else 8000

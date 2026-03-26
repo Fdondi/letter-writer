@@ -1,6 +1,6 @@
 from .base import BaseClient, ModelSize
 from mistralai.client import Mistral
-from typing import List, Dict
+from typing import List, Dict, Any, Optional
 import os
 import typer
 from langsmith import traceable
@@ -96,7 +96,9 @@ class MistralClient(BaseClient):
         system: str,
         user_messages: List[str],
         search: bool = False,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
+        _ = response_format
         if isinstance(model_size, str):
             model = model_size
         else:

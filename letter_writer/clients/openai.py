@@ -1,6 +1,6 @@
 from .base import BaseClient, ModelSize
 from openai import OpenAI
-from typing import List, Dict
+from typing import List, Dict, Any, Optional
 import typer
 from langsmith import traceable
 
@@ -13,7 +13,14 @@ class OpenAIClient(BaseClient):
         return [{"role": "system", "content": system}] + [{"role": "user", "content": message} for message in user_messages]
 
     @traceable(run_type="llm", name="OpenAI.call")
-    def call(self, model_size: ModelSize | str, system: str, user_messages: List[str], search: bool = False) -> str:
+    def call(
+        self,
+        model_size: ModelSize | str,
+        system: str,
+        user_messages: List[str],
+        search: bool = False,
+        response_format: Optional[Dict[str, Any]] = None,
+    ) -> str:
         messages = self._format_messages(system, user_messages)
         if isinstance(model_size, str):
             model = model_size
@@ -24,9 +31,14 @@ class OpenAIClient(BaseClient):
                 f"[WARNING] search requested for OpenAI model {model} without explicit search capability"
             )
         typer.echo(f"[INFO] using OpenAI model {model}" + (" with search" if search else ""))
+        request_kwargs: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+        }
+        if response_format:
+            request_kwargs["response_format"] = response_format
         response = self.client.chat.completions.create(
-            model=model,
-            messages=messages, 
+            **request_kwargs,
         )
         
         if response.usage:

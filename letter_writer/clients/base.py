@@ -3,7 +3,7 @@ import logging
 import sys
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -152,5 +152,6 @@ class BaseClient:
         system: str,
         user_messages: List[str],
         search: bool = False,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         raise NotImplementedError("Subclasses must implement this method")

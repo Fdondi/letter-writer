@@ -1,155 +1,87 @@
-# Agentic Feedback Flow: Visibility and Actions
+# Agentic Feedback Flow
 
-This document describes the current behavior of the agentic discussion pipeline, including what each agent can see and what each agent is allowed to do at every stage.
+This document describes the agentic discussion pipeline: phases, parallelism, structured LLM outputs, persistence, and what the UI shows while feedback runs.
 
 ## Scope
 
-- Covers the feedback path executed by `/agentic/feedback/start` background worker logic.
-- Reflects current implementation in `letter_writer_server/api/phases.py` and `letter_writer/agentic_service.py`.
+- Feedback is started via `/api/phases/agentic/feedback/start/` and runs in a background worker (`_run_ordered_feedback_loop` in `letter_writer_server/api/phases.py`).
+- Core logic and schemas live in `letter_writer/agentic_service.py`.
+- LLM clients accept optional `response_format` (JSON schema) on `BaseClient.call` so each phase exposes **only** the allowed output shape—not merely prompt text.
 
 ## Terminology
 
-- **Topic**: one dimension in `AGENTIC_TOPIC_KEYS` (for example instruction, accuracy, etc.).
-- **Vendor/agent**: one model provider selected in `feedback_vendors`.
-- **Thread**: list of top-level comments for a topic, including subcomments, addendums, and votes.
-- **Carry-over comment**: a cloned top comment from an earlier topic, injected into a later topic so later-topic agents can react.
-- **Round**: per-topic cursor round. A topic is active while `topic_round <= max_rounds`.
+- **Topic**: one dimension in `AGENTIC_TOPIC_KEYS` (instruction, company_fit, precision, user_fit, human, accuracy).
+- **Vendor**: a model provider from `feedback_vendors` / `feedback_vendor_order`.
+- **Thread**: per-topic list of top-level comments (subcomments, addendums, votes).
+- **Round**: per-topic cursor `round` in `topic_cursors`. A topic is active while `round <= max_rounds`.
 
 ## High-level execution order
 
-Each worker tick runs these stages:
+Each worker loop iteration (one “global round”) runs:
 
-1. Heartbeat/suspend/abort checks.
-2. Build active topic work for the current global tick.
-3. **Phase A (parallel topics):** run all active topics in parallel.
-4. Persist Phase A outputs (threads + per-topic round increment/shuffle).
-5. **Phase B (linear cross-topic sweep):** for each later topic, run one additional pass where it sees carry-over comments from all earlier topics at once.
-6. Persist Phase B updates.
-7. Repeat until no active topics remain, then mark `feedback_done`.
+1. Heartbeat / suspend / stale-poll abort checks.
+2. **Phase A — topic phases (strictly ordered sub-phases, parallel within each sub-phase):**
+   - **A1**: optional new top-level comment per (topic × vendor).
+   - **A2a**: optional subcomments per (topic × vendor), seeing the thread after A1.
+   - **A2b**: optional subcomments again, seeing the thread after A2a.
+   - **A3**: optional addendums (edit suggestions) per (topic × vendor), seeing the full thread after A2b.
+3. **Phase B — global cross-topic vote:** after all of Phase A finishes for this round, every vendor runs **one** structured vote call over **all** active topics’ comments and addendums. Votes are applied; items with strictly negative score (`down > up`) are dropped (comments marked removed; addendums removed from lists).
+4. Per-topic round counters advance and vendor orders reshuffle; repeat until every topic has `round > max_rounds`, then `feedback_done`.
 
-## Stage-by-stage visibility and permissions
+There is **no** sequential “one vendor after another” chain inside a topic for these phases, and **no** linear per-topic Phase B sweep. Cross-topic interaction is **Phase B** only.
 
-### Stage 0: Entry checks
+## Parallelism
 
-Before any agent call:
+- **Phase A (each of A1 / A2a / A2b / A3):** all `(active_topic × feedback_vendor)` API calls for that sub-phase run concurrently (`ThreadPoolExecutor` + `as_completed`).
+- **Phase B:** all `feedback_vendor` global vote calls run concurrently.
 
-- Worker reads `feedback_ongoing`, `feedback_suspended`, heartbeat timestamps.
-- If suspended: stop worker and persist.
-- If stale poll heartbeat: hard-abort feedback and reset state back to draft phase.
+## Structured output (tools / schemas)
 
-No model calls happen here.
+Each phase uses a **fixed JSON schema** passed to the client as `response_format` (OpenAI/DeepSeek: `response_format`; Anthropic: single tool + `tool_choice`; Gemini: `response_schema` when schema is set). The model is constrained to that schema for the call—not only by natural-language instructions.
 
-### Stage 1: Build topic work items
+Rough shape by phase (see `letter_writer/agentic_service.py` for exact `SCHEMA_*`):
 
-For each active topic:
+| Phase | Allowed output |
+|--------|----------------|
+| A1 | `{ "new_comment": string \| null }` |
+| A2a / A2b | `{ "subcomments": [ { "comment_id", "text" } ] }` |
+| A3 | `{ "addendums": [ { "comment_id", "text" } ] }` |
+| B | `{ "votes": [ { "topic", "target_type", "comment_id", "action", optional "addendum_id", "reason" } ] }` |
 
-- Build topic context from draft(s), CV, company report, job text, docs, style, and metadata.
-- Load current topic thread.
-- Ensure vendor order exists (fallback from persisted `feedback_vendor_order` if needed).
+Entry point: `call_agentic_phase_action(...)`. Application to threads uses `apply_phase_a1_comment`, `apply_phase_subcomments`, `apply_phase_addendums`, and `apply_global_votes_and_prune`.
 
-No agent acts here; this stage only prepares input.
+## Legacy cross-topic carry-over
 
-### Stage 2 (Phase A): Parallel topic execution
+Earlier designs injected “carry-over” clones from prior topics into later topic threads and merged edits back. That path is **disabled**; global Phase B replaces it. Helper functions such as `get_prior_topic_top_comments` / `seed_thread_with_prior_topic_comments` / `merge_carryover_updates_and_strip` are kept for compatibility but no longer drive the main loop.
 
-All active topics run concurrently. Within each topic, vendors run sequentially in that topic order.
+## UI: `waiting_for` (topic progress)
 
-What an agent in topic `T` sees in Phase A:
+While `feedback_ongoing` is true, `topic_meta[topic].waiting_for` (also echoed under each topic in poll `threads`) describes what that topic is waiting on.
 
-- Topic `T` context (draft(s) + source data).
-- Current thread for topic `T` only.
-- No cross-topic carry-over is injected in this phase.
+- **Phase A:** each topic shows **that topic’s** vendors only:
+  - `API returned: … | still running: …` updates **after each** vendor call completes for that topic in the current sub-phase (A1, A2a, A2b, or A3).
+- **Phase B:** every active topic shows the **same** global line (one shared vote wave):
+  - `API returned: … | still running: …` updates after each vendor’s global vote call returns.
 
-What the agent can do:
+Strings are built in `letter_writer_server/api/phases.py` via `_topic_wait_strings_phase_a` and `_topic_wait_strings_phase_b`.
 
-- If thread empty (first agent path):
-  - create one top-level comment, or skip (`NO COMMENT` / `SKIP`).
-- If thread non-empty (JSON path):
-  - optional new top-level comment (`new_comment`).
-  - subcomment on open comments.
-  - vote top-level comments (`upvote` / `downvote` / `abstain`).
-  - upvote/downvote existing addendums by `addendum_id`.
-  - add a new addendum (which starts with author upvote).
+State is stored in `topic_feedback_wait` on the agentic state object; `_build_topic_meta` in `letter_writer/agentic_service.py` exposes it as `waiting_for` when feedback is ongoing.
 
-Important vote effects:
+## Poll snapshot (live sessions)
 
-- Any top-level **downvote** marks that comment removed for downstream use.
-- When an addendum becomes net-positive, parent comment votes are invalidated/reset.
+For `/agentic/feedback/poll/`, when a live in-memory entry exists, the snapshot passed to `poll_response` must include:
 
-After each topic completes:
+- `worker_running`
+- `topic_feedback_wait`
 
-- Topic thread returned from Phase A is persisted.
-- Topic cursor round increments by 1.
-- Topic vendor order reshuffled for next round.
+Otherwise the UI would see `waiting_for: null` even while the worker is updating progress.
 
-### Stage 3 (Phase B): Linear cross-topic sweep
+## In-memory live state vs persisted session
 
-Topics are processed in fixed order. For each target topic `j > 0`:
+While feedback runs, a per-session entry in `_agentic_live_store` lets the worker and poll share state. The worker persists after phase merges. Polls on **another** process fall back to persisted storage (may lag on `waiting_for` until next persist).
 
-- Collect carry-over comments from **all earlier topics** `0..j-1` using top surviving comments per earlier topic.
-- Inject those carry-over comments into topic `j` thread once.
-- Run topic `j` vendors sequentially one more time for this sweep.
-- Merge carry-over edits back into source topics, then strip carry-over clones from topic `j` visible thread.
+On feedback start, if a live entry exists from a prior run, the handler must replace its `state` from the current session so `feedback_ongoing` and threads are not stale (see comments in `phases.py` around `agentic/feedback/start/`).
 
-What an agent in target topic `j` sees in Phase B:
+## Post-feedback draft voting (separate)
 
-- Same topic `j` context as Phase A.
-- Topic `j` local thread.
-- Prior-topic carry-over section containing selected comments from all earlier topics.
-
-What the agent can do in Phase B:
-
-- The exact same actions as Stage 2 JSON path:
-  - vote/subcomment/addendum/new comment according to prompt rules.
-- Actions on carry-over clones are written back to original source-topic comments during merge.
-
-Visibility consequence:
-
-- Later topics get a "last word" pass over earlier topics' selected comments.
-- Earlier topics do not get an additional pass after later topics act in this same tick.
-
-### Stage 4: Completion condition
-
-When no topics remain active (`topic_round > max_rounds` for all topics):
-
-- Worker sets `feedback_ongoing = False`.
-- Worker sets status to `feedback_done`.
-
-## What is selected for cross-topic carry-over
-
-When building prior-topic carry-over for target topic `T`:
-
-- Only topics earlier than `T` are considered.
-- Removed comments are excluded.
-- Candidates are ranked by score (up/down votes + small bonuses for discussion/addendum signals).
-- Up to `max_per_topic` (currently 3) comments per earlier topic are cloned.
-
-So agents do **not** see all earlier-topic comments, only top surviving ones.
-
-## Who can act on what (quick matrix)
-
-- **Topic-local comments in Phase A:** agents of that same topic can act.
-- **Earlier-topic carry-over in Phase A:** not shown.
-- **Earlier-topic carry-over in Phase B:** agents of later topics can act; actions are merged back to originals.
-- **Removed comments:** visible for audit but not acted on downstream.
-
-## Voting stage (post-feedback)
-
-After feedback is done, voting is separate:
-
-- Each voting vendor reads all drafts + all discussion threads.
-- Voting calls are parallelized.
-- Each voter returns top-3 preferred draft vendors.
-
-This is independent from per-topic feedback action rules above.
-
-## Notes on current behavior
-
-- Current flow is **parallel topics + linear sweep** per worker tick.
-- This differs from strictly topic-serial execution and from full quadratic per-edge sweep.
-- Cross-topic visibility is present, but only through selected top carry-over comments from earlier topics.
-
-## In-memory “live” state vs persisted session
-
-While feedback is running, the API keeps a per-session copy in `_agentic_live_store` (same server process) so the background worker and `/agentic/feedback/poll/` can share threads without racing. Polls that hit **another** worker process have no live entry and read **persisted** session storage instead.
-
-On `/agentic/feedback/start/`, if a live entry already exists from an earlier run on the same process (for example after a new draft followed by starting feedback again), the handler must **replace** that entry’s `state` from the current session. Updating only `last_poll_at` would leave `feedback_ongoing=false` from the old run, so the worker exits immediately (`AGENTIC ordered worker exit: ongoing=false`), nothing is generated, and the UI shows empty threads while persisted data can briefly look inconsistent.
+After `status === feedback_done`, the product may run **draft** voting (`draft_votes`): each voter ranks favorite draft vendors. That is separate from Phase B comment/addendum voting above.

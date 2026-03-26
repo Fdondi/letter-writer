@@ -191,6 +191,15 @@ export default function AgenticThread({
           )}
           <span style={{ fontSize: 11, color: "var(--secondary-text-color)" }}>
             {messages} msg{messages !== 1 ? "s" : ""} · {turns} turn{turns !== 1 ? "s" : ""}
+            {meta.waiting_for ? (
+              <>
+                {" "}
+                ·{" "}
+                <span style={{ fontWeight: 500, color: "var(--text-color)" }} title={meta.waiting_for}>
+                  {meta.waiting_for}
+                </span>
+              </>
+            ) : null}
           </span>
           {onAddRound && (
             <button

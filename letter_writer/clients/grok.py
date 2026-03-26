@@ -1,5 +1,5 @@
 from .base import BaseClient, ModelSize
-from typing import List
+from typing import List, Dict, Any, Optional
 import os
 import typer
 import xai_sdk
@@ -18,7 +18,15 @@ class GrokClient(BaseClient):
         self.client = xai_sdk.Client(api_key=api_key)
 
     @traceable(run_type="llm", name="Grok.call")
-    def call(self, model_size: ModelSize | str, system: str, user_messages: List[str], search: bool = False) -> str:
+    def call(
+        self,
+        model_size: ModelSize | str,
+        system: str,
+        user_messages: List[str],
+        search: bool = False,
+        response_format: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        _ = response_format
         if isinstance(model_size, str):
             model = model_size
         else:
