@@ -118,6 +118,8 @@ export default function App({ flow = "vendor" }) {
   const [agenticSavingFinal, setAgenticSavingFinal] = useState(false);
   const [agenticSaveError, setAgenticSaveError] = useState(null);
   const [agenticFinalParagraphs, setAgenticFinalParagraphs] = useState([]);
+  const rehydrationAttemptedRef = useRef(false);
+  const latestFormSnapshotRef = useRef(null);
 
   const normalizeAgenticThreads = useCallback((threadsPayload = {}, topicMetaPayload = {}) => {
     const threadsOut = AGENTIC_TOPICS.reduce((acc, topic) => ({ ...acc, [topic]: [] }), {});
@@ -153,13 +155,21 @@ export default function App({ flow = "vendor" }) {
       const round = rawValue.round;
       const done = rawValue.done;
       const messages = rawValue.messages_count ?? rawValue.count ?? rawValue.messages;
-      if (round != null || done != null || messages != null) {
-        topicMetaOut[topic] = {
+      if (round != null || done != null || messages != null || "waiting_for" in rawValue) {
+        const nextMeta = {
           ...(topicMetaOut[topic] || {}),
           ...(round != null && { round }),
           ...(messages != null && { messages: Number.isFinite(Number(messages)) ? Number(messages) : candidateThread.length }),
           ...(done != null && { done: done === true }),
         };
+        if ("waiting_for" in rawValue) {
+          if (rawValue.waiting_for != null && String(rawValue.waiting_for).trim() !== "") {
+            nextMeta.waiting_for = String(rawValue.waiting_for).trim();
+          } else {
+            delete nextMeta.waiting_for;
+          }
+        }
+        topicMetaOut[topic] = nextMeta;
       }
     };
 
@@ -194,6 +204,61 @@ export default function App({ flow = "vendor" }) {
     if (!Number.isFinite(n)) return;
     setAgenticMaxRounds(n);
   }, []);
+
+  const isFormSnapshotPristine = useCallback((snapshot) => {
+    if (!snapshot || typeof snapshot !== "object") return false;
+    const emptyPoc = !snapshot.pointOfContact || (
+      !String(snapshot.pointOfContact.name || "").trim() &&
+      !String(snapshot.pointOfContact.role || "").trim() &&
+      !String(snapshot.pointOfContact.contact_details || "").trim() &&
+      !String(snapshot.pointOfContact.notes || "").trim() &&
+      !String(snapshot.pointOfContact.company || "").trim()
+    );
+    return (
+      !String(snapshot.jobText || "").trim() &&
+      !String(snapshot.companyName || "").trim() &&
+      !String(snapshot.jobTitle || "").trim() &&
+      !String(snapshot.location || "").trim() &&
+      !String(snapshot.language || "").trim() &&
+      !String(snapshot.salary || "").trim() &&
+      (!Array.isArray(snapshot.requirements) || snapshot.requirements.length === 0) &&
+      (!snapshot.competences || Object.keys(snapshot.competences).length === 0) &&
+      emptyPoc &&
+      !String(snapshot.additionalUserInfo || "").trim() &&
+      !String(snapshot.additionalCompanyInfo || "").trim() &&
+      !snapshot.extractedData
+    );
+  }, []);
+
+  useEffect(() => {
+    latestFormSnapshotRef.current = {
+      jobText,
+      companyName,
+      jobTitle,
+      location,
+      language,
+      salary,
+      requirements,
+      competences,
+      pointOfContact,
+      additionalUserInfo,
+      additionalCompanyInfo,
+      extractedData,
+    };
+  }, [
+    jobText,
+    companyName,
+    jobTitle,
+    location,
+    language,
+    salary,
+    requirements,
+    competences,
+    pointOfContact,
+    additionalUserInfo,
+    additionalCompanyInfo,
+    extractedData,
+  ]);
 
   // Research state
   const [selectedCompanyReport, setSelectedCompanyReport] = useState(null);
@@ -461,8 +526,145 @@ export default function App({ flow = "vendor" }) {
       .catch((e) => setError(String(e)));
   }, []);
 
-  // Intentionally no agentic rehydration on route enter/refresh.
-  // Starting a flow must always use the current form inputs only.
+  // Rehydrate only on actual browser reload/back-forward, never on in-app route changes.
+  // Also only rehydrate while the local form is still pristine to avoid overwriting new input.
+  useEffect(() => {
+    if (rehydrationAttemptedRef.current) return;
+    if (checkingAuth || !isAuthenticated) return;
+
+    const navEntry = performance.getEntriesByType("navigation")?.[0];
+    const navType = navEntry?.type || "navigate";
+    const isReloadLikeNav = navType === "reload" || navType === "back_forward";
+    if (!isReloadLikeNav) {
+      rehydrationAttemptedRef.current = true;
+      return;
+    }
+
+    if (!isFormSnapshotPristine(latestFormSnapshotRef.current)) {
+      rehydrationAttemptedRef.current = true;
+      return;
+    }
+
+    rehydrationAttemptedRef.current = true;
+    let cancelled = false;
+
+    const safeString = (value) => (value == null ? "" : String(value));
+    const normalizeRequirements = (value) => {
+      if (Array.isArray(value)) return value.filter(Boolean);
+      if (typeof value === "string" && value.trim()) return [value.trim()];
+      return [];
+    };
+
+    (async () => {
+      try {
+        const [sessionRes, agenticRes] = await Promise.all([
+          fetch("/api/phases/state/", { credentials: "include" }),
+          flow === "agentic"
+            ? fetch("/api/phases/agentic/state/", { credentials: "include" })
+            : Promise.resolve(null),
+        ]);
+        if (cancelled) return;
+        if (!sessionRes.ok) return;
+
+        const sessionPayload = await sessionRes.json();
+        if (cancelled) return;
+
+        if (!isFormSnapshotPristine(latestFormSnapshotRef.current)) {
+          return;
+        }
+
+        const sessionId = sessionPayload?.session_id;
+        const state = sessionPayload?.session_state || {};
+        const common = state?.metadata?.common || {};
+        let restoredSomething = false;
+
+        if (sessionId) {
+          setPhaseSessionId(sessionId);
+          restoredSomething = true;
+        }
+        if (state?.job_text != null) {
+          setJobText(safeString(state.job_text));
+          restoredSomething = true;
+        }
+        if (common.company_name != null) {
+          setCompanyName(safeString(common.company_name));
+          restoredSomething = true;
+        }
+        if (common.job_title != null) {
+          setJobTitle(safeString(common.job_title));
+          restoredSomething = true;
+        }
+        if (common.location != null) {
+          setLocation(safeString(common.location));
+          restoredSomething = true;
+        }
+        if (common.language != null) {
+          setLanguage(safeString(common.language));
+          restoredSomething = true;
+        }
+        if (common.salary != null) {
+          setSalary(safeString(common.salary));
+          restoredSomething = true;
+        }
+        if (common.additional_user_info != null) {
+          setAdditionalUserInfo(safeString(common.additional_user_info));
+          restoredSomething = true;
+        }
+        if (common.additional_company_info != null) {
+          setAdditionalCompanyInfo(safeString(common.additional_company_info));
+          restoredSomething = true;
+        }
+        if (common.requirements != null) {
+          setRequirements(normalizeRequirements(common.requirements));
+          restoredSomething = true;
+        }
+        if (common.competences && typeof common.competences === "object") {
+          setCompetences(common.competences);
+          restoredSomething = true;
+        }
+        if (common.point_of_contact && typeof common.point_of_contact === "object") {
+          setPointOfContact({
+            name: safeString(common.point_of_contact.name),
+            role: safeString(common.point_of_contact.role),
+            contact_details: safeString(common.point_of_contact.contact_details),
+            notes: safeString(common.point_of_contact.notes),
+            company: safeString(common.point_of_contact.company),
+          });
+          restoredSomething = true;
+        }
+
+        if (flow === "agentic" && agenticRes && agenticRes.ok) {
+          const agenticPayload = await agenticRes.json();
+          if (cancelled) return;
+          const restoredAgentic = normalizeAgenticState(agenticPayload?.agentic_state || null);
+          if (restoredAgentic && restoredAgentic.status) {
+            setAgenticState(restoredAgentic);
+            if (restoredAgentic.max_rounds != null) syncAgenticMaxRoundsFromServer(restoredAgentic.max_rounds);
+            if (restoredAgentic.status === "done") setAgenticStage("assembly");
+            else setAgenticStage("agentic");
+            restoredSomething = true;
+          }
+        }
+
+        if (restoredSomething) {
+          showNotification("Recovered previous session after browser reload");
+        }
+      } catch (e) {
+        console.warn("Reload rehydration skipped:", e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    checkingAuth,
+    isAuthenticated,
+    flow,
+    normalizeAgenticState,
+    syncAgenticMaxRoundsFromServer,
+    isFormSnapshotPristine,
+  ]);
 
   // Notify only when agentic feedback actually completes (ongoing becomes false), not on start or every poll
   const agenticOngoingRef = useRef(undefined);
