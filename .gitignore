@@ -1,5 +1,6 @@
 .env
 .cursor/
+.claude/
 trace/
 letters/
 jobs/
