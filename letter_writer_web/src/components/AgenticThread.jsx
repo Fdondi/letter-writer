@@ -68,8 +68,9 @@ function topicStatusColor(meta) {
 }
 
 /** Renders a translation bar above and translated content. Used for addendums and subcomments.
- * leftSlot: optional content to show on the left of the bar (e.g. Edit/Remove) so it doesn't overlap the language selector. */
-function TranslatableSlice({ translation, fieldId, sourceText, render, leftSlot }) {
+ * leftSlot: optional content to show on the left of the bar (e.g. Edit/Remove) so it doesn't overlap the language selector.
+ * rightSlot: optional content to the left of the language controls (e.g. vote tallies) so votes stay visible. */
+function TranslatableSlice({ translation, fieldId, sourceText, render, leftSlot, rightSlot }) {
   useEffect(() => {
     if (translation && fieldId) translation.resetFieldTranslation(fieldId, sourceText);
   }, [sourceText, fieldId, translation]);
@@ -87,11 +88,24 @@ function TranslatableSlice({ translation, fieldId, sourceText, render, leftSlot 
   };
 
   if (!translation || !fieldId) {
-    if (leftSlot && render) {
+    if ((leftSlot || rightSlot) && render) {
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: 2, width: "100%" }}>
-          <div style={{ display: "flex", justifyContent: "flex-start", alignItems: "center", marginBottom: 2 }}>
-            {leftSlot}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 2,
+              gap: 8,
+              width: "100%",
+              minHeight: 24,
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>{leftSlot}</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
+              {rightSlot}
+            </span>
           </div>
           {render(sourceText)}
         </div>
@@ -105,21 +119,26 @@ function TranslatableSlice({ translation, fieldId, sourceText, render, leftSlot 
       <div
         style={{
           display: "flex",
-          justifyContent: leftSlot ? "space-between" : "flex-end",
+          justifyContent: "space-between",
           alignItems: "center",
           marginBottom: 2,
           gap: 8,
+          width: "100%",
+          minHeight: 24,
         }}
       >
-        {leftSlot ?? null}
-        <LanguageSelector
-          languages={translation.languages}
-          viewLanguage={viewLanguage}
-          onLanguageChange={handleLanguageChange}
-          hasTranslation={(code) => translation.hasTranslation(fieldId, code)}
-          isTranslating={translation.isTranslating[fieldId] || false}
-          size="tiny"
-        />
+        <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>{leftSlot ?? null}</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          {rightSlot}
+          <LanguageSelector
+            languages={translation.languages}
+            viewLanguage={viewLanguage}
+            onLanguageChange={handleLanguageChange}
+            hasTranslation={(code) => translation.hasTranslation(fieldId, code)}
+            isTranslating={translation.isTranslating[fieldId] || false}
+            size="tiny"
+          />
+        </span>
       </div>
       {render ? render(displayedText) : displayedText}
     </div>
@@ -761,6 +780,39 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
               {subcomments.map((s, subIdx) => {
                 const subRgb = colorToRgbString(vendorColors[s.vendor] || null);
                 const subFieldId = fieldId ? `${fieldId}_sub_${subIdx}` : null;
+                const subUpList = (s.up && Array.isArray(s.up)) ? s.up : [];
+                const subDownList = (s.down && Array.isArray(s.down)) ? s.down : [];
+                const subAbstainList = (s.abstain && Array.isArray(s.abstain)) ? s.abstain : [];
+                const subUp = subUpList.length;
+                const subDown = subDownList.length;
+                const subAbstain = subAbstainList.length;
+                const subReasons = (s.reasons && typeof s.reasons === "object") ? s.reasons : {};
+                const reasonLines = Object.entries(subReasons).map(([v, r]) => `${v}: ${String(r)}`);
+                const voteSummary = [
+                  subUp ? `Up: ${subUpList.join(", ")}` : null,
+                  subDown ? `Down: ${subDownList.join(", ")}` : null,
+                  subAbstain ? `Abstain: ${subAbstainList.join(", ")}` : null,
+                ].filter(Boolean).join(" | ") || "No votes yet";
+                const subVoteTooltip = [
+                  voteSummary,
+                  reasonLines.length ? `\n\nReasoning (per model):\n${reasonLines.join("\n")}` : "",
+                ].join("");
+                const voteRightSlot = (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: subUp > subDown ? "#16a34a" : subDown > subUp ? "#dc2626" : "var(--secondary-text-color)",
+                      flexShrink: 0,
+                      fontWeight: 600,
+                      minWidth: 88,
+                      textAlign: "right",
+                      letterSpacing: "0.02em",
+                    }}
+                    title={subVoteTooltip}
+                  >
+                    ↑ {subUp}  ↓ {subDown}{subAbstain ? `  ⏭ ${subAbstain}` : ""}
+                  </span>
+                );
                 return (
                   <div
                     key={s.id || s.text?.slice(0, 12)}
@@ -795,10 +847,12 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
                       translation={translation}
                       fieldId={subFieldId}
                       sourceText={s.text}
+                      rightSlot={voteRightSlot}
                       render={(displayedText) => (
-                        <span>
-                          <span style={{ color: "var(--secondary-text-color)", fontWeight: 600 }}>{s.vendor}:</span> {displayedText}
-                        </span>
+                        <div style={{ fontSize: 12, color: "var(--text-color)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                          <span style={{ color: "var(--secondary-text-color)", fontWeight: 600 }}>{s.vendor}:</span>{" "}
+                          {displayedText}
+                        </div>
                       )}
                     />
                   </div>

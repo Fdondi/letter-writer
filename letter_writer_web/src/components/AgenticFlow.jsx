@@ -21,6 +21,14 @@ const VOTE_COUNTDOWN_SECONDS = 15;
 
 const DRAFT_FIELD_ID = "agentic_draft";
 
+function hasAnyThreadComments(threadMap) {
+  if (!threadMap || typeof threadMap !== "object") return false;
+  return TOPIC_KEYS.some((topic) => {
+    const list = threadMap[topic];
+    return Array.isArray(list) && list.some((comment) => !comment?.carried);
+  });
+}
+
 function DraftWithTranslation({ draftText, translation }) {
   useEffect(() => {
     if (translation) translation.resetFieldTranslation(DRAFT_FIELD_ID, draftText);
@@ -113,7 +121,11 @@ export default function AgenticFlow({
   const draftLetters = agenticState?.draft_letters ?? (draftLetter != null && agenticState?.draft_vendor ? { [agenticState.draft_vendor]: draftLetter } : {});
   const draftVendorList = Object.keys(draftLetters).filter(Boolean);
   const threadsFromState = agenticState?.threads || {};
-  const threads = editedThreads ?? threadsFromState;
+  const editedHasComments = hasAnyThreadComments(editedThreads);
+  const stateHasComments = hasAnyThreadComments(threadsFromState);
+  const threads = editedHasComments || !stateHasComments
+    ? (editedThreads ?? threadsFromState)
+    : threadsFromState;
   const ongoing = agenticState?.ongoing;
   const round = agenticState?.round ?? 0;
   const cost = agenticState?.cost ?? 0;
@@ -196,7 +208,12 @@ export default function AgenticFlow({
       if (status === "done") setEditedThreads(null);
       return;
     }
-    if (editedThreads == null) setEditedThreads(JSON.parse(JSON.stringify(threadsFromState)));
+    const stateHasComments = hasAnyThreadComments(threadsFromState);
+    const editedHasComments = hasAnyThreadComments(editedThreads);
+    // If completion snapshot happened while threads were transiently empty, refresh from state.
+    if (editedThreads == null || (!editedHasComments && stateHasComments)) {
+      setEditedThreads(JSON.parse(JSON.stringify(threadsFromState)));
+    }
   }, [canEditThreads, threadsFromState, status]);
 
   useEffect(() => {
@@ -239,8 +256,11 @@ export default function AgenticFlow({
     }
     if (loading || hasAutoStartedRefineRef.current) return;
     hasAutoStartedRefineRef.current = true;
-    onRefine?.(editedThreads ?? threadsFromState);
-  }, [canAutoRefine, loading, onRefine, editedThreads, threadsFromState]);
+    const refineThreads = editedHasComments || !stateHasComments
+      ? (editedThreads ?? threadsFromState)
+      : threadsFromState;
+    onRefine?.(refineThreads);
+  }, [canAutoRefine, loading, onRefine, editedThreads, threadsFromState, editedHasComments, stateHasComments]);
 
   // Default draft tab when draft vendors change
   useEffect(() => {

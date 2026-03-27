@@ -19,6 +19,22 @@ except Exception:  # pragma: no cover
     pass
 
 
+_GEMINI_UNSUPPORTED_SCHEMA_KEYS = {"additionalProperties", "minLength", "maxLength"}
+
+
+def _strip_unsupported_schema_keys(schema: Any) -> Any:
+    """Recursively remove JSON Schema keys that Gemini's API doesn't support."""
+    if isinstance(schema, dict):
+        return {
+            k: _strip_unsupported_schema_keys(v)
+            for k, v in schema.items()
+            if k not in _GEMINI_UNSUPPORTED_SCHEMA_KEYS
+        }
+    if isinstance(schema, list):
+        return [_strip_unsupported_schema_keys(item) for item in schema]
+    return schema
+
+
 class GeminiClient(BaseClient):
     def __init__(self):
         super().__init__()
@@ -159,7 +175,7 @@ class GeminiClient(BaseClient):
             }
             if schema:
                 cfg["response_mime_type"] = "application/json"
-                cfg["response_schema"] = cast(Any, schema)
+                cfg["response_schema"] = cast(Any, _strip_unsupported_schema_keys(schema))
             response = self.client.models.generate_content(
                 model=model_name,
                 config=types.GenerateContentConfig(**cfg),
