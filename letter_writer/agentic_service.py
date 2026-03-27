@@ -160,6 +160,59 @@ SCHEMA_B = {
 }
 
 
+def build_phase_b_schema(
+    threads: Dict[str, List[Dict[str, Any]]],
+    active_topics: List[str],
+) -> Dict[str, Any]:
+    """Build a strict Phase B schema constrained to ids currently present in threads."""
+    comment_ids: List[str] = []
+    addendum_ids: List[str] = []
+    for topic in active_topics:
+        for c in threads.get(topic) or []:
+            cid = c.get("id")
+            if isinstance(cid, str) and cid and cid not in comment_ids:
+                comment_ids.append(cid)
+            for a in c.get("addendums") or []:
+                aid = a.get("id")
+                if isinstance(aid, str) and aid and aid not in addendum_ids:
+                    addendum_ids.append(aid)
+
+    # When there are no ids yet, keep SCHEMA_B's permissive string fields to avoid invalid empty-enum schema.
+    topic_schema: Dict[str, Any] = {"type": "string"}
+    if active_topics:
+        topic_schema = {"type": "string", "enum": list(active_topics)}
+    comment_id_schema: Dict[str, Any] = {"type": "string"}
+    if comment_ids:
+        comment_id_schema = {"type": "string", "enum": comment_ids}
+    addendum_id_schema: Dict[str, Any] = {"type": ["string", "null"]}
+    if addendum_ids:
+        addendum_id_schema = {"type": ["string", "null"], "enum": addendum_ids + [None]}
+
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "votes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "topic": topic_schema,
+                        "target_type": {"type": "string", "enum": ["comment", "addendum"]},
+                        "comment_id": comment_id_schema,
+                        "addendum_id": addendum_id_schema,
+                        "action": {"type": "string", "enum": ["upvote", "downvote", "abstain"]},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["topic", "target_type", "comment_id", "action"],
+                },
+            },
+        },
+        "required": ["votes"],
+    }
+
+
 def _require_session(session) -> None:
     """Raise if session is missing or invalid."""
     if not session:
@@ -925,9 +978,12 @@ def call_agentic_phase_action(
     context: str,
     thread: Optional[List[Dict[str, Any]]] = None,
     global_threads_str: str = "",
+    schema_override: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     client = get_client(ModelVendor(vendor))
-    if phase == PHASE_A1:
+    if schema_override is not None:
+        schema = schema_override
+    elif phase == PHASE_A1:
         schema = SCHEMA_A1
     elif phase in (PHASE_A2A, PHASE_A2B):
         schema = SCHEMA_A2

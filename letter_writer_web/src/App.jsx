@@ -187,15 +187,22 @@ export default function App({ flow = "vendor" }) {
     return { threads: threadsOut, topicMeta: topicMetaOut };
   }, []);
 
-  const normalizeAgenticState = useCallback((state) => {
+  const stripAgenticThreadFields = useCallback((state) => {
     if (!state || typeof state !== "object") return state;
-    const normalized = normalizeAgenticThreads(state.threads || {}, state.topic_meta || {});
+    const next = { ...state };
+    delete next.threads;
+    delete next.topic_meta;
+    return next;
+  }, []);
+
+  const mergeAgenticUpdate = useCallback((prevState, update) => {
+    const cleanUpdate = stripAgenticThreadFields(update);
+    if (!cleanUpdate || typeof cleanUpdate !== "object") return prevState || null;
     return {
-      ...state,
-      threads: normalized.threads,
-      topic_meta: normalized.topicMeta,
+      ...(prevState || {}),
+      ...cleanUpdate,
     };
-  }, [normalizeAgenticThreads]);
+  }, [stripAgenticThreadFields]);
 
   /** Keep the Max rounds input aligned with persisted server `max_rounds` (poll, add round, draft, etc.). */
   const syncAgenticMaxRoundsFromServer = useCallback((value) => {
@@ -636,7 +643,19 @@ export default function App({ flow = "vendor" }) {
         if (flow === "agentic" && agenticRes && agenticRes.ok) {
           const agenticPayload = await agenticRes.json();
           if (cancelled) return;
-          const restoredAgentic = normalizeAgenticState(agenticPayload?.agentic_state || null);
+          const rawRestoredAgentic = agenticPayload?.agentic_state || null;
+          const restoredAgentic = (() => {
+            if (!rawRestoredAgentic || typeof rawRestoredAgentic !== "object") return rawRestoredAgentic;
+            const normalized = normalizeAgenticThreads(
+              rawRestoredAgentic.threads || {},
+              rawRestoredAgentic.topic_meta || {}
+            );
+            return {
+              ...rawRestoredAgentic,
+              threads: normalized.threads,
+              topic_meta: normalized.topicMeta,
+            };
+          })();
           if (restoredAgentic && restoredAgentic.status) {
             setAgenticState(restoredAgentic);
             if (restoredAgentic.max_rounds != null) syncAgenticMaxRoundsFromServer(restoredAgentic.max_rounds);
@@ -661,7 +680,8 @@ export default function App({ flow = "vendor" }) {
     checkingAuth,
     isAuthenticated,
     flow,
-    normalizeAgenticState,
+    normalizeAgenticThreads,
+    stripAgenticThreadFields,
     syncAgenticMaxRoundsFromServer,
     isFormSnapshotPristine,
   ]);
@@ -1543,7 +1563,7 @@ export default function App({ flow = "vendor" }) {
         setAgenticLoading(false);
         return;
       }
-      const nextAgentic = normalizeAgenticState(res.data?.agentic_state ?? null);
+      const nextAgentic = stripAgenticThreadFields(res.data?.agentic_state ?? null);
       setAgenticState(nextAgentic);
       if (nextAgentic?.max_rounds != null) syncAgenticMaxRoundsFromServer(nextAgentic.max_rounds);
       setAgenticStage("agentic");
@@ -1597,14 +1617,10 @@ export default function App({ flow = "vendor" }) {
       }
       const data = await res.json();
       publishUserMonthlyCost(data);
-      const normalized = normalizeAgenticThreads(data.threads || {}, data.topic_meta || {});
-      setAgenticState((prev) => ({
-        ...(prev || {}),
-        threads: normalized.threads,
+      setAgenticState((prev) => mergeAgenticUpdate(prev, {
         status: data.status ?? "feedback",
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
-        topic_meta: normalized.topicMeta,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
       }));
       if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
@@ -1631,14 +1647,10 @@ export default function App({ flow = "vendor" }) {
       }
       const data = await res.json();
       publishUserMonthlyCost(data);
-      const normalized = normalizeAgenticThreads(data.threads || {}, data.topic_meta || {});
-      setAgenticState((prev) => ({
-        ...(prev || {}),
-        threads: normalized.threads,
+      setAgenticState((prev) => mergeAgenticUpdate(prev, {
         status: data.status ?? prev?.status,
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
-        topic_meta: normalized.topicMeta,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
       }));
       if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
@@ -1665,14 +1677,10 @@ export default function App({ flow = "vendor" }) {
       }
       const data = await res.json();
       publishUserMonthlyCost(data);
-      const normalized = normalizeAgenticThreads(data.threads || {}, data.topic_meta || {});
-      setAgenticState((prev) => ({
-        ...(prev || {}),
-        threads: normalized.threads,
+      setAgenticState((prev) => mergeAgenticUpdate(prev, {
         status: data.status ?? prev?.status,
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
-        topic_meta: normalized.topicMeta,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
       }));
       if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
@@ -1699,14 +1707,10 @@ export default function App({ flow = "vendor" }) {
       }
       const data = await res.json();
       publishUserMonthlyCost(data);
-      const normalized = normalizeAgenticThreads(data.threads || {}, data.topic_meta || {});
-      setAgenticState((prev) => ({
-        ...(prev || {}),
-        threads: normalized.threads,
+      setAgenticState((prev) => mergeAgenticUpdate(prev, {
         status: data.status ?? prev?.status,
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
-        topic_meta: normalized.topicMeta,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
       }));
       if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
@@ -1735,11 +1739,7 @@ export default function App({ flow = "vendor" }) {
       const data = await res.json();
       publishUserMonthlyCost(data);
       if (data?.agentic_update != null) {
-        const normalizedUpdate = normalizeAgenticState(data.agentic_update);
-        setAgenticState((prev) => ({
-          ...(prev || {}),
-          ...normalizedUpdate,
-        }));
+        setAgenticState((prev) => mergeAgenticUpdate(prev, data.agentic_update));
       }
     } catch (e) {
       setAgenticError(e?.message || String(e));
@@ -1760,11 +1760,7 @@ export default function App({ flow = "vendor" }) {
       const res = await fetchWithHeartbeat("/api/phases/agentic/refine/", opts);
       if (res.isHeartbeat) return;
       if (res.data?.agentic_update != null) {
-        const normalizedUpdate = normalizeAgenticState(res.data.agentic_update);
-        setAgenticState((prev) => ({
-          ...(prev || {}),
-          ...normalizedUpdate,
-        }));
+        setAgenticState((prev) => mergeAgenticUpdate(prev, res.data.agentic_update));
       }
     } catch (e) {
       setAgenticError(e?.message || String(e));

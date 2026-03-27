@@ -67,6 +67,7 @@ from letter_writer.agentic_service import (
     apply_phase_addendums,
     format_global_threads_for_voting,
     apply_global_votes_and_prune,
+    build_phase_b_schema,
     DEFAULT_MAX_ROUNDS,
     POLL_ABORT_SECONDS,
     STATUS_DRAFT,
@@ -537,16 +538,27 @@ def _topic_wait_strings_phase_a(
     round_num: int,
     done_pairs: Set[Tuple[str, str]],
 ) -> Dict[str, str]:
-    """One line per topic: which vendors returned vs still in flight for this phase."""
+    """One line per topic with vendor progress and cross-topic barrier sync status."""
     out: Dict[str, str] = {}
+    topic_pending_vendors: Dict[str, List[str]] = {
+        t: sorted(v for v in feedback_vendors if (t, v) not in done_pairs)
+        for t in active_topics
+    }
+    topics_still_running = sorted(t for t, pending in topic_pending_vendors.items() if pending)
     for t in active_topics:
         done_list = sorted(v for v in feedback_vendors if (t, v) in done_pairs)
-        pending_list = sorted(v for v in feedback_vendors if (t, v) not in done_pairs)
-        out[t] = (
+        pending_list = topic_pending_vendors[t]
+        msg = (
             f"{phase_label} (r{round_num}) — "
             f"API returned: {', '.join(done_list) if done_list else 'none'} | "
             f"still running: {', '.join(pending_list) if pending_list else 'none'}"
         )
+        if not pending_list:
+            waiting_topics = [x for x in topics_still_running if x != t]
+            msg += (
+                f" | waiting on topic sync: {', '.join(waiting_topics) if waiting_topics else 'none'}"
+            )
+        out[t] = msg
     return out
 
 
@@ -753,6 +765,7 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
                 active_topics, feedback_vendors, round_num, set()
             )
             global_threads_str = format_global_threads_for_voting(threads, active_topics)
+            phase_b_schema = build_phase_b_schema(threads, active_topics)
 
         global_context = (
             "Cross-topic voting context.\n\n"
@@ -772,6 +785,7 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
                     topic="global",
                     context=global_context,
                     global_threads_str=global_threads_str,
+                    schema_override=phase_b_schema,
                 ): vendor
                 for vendor in feedback_vendors
             }
