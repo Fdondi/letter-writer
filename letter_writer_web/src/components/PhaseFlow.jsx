@@ -28,6 +28,7 @@ import { phases as phaseModules } from "./phases";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
 import { useTranslation } from "../utils/useTranslation";
 import LanguageSelector from "./LanguageSelector";
+import { mergeCategoryItems } from "./phases/feedbackItemUtils";
 
 // Card status enum - cards report their status to phases
 const CardStatus = {
@@ -863,7 +864,7 @@ function VendorCard({
   
   // Card-specific UI state
   const [selectedFeedbackTab, setSelectedFeedbackTab] = useState(null);
-  const [feedbackApprovals, setFeedbackApprovals] = useState({});
+  const [feedbackItemApprovals, setFeedbackItemApprovals] = useState({});
   const [collapsed, setCollapsed] = useState(false);
   
   // Translation support for this card
@@ -905,14 +906,22 @@ function VendorCard({
     if (cardPhase && phaseModule?.initializeFeedbackFromData && data) {
       try {
         const feedbackData = phaseModule.initializeFeedbackFromData(data);
-        if (feedbackData && feedbackData.feedbackKeys && feedbackData.feedbackKeys.length > 0 && !selectedFeedbackTab) {
-          setSelectedFeedbackTab(feedbackData.feedbackKeys[0]);
-          // Initialize approvals as all unreviewed
-          const initialApprovals = {};
-          feedbackData.feedbackKeys.forEach(k => {
-            initialApprovals[k] = false;
+        if (feedbackData && feedbackData.feedbackKeys && feedbackData.feedbackKeys.length > 0) {
+          if (!selectedFeedbackTab) {
+            setSelectedFeedbackTab(feedbackData.feedbackKeys[0]);
+          }
+          setFeedbackItemApprovals((prev) => {
+            const next = { ...prev };
+            feedbackData.feedbackKeys.forEach((k) => {
+              const items = mergeCategoryItems(feedbackData.feedback, {}, k);
+              items.forEach((it) => {
+                if (it.type === "PLEASE_FIX" && next[it.id] === undefined) {
+                  next[it.id] = false;
+                }
+              });
+            });
+            return next;
           });
-          setFeedbackApprovals(initialApprovals);
         }
       } catch (e) {
         console.error(`Error initializing feedback from data for ${cardPhase}:`, e, data);
@@ -956,15 +965,20 @@ function VendorCard({
     const dataValue = cardPhaseData[key];
     
     // Handle objects (like feedback_overrides) - check if they differ in content
-    if (editValue && typeof editValue === 'object') {
+    if (editValue && typeof editValue === "object" && !Array.isArray(editValue)) {
+      const dataObj = dataValue && typeof dataValue === "object" && !Array.isArray(dataValue) ? dataValue : {};
       const editKeys = Object.keys(editValue);
-      const dataKeys = dataValue && typeof dataValue === 'object' ? Object.keys(dataValue) : [];
-      
+      const dataKeys = Object.keys(dataObj);
       if (editKeys.length === 0 && dataKeys.length === 0) return false;
-      
-      // For simple objects like feedback_overrides, check if values differ
       if (editKeys.length !== dataKeys.length) return true;
-      return editKeys.some(k => editValue[k] !== dataValue[k]);
+      return editKeys.some((k) => {
+        const ev = editValue[k];
+        const dv = dataObj[k];
+        if (ev !== null && typeof ev === "object") {
+          return JSON.stringify(ev) !== JSON.stringify(dv);
+        }
+        return ev !== dv;
+      });
     }
     
     const editStr = (editValue ?? '').toString().trim();
@@ -990,9 +1004,6 @@ function VendorCard({
     }
   };
 
-  // Get findNextUnseenFeedback from phase module (refine-specific)
-  const findNextUnseenFeedback = phaseModule?.findNextUnseenFeedback || (() => null);
-  
   // Auto-collapse when done
   useEffect(() => {
     if (isDone && !collapsed) {
@@ -1019,20 +1030,23 @@ function VendorCard({
       thisPhaseDirty,
       previousPhaseApproved,
       feedbackKeys,
-      feedbackApprovals,
+      feedbackItemApprovals,
       feedbackOverrides,
       feedback,
     });
-  }, [isLoading, approved, thisPhaseDirty, cardPhase, previousPhaseApproved, feedbackKeys, feedbackApprovals, feedbackOverrides, feedback, phaseModule]);
+  }, [isLoading, approved, thisPhaseDirty, cardPhase, previousPhaseApproved, feedbackKeys, feedbackItemApprovals, feedbackOverrides, feedback, phaseModule]);
 
   // Helper to check if any field has translation for a language
   const hasAnyTranslation = useCallback((code) => {
     if (cardPhase === "draft") {
-      return translation.hasTranslation("draft_letter") || 
-             feedbackKeys.some(k => translation.hasTranslation(`feedback_${k}`));
+      const itemFieldHas = feedbackKeys.some((k) => {
+        const items = mergeCategoryItems(feedback, feedbackOverrides, k);
+        return items.some((it) => translation.hasTranslation(`feedback_${k}_${it.id}`));
+      });
+      return translation.hasTranslation("draft_letter") || itemFieldHas;
     }
     return false;
-  }, [cardPhase, translation, feedbackKeys]);
+  }, [cardPhase, translation, feedbackKeys, feedback, feedbackOverrides]);
 
   // Handle language change
   const handleLanguageChange = useCallback(async (code) => {
@@ -1058,11 +1072,12 @@ function VendorCard({
       
       // Translate each feedback field independently
       for (const key of feedbackKeys) {
-        const feedbackValue = feedbackOverrides[key] ?? feedback[key] ?? "";
-        if (feedbackValue) {
-          translationPromises.push(
-            translation.translateField(`feedback_${key}`, feedbackValue, code)
-          );
+        const items = mergeCategoryItems(feedback, feedbackOverrides, key);
+        for (const it of items) {
+          if (it.observation) {
+            const fid = `feedback_${key}_${it.id}`;
+            translationPromises.push(translation.translateField(fid, it.observation, code));
+          }
         }
       }
       
@@ -1190,11 +1205,9 @@ function VendorCard({
             feedbackKeys,
             feedbackOverrides,
             activeFeedbackKey,
-            feedbackApprovals,
+            feedbackItemApprovals,
             setSelectedFeedbackTab,
-            setFeedbackApprovals,
-            findNextUnseenFeedback: (currentKey, approvals, overrides, feedbackData) => 
-              findNextUnseenFeedback(currentKey, approvals, overrides, feedbackData, feedbackKeys),
+            setFeedbackItemApprovals,
             handleSaveFeedbackOverride,
             translation,
           })

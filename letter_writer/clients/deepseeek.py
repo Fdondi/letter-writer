@@ -40,7 +40,8 @@ class DeepSeekClient(BaseClient):
             "stream": False,
         }
         if response_format:
-            request_kwargs["response_format"] = response_format
+            # DeepSeek rejects OpenAI-style json_schema; JSON mode is json_object only.
+            request_kwargs["response_format"] = {"type": "json_object"}
         response = self.client.chat.completions.create(**request_kwargs)
         
         if response.usage:

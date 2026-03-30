@@ -1,146 +1,102 @@
 import React from "react";
+import { FeedbackItemsPanel } from "./FeedbackItemsPanel";
+import {
+  mergeCategoryItems,
+  categoryHasPleaseFix,
+  categoryAllItemsApproved,
+  findNextUnseenCategory,
+} from "./feedbackItemUtils";
 
 /**
  * Refine phase module - handles the review of the draft and feedback
  * The data for this phase (draft + feedback) comes from the background phase's approval (draft API call).
  */
 
-/**
- * Returns the title for refine phase
- */
 export function getPhaseTitle() {
   return "Refine";
 }
 
-/**
- * Initializes edits from data for refine phase
- */
 export function initializeEditsFromData(data) {
   if (!data) {
     return {};
   }
-  
-  // Handle draft_letter - might be null, undefined, or empty string
+
   const draft_letter = data.draft_letter;
   if (draft_letter && typeof draft_letter === "string" && draft_letter.trim()) {
     return { draft_letter: draft_letter, feedback_overrides: {} };
   }
-  
+
   return {};
 }
 
-/**
- * Initializes feedback state from data for refine phase
- * Returns { feedback, feedbackKeys } or null if no feedback data
- */
 export function initializeFeedbackFromData(data) {
   if (!data) {
     return null;
   }
-  
-  // Handle feedback - it might be null, undefined, empty object, or a dict
+
   const feedback = data.feedback;
   if (!feedback || typeof feedback !== "object") {
     return null;
   }
-  
+
   const feedbackKeys = Object.keys(feedback);
   if (feedbackKeys.length === 0) {
     return null;
   }
-  
+
   return { feedback, feedbackKeys };
 }
 
-/**
- * Helper function to find the next unseen feedback tab
- */
-export function findNextUnseenFeedback(currentKey, approvals, overrides, feedbackData, feedbackKeys) {
-  if (feedbackKeys.length === 0) return null;
-  
-  const isSeen = (key) => {
-    const isApproved = approvals[key] === true;
-    const baseVal = feedbackData[key] || "";
-    const overrideVal = overrides[key];
-    const isModified = overrideVal !== undefined && overrideVal !== baseVal;
-    return isApproved || isModified;
-  };
-  
-  const currentIndex = feedbackKeys.indexOf(currentKey);
-  for (let i = 1; i < feedbackKeys.length; i++) {
-    const nextIndex = (currentIndex + i) % feedbackKeys.length;
-    const nextKey = feedbackKeys[nextIndex];
-    if (!isSeen(nextKey)) {
-      return nextKey;
-    }
-  }
-  return null;
+export function findNextUnseenFeedback(currentKey, itemApprovals, overrides, feedbackData, feedbackKeys) {
+  return findNextUnseenCategory(currentKey, feedbackKeys, feedbackData, overrides, itemApprovals);
 }
 
-/**
- * Computes readyForApproval for refine phase
- */
 export function computeReadyForApproval({
   isLoading,
   approved,
   thisPhaseDirty,
   previousPhaseApproved,
   feedbackKeys,
-  feedbackApprovals,
+  feedbackItemApprovals,
   feedbackOverrides,
   feedback,
 }) {
   if (isLoading) return false;
   if (approved && !thisPhaseDirty) return false;
   if (!previousPhaseApproved) return false;
-  
+
   if (feedbackKeys.length > 0) {
     const allFeedbackReviewed = feedbackKeys.every((k) => {
-      const isApproved = feedbackApprovals[k] === true;
-      const isEdited = feedbackOverrides[k] !== undefined;
-      const baseVal = feedback[k] || "";
-      const overrideVal = feedbackOverrides[k];
-      const displayVal = overrideVal !== undefined ? overrideVal : baseVal;
-      const trimmedUpper = (displayVal || "").trim().toUpperCase();
-      const isRemoved = trimmedUpper === "" || trimmedUpper.endsWith("NO COMMENT");
-      return isApproved || isEdited || isRemoved;
+      const items = mergeCategoryItems(feedback, feedbackOverrides, k);
+      return categoryAllItemsApproved(items, feedbackItemApprovals);
     });
     if (!allFeedbackReviewed) return false;
   }
-  
+
   return true;
 }
 
-/**
- * Handles retry result for refine phase
- */
 export function handleRetryResult(data, callbacks) {
   // Logic handled in App.jsx approvePhase
 }
 
-/**
- * Renders the content for refine phase
- */
 export function renderContent({
   EditableField,
-  EditableFeedback,
   cardPhaseEdits,
   cardPhaseData,
   handleEditChange,
   isLoading,
   previousPhaseApproved,
   approved,
-  phaseObj,
   cardPhase,
   vendor,
   feedback,
   feedbackKeys,
   feedbackOverrides,
   activeFeedbackKey,
-  feedbackApprovals,
+  feedbackItemApprovals,
+  setFeedbackItemApprovals,
   setSelectedFeedbackTab,
-  setFeedbackApprovals,
-  findNextUnseenFeedback,
   handleSaveFeedbackOverride,
   translation,
 }) {
@@ -167,28 +123,11 @@ export function renderContent({
         <div style={{ marginTop: 8 }}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {feedbackKeys.map((key) => {
-              const overriddenVal = feedbackOverrides[key];
-              const baseVal = feedback[key] || "";
-              const displayVal = overriddenVal !== undefined ? overriddenVal : baseVal;
-              const trimmedUpper = (displayVal || "").trim().toUpperCase();
-              const isNoComment = trimmedUpper === "" || trimmedUpper.endsWith("NO COMMENT");
-              const approved = feedbackApprovals[key];
-              const isModified = overriddenVal !== undefined && overriddenVal !== baseVal;
-
-              const baseHasContent = (baseVal || "").trim().length > 0 && 
-                !(baseVal || "").trim().toUpperCase().endsWith("NO COMMENT");
-              const machineStatus = baseHasContent ? "📜" : "✅";
-
-              const baseNoComment = (baseVal || "").trim().toUpperCase().endsWith("NO COMMENT");
-              let humanStatus = "❔";
-              const userClearedIssue = isModified && isNoComment && !baseNoComment;
-              if (userClearedIssue) {
-                humanStatus = "✅";
-              } else if (approved) {
-                humanStatus = "👍";
-              } else if (isModified) {
-                humanStatus = "✏️";
-              }
+              const baseItems = mergeCategoryItems(feedback, {}, key);
+              const displayItems = mergeCategoryItems(feedback, feedbackOverrides, key);
+              const machineStatus = categoryHasPleaseFix(baseItems) ? "📜" : "✅";
+              const humanOk = categoryAllItemsApproved(displayItems, feedbackItemApprovals);
+              const humanStatus = displayItems.length === 0 ? "✅" : humanOk ? "👍" : "❔";
 
               const isSelected = activeFeedbackKey === key;
               return (
@@ -222,49 +161,19 @@ export function renderContent({
               );
             })}
           </div>
-          {activeFeedbackKey && (feedback[activeFeedbackKey] !== undefined || feedbackOverrides[activeFeedbackKey] !== undefined) && (
-            <EditableFeedback
-              key={activeFeedbackKey}
-              label={activeFeedbackKey}
-              value={feedbackOverrides[activeFeedbackKey] ?? feedback[activeFeedbackKey] ?? ""}
-              placeholder="Feedback"
-              approved={feedbackApprovals[activeFeedbackKey]}
-              hasContent={(feedback[activeFeedbackKey] || "").trim().length > 0}
-              onApprove={() => {
-                setFeedbackApprovals(prev => {
-                  const next = { ...prev, [activeFeedbackKey]: true };
-                  const nextUnseen = findNextUnseenFeedback(
-                    activeFeedbackKey,
-                    next,
-                    feedbackOverrides,
-                    feedback,
-                    feedbackKeys
-                  );
-                  if (nextUnseen) {
-                    setSelectedFeedbackTab(nextUnseen);
-                  }
-                  return next;
-                });
-              }}
-              onSave={(val) => {
-                const updatedOverrides = { ...feedbackOverrides, [activeFeedbackKey]: val };
-                handleSaveFeedbackOverride(activeFeedbackKey, val);
-                const nextUnseen = findNextUnseenFeedback(
-                  activeFeedbackKey,
-                  feedbackApprovals,
-                  updatedOverrides,
-                  feedback,
-                  feedbackKeys
-                );
-                if (nextUnseen) {
-                  setSelectedFeedbackTab(nextUnseen);
-                }
-              }}
-              isModified={
-                feedbackOverrides[activeFeedbackKey] !== undefined &&
-                feedbackOverrides[activeFeedbackKey] !== feedback[activeFeedbackKey]
-              }
-              fieldId={`feedback_${activeFeedbackKey}`}
+          {activeFeedbackKey && (
+            <FeedbackItemsPanel
+              categoryKey={activeFeedbackKey}
+              items={mergeCategoryItems(feedback, feedbackOverrides, activeFeedbackKey)}
+              feedbackItemApprovals={feedbackItemApprovals}
+              setFeedbackItemApprovals={setFeedbackItemApprovals}
+              handleSaveFeedbackOverride={handleSaveFeedbackOverride}
+              feedbackKeys={feedbackKeys}
+              feedback={feedback}
+              feedbackOverrides={feedbackOverrides}
+              activeFeedbackKey={activeFeedbackKey}
+              setSelectedFeedbackTab={setSelectedFeedbackTab}
+              disabled={isLoading || !previousPhaseApproved}
               translation={translation}
             />
           )}

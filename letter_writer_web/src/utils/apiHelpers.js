@@ -134,13 +134,11 @@ export async function fetchWithHeartbeat(url, options = {}, restoreConfig = null
   
   // Handle 401 Unauthorized (authentication required)
   if (res.status === 401) {
-    // Redirect to login page if not already there
-    if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-      // Store the current path to redirect back after login
-      const returnUrl = window.location.pathname + window.location.search;
-      window.location.href = `/login?return=${encodeURIComponent(returnUrl)}`;
-      // Return a rejected promise to stop further processing
-      return Promise.reject(new Error('Unauthorized: Redirecting to login'));
+    // Do not navigate here. App's mount effect already sends users to Google when unauthenticated.
+    // Parallel 401s (e.g. phases/init, personal-data via fetchWithHeartbeat) would otherwise double
+    // the OAuth request even in a single tab. Callers may prompt re-login; user can refresh.
+    if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+      return Promise.reject(new Error("Unauthorized"));
     }
     // If already on login page, parse error message
     const text = await res.text();

@@ -105,7 +105,7 @@ class DraftPhaseRequest(BaseModel):
 class RefinePhaseRequest(BaseModel):
     fancy: Optional[bool] = False
     draft_letter: Optional[str] = None
-    feedback_override: Optional[Dict[str, str]] = None
+    feedback_override: Optional[Dict[str, Any]] = None
     company_report: Optional[str] = None
     top_docs: Optional[List[Dict[str, Any]]] = None
 

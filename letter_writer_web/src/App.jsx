@@ -19,6 +19,7 @@ import ResearchComponent from "./components/ResearchComponent";
 import SimilarOffersCarousel from "./components/SimilarOffersCarousel";
 import { splitIntoParagraphs } from "./utils/split";
 import { fetchWithHeartbeat, retryApiCall, initializeCsrfToken, getCsrfToken, publishUserMonthlyCost } from "./utils/apiHelpers";
+import { scheduleGoogleOAuthRedirect, clearOAuthRedirectCooldown } from "./utils/googleOAuthRedirect";
 import { showNotification } from "./utils/apiNotifications";
 import { phases as phaseModules } from "./components/phases";
 import { translateText } from "./utils/translate";
@@ -323,6 +324,7 @@ export default function App({ flow = "vendor" }) {
       .then((res) => res.json())
       .then((data) => {
         if (data.authenticated) {
+          clearOAuthRedirectCooldown();
           setIsAuthenticated(true);
           // Initialize CSRF token after authentication is confirmed
           // This ensures the token is available for subsequent API calls
@@ -330,24 +332,14 @@ export default function App({ flow = "vendor" }) {
             console.warn("Failed to initialize CSRF token after auth:", e);
           });
         } else {
-          // Not authenticated - redirect to Google OAuth login
-          const returnUrl = window.location.pathname + window.location.search;
-          if (returnUrl && returnUrl !== "/accounts/google/login") {
-            sessionStorage.setItem("authReturnUrl", returnUrl);
-          }
-          window.location.href = "/accounts/google/login";
+          scheduleGoogleOAuthRedirect();
           setIsAuthenticated(false);
         }
         setCheckingAuth(false);
       })
       .catch((e) => {
         console.error("Failed to check auth status:", e);
-        // On error, redirect to Google OAuth login
-        const returnUrl = window.location.pathname + window.location.search;
-        if (returnUrl && returnUrl !== "/accounts/google/login") {
-          sessionStorage.setItem("authReturnUrl", returnUrl);
-        }
-        window.location.href = "/accounts/google/login";
+        scheduleGoogleOAuthRedirect();
         setIsAuthenticated(false);
         setCheckingAuth(false);
       });
@@ -827,7 +819,7 @@ export default function App({ flow = "vendor" }) {
           </p>
           <button
             onClick={() => {
-              window.location.href = "/accounts/google/login";
+              scheduleGoogleOAuthRedirect();
             }}
             style={{
               width: "100%",

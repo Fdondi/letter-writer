@@ -1,5 +1,6 @@
 import json
 import logging
+import uuid
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
@@ -27,23 +28,81 @@ class MissingCVError(Exception):
     """Catastrophic error: CV text is missing or empty when it should be present."""
     pass
 
-REQUIRED_SUFFIXES = ("NO COMMENT", "PLEASE FIX")
 # In agentic flow, agents may output SKIP or NO COMMENT to leave no feedback
 AGENTIC_SKIP_PHRASES = ("NO COMMENT", "SKIP")
+
+VENDOR_FEEDBACK_JSON_SCHEMA: Dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "vendor_feedback_items",
+        "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "observation": {"type": "string"},
+                            "type": {
+                                "type": "string",
+                                "enum": ["ALREADY_GOOD", "PLEASE_FIX"],
+                            },
+                        },
+                        "required": ["observation", "type"],
+                    },
+                },
+            },
+            "required": ["items"],
+        },
+    },
+}
 
 # Topic keys for per-topic agentic feedback.
 # Order matters: downstream topics can review and challenge prior topics' top comments.
 AGENTIC_TOPIC_KEYS = ("instruction", "company_fit", "precision", "user_fit", "human", "accuracy")
 
 
-def _has_required_suffix(text: str) -> bool:
-    """Check whether text ends with one of the required review markers."""
-    normalized = (text or "").strip().upper()
-    return any(normalized.endswith(marker) for marker in REQUIRED_SUFFIXES)
+def _extract_json_value(raw: str) -> Any:
+    """Parse JSON from model output, tolerating fenced blocks."""
+    text = (raw or "").strip()
+    if not text:
+        raise json.JSONDecodeError("empty", text, 0)
+    if text.startswith("```"):
+        lines = text.split("\n")
+        inner = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
+        text = inner.strip()
+        if text.lower().startswith("json"):
+            text = text[4:].lstrip()
+    return json.loads(text)
 
 
-@traceable(run_type="chain", name="call_with_required_suffix")
-def _call_with_required_suffix(
+def normalize_parsed_feedback_items(data: Any) -> List[Dict[str, Any]]:
+    """Normalize parsed JSON (object with items, or bare list) into feedback item dicts."""
+    raw_items: List[Any] = []
+    if isinstance(data, dict) and isinstance(data.get("items"), list):
+        raw_items = data["items"]
+    elif isinstance(data, list):
+        raw_items = data
+    out: List[Dict[str, Any]] = []
+    for it in raw_items:
+        if not isinstance(it, dict):
+            continue
+        obs = str(it.get("observation", "")).strip()
+        typ = str(it.get("type", "")).strip().upper()
+        if typ not in ("ALREADY_GOOD", "PLEASE_FIX"):
+            continue
+        if typ == "PLEASE_FIX" and not obs:
+            continue
+        if typ == "ALREADY_GOOD" and not obs:
+            continue
+        out.append({"id": str(uuid.uuid4()), "observation": obs, "type": typ})
+    return out
+
+
+@traceable(run_type="chain", name="call_vendor_feedback_items")
+def _call_vendor_feedback_items(
     client: BaseClient,
     model_size: ModelSize,
     system: str,
@@ -51,34 +110,101 @@ def _call_with_required_suffix(
     *,
     search: bool = False,
     max_retries: int = 2,
-) -> str:
-    """Call an LLM and enforce that the reply ends with NO COMMENT or PLEASE FIX."""
-    suffix_instruction = (
-        " ALWAYS end your response with exactly one of these phrases: "
-        "'NO COMMENT' (no issues) or 'PLEASE FIX' (issues found). "
-        "Do not add anything after that final phrase."
+) -> List[Dict[str, Any]]:
+    """Call an LLM; response must be JSON with an items array of {observation, type}."""
+    common_instructions = (
+        " Reply with JSON only. The answer must be an object with key \"items\" whose value is an array. "
+        "Each array element must be {\"observation\": string, \"type\": either \"ALREADY_GOOD\" or \"PLEASE_FIX\"}. "
+        "Emit one element per distinct observation, each item should be logically a bullet point. "
+        "ALREADY_GOOD is meant as an escape hatch for when you realize after writing that the observation does not actually demand an action. "
+        "Prefer marking as ALREADY_GOOD to producing irrelevant PLEASE_FIX, but do not aim to write ALREADY_GOOD points. "
+        "If there is nothing substantive to critique, that's great, emit an empty items array. Avoid padding with nitpicks or non-problems. "
+        "Include all the needed information, since the reviewer will ONLY see your comment, don't assume they have additional information. "
+        "For example, 'include concrete metrics/examples' is not a good observation; if you have metrics or examples include them explicitly. "
+        "If you don't have the data that would be needed, it is not available. Suggest ways of working around this absence instead."
     )
-    enforced_system = system + suffix_instruction
+    enforced_system = system + common_instructions
 
-    last_response = ""
+    last_raw = ""
     for attempt in range(1, max_retries + 1):
-        response = client.call(model_size, enforced_system, [prompt], search=search)
-        last_response = response.strip()
-        if _has_required_suffix(last_response):
-            return last_response
-        logger.warning(
-            "Missing required suffix in review response (attempt %s/%s); retrying...",
-            attempt,
-            max_retries,
-        )
+        try:
+            last_raw = client.call(
+                model_size,
+                enforced_system,
+                [prompt],
+                search=search,
+                response_format=VENDOR_FEEDBACK_JSON_SCHEMA,
+            )
+            data = _extract_json_value(last_raw)
+            items = normalize_parsed_feedback_items(data)
+            return items
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            logger.warning(
+                "Vendor feedback JSON parse failed (attempt %s/%s): %s",
+                attempt,
+                max_retries,
+                e,
+            )
+        except Exception as e:
+            logger.warning(
+                "Vendor feedback LLM call failed (attempt %s/%s): %s",
+                attempt,
+                max_retries,
+                e,
+            )
 
-    # As a final safety net, append PLEASE FIX to avoid false approval.
-    logger.warning(
-        "Missing required suffix in review response (attempt %s/%s); appending PLEASE FIX",
-        attempt,
-        max_retries,
-    )
-    return f"{last_response}\nPLEASE FIX"
+    logger.warning("Vendor feedback falling back to empty list after failed parses")
+    return []
+
+
+def _legacy_feedback_string_to_items(val: str) -> List[Dict[str, Any]]:
+    """Convert legacy suffix-style feedback strings to structured items."""
+    t = (val or "").strip()
+    if not t:
+        return []
+    u = t.upper()
+    if u.endswith("NO COMMENT") or u.endswith("SKIP"):
+        return []
+    if u.endswith("PLEASE FIX"):
+        obs = t[: -len("PLEASE FIX")].rstrip()
+        if not obs:
+            return []
+        return [{"id": str(uuid.uuid4()), "observation": obs, "type": "PLEASE_FIX"}]
+    return [{"id": str(uuid.uuid4()), "observation": t, "type": "PLEASE_FIX"}]
+
+
+def normalize_feedback_value(val: Any) -> List[Dict[str, Any]]:
+    """Normalize feedback stored for one dimension (list, legacy string, or empty)."""
+    if val is None:
+        return []
+    if isinstance(val, list):
+        out: List[Dict[str, Any]] = []
+        for it in val:
+            if not isinstance(it, dict):
+                continue
+            obs = str(it.get("observation", "")).strip()
+            typ = str(it.get("type", "")).strip().upper()
+            if typ not in ("ALREADY_GOOD", "PLEASE_FIX"):
+                continue
+            if typ == "PLEASE_FIX" and not obs:
+                continue
+            if typ == "ALREADY_GOOD" and not obs:
+                continue
+            iid = str(it.get("id") or "").strip()
+            if not iid:
+                iid = str(uuid.uuid4())
+            out.append({"id": iid, "observation": obs, "type": typ})
+        return out
+    if isinstance(val, str):
+        return _legacy_feedback_string_to_items(val)
+    return []
+
+
+def normalize_feedback_map(fb: Optional[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Normalize a full six-key (or partial) feedback dict after load or override."""
+    keys = ("instruction", "accuracy", "precision", "company_fit", "user_fit", "human")
+    src = fb or {}
+    return {k: normalize_feedback_value(src.get(k)) for k in keys}
 
 
 def _is_no_comment(feedback: str) -> bool:
@@ -722,26 +848,25 @@ def generate_letter(
     return client.call(ModelSize.XLARGE, system, [prompt])
 
 @traceable(run_type="chain", name="instruction_check")
-def instruction_check(letter: str, client: BaseClient, style_instructions: str = "") -> str:
+def instruction_check(letter: str, client: BaseClient, style_instructions: str = "") -> List[Dict[str, Any]]:
     """Check the letter for consistency with the instructions."""
     if not style_instructions:
         style_instructions = get_style_instructions()
 
     system = (
-        "You are an expert in style and tone. Check the letter for consistency with the style instructions."
-        "Be very brief, a couple of sentences is enough. It is likely the instructions were already follwed. "
-        "If at any point you see that there is no strong negative feedback, output NO COMMENT and end the answer. \n"
+        "You are an expert in style and tone. Check the letter for consistency with the style instructions. "
+        "Keep each observation brief. Report only concrete mismatches or omissions, not praise.\n"
     )
     prompt = (
         "========== Style Instructions:\n" + style_instructions + "\n==========\n\n" +
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Please catch any strong inconsitency with the instructions, or output NO COMMENT"
+        "List any strong inconsistencies with the instructions, or use empty items if none."
     )
-    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
+    return _call_vendor_feedback_items(client, ModelSize.TINY, system, prompt)
 
 
 @traceable(run_type="chain", name="accuracy_check")
-def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_user_info: str = "") -> str:
+def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_user_info: str = "") -> List[Dict[str, Any]]:
     """Check the accuracy of the cover letter against the user's CV.
     
     Args:
@@ -767,19 +892,18 @@ def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_use
         "Also pay attention to claims not strictly about tools, they also need to be supported in some way.\n"
         "Example: 'Crypto made me a programmer' [it's a claim, it needs to be supported by the CV]\n"
         "Be especially wary of claims of a 'common thread' or 'throughout my carreer' if it's not supported by the CV.\n"
-        "Be very brief, a couple of sentences is enough. If at any point you see that there is no strong negative feedback, output NO COMMENT and end the answer. \n"
+        "Keep each observation brief; no praise or reassurance. If there is no meaningful issue, return an empty items list.\n"
         + additional_context
     )
     prompt = (
         "========== User CV:\n" + cv_text + "\n==========\n" +
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Please review the cover letter for factual accuracy against the CV. "
-        "Point out any claims that cannot be verified from the CV or are inconsistent with it."
+        "Review factual accuracy against the CV. Point out claims that cannot be verified or are inconsistent."
     )
-    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
+    return _call_vendor_feedback_items(client, ModelSize.TINY, system, prompt)
 
 @traceable(run_type="chain", name="precision_check")
-def precision_check(letter: str, company_report: str, job_text: str, client: BaseClient) -> str:
+def precision_check(letter: str, company_report: str, job_text: str, client: BaseClient) -> List[Dict[str, Any]]:
     """Check the precision and style of the cover letter against the company report and job description."""
     system = (
         "You are a senior HR manager at the company. Evaluate how well the cover letter addresses the needs of the company, as described in the company report and job description. "
@@ -791,39 +915,36 @@ def precision_check(letter: str, company_report: str, job_text: str, client: Bas
         "3. Is there any claim about the company that is not supported by the company report or company information presented in the job offer; or even if it is technically supported, is presented in a way that makes you suspect the writer doesn't understand the company?\n"
         "Example: the company entered crypto last year -> 'excited to apply to a company that has been a pioneer in crypto since its origin' [incorrect, user clearly didn't follow the company for long]\n"
         "Example: the company originated in the F1 racing world, but has pivoted to banking and not worked in racing in a while -> 'excited to enter the world of racing [user is either not up to date on the company, or making up misinterpreting partial information]\n"
-        "Be very brief, a couple of sentences is enough. If at any point you see that there is no strong negative feedback, output NO COMMENT and end the answer. \n"
+        "Keep each observation brief; do not praise coverage or fit. If there is no meaningful issue, return an empty items list.\n"
     )
     prompt = (
         "========== Company Report:\n" + company_report + "\n==========\n" +
         "========== Job Offer:\n" + job_text + "\n==========\n" +
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Please review the cover letter for consistency with the company report and job description. "
-        "Provide specific feedback on how to better align with the company's needs."
+        "Review consistency with the company report and job description; note misalignment or superfluous claims."
     )
-    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
+    return _call_vendor_feedback_items(client, ModelSize.TINY, system, prompt)
 
 @traceable(run_type="chain", name="company_fit_check")
-def company_fit_check(letter: str, company_report: str, job_offer: str, client: BaseClient) -> str:
+def company_fit_check(letter: str, company_report: str, job_offer: str, client: BaseClient) -> List[Dict[str, Any]]:
     """Check how well the cover letter aligns with the company's values, culture, tone, and needs."""
     system = (
         "You are a senior HR manager at the company. Evaluate how well the cover letter "
         "demonstrates understanding of and alignment with the company's values, mission, tone, and culture "
         "as described in the company report and implied by the job offer.\n"
-        "Does the letter feel like it's written for the company? "
-        "Does it feel generic, or written with understadnding ad care for what the company does, values, and needs? "
-        "Be very brief, a couple of sentences is enough. If at any point you see that there is no strong negative feedback, output NO COMMENT and end the answer. \n"
+        "Focus on generic, shallow, or mismatched signals—not on affirming that the letter is personalized. "
+        "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
     )
     prompt = (
         "========== Company Report:\n" + company_report + "\n==========\n" +
         "========== Job Offer:\n" + job_offer + "\n==========\n" +
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Please review the cover letter for alignment with the company's values, tone, and culture. "
-        "Provide feedback on how to better demonstrate understanding of and fit with the company. "
+        "Review alignment with the company's values, tone, and culture; note generic or mismatched content."
     )
-    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
+    return _call_vendor_feedback_items(client, ModelSize.TINY, system, prompt)
 
 @traceable(run_type="chain", name="user_fit_check")
-def user_fit_check(letter: str, examples: Sequence[TopDocument], client: BaseClient) -> str:
+def user_fit_check(letter: str, examples: Sequence[TopDocument], client: BaseClient) -> List[Dict[str, Any]]:
     """Check how well the cover letter showcases the user's unique value proposition."""
     examples_formatted = "\n\n".join(
         f"---- Example #{i+1} - {ex['company_name']} ----\n"
@@ -831,18 +952,17 @@ def user_fit_check(letter: str, examples: Sequence[TopDocument], client: BaseCli
         for i, ex in enumerate(examples) if ex['letter_text']
     )
     system = (
-        "You are an expert in style and tone. Evaluate how well the cover letter follws the pattern of the previous examples. \n"
-        "Does the last letter match the previous ones? Does it look like it's written by the same hand? \n"
-        "Does it pay attention to the same aspects? Does it highlight strengths and negotiate weaknesses in the same way? \n"
-        "Be very brief, a couple of sentences is enough. If at any point you see that there is no strong negative feedback, output NO COMMENT and end the answer. \n"
+        "You are an expert in style and tone. Evaluate how well the cover letter follows the pattern of the previous examples. \n"
+        "Flag divergences: tone, structure, emphasis, or how weaknesses are handled compared with the references. \n"
+        "Do not praise imitation or \"good fit\" with the examples; only output items where the draft should change.\n"
+        "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
     )
     prompt = (
         "========== Reference Examples:\n" + examples_formatted + "\n==========\n" +
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Please review the cover letter for effectiveness in adhering to the style and tone of the previous examples."
-        "Provide feedback on how to improve the letter to better match the previous examples."
+        "Compare to the reference letters; note where the draft diverges in style, emphasis, or handling of weaknesses."
     )
-    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
+    return _call_vendor_feedback_items(client, ModelSize.TINY, system, prompt)
 
 def _format_correction(corr: dict) -> str:
     """Format a correction diff for display in the review agent prompt."""
@@ -863,7 +983,7 @@ def _format_correction(corr: dict) -> str:
         return f"  Original: {original}\n  Edited: {edited}"
 
 @traceable(run_type="chain", name="human_check")
-def human_check(letter: str, examples: Sequence[TopDocument], client: BaseClient) -> str:
+def human_check(letter: str, examples: Sequence[TopDocument], client: BaseClient) -> List[Dict[str, Any]]:
     """Check the letter for consistency with the instructions."""
     rewritten_examples = [
         ex
@@ -876,7 +996,7 @@ def human_check(letter: str, examples: Sequence[TopDocument], client: BaseClient
             "none of %s have AI letters, skipping",
             ", ".join(ex.get("company_name", "?") for ex in examples),
         )
-        return "NO COMMENT"
+        return []
 
     examples_formatted = "\n\n".join(
         f"---- Example #{i+1} - {ex['company_name']} ----\n"
@@ -911,18 +1031,17 @@ def human_check(letter: str, examples: Sequence[TopDocument], client: BaseClient
         "The reviewer might have copied parts of the initial letter, or rewrote it from scratch. Either way, pay attention to what was changed. "
         "You might also see ratings, chunk usage counts, explicit feedback comments, and user corrections (compact diffs showing changed portions, or full paragraphs if >20% changed) on the initial letters. "
         "The corrections use a compact format: -original text+edited text for small changes, or full original/edited paragraphs for larger changes. "
-        "Use these to understand what the reviewer liked or disliked, and pay special attention to the user corrections as they show exactly what the reviewer changed.\n"
-        "Once you noticed what changes tend to be made, flag if in the final, new letter anything looks like a feature than the reviewer would change in the earler examples.\n"
-        "Note you should NOT flag elements just for not being in the positive examples, but only if they are present in the initial examples AND usually removed in the revised ones.\n"
-        "Be very brief, a couple of sentences is enough. "
-        "If at any point you see that nothing in the final letter looks like something the reviewer would change, output NO COMMENT and end the answer. \n"
+        "Use these to understand what the reviewer changed and removed, and pay special attention to user corrections.\n"
+        "Once you notice recurring removals or rewrites, flag if the new letter contains similar content the reviewer would likely change.\n"
+        "Do NOT flag elements merely for not appearing in references, and do not output praise—only actionable mismatches with edit patterns.\n"
+        "Keep each observation brief. If nothing in the draft matches a pattern the reviewer would change, return empty items.\n"
     )
     prompt = (  
         "========== Reference Examples:\n" + examples_formatted + "\n==========\n" +
         "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Please review the cover letter for anything that looks like something the reviewer would change, based on the examples."
+        "Flag anything in the draft that resembles content the reviewer typically removes or rewrites in the examples."
     )
-    return _call_with_required_suffix(client, ModelSize.TINY, system, prompt)
+    return _call_vendor_feedback_items(client, ModelSize.TINY, system, prompt)
 
 
 def _letter_block_for_context(draft_letter: str) -> str:
@@ -1036,15 +1155,38 @@ def get_agentic_topic_context(
     return letter_block
 
 
+def _rewrite_dimension_text(val: Any) -> str:
+    """Build the refinement prompt fragment for one dimension (legacy string or item list)."""
+    if isinstance(val, str):
+        if _is_no_comment(val):
+            return ""
+        s = (val or "").strip()
+        if s.upper().endswith("PLEASE FIX"):
+            return s[: -len("PLEASE FIX")].rstrip()
+        return s
+    if isinstance(val, list):
+        lines: List[str] = []
+        for it in val:
+            if not isinstance(it, dict):
+                continue
+            if it.get("type") != "PLEASE_FIX":
+                continue
+            o = (it.get("observation") or "").strip()
+            if o:
+                lines.append(o)
+        return "\n".join(lines)
+    return ""
+
+
 @traceable(run_type="chain", name="rewrite_letter")
 def rewrite_letter(
     original_letter: str,
-    instruction_feedback: str,
-    accuracy_feedback: str,
-    precision_feedback: str,
-    company_fit_feedback: str,
-    user_fit_feedback: str,
-    human_feedback: str,
+    instruction_feedback: Any,
+    accuracy_feedback: Any,
+    precision_feedback: Any,
+    company_fit_feedback: Any,
+    user_fit_feedback: Any,
+    human_feedback: Any,
     client: BaseClient,
     trace_dir: Path
 ) -> str:
@@ -1056,24 +1198,20 @@ def rewrite_letter(
     )
     had_feedback = False
     prompt = "========== Original Cover Letter:\n" + original_letter + "\n==========\n"
-    if not _is_no_comment(instruction_feedback):
+    dim_blocks = (
+        ("Instruction Feedback", instruction_feedback),
+        ("Accuracy Feedback", accuracy_feedback),
+        ("Precision Feedback", precision_feedback),
+        ("Company Fit Feedback", company_fit_feedback),
+        ("User Fit Feedback", user_fit_feedback),
+        ("Human Feedback", human_feedback),
+    )
+    for title, val in dim_blocks:
+        block = _rewrite_dimension_text(val)
+        if not block:
+            continue
         had_feedback = True
-        prompt += "========== Instruction Feedback:\n" + instruction_feedback + "\n==========\n"
-    if not _is_no_comment(accuracy_feedback):
-        had_feedback = True
-        prompt += "========== Accuracy Feedback:\n" + accuracy_feedback + "\n==========\n"
-    if not _is_no_comment(precision_feedback):
-        had_feedback = True
-        prompt += "========== Precision Feedback:\n" + precision_feedback + "\n==========\n"
-    if not _is_no_comment(company_fit_feedback):
-        had_feedback = True
-        prompt += "========== Company Fit Feedback:\n" + company_fit_feedback + "\n==========\n"
-    if not _is_no_comment(user_fit_feedback):
-        had_feedback = True
-        prompt += "========== User Fit Feedback:\n" + user_fit_feedback + "\n==========\n"
-    if not _is_no_comment(human_feedback):
-        had_feedback = True
-        prompt += "========== Human Feedback:\n" + human_feedback + "\n==========\n"
+        prompt += f"========== {title}:\n" + block + "\n==========\n"
     if not had_feedback:
         logger.info("No feedback provided, returning original letter.")
         return original_letter

@@ -3,12 +3,37 @@ import os
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from starlette.responses import Response
 
+from letter_writer_server.core.rate_limit import limiter
+
 from letter_writer.config import get_log_level
+
+
+def _env_truthy(key: str) -> bool:
+    return (os.environ.get(key) or "").strip().lower() in ("1", "true", "yes")
+
+
+def _configure_optional_gcp_grpc_debug_logging() -> None:
+    """When LOG_GCP_DEBUG=1, raise verbosity for token refresh and Firestore gRPC (noisy)."""
+    if not _env_truthy("LOG_GCP_DEBUG"):
+        return
+    level = logging.DEBUG
+    for name in (
+        "google",
+        "google.auth",
+        "google.auth.transport",
+        "google.auth.transport.requests",
+        "google.auth.transport.grpc",
+        "google.api_core",
+        "google.cloud.firestore",
+        "grpc",
+        "grpc._plugin_wrapping",
+    ):
+        logging.getLogger(name).setLevel(level)
+
 
 # Configure root logging once so INFO logs are emitted by default.
 logging.basicConfig(
@@ -19,6 +44,8 @@ logging.basicConfig(
 # Keep package-level loggers aligned with configured root level.
 for _name in ("letter_writer", "letter_writer_server"):
     logging.getLogger(_name).setLevel(get_log_level())
+
+_configure_optional_gcp_grpc_debug_logging()
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from starlette.middleware.sessions import SessionMiddleware as StarletteSessionMiddleware
 # Use our custom session middleware instead
@@ -32,9 +59,6 @@ app = FastAPI(
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
 
-# Rate limiter — keyed on client IP.
-# Use @limiter.limit("N/minute") on individual endpoints (e.g. /login/).
-limiter = Limiter(key_func=get_remote_address, default_limits=["300/minute"])
 app.state.limiter = limiter
 
 

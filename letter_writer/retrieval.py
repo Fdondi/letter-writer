@@ -5,6 +5,7 @@ from pathlib import Path
 from openai import OpenAI
 import typer
 from langsmith import traceable
+from google.cloud.firestore_v1.base_query import FieldFilter
 
 from .clients.base import BaseClient, ModelSize
 
@@ -101,7 +102,9 @@ def retrieve_similar_job_offers(
     vector = embed(job_text, openai_client)
     logger.debug("[RAG] embedding generated, vector length=%s", len(vector))
     # Optional per-user scope for personal document similarity.
-    query_target = collection.where("user_id", "==", user_id) if user_id else collection
+    query_target = (
+        collection.where(filter=FieldFilter("user_id", "==", user_id)) if user_id else collection
+    )
     # Keep retrieval pool fixed to avoid unexpected document fan-out.
     limit = 7
     results = query_vector_similarity(query_target, vector, limit=limit)

@@ -1,10 +1,8 @@
 import time
 from fastapi import APIRouter, Request, Response, Depends, HTTPException
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
-_limiter = Limiter(key_func=get_remote_address)
 from fastapi.responses import RedirectResponse, JSONResponse
+
+from letter_writer_server.core.rate_limit import limiter
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from letter_writer_server.core.config import settings
 from letter_writer_server.core.session import Session, get_session
@@ -27,7 +25,8 @@ oauth.register(
 )
 
 @router.get("/login/")
-@_limiter.limit("10/minute")
+@router.get("/login")
+@limiter.limit("10/minute")
 async def login(request: Request):
     if not _oauth_is_configured():
         raise HTTPException(

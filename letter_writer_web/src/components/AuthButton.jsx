@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { clearOAuthRedirectCooldown } from "../utils/googleOAuthRedirect";
 
 /**
  * Simple Google OAuth account button.
@@ -54,7 +55,7 @@ export default function AuthButton() {
         method: "POST",
       });
       console.log("Logout response:", result);
-      // Reload the page - App.jsx will check auth and show login UI
+      clearOAuthRedirectCooldown();
       window.location.reload();
     } catch (e) {
       console.error("Failed to logout:", e);

@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Union, cast
 from uuid import uuid4
 
 from google.cloud import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 from google.cloud.firestore_v1.vector import Vector
 
 from .config import env_default
@@ -253,7 +254,7 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
     if not doc_id:
         # If caller does a create without ID, reuse an existing equivalent
         # application for this user (even legacy docs without fingerprint).
-        for candidate in collection.where("user_id", "==", user_id).stream():
+        for candidate in collection.where(filter=FieldFilter("user_id", "==", user_id)).stream():
             candidate_data = candidate.to_dict() or {}
             candidate_company = ((candidate_data.get("company_name_original") or candidate_data.get("company_name") or "").strip().lower())
             candidate_role = (candidate_data.get("role") or "").strip().lower()
@@ -411,7 +412,7 @@ def list_documents(
         raise ValueError("user_id is required for Firestore document operations")
     
     # Always filter by user_id first (required for security)
-    query = collection.where("user_id", "==", user_id)
+    query = collection.where(filter=FieldFilter("user_id", "==", user_id))
     
     # Track if we need to filter in memory (Firestore doesn't support substring/contains search)
     has_filters = company_name or role

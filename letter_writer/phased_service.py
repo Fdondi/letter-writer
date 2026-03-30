@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
@@ -25,6 +25,7 @@ from .generation import (
     precision_check,
     rewrite_letter,
     user_fit_check,
+    normalize_feedback_map,
     extract_job_metadata,
 )
 from .cost_tracker import track_api_cost
@@ -51,7 +52,7 @@ class VendorPhaseState:
     company_report: Optional[str] = None
     draft_letter: Optional[str] = None
     final_letter: Optional[str] = None
-    feedback: Dict[str, str] = field(default_factory=dict)
+    feedback: Dict[str, Any] = field(default_factory=dict)
     # Legacy aggregate fields (for backward compatibility)
     cost: float = 0.0
     input_tokens: int = 0
@@ -466,7 +467,7 @@ def advance_to_refinement(
     session_id: str,
     vendor: ModelVendor,
     draft_override: Optional[str] = None,
-    feedback_override: Optional[Dict[str, str]] = None,
+    feedback_override: Optional[Dict[str, Any]] = None,
     company_report_override: Optional[str] = None,
     top_docs_override: Optional[List[TopDocument]] = None,
     fancy: bool = False,
@@ -506,20 +507,21 @@ def advance_to_refinement(
     state.company_report = company_report
     state.top_docs = top_docs
     if feedback_override is not None:
-        # Merge/replace cached feedback with user-provided overrides
-        state.feedback = feedback_override
+        merged = dict(state.feedback or {})
+        merged.update(feedback_override)
+        state.feedback = merged
 
     try:
-        feedback = state.feedback or {}
+        feedback = normalize_feedback_map(state.feedback)
         logger.info("[PHASE] refine -> %s :: rewrite_letter (XLARGE)", vendor.value)
         refined = rewrite_letter(
             draft_letter,
-            feedback.get("instruction", ""),
-            feedback.get("accuracy", ""),
-            feedback.get("precision", ""),
-            feedback.get("company_fit", ""),
-            feedback.get("user_fit", ""),
-            feedback.get("human", ""),
+            feedback.get("instruction", []),
+            feedback.get("accuracy", []),
+            feedback.get("precision", []),
+            feedback.get("company_fit", []),
+            feedback.get("user_fit", []),
+            feedback.get("human", []),
             ai_client,
             trace_dir,
         )
@@ -533,7 +535,7 @@ def advance_to_refinement(
 
     state.draft_letter = draft_letter
     state.final_letter = refined
-    state.feedback = feedback
+    state.feedback = {k: feedback[k] for k in ("instruction", "accuracy", "precision", "company_fit", "user_fit", "human")}
     _update_cost(state, ai_client, phase="refine", user_id=user_id, vendor_str=vendor.value)
     
     # Save vendor-specific data to session_vendors collection (lock-free)

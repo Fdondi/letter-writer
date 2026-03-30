@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { scheduleGoogleOAuthRedirect } from "../utils/googleOAuthRedirect";
 
 export default function LoginPage() {
   const [user, setUser] = useState(null);
@@ -56,8 +57,7 @@ export default function LoginPage() {
     if (returnUrl && returnUrl !== "/login") {
       sessionStorage.setItem("authReturnUrl", returnUrl);
     }
-    // Redirect to Google OAuth login
-    window.location.href = "/accounts/google/login";
+    scheduleGoogleOAuthRedirect();
   };
 
   if (loading) {
