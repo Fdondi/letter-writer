@@ -1,25 +1,34 @@
 import os
+import sys
 from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+def _require_secret_key() -> str:
+    key = os.getenv("APP_SECRET_KEY") or os.getenv("DJANGO_SECRET_KEY")
+    if not key:
+        print(
+            "FATAL: APP_SECRET_KEY environment variable is not set. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\"",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return key
 
 class Settings(BaseSettings):
     # Application Settings
     PROJECT_NAME: str = "Letter Writer API"
     API_V1_STR: str = "/api"
-    
+
     # Environment
     ENVIRONMENT: str = "production"
-    
+
     # Security
-    # Prefer APP_SECRET_KEY, keep DJANGO_SECRET_KEY as backward-compatible fallback.
-    SECRET_KEY: str = (
-        os.getenv("APP_SECRET_KEY")
-        or os.getenv("DJANGO_SECRET_KEY")
-        or "your-super-secret-key-change-this"
-    )
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 30  # 30 days
-    
-    # CORS
+    SECRET_KEY: str = _require_secret_key()
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+
+    # CORS — space/comma-separated list of allowed origins via env var.
+    # Localhost origins are kept for local Docker dev; add your production
+    # domain via BACKEND_CORS_EXTRA_ORIGINS="https://myapp.run.app".
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:5173",
         "http://localhost:3000",
@@ -27,13 +36,21 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
         "https://localhost:8443",
         "https://localhost",
-        "https://example.com"
     ]
+
+    @property
+    def cors_origins(self) -> List[str]:
+        extra = os.getenv("BACKEND_CORS_EXTRA_ORIGINS", "")
+        extra_list = [o.strip() for o in extra.replace(",", " ").split() if o.strip()]
+        return self.BACKEND_CORS_ORIGINS + extra_list
 
     # Google OAuth
     GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_OAUTH_SECRET", "")
-    GOOGLE_REDIRECT_URI: str = "https://localhost:8443/accounts/google/login/callback/" # Default for local dev
+    GOOGLE_REDIRECT_URI: str = os.getenv(
+        "GOOGLE_OAUTH_REDIRECT_URI",
+        "https://localhost:8443/accounts/google/login/callback/",
+    )
 
     # Firestore
     GOOGLE_CLOUD_PROJECT: Optional[str] = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("FIRESTORE_PROJECT_ID")
@@ -48,7 +65,7 @@ class Settings(BaseSettings):
     # Session
     SESSION_SECRET_KEY: str = SECRET_KEY  # Reuse secret key for session signing
     SESSION_COOKIE_NAME: str = "letter_writer_session"
-    
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

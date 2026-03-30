@@ -123,8 +123,13 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
         if not isinstance(file, UploadFile):
             raise HTTPException(status_code=400, detail="Invalid file upload")
         
-        file_bytes = await file.read()
-        filename = file.filename or "upload"
+        MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+        file_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(file_bytes) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
+        import re as _re
+        raw_filename = file.filename or "upload"
+        filename = _re.sub(r"[^\w\s.\-]", "", raw_filename.replace("/", "").replace("\\", ""))[:255] or "upload"
         # For txt/md, decode as text; for PDF we'd need extraction
         extracted_text = file_bytes.decode('utf-8', errors='replace')
         
@@ -138,7 +143,7 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
     else:
         try:
             data = await request.json()
-        except:
+        except Exception:
             raise HTTPException(status_code=400, detail="Invalid JSON")
         
         user_doc_ref = get_personal_data_document(user_id)

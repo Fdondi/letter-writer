@@ -35,13 +35,18 @@ async def list_docs(request: Request, session: Session = Depends(get_session)):
     collection = get_collection()
     params = request.query_params
     
+    try:
+        limit = max(1, min(int(params.get("limit", 50)), 200))
+        skip = max(0, int(params.get("skip", 0)))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="limit and skip must be integers")
     docs = list_documents(
         collection,
         user_id=user['id'],
         company_name=params.get("company_name"),
         role=params.get("role"),
-        limit=int(params.get("limit", 50)),
-        skip=int(params.get("skip", 0))
+        limit=limit,
+        skip=skip,
     )
     return {"documents": docs}
 
@@ -148,7 +153,9 @@ async def delete_doc(document_id: str, session: Session = Depends(get_session)):
         doc = get_document(collection, document_id, user_id=user['id'])
         if not doc:
             raise HTTPException(status_code=404, detail="Not found")
-    except:
+    except HTTPException:
+        raise
+    except Exception:
         raise HTTPException(status_code=404, detail="Not found")
         
     delete_documents(collection, [document_id])

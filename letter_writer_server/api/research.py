@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends, Request
 from typing import List, Optional
 from pydantic import BaseModel
 
@@ -6,6 +6,8 @@ from pathlib import Path
 from letter_writer.client import get_client, ModelVendor
 from letter_writer.generation import extract_job_metadata_no_requirements
 from letter_writer.research import perform_company_research, perform_poc_research
+from letter_writer_server.core.session import Session, get_session
+from letter_writer_server.api.cost_utils import check_spending_limits
 
 router = APIRouter()
 
@@ -29,8 +31,10 @@ class ResearchPocRequest(BaseModel):
 
 
 @router.post("/company/extract/")
-async def extract_company_metadata(data: ExtractCompanyMetadataRequest):
+async def extract_company_metadata(data: ExtractCompanyMetadataRequest, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     """Part 3: Extract company metadata from job text (stateless, no user context)."""
+    if not session.get('user'):
+        raise HTTPException(status_code=401, detail="Authentication required")
     try:
         ai_client = get_client(ModelVendor.OPENAI)
         trace_dir = Path("trace", "research.company.extraction")
@@ -41,8 +45,10 @@ async def extract_company_metadata(data: ExtractCompanyMetadataRequest):
 
 
 @router.post("/company/")
-async def research_company(data: ResearchCompanyRequest):
+async def research_company(data: ResearchCompanyRequest, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     """Part 4: Company background research (cache → vector search → new). Stateless."""
+    if not session.get('user'):
+        raise HTTPException(status_code=401, detail="Authentication required")
     models = data.models or ["openai"]
     company_name = (data.company_name or "").strip()
 
@@ -67,7 +73,9 @@ async def research_company(data: ResearchCompanyRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/poc/")
-async def research_poc(data: ResearchPocRequest):
+async def research_poc(data: ResearchPocRequest, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
+    if not session.get('user'):
+        raise HTTPException(status_code=401, detail="Authentication required")
     models = data.models or ["openai"]
     try:
         results = perform_poc_research(

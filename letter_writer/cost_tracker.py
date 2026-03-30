@@ -39,6 +39,7 @@ _memory_store: Dict[str, Any] = {
     "services": {},  # service_name -> {"total": float, "count": int}
     "users": {},     # user_id -> {"total": float, "services": {service_name -> {"total": float, "count": int}}}
     "requests": [],  # List of individual requests for BigQuery insert
+    "daily": {},     # date (YYYY-MM-DD) -> {user_id -> total float}
 }
 
 # Periodic flush thread
@@ -51,6 +52,7 @@ REDIS_PREFIX = "costs:"
 TOTAL_KEY = f"{REDIS_PREFIX}total"
 SERVICE_PREFIX = f"{REDIS_PREFIX}service:"
 USER_PREFIX = f"{REDIS_PREFIX}user:"
+DAILY_KEY_TTL_SECONDS = 60 * 60 * 36  # 36 hours — survives midnight, auto-expires
 
 # Flush interval in seconds (default: 30 minutes)
 FLUSH_INTERVAL = int(os.environ.get("COST_FLUSH_INTERVAL_SECONDS", 1800))
@@ -391,6 +393,13 @@ def _track_in_memory(
 
         _memory_store["requests"].append(request_data)
 
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if today not in _memory_store["daily"]:
+            _memory_store["daily"][today] = {}
+        _memory_store["daily"][today][user_id] = (
+            _memory_store["daily"][today].get(user_id, 0.0) + cost
+        )
+
 
 def _track_in_redis(
     redis_client,
@@ -441,6 +450,11 @@ def _track_in_redis(
             request_data["character_count"] = meta["character_count"]
 
         pipe.rpush(f"{REDIS_PREFIX}requests", json.dumps(request_data))
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        daily_key = f"{USER_PREFIX}{user_id}:daily:{today}"
+        pipe.incrbyfloat(daily_key, cost)
+        pipe.expire(daily_key, DAILY_KEY_TTL_SECONDS)
 
         pipe.execute()
 
@@ -804,6 +818,25 @@ def get_user_daily_costs(user_id: str, months_back: int = 1) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error querying BigQuery for daily costs: {e}")
         return {"error": str(e), "days": []}
+
+
+def get_user_today_cost(user_id: str) -> float:
+    """Return total spend for user today (UTC) from Redis daily key + in-memory fallback.
+
+    The daily Redis key accumulates across flushes (never reset by flush) and
+    expires automatically after 36 h.  This gives a fast O(1) limit check.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    redis_client = _get_redis_client()
+    if redis_client is not None:
+        try:
+            val = redis_client.get(f"{USER_PREFIX}{user_id}:daily:{today}")
+            return float(val or 0.0)
+        except Exception as exc:
+            logger.warning("Redis get_user_today_cost failed for user=%s: %s", user_id, exc)
+    # In-memory fallback
+    with _memory_lock:
+        return float(_memory_store.get("daily", {}).get(today, {}).get(user_id, 0.0))
 
 
 def _get_pending_requests_from_memory() -> List[Dict[str, Any]]:

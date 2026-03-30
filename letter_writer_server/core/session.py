@@ -1,3 +1,4 @@
+import json
 import os
 import pickle
 import fcntl
@@ -7,7 +8,7 @@ import logging
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Optional
-from fastapi import Request, Response
+from fastapi import Request, Response, HTTPException, Depends
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -34,7 +35,13 @@ def _load_from_filesystem(session_key: str) -> Optional[Dict[str, Any]]:
         file_path = _get_session_file_path(session_key)
         if file_path.exists():
             with open(file_path, 'rb') as f:
-                return pickle.load(f)
+                raw = f.read()
+            # Try JSON first; fall back to pickle for legacy sessions.
+            try:
+                return json.loads(raw.decode('utf-8'))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                logger.warning(f"Session {session_key}: falling back to pickle (legacy format)")
+                return pickle.loads(raw)  # noqa: S301 — legacy migration only
     except Exception as e:
         logger.warning(f"Failed to load session {session_key} from filesystem: {e}")
     return None
@@ -46,15 +53,16 @@ def _save_to_filesystem(session_key: str, data: Dict[str, Any]) -> None:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         # Write to temp file then rename for atomicity
         tmp_path = file_path.with_suffix('.tmp')
+        serialized = json.dumps(data, default=str).encode('utf-8')
         with open(tmp_path, 'wb') as f:
-            pickle.dump(data, f)
+            f.write(serialized)
         try:
             tmp_path.rename(file_path)
         except FileNotFoundError:
             # Race-safe retry: ensure parent exists and rewrite temp once.
             file_path.parent.mkdir(parents=True, exist_ok=True)
             with open(tmp_path, 'wb') as f:
-                pickle.dump(data, f)
+                f.write(serialized)
             tmp_path.rename(file_path)
     except Exception as e:
         logger.error(f"Failed to save session {session_key} to filesystem: {e}")
@@ -371,3 +379,29 @@ class SessionMiddleware(BaseHTTPMiddleware):
 
 def get_session(request: Request) -> Session:
     return request.state.session
+
+
+# Re-authentication is required once every 24 hours.
+AUTH_MAX_AGE_SECONDS = 60 * 60 * 24
+
+
+def require_auth(session: Session = Depends(get_session)) -> dict:
+    """FastAPI dependency: ensures the request has a valid, recently-authenticated user.
+
+    Returns the user dict on success.  Raises 401 otherwise so callers don't need
+    to check manually — just declare ``user: dict = Depends(require_auth)``.
+    """
+    user = session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    auth_time = float(session.get("auth_time") or 0)
+    if time.time() - auth_time > AUTH_MAX_AGE_SECONDS:
+        # Clear the stale user so the session can be reused after re-login.
+        session.pop("user", None)
+        session.pop("auth_time", None)
+        raise HTTPException(
+            status_code=401,
+            detail="Session expired — please sign in again",
+            headers={"X-Reauth-Required": "true"},
+        )
+    return user

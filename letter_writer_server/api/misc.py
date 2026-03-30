@@ -21,7 +21,8 @@ from letter_writer.retrieval import embed, retrieve_similar_job_offers, select_t
 from letter_writer.personal_data_sections import get_models
 from letter_writer.personal_data_sections import get_competence_ratings
 from letter_writer.spam_prevention import get_in_flight_requests, clear_in_flight_requests
-from letter_writer_server.api.cost_utils import with_user_monthly_cost
+from letter_writer_server.api.cost_utils import with_user_monthly_cost, check_spending_limits
+from letter_writer_server.core.session import require_auth
 from openai import OpenAI
 
 router = APIRouter()
@@ -72,7 +73,7 @@ class RefreshRequest(BaseModel):
     clear: bool = False
 
 @router.post("/refresh/")
-async def refresh(request: Request, data: RefreshRequest):
+async def refresh(request: Request, data: RefreshRequest, _user: dict = Depends(require_auth)):
     try:
         kwargs = data.dict(exclude_unset=True)
         # Convert path strings to Path objects if needed by refresh_repository
@@ -86,7 +87,7 @@ async def refresh(request: Request, data: RefreshRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/extract/")
-async def extract_job(request: Request, data: ExtractRequest, session: Session = Depends(get_session)):
+async def extract_job(request: Request, data: ExtractRequest, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     """User-bound extraction: skills + CV match + similar past jobs, all in parallel."""
     user = session.get('user')
     try:
@@ -294,7 +295,7 @@ async def extract_job(request: Request, data: ExtractRequest, session: Session =
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/process-job/")
-async def process_job(request: Request, data: ProcessJobRequest, session: Session = Depends(get_session)):
+async def process_job(request: Request, data: ProcessJobRequest, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     try:
         instructions = session.get("style_instructions", "")
         if not instructions:
@@ -329,14 +330,14 @@ class TranslateRequest(BaseModel):
     source_language: Optional[str] = None
 
 @router.post("/translate/")
-async def translate(data: TranslateRequest, session: Session = Depends(get_session)):
+async def translate(data: TranslateRequest, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     import httpx
     import os
     from letter_writer.cost_tracker import calculate_translation_cost, track_api_cost
 
     api_key = os.environ.get("GOOGLE_TRANSLATE_API_KEY")
     if not api_key:
-        raise HTTPException(status_code=500, detail="GOOGLE_TRANSLATE_API_KEY not configured")
+        raise HTTPException(status_code=500, detail="Translation service is not configured")
 
     if not data.text or not data.text.strip():
         return {"status": "ok", "translation": ""}
@@ -413,10 +414,14 @@ async def list_vendors(session: Session = Depends(get_session)):
     }
 
 @router.get("/debug/in-flight-requests/")
-async def debug_in_flight():
+async def debug_in_flight(session: Session = Depends(get_session)):
+    if not session.get('user'):
+        raise HTTPException(status_code=401, detail="Authentication required")
     return {"count": len(get_in_flight_requests()), "requests": get_in_flight_requests()}
 
 @router.post("/debug/clear-in-flight-requests/")
-async def debug_clear_in_flight():
+async def debug_clear_in_flight(session: Session = Depends(get_session)):
+    if not session.get('user'):
+        raise HTTPException(status_code=401, detail="Authentication required")
     cleared = clear_in_flight_requests()
     return {"status": "ok", "cleared_count": cleared}
