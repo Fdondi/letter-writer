@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from letter_writer_server.core.session import (
     Session,
     get_session,
+    require_auth,
     get_agentic_last_poll_at_from_storage,
     load_session_from_storage,
     save_session_to_storage,
@@ -21,6 +22,7 @@ from letter_writer_server.core.session import (
     try_acquire_agentic_lock,
     release_agentic_lock,
 )
+from letter_writer_server.api.cost_utils import check_spending_limits
 from letter_writer.generation import AGENTIC_TOPIC_KEYS, get_agentic_topic_context, get_style_instructions
 from letter_writer.phased_service import get_metadata_field
 from letter_writer.clients.base import ModelVendor
@@ -82,7 +84,7 @@ from letter_writer.agentic_service import (
     STATUS_FEEDBACK_DONE,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_auth)])
 
 class InitSessionRequest(BaseModel):
     job_text: Optional[str] = None
@@ -267,7 +269,7 @@ async def update_session_common_data(request: Request, data: Dict[str, Any], ses
     return {"status": "ok", "session_id": session.session_key}
 
 @router.post("/background/{vendor}/")
-async def background_phase(vendor: str, data: BackgroundPhaseRequest, request: Request, session: Session = Depends(get_session)):
+async def background_phase(vendor: str, data: BackgroundPhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     # Set current request for session_store compatibility (if it uses thread locals)
     set_current_request(request)
     
@@ -329,7 +331,7 @@ async def background_phase(vendor: str, data: BackgroundPhaseRequest, request: R
     }, session)
 
 @router.post("/draft/{vendor}/")
-async def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, session: Session = Depends(get_session)):
+async def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
     user = session.get('user')
     if not user:
@@ -358,7 +360,7 @@ async def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, se
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/refine/{vendor}/")
-async def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, session: Session = Depends(get_session)):
+async def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
     user = session.get('user')
     if not user:
@@ -389,7 +391,7 @@ async def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, 
 # --- Agentic (per-topic) flow ---
 
 @router.post("/agentic/draft/")
-async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Session = Depends(get_session)):
+async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
     user = session.get("user")
     if not user:
@@ -445,7 +447,7 @@ async def agentic_state(session: Session = Depends(get_session)):
 
 
 @router.post("/agentic/feedback/start/")
-async def agentic_feedback_start(data: AgenticRunRoundRequest, request: Request, session: Session = Depends(get_session)):
+async def agentic_feedback_start(data: AgenticRunRoundRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
     user = session.get("user")
     if not user:
@@ -1053,7 +1055,7 @@ async def agentic_feedback_poll(
 
 
 @router.post("/agentic/run-round/")
-async def agentic_run_round(data: AgenticRunRoundRequest, request: Request, session: Session = Depends(get_session)):
+async def agentic_run_round(data: AgenticRunRoundRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
     user = session.get("user")
     if not user:
@@ -1252,7 +1254,7 @@ async def agentic_vote(data: AgenticVoteRequest, request: Request, session: Sess
 
 
 @router.post("/agentic/refine/")
-async def agentic_refine(request: Request, session: Session = Depends(get_session), body: Optional[AgenticRefineRequest] = Body(None)):
+async def agentic_refine(request: Request, session: Session = Depends(get_session), body: Optional[AgenticRefineRequest] = Body(None), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
     user = session.get("user")
     if not user:

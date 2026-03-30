@@ -1,4 +1,9 @@
+import time
 from fastapi import APIRouter, Request, Response, Depends, HTTPException
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+_limiter = Limiter(key_func=get_remote_address)
 from fastapi.responses import RedirectResponse, JSONResponse
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from letter_writer_server.core.config import settings
@@ -16,12 +21,13 @@ oauth.register(
     client_secret=settings.GOOGLE_CLIENT_SECRET,
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
     client_kwargs={
-        'scope': 'openid email profile',
+        'scope': 'openid email',
         'prompt': 'select_account',
     }
 )
 
 @router.get("/login/")
+@_limiter.limit("10/minute")
 async def login(request: Request):
     if not _oauth_is_configured():
         raise HTTPException(
@@ -44,12 +50,13 @@ async def auth_callback(request: Request, session: Session = Depends(get_session
 
     if user_info:
         session['user'] = {
-            'id': user_info.get('sub'), 
+            'id': user_info.get('sub'),
             'email': user_info.get('email'),
             'name': user_info.get('name'),
             'picture': user_info.get('picture'),
             'provider': 'google'
         }
+        session['auth_time'] = time.time()
     
     return RedirectResponse(url="/")
 

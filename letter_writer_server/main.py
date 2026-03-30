@@ -1,8 +1,12 @@
 import logging
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from starlette.responses import Response
 
 from letter_writer.config import get_log_level
 
@@ -28,13 +32,26 @@ app = FastAPI(
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
 
+# Rate limiter — keyed on client IP.
+# Use @limiter.limit("N/minute") on individual endpoints (e.g. /login/).
+limiter = Limiter(key_func=get_remote_address, default_limits=["300/minute"])
+app.state.limiter = limiter
+
+
+def rate_limit_exceeded_handler(request: Request, exc: Exception) -> Response:
+    assert isinstance(exc, RateLimitExceeded)
+    return _rate_limit_exceeded_handler(request, exc)
+
+
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
 
 app.add_middleware(
@@ -44,9 +61,11 @@ app.add_middleware(
     max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
 )
 
-# Trust Proxy Headers (for HTTPS/Host behind Nginx)
-# Added last to be executed first
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
+# Trust Proxy Headers (for HTTPS/Host behind load balancer).
+# In production set TRUSTED_PROXY_HOSTS to your load balancer IP/CIDR.
+# Defaults to "*" so local Docker keeps working unchanged.
+_trusted_proxy_hosts = os.getenv("TRUSTED_PROXY_HOSTS", "*").split(",")
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_proxy_hosts)
 
 # Routers
 app.include_router(auth.router, prefix="/accounts/google", tags=["auth"]) # Legacy path for redirect compatibility

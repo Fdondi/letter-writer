@@ -14,15 +14,28 @@ from letter_writer.cost_tracker import (
 
 router = APIRouter()
 
+
+def _parse_months(request: Request) -> int:
+    try:
+        months = int(request.query_params.get("months", 1))
+        return max(1, min(months, 24))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="months must be an integer")
+
+
 @router.get("/summary/")
-async def get_summary():
+async def get_summary(session: Session = Depends(get_session)):
+    if not session.get('user'):
+        raise HTTPException(status_code=401, detail="Authentication required")
     try:
         return get_cost_summary()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/flush/")
-async def flush_costs():
+async def flush_costs(session: Session = Depends(get_session)):
+    if not session.get('user'):
+        raise HTTPException(status_code=401, detail="Authentication required")
     try:
         return flush_costs_to_bigquery(reset_after_flush=True)
     except Exception as e:
@@ -33,14 +46,14 @@ async def get_user_costs(request: Request, session: Session = Depends(get_sessio
     user = session.get('user')
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    
-    months = int(request.query_params.get("months", 1))
-    
+
+    months = _parse_months(request)
+
     try:
         result = get_user_monthly_cost(user['id'], months_back=months)
         pending = get_cost_summary()
         pending_cost = pending.get("pending_by_user", {}).get(user['id'], 0)
-        
+
         result["total_cost"] = result.get("total_cost", 0) + pending_cost
         result["pending_cost"] = pending_cost
         return result
@@ -48,8 +61,10 @@ async def get_user_costs(request: Request, session: Session = Depends(get_sessio
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/global/")
-async def get_global_costs(request: Request):
-    months = int(request.query_params.get("months", 1))
+async def get_global_costs(request: Request, session: Session = Depends(get_session)):
+    if not session.get('user'):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    months = _parse_months(request)
     try:
         return get_global_monthly_cost(months_back=months)
     except Exception as e:
@@ -60,8 +75,8 @@ async def get_daily_costs(request: Request, session: Session = Depends(get_sessi
     user = session.get('user')
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    
-    months = int(request.query_params.get("months", 1))
+
+    months = _parse_months(request)
     try:
         return get_user_daily_costs(user['id'], months_back=months)
     except Exception as e:
