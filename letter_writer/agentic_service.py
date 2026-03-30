@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import time
 import uuid
@@ -74,11 +75,13 @@ DEFAULT_MAX_ROUNDS = 3
 # Server-side bounds for agentic feedback depth (client requests are clamped; persisted max_rounds is authoritative).
 AGENTIC_MIN_MAX_ROUNDS = 1
 AGENTIC_MAX_ROUNDS_CAP = 15
+# After A1 top-level comments, run this many (add subcomments → vote/prune) cycles before addendums (A3).
+DEFAULT_SUB_COMMENT_ROUNDS = 0
+AGENTIC_MAX_SUB_COMMENT_ROUNDS_CAP = 8
 MAX_POSITIVE_COMMENTS = 5
 MIN_ROUNDS_BEFORE_DONE = 2  # require at least 2 full rounds (2 interactions per vendor) before we can stop
 # If the client does not send a poll request for this many seconds, we abort (client likely left).
 # This is about browser not polling, not about agents taking long to respond.
-POLL_ABORT_SECONDS = 30
 
 PHASE_A1 = "a1_top_comments"
 PHASE_A2A1 = "a2a1_subcomments_add"
@@ -90,6 +93,40 @@ PHASE_B = "b_global_votes"
 
 PHASES_SUBCOMMENT_ADD = frozenset({PHASE_A2A1, PHASE_A2B1})
 PHASES_SUBCOMMENT_VOTE = frozenset({PHASE_A2A2, PHASE_A2B2})
+
+# Rotate API phase keys for successive sub-comment cycles (prompt/schema are identical per role).
+SUBCOMMENT_PHASE_KEY_PAIRS: List[Tuple[str, str]] = [
+    (PHASE_A2A1, PHASE_A2A2),
+    (PHASE_A2B1, PHASE_A2B2),
+]
+
+
+def build_agentic_phase_a_labels(sub_comment_rounds: int) -> List[Tuple[str, str]]:
+    """Phase-A pipeline: top-level comments, then N×(subcomment add, vote), then addendums.
+
+    Display labels are semantic and fixed at the ends; only the middle steps vary with N.
+    """
+    out: List[Tuple[str, str]] = [(PHASE_A1, "Top-level comments")]
+    try:
+        n = int(sub_comment_rounds)
+    except (TypeError, ValueError):
+        n = DEFAULT_SUB_COMMENT_ROUNDS
+    n = max(0, min(n, AGENTIC_MAX_SUB_COMMENT_ROUNDS_CAP))
+    m = len(SUBCOMMENT_PHASE_KEY_PAIRS)
+    for i in range(n):
+        add_ph, vote_ph = SUBCOMMENT_PHASE_KEY_PAIRS[i % m]
+        if n > 1:
+            k = i + 1
+            add_lbl = f"Sub-comments ({k}/{n})"
+            vote_lbl = f"Sub-comment votes ({k}/{n})"
+        else:
+            add_lbl = "Sub-comments"
+            vote_lbl = "Sub-comment votes"
+        out.append((add_ph, add_lbl))
+        out.append((vote_ph, vote_lbl))
+    out.append((PHASE_A3, "Edit suggestions"))
+    return out
+
 
 SCHEMA_A1 = {
     "type": "object",
@@ -125,17 +162,15 @@ SCHEMA_A2_SUB_VOTE = {
     "additionalProperties": False,
     "properties": {
         "subcomment_votes": {
-            "type": "array",
-            "items": {
+            "type": "object",
+            "additionalProperties": {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "comment_id": {"type": "string"},
-                    "subcomment_id": {"type": "string"},
                     "action": {"type": "string", "enum": ["upvote", "downvote", "abstain"]},
-                    "reason": {"type": "string", "minLength": 1},
+                    "reason": {"type": "string"},
                 },
-                "required": ["comment_id", "subcomment_id", "action", "reason"],
+                "required": ["action", "reason"],
             },
         },
     },
@@ -167,19 +202,15 @@ SCHEMA_B = {
     "additionalProperties": False,
     "properties": {
         "votes": {
-            "type": "array",
-            "items": {
+            "type": "object",
+            "additionalProperties": {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "topic": {"type": "string"},
-                    "target_type": {"type": "string", "enum": ["comment", "addendum"]},
-                    "comment_id": {"type": "string"},
-                    "addendum_id": {"type": "string"},
                     "action": {"type": "string", "enum": ["upvote", "downvote", "abstain"]},
                     "reason": {"type": "string"},
                 },
-                "required": ["topic", "target_type", "comment_id", "addendum_id", "action", "reason"],
+                "required": ["action", "reason"],
             },
         },
     },
@@ -191,53 +222,118 @@ def build_phase_b_schema(
     threads: Dict[str, List[Dict[str, Any]]],
     active_topics: List[str],
 ) -> Dict[str, Any]:
-    """Build a strict Phase B schema constrained to ids currently present in threads."""
+    """Build a strict Phase B schema constrained to ids currently present in threads.
+
+    .. deprecated:: Use :func:`build_phase_b_schema_for_topic` for the
+       per-tuple Phase B calls.
+    """
     comment_ids: List[str] = []
-    addendum_ids: List[str] = []
+    addendum_pairs: List[Tuple[str, str]] = []
+    seen_cids: set = set()
     for topic in active_topics:
         for c in threads.get(topic) or []:
             cid = c.get("id")
-            if isinstance(cid, str) and cid and cid not in comment_ids:
+            if isinstance(cid, str) and cid and cid not in seen_cids:
+                seen_cids.add(cid)
                 comment_ids.append(cid)
             for a in c.get("addendums") or []:
                 aid = a.get("id")
-                if isinstance(aid, str) and aid and aid not in addendum_ids:
-                    addendum_ids.append(aid)
+                if isinstance(cid, str) and cid and isinstance(aid, str) and aid:
+                    addendum_pairs.append((cid, aid))
 
-    # When there are no ids yet, keep SCHEMA_B's permissive string fields to avoid invalid empty-enum schema.
-    topic_schema: Dict[str, Any] = {"type": "string"}
-    if active_topics:
-        topic_schema = {"type": "string", "enum": list(active_topics)}
-    comment_id_schema: Dict[str, Any] = {"type": "string"}
-    if comment_ids:
-        comment_id_schema = {"type": "string", "enum": comment_ids}
-    addendum_id_schema: Dict[str, Any] = {"type": "string"}
-    if addendum_ids:
-        addendum_id_schema = {"type": "string", "enum": addendum_ids + [""]}
+    return _build_vote_schema(comment_ids, addendum_pairs, active_topics)
 
+
+def build_phase_b_schema_for_topic(
+    thread: List[Dict[str, Any]],
+    target_topic: str,
+) -> Dict[str, Any]:
+    """Strict Phase B schema scoped to a single target topic's ids."""
+    comment_ids: List[str] = []
+    addendum_pairs: List[Tuple[str, str]] = []
+    for c in thread:
+        if _is_comment_removed(c):
+            continue
+        cid = c.get("id")
+        if not isinstance(cid, str) or not cid:
+            continue
+        comment_ids.append(cid)
+        for a in c.get("addendums") or []:
+            aid = a.get("id")
+            if isinstance(aid, str) and aid:
+                addendum_pairs.append((cid, aid))
+    return _build_vote_schema(comment_ids, addendum_pairs, [target_topic])
+
+
+def _build_vote_schema(
+    comment_ids: List[str],
+    addendum_pairs: List[Tuple[str, str]],
+    topics: List[str],  # kept for callers but no longer embedded in the schema
+) -> Dict[str, Any]:
+    """Object-keyed Phase B voting schema.
+
+    Keys: ``"c::{comment_id}"`` for top-level comments,
+          ``"a::{comment_id}::{addendum_id}"`` for addendums.
+    All expected keys appear in ``required``, so the model must supply an
+    action+reason for every item exactly once — duplication is impossible
+    because JSON object keys are unique.
+    """
+    vote_item: Dict[str, Any] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "action": {"type": "string", "enum": ["upvote", "downvote", "abstain"]},
+            "reason": {"type": "string"},
+        },
+        "required": ["action", "reason"],
+    }
+    properties: Dict[str, Any] = {}
+    required: List[str] = []
+    for cid in comment_ids:
+        key = f"c::{cid}"
+        properties[key] = vote_item
+        required.append(key)
+    for cid, aid in addendum_pairs:
+        key = f"a::{cid}::{aid}"
+        properties[key] = vote_item
+        required.append(key)
     return {
         "type": "object",
         "additionalProperties": False,
         "properties": {
             "votes": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "topic": topic_schema,
-                        "target_type": {"type": "string", "enum": ["comment", "addendum"]},
-                        "comment_id": comment_id_schema,
-                        "addendum_id": addendum_id_schema,
-                        "action": {"type": "string", "enum": ["upvote", "downvote", "abstain"]},
-                        "reason": {"type": "string"},
-                    },
-                    "required": ["topic", "target_type", "comment_id", "addendum_id", "action", "reason"],
-                },
-            },
+                "type": "object",
+                "additionalProperties": False,
+                "properties": properties,
+                "required": required,
+            }
         },
         "required": ["votes"],
     }
+
+
+def format_topic_thread_for_voting(
+    thread: List[Dict[str, Any]],
+    topic: str,
+) -> str:
+    """Format a single topic's thread for the Phase B voting prompt."""
+    lines: List[str] = []
+    for c in thread:
+        if _is_comment_removed(c):
+            continue
+        cid = c.get("id", "")
+        lines.append(f"Comment topic={topic} id={cid} by {c.get('vendor', '?')}: {c.get('text', '')}")
+        for a in c.get("addendums") or []:
+            aid = a.get("id", "")
+            lines.append(
+                f"  Addendum topic={topic} comment_id={cid} addendum_id={aid} by {a.get('vendor', '?')}: {a.get('text', '')}"
+            )
+        for s in c.get("subcomments") or []:
+            sid = s.get("id", "")
+            lines.append(
+                f"  Subcomment topic={topic} comment_id={cid} subcomment_id={sid} by {s.get('vendor', '?')}: {s.get('text', '')}"
+            )
+    return "\n".join(lines).strip() or "(No comments)"
 
 
 def list_subcomment_vote_targets(thread: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
@@ -257,40 +353,34 @@ def list_subcomment_vote_targets(thread: List[Dict[str, Any]]) -> List[Tuple[str
 
 
 def build_phase_subcomment_vote_schema(thread: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """JSON schema for subcomment votes constrained to ids present on this topic's thread."""
+    """Object-keyed schema for subcomment votes.
+
+    Keys: ``"{comment_id}::{subcomment_id}"``, value: ``{action, reason}``.
+    All expected keys are in ``required`` — the model must fill every one and
+    cannot duplicate (object keys are unique by definition).
+    """
     targets = list_subcomment_vote_targets(thread)
-    n = len(targets)
-    comment_ids = sorted({cid for cid, _ in targets})
-    subcomment_ids = sorted({sid for _, sid in targets})
-    comment_id_schema: Dict[str, Any] = {"type": "string"}
-    if comment_ids:
-        comment_id_schema = {"type": "string", "enum": comment_ids}
-    subcomment_id_schema: Dict[str, Any] = {"type": "string"}
-    if subcomment_ids:
-        subcomment_id_schema = {"type": "string", "enum": subcomment_ids}
-    item_schema: Dict[str, Any] = {
+    vote_item: Dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "comment_id": comment_id_schema,
-            "subcomment_id": subcomment_id_schema,
             "action": {"type": "string", "enum": ["upvote", "downvote", "abstain"]},
-            "reason": {"type": "string", "minLength": 1},
+            "reason": {"type": "string"},
         },
-        "required": ["comment_id", "subcomment_id", "action", "reason"],
+        "required": ["action", "reason"],
     }
-    arr: Dict[str, Any] = {
-        "type": "array",
-        "items": item_schema,
-    }
-    if n > 0:
-        arr["minItems"] = n
-        arr["maxItems"] = n
+    properties = {f"{cid}::{sid}": vote_item for cid, sid in targets}
+    required = [f"{cid}::{sid}" for cid, sid in targets]
     return {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "subcomment_votes": arr,
+            "subcomment_votes": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": properties,
+                "required": required,
+            }
         },
         "required": ["subcomment_votes"],
     }
@@ -337,6 +427,35 @@ def apply_server_max_rounds_policy(requested: Optional[int]) -> int:
     return r
 
 
+def apply_server_sub_comment_rounds_policy(requested: Optional[int]) -> int:
+    """Clamp client-requested sub-comment cycles per main round (add+vote each). Default 0."""
+    if requested is None:
+        return DEFAULT_SUB_COMMENT_ROUNDS
+    try:
+        r = int(requested)
+    except (TypeError, ValueError):
+        logger.warning(
+            "agentic sub_comment_rounds invalid value %r; using default %s (server)",
+            requested,
+            DEFAULT_SUB_COMMENT_ROUNDS,
+        )
+        return DEFAULT_SUB_COMMENT_ROUNDS
+    if r < 0:
+        logger.warning(
+            "agentic sub_comment_rounds %s below 0; clamped (server source of truth)",
+            r,
+        )
+        return 0
+    if r > AGENTIC_MAX_SUB_COMMENT_ROUNDS_CAP:
+        logger.warning(
+            "agentic sub_comment_rounds %s above server cap %s; clamped (server source of truth)",
+            r,
+            AGENTIC_MAX_SUB_COMMENT_ROUNDS_CAP,
+        )
+        return AGENTIC_MAX_SUB_COMMENT_ROUNDS_CAP
+    return r
+
+
 def warn_agentic_round_limit_issues(state: Optional[Dict[str, Any]]) -> None:
     """Log warnings when topic cursors exceed backend limits or client draft hint vs server max_rounds."""
     if not state:
@@ -359,7 +478,8 @@ def warn_agentic_round_limit_issues(state: Optional[Dict[str, Any]]) -> None:
         cur = cursors.get(topic) or {}
         try:
             r = int(cur.get("round", 1) or 1)
-        except Exception:
+        except Exception as e:
+            logger.warning("round parse failed for topic=%s: %s", topic, e)
             r = 1
         if r > mr + 1:
             logger.warning(
@@ -385,6 +505,7 @@ def save_agentic_state(session, state: Dict[str, Any]) -> None:
 AGENTIC_STATE_RESPONSE_KEYS = (
     "status", "round", "draft_letter", "final_letter", "threads", "cost", "draft_vendor",
     "draft_letters", "final_letters", "feedback_suspended", "topic_meta", "max_rounds",
+    "sub_comment_rounds",
     "vendor_errors", "draft_votes", "refine_samples",
 )
 
@@ -394,6 +515,20 @@ def _get_max_rounds(state: Optional[Dict[str, Any]]) -> int:
     if not state:
         return DEFAULT_MAX_ROUNDS
     return int(state.get("max_rounds") or DEFAULT_MAX_ROUNDS)
+
+
+def _get_sub_comment_rounds(state: Optional[Dict[str, Any]]) -> int:
+    """Return sub-comment (add+vote) cycles per main commenting round (default 0)."""
+    if not state:
+        return DEFAULT_SUB_COMMENT_ROUNDS
+    raw = state.get("sub_comment_rounds")
+    if raw is None:
+        return DEFAULT_SUB_COMMENT_ROUNDS
+    try:
+        r = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_SUB_COMMENT_ROUNDS
+    return max(0, min(r, AGENTIC_MAX_SUB_COMMENT_ROUNDS_CAP))
 
 
 def feedback_rounds_exhausted(state: Optional[Dict[str, Any]]) -> bool:
@@ -406,7 +541,8 @@ def feedback_rounds_exhausted(state: Optional[Dict[str, Any]]) -> bool:
         cur = cursors.get(topic) or {}
         try:
             r = int(cur.get("round", 1) or 1)
-        except Exception:
+        except Exception as e:
+            logger.warning("round parse failed for topic=%s: %s", topic, e)
             r = 1
         if r <= max_rounds:
             return False
@@ -450,11 +586,11 @@ def agentic_topic_human_label(topic: str) -> str:
     }.get(topic, topic)
 
 
-def clear_topic_feedback_wait(state: Optional[Dict[str, Any]]) -> None:
-    """Remove per-topic wait strings (worker progress); call when feedback worker stops."""
+def clear_phase_progress(state: Optional[Dict[str, Any]]) -> None:
+    """Remove phase-progress tracking; call when the feedback worker stops."""
     if not state:
         return
-    state.pop("topic_feedback_wait", None)
+    state.pop("phase_progress", None)
 
 
 def _build_topic_meta(state: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -464,8 +600,16 @@ def _build_topic_meta(state: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, An
     threads = state.get("threads") or _empty_threads()
     cursors = state.get("topic_cursors") or {}
     max_rounds = _get_max_rounds(state)
-    wait_map = state.get("topic_feedback_wait") or {}
     feedback_on = bool(state.get("feedback_ongoing"))
+
+    # Structured progress set by individual worker threads:
+    #   Phase A task key: "{topic}::{vendor}"           (2 parts)
+    #   Phase B task key: "{src}::{target}::{vendor}"   (3 parts)
+    progress = state.get("phase_progress") or {}
+    phase_label = progress.get("phase") or ""
+    phase_round = int(progress.get("round") or 1)
+    tasks: Dict[str, bool] = progress.get("tasks") or {}
+
     out = {}
     for topic in AGENTIC_TOPIC_KEYS:
         cur = cursors.get(topic) or {}
@@ -476,14 +620,25 @@ def _build_topic_meta(state: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, An
             "messages": len(threads.get(topic) or []),
             "done": done,
         }
-        wf = wait_map.get(topic)
-        if (
-            feedback_on
-            and not done
-            and isinstance(wf, str)
-            and wf.strip()
-        ):
-            entry["waiting_for"] = wf.strip()
+        if feedback_on and not done and tasks:
+            pending: List[str] = []
+            completed: List[str] = []
+            for key, is_done in tasks.items():
+                parts = key.split("::")
+                if len(parts) == 2 and parts[0] == topic:
+                    # Phase A: "{topic}::{vendor}"
+                    (completed if is_done else pending).append(parts[1])
+                elif len(parts) == 3 and parts[1] == topic:
+                    # Phase B: "{src}::{target}::{vendor}"
+                    label = f"{parts[0]}:{parts[2]}"
+                    (completed if is_done else pending).append(label)
+            if pending or completed:
+                entry["waiting_for"] = {
+                    "phase": phase_label,
+                    "round": phase_round,
+                    "pending": sorted(pending),
+                    "done": sorted(completed),
+                }
         out[topic] = entry
     return out
 
@@ -495,6 +650,7 @@ def slim_agentic_state_for_response(state: Optional[Dict[str, Any]]) -> Optional
     result = {k: state.get(k) for k in AGENTIC_STATE_RESPONSE_KEYS if k in state}
     result["topic_meta"] = _build_topic_meta(state)
     result["max_rounds"] = _get_max_rounds(state)
+    result["sub_comment_rounds"] = _get_sub_comment_rounds(state)
     if "feedback_suspended" not in result and state.get("feedback_suspended") is not None:
         result["feedback_suspended"] = state.get("feedback_suspended")
     return result
@@ -528,6 +684,7 @@ def poll_response(
         "status": status,
         "feedback_suspended": feedback_suspended,
         "max_rounds": _get_max_rounds(state),
+        "sub_comment_rounds": _get_sub_comment_rounds(state),
         "vendor_errors": state.get("vendor_errors", {}),
     }
 
@@ -568,23 +725,60 @@ def _ensure_addendum_id(a: Dict, comment_idx: int, addendum_idx: int) -> Dict:
 
 
 # ---------------------------------------------------------------------------
-# Deduplication philosophy (post-cleanup)
+# Agentic feedback flow — architecture overview
 # ---------------------------------------------------------------------------
-# Previously three guard layers blocked vendors from re-acting on a comment:
-#   _comment_acted_vendors  — permanent per-comment, cross-round
-#   _comment_voted_vendors  — permanent per-comment, cross-round
-#   voted_vendors / voted_by_topic / acted_vendors / acted_by_topic fields
 #
-# All three were removed because:
-#   1. Each vendor is called exactly once per topic per round, so duplicate
-#      votes within a round cannot occur by construction.
-#   2. Cross-round re-voting is intentional — a vendor should be able to
-#      change its position (or add new subcomments) every round.
-#   3. The aggregate ``c["votes"]`` dict reflects each vendor's *latest*
-#      position; ``c["votes_by_round"]`` preserves the full per-round history
-#      so the UI can render vote rows for every round.
-#   4. In prompt formatting every non-removed comment is always marked OPEN
-#      so every vendor is prompted to act on it each round.
+# One "round" consists of:
+#
+#   Phase A  (per-topic, no cross-topic sync)
+#   ─────────────────────────────────────────
+#   Each topic runs its own independent pipeline of sub-phases:
+#     — Top-level comments (one optional comment per vendor)
+#     — Zero or more cycles of: sub-comments → vote/prune (count = ``sub_comment_rounds``)
+#     — Edit-suggestion addendums
+#   Topics run concurrently.  Within a topic, sub-phases are sequential.
+#   All vendors for a given topic + sub-phase run in parallel.
+#
+#   Sync barrier
+#   ────────────
+#   All topics must finish Phase A before any topic enters Phase B.
+#
+#   Phase B  (per-tuple cross-topic voting)
+#   ────────────────────────────────────────
+#   For every (vendor, source_topic, target_topic) tuple:
+#     - The vendor acts in the *context* of source_topic
+#     - The vendor votes on comments/addendums from target_topic
+#   All tuples run fully in parallel.  This ensures every vendor
+#   evaluates every topic's comments from every perspective, and no
+#   topic is accidentally skipped.
+#   ``apply_global_votes_and_prune`` records those votes into each
+#   comment's ``votes`` (aggregate) and ``votes_by_round`` (per-round
+#   snapshot keyed ``"{topic}::{round}"``).
+#
+# Then the round counter increments and the loop repeats.
+#
+# Vote storage
+# ────────────
+# Each top-level comment carries two vote structures:
+#   c["votes"]           — aggregate {up: [], down: [], abstain: []}.
+#                          Reflects each vendor's *latest* position
+#                          (used for net-score and prompt display).
+#   c["votes_by_round"]  — dict keyed by "{topic}::{round}" →
+#                          {up: [], down: [], abstain: [], reasons: {},
+#                           topic: str, round: int}.
+#                          The UI renders one vote row per bucket.
+#
+# Deduplication
+# ─────────────
+# No dedup guards exist.  Each vendor is called exactly once per topic
+# per round, so duplicates cannot arise.  Cross-round re-voting is
+# intentional: a vendor may change its position every round and both
+# positions are preserved in ``votes_by_round``.
+#
+# Prompt formatting
+# ─────────────────
+# Every non-removed comment is always marked OPEN so every vendor is
+# prompted to act on it each round.
 # ---------------------------------------------------------------------------
 
 
@@ -600,11 +794,25 @@ def _ensure_vote_round_bucket(
     c: Dict[str, Any],
     round_num: Optional[int],
     topic: Optional[str] = None,
+    source_topic: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Return mutable per-round vote bucket for a comment."""
+    """Return mutable per-round vote bucket for a comment.
+
+    Key format:
+      ``"{source_topic}::{target_topic}::{round}"`` — Phase B cross-topic vote
+      ``"{target_topic}::{round}"``                — single-topic Phase A vote
+      ``"{round}"``                                — legacy / no topic info
+    """
     rn = int(round_num or c.get("created_round") or 1)
     rounds = c.setdefault("votes_by_round", {})
-    key = f"{topic}::{rn}" if topic else str(rn)
+    if source_topic:
+        # Phase B: key is the source perspective + round only.
+        # The target topic is implicit — it is always the comment's own topic.
+        key = f"{source_topic}::{rn}"
+    elif topic:
+        key = f"{topic}::{rn}"
+    else:
+        key = str(rn)
     bucket = rounds.get(key)
     if not isinstance(bucket, dict):
         bucket = {}
@@ -613,7 +821,10 @@ def _ensure_vote_round_bucket(
     bucket.setdefault("down", [])
     bucket.setdefault("abstain", [])
     bucket.setdefault("reasons", {})
-    if topic:
+    if source_topic:
+        # "topic" field = the source perspective (what's meaningful for the UI label).
+        bucket.setdefault("topic", source_topic)
+    elif topic:
         bucket.setdefault("topic", topic)
     bucket.setdefault("round", rn)
     return bucket
@@ -626,6 +837,7 @@ def _set_comment_vote_action(
     *,
     round_num: Optional[int] = None,
     topic: Optional[str] = None,
+    source_topic: Optional[str] = None,
     reason: str = "",
 ) -> bool:
     """Record one vendor's vote on a top-level comment.
@@ -634,12 +846,15 @@ def _set_comment_vote_action(
       1. ``c["votes"]`` — aggregate tallies (latest position per vendor across
          all rounds; used for net-score calculations and prompt display).
       2. ``c["votes_by_round"][key]`` — per-round snapshot keyed by
-         ``"{topic}::{round}"`` so the UI can show vote history per round.
+         ``"{source_topic}::{target_topic}::{round}"`` for Phase B cross-topic
+         votes, or ``"{target_topic}::{round}"`` for Phase A votes, so the UI
+         can show vote history broken down by source perspective and round.
 
-    No deduplication guard: each vendor is called exactly once per topic per
-    round, so duplicates cannot occur.  A vendor that voted "up" in round 1
-    may vote "down" in round 2; the aggregate dict reflects their latest
-    position while both rounds are preserved in ``votes_by_round``.
+    Within each per-round bucket the vendor is deduplicated (latest position
+    wins) to prevent the same vendor appearing in multiple buckets when Phase B
+    produces several (source_topic, target_topic) calls for the same vendor.
+    A vendor that voted "up" in one round may vote "down" in the next; both
+    rounds are preserved in ``votes_by_round``.
     """
     if "votes" not in c or not isinstance(c.get("votes"), dict):
         c["votes"] = {"up": [], "down": [], "abstain": []}
@@ -654,8 +869,14 @@ def _set_comment_vote_action(
             votes[k].remove(vendor)
     votes[action].append(vendor)
 
-    # Update per-round bucket.
-    bucket = _ensure_vote_round_bucket(c, round_num, topic=topic)
+    # Update per-round bucket.  Deduplicate within the bucket: if the model
+    # returns the same comment_id multiple times (e.g. to pad minItems), we
+    # only record the first occurrence per vendor per bucket.
+    bucket = _ensure_vote_round_bucket(c, round_num, topic=topic, source_topic=source_topic)
+    for _a in ("up", "down", "abstain"):
+        lst = bucket.setdefault(_a, [])
+        if vendor in lst:
+            lst.remove(vendor)
     bucket[action].append(vendor)
 
     # Store optional rationale.
@@ -902,7 +1123,8 @@ def _call_agentic_feedback_agent(
         raw = "\n".join(lines)
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        logger.warning("_parse_phase_response JSON parse failed: %s", e)
         return {"subcomments": [], "votes": [], "new_comment": None}
     subcomments = data.get("subcomments") or []
     votes = data.get("votes") or []
@@ -912,15 +1134,40 @@ def _call_agentic_feedback_agent(
     return {"subcomments": subcomments, "votes": votes, "new_comment": new_comment}
 
 
+_GEMINI_SCHEMA_STRIP_KEYS = frozenset({
+    "enum", "minItems", "maxItems", "minLength", "maxLength", "minimum", "maximum", "format",
+})
+
+
+def _simplify_schema_for_gemini(node: Any) -> Any:
+    """Recursively strip constraints that cause Gemini's 'too many states' error.
+
+    Gemini rejects schemas with large enum lists (e.g. hex IDs), array length
+    bounds (minItems/maxItems), and string matchers (minLength etc.).  Removing
+    these still gives Gemini the structural shape it needs while staying within
+    its serving constraint budget.
+    """
+    if isinstance(node, dict):
+        return {
+            k: _simplify_schema_for_gemini(v)
+            for k, v in node.items()
+            if k not in _GEMINI_SCHEMA_STRIP_KEYS
+        }
+    if isinstance(node, list):
+        return [_simplify_schema_for_gemini(v) for v in node]
+    return node
+
+
 def _json_response_format(name: str, schema: Dict[str, Any], vendor: str) -> Dict[str, Any]:
     if vendor == "deepseek":
         return {"type": "json_object"}
+    effective_schema = _simplify_schema_for_gemini(schema) if vendor == "gemini" else schema
     return {
         "type": "json_schema",
         "json_schema": {
             "name": name,
             "strict": True,
-            "schema": schema,
+            "schema": effective_schema,
         },
     }
 
@@ -936,7 +1183,8 @@ def _parse_structured_json(raw: str) -> Dict[str, Any]:
         text = "\n".join(lines).strip()
     try:
         obj = json.loads(text)
-    except Exception:
+    except Exception as e:
+        logger.warning("_parse_structured_json failed: %s", e)
         return {}
     return obj if isinstance(obj, dict) else {}
 
@@ -988,16 +1236,16 @@ def _phase_prompt(
                 context
                 + "\n\n========== Current topic thread ==========\n"
                 + thread_str
-                + "\n\nThere are no subcomments to vote on. Return subcomment_votes as an empty array []."
+                + "\n\nThere are no subcomments to vote on. Return subcomment_votes as an empty object {}."
             )
         else:
             prompt = (
                 context
                 + "\n\n========== Current topic thread ==========\n"
                 + thread_str
-                + f"\n\nYou MUST return exactly {n} entries in subcomment_votes — one per subcomment shown above. "
-                "Use the exact comment_id and subcomment_id from each line. Do not omit any subcomment. "
-                "For each entry set action to upvote (useful/accurate), downvote (redundant/noisy/wrong), or abstain. "
+                + f"\n\nThe subcomment_votes object has exactly {n} keys — one per subcomment above. "
+                "You MUST fill every key. "
+                "Set action to upvote (useful/accurate), downvote (redundant/noisy/wrong), or abstain. "
                 "Every entry MUST include a non-empty reason: one short sentence explaining your vote. "
                 "Subcomments with strict majority downvotes are removed after this phase."
             )
@@ -1019,13 +1267,15 @@ def _phase_prompt(
         system = (
             "You are a cross-topic voting agent. "
             "Use only the provided response tool/schema. "
-            "Vote on comments/addendums from this and prior topics."
+            "The votes object has one key per comment and per addendum. "
+            "You MUST fill every key — omitting any is not allowed."
         )
         prompt = (
             context
-            + "\n\n========== All topic threads ==========\n"
+            + "\n\n========== Comments to vote on ==========\n"
             + global_threads_str
-            + "\n\nReturn only votes. For comment votes, set addendum_id to an empty string \"\"."
+            + "\n\nIMPORTANT: Fill every key in the votes object with an action (upvote/downvote/abstain) "
+            "and a non-empty reason. Every item must be covered — do not skip any."
         )
         return system, prompt
     return ("Use only the provided response tool/schema.", context)
@@ -1092,23 +1342,27 @@ def call_agentic_phase_action(
         expected = list_subcomment_vote_targets(thread or [])
         expected_set = set(expected)
         by_pair: Dict[Tuple[str, str], Dict[str, Any]] = {}
-        for v in data.get("subcomment_votes") or []:
-            if not isinstance(v, dict):
+        raw_votes = data.get("subcomment_votes") or {}
+        if not isinstance(raw_votes, dict):
+            logger.warning(
+                "AGENTIC unexpected subcomment_votes type vendor=%s topic=%s type=%s",
+                vendor, topic, type(raw_votes).__name__,
+            )
+            raw_votes = {}
+        for key, v in raw_votes.items():
+            if not isinstance(v, dict) or "::" not in key:
                 continue
-            cid = v.get("comment_id")
-            sid = v.get("subcomment_id")
+            cid, sid = key.split("::", 1)
             action = str(v.get("action") or "").lower()
-            if not isinstance(cid, str) or not isinstance(sid, str):
-                continue
             if action not in ("upvote", "downvote", "abstain"):
                 continue
             reason = _sanitize_vote_reason(v.get("reason"))
             if not reason:
                 continue
-            key = (cid, sid)
-            if key not in expected_set:
+            pair = (cid, sid)
+            if pair not in expected_set:
                 continue
-            by_pair[key] = {
+            by_pair[pair] = {
                 "comment_id": cid,
                 "subcomment_id": sid,
                 "action": action,
@@ -1134,30 +1388,53 @@ def call_agentic_phase_action(
             if isinstance(cid, str) and text:
                 out.append({"comment_id": cid, "text": text})
         return {"addendums": out}
+    # Phase B: object-keyed votes.
+    # Keys: "c::{comment_id}" for comments, "a::{comment_id}::{addendum_id}" for addendums.
+    # topic is injected from call context (this function's `topic` param = target_topic).
+    raw_votes = data.get("votes") or {}
+    if not isinstance(raw_votes, dict):
+        logger.warning(
+            "AGENTIC unexpected votes type vendor=%s topic=%s type=%s",
+            vendor, topic, type(raw_votes).__name__,
+        )
+        raw_votes = {}
     out_votes = []
-    for v in data.get("votes") or []:
+    for item_key, v in raw_votes.items():
         if not isinstance(v, dict):
             continue
-        topic_key = v.get("topic")
-        target_type = v.get("target_type")
-        cid = v.get("comment_id")
         action = str(v.get("action") or "").lower()
-        if not isinstance(topic_key, str) or not isinstance(cid, str):
-            continue
-        if target_type not in ("comment", "addendum"):
-            continue
         if action not in ("upvote", "downvote", "abstain"):
             continue
-        out_votes.append(
-            {
-                "topic": topic_key,
-                "target_type": target_type,
+        reason = str(v.get("reason") or "")
+        if item_key.startswith("c::"):
+            cid = item_key[3:]
+            if not cid:
+                continue
+            out_votes.append({
+                "topic": topic,
+                "target_type": "comment",
                 "comment_id": cid,
-                "addendum_id": v.get("addendum_id"),
+                "addendum_id": None,
                 "action": action,
-                "reason": str(v.get("reason") or ""),
-            }
-        )
+                "reason": reason,
+            })
+        elif item_key.startswith("a::"):
+            rest = item_key[3:]
+            if "::" not in rest:
+                continue
+            cid, aid = rest.split("::", 1)
+            if not cid or not aid:
+                continue
+            out_votes.append({
+                "topic": topic,
+                "target_type": "addendum",
+                "comment_id": cid,
+                "addendum_id": aid,
+                "action": action,
+                "reason": reason,
+            })
+        else:
+            logger.warning("AGENTIC unknown vote key vendor=%s topic=%s key=%r", vendor, topic, item_key)
     return {"votes": out_votes}
 
 
@@ -1177,7 +1454,7 @@ def apply_phase_a1_comment(
             "vendor": vendor,
             "text": text,
             "addendums": [],
-            "votes": {"up": [vendor], "down": [], "abstain": []},
+            "votes": {"up": [], "down": [], "abstain": []},
             "votes_by_round": {},
             "subcomments": [],
             "removed": False,
@@ -1361,11 +1638,11 @@ def format_global_threads_for_voting(
 
 def apply_global_votes_and_prune(
     threads: Dict[str, List[Dict[str, Any]]],
-    votes_payloads: List[Tuple[str, Dict[str, Any]]],
+    votes_payloads: List[Tuple[str, str, Dict[str, Any]]],
     *,
     round_num: int,
 ) -> None:
-    for vendor, payload in votes_payloads:
+    for vendor, source_topic, payload in votes_payloads:
         for vote in payload.get("votes") or []:
             topic = vote.get("topic")
             if topic not in threads:
@@ -1386,6 +1663,7 @@ def apply_global_votes_and_prune(
                     mapped,
                     round_num=round_num,
                     topic=topic,
+                    source_topic=source_topic or None,
                     reason=vote.get("reason") or "",
                 )
                 continue
@@ -1570,15 +1848,8 @@ def _apply_agent_response(
             "removed": False,
             "created_round": int(round_num or 1),
         })
-        # Proposer implicitly backs their own new top-level comment.
-        _set_comment_vote_action(
-            thread[-1],
-            vendor,
-            "up",
-            round_num=round_num,
-            topic=topic,
-            reason="proposer",
-        )
+        # Voting is handled exclusively by Phase B cross-topic passes.
+        # No implicit self-vote here.
         if new_comment_ids is not None:
             new_comment_ids.append(new_comment_id)
         changed = True
@@ -1766,8 +2037,8 @@ def _call_voting_agent(
         votes = json.loads(raw)
         if isinstance(votes, list):
             return [v for v in votes if isinstance(v, str) and v in draft_letters][:3]
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as e:
+        logger.warning("votes JSON parse failed: %s", e)
     _log(f"AGENTIC voting: {vendor} returned unparseable response: {raw[:200]}")
     return []
 
@@ -1832,12 +2103,22 @@ def run_agentic_voting(
     return state
 
 
+def _default_refine_sample_n() -> int:
+    """How many draft letters to sample as references during refine (env override, clamped)."""
+    raw = (os.getenv("AGENTIC_REFINE_SAMPLE_COUNT") or "2").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 2
+    return max(1, min(20, n))
+
+
 def _sample_drafts_for_vendor(
     draft_letters: Dict[str, str],
     draft_votes: Dict[str, int],
     target_vendor: str,
     num_agents: int,
-    n: int = 3,
+    n: int = 2,
 ) -> List[str]:
     """
     Sample n draft vendors proportional to votes, with bias: target_vendor gets
@@ -1876,6 +2157,7 @@ def run_agentic_draft(
     top_docs_override: Optional[List[TopDocument]] = None,
     style_instructions: str = "",
     max_rounds: Optional[int] = None,
+    sub_comment_rounds: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Generate the draft letter with the given vendor and store agentic state.
@@ -1947,6 +2229,7 @@ def run_agentic_draft(
     state["style_instructions"] = style_instructions
     state["client_max_rounds_requested"] = max_rounds
     state["max_rounds"] = apply_server_max_rounds_policy(max_rounds)
+    state["sub_comment_rounds"] = apply_server_sub_comment_rounds_policy(sub_comment_rounds)
     save_agentic_state(session, state)
     if cost > 0:
         track_api_cost(_user_id(session), "draft", draft_vendor, cost)
@@ -1960,6 +2243,7 @@ def run_agentic_draft_multi(
     top_docs_override: Optional[List[TopDocument]] = None,
     style_instructions: str = "",
     max_rounds: Optional[int] = None,
+    sub_comment_rounds: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Generate one draft letter per selected vendor and store in state as draft_letters.
@@ -2075,6 +2359,7 @@ def run_agentic_draft_multi(
     state["style_instructions"] = style_instructions
     state["client_max_rounds_requested"] = max_rounds
     state["max_rounds"] = apply_server_max_rounds_policy(max_rounds)
+    state["sub_comment_rounds"] = apply_server_sub_comment_rounds_policy(sub_comment_rounds)
     save_agentic_state(session, state)
     return state
 
@@ -2202,7 +2487,7 @@ def start_agentic_feedback(session, feedback_vendors: List[str]) -> Dict[str, An
     state["last_poll_at"] = time.time()
     state["round"] = state.get("round", 0) + 1
     state["feedback_vendor_order"] = list(feedback_vendors)  # persist for migration / reload
-    clear_topic_feedback_wait(state)
+    clear_phase_progress(state)
     # Each topic gets its own memory: independent round index and shuffled vendor order
     state["topic_cursors"] = {
         topic: {
@@ -2366,25 +2651,17 @@ def _run_one_topic_sequential(
 
 
 def run_agentic_feedback_step(
-    session, last_poll_at_from_disk: Optional[float] = None
+    session,
 ) -> Tuple[Dict[str, Any], bool]:
     """
     Run one full feedback round per poll: for each topic, run all vendors sequentially so each
     agent sees the previous agents' comments and addendums. Topics are processed in parallel.
-    If no poll for 10s, abort. Returns (full state, ongoing).
+    Returns (full state, ongoing).
     """
     _require_session(session)
-    now = time.time()
     state = get_agentic_state(session)
     if not state:
         return (state or {}, False)
-    if last_poll_at_from_disk is not None and (now - last_poll_at_from_disk) > POLL_ABORT_SECONDS:
-        gap = now - last_poll_at_from_disk
-        _log(f"AGENTIC feedback aborted: no poll from client for {gap:.1f}s (threshold {POLL_ABORT_SECONDS}s)")
-        state["feedback_ongoing"] = False
-        state["status"] = STATUS_FEEDBACK_DONE
-        save_agentic_state(session, state)
-        return (state, False)
     if not state.get("feedback_ongoing"):
         _log("AGENTIC poll step: early return (feedback_ongoing false)")
         return (state, False)
@@ -2556,11 +2833,16 @@ def run_agentic_feedback_step(
     return (state, ongoing)
 
 
-def run_agentic_refine(session, threads_override: Optional[Dict[str, List[Dict]]] = None) -> Dict[str, Any]:
+def run_agentic_refine(
+    session,
+    threads_override: Optional[Dict[str, List[Dict]]] = None,
+    refine_sample_count: Optional[int] = None,
+) -> Dict[str, Any]:
     """
     Collect all positive-vote comments and addendums, then produce one final letter per vendor.
-    For each vendor, 3 draft examples are sampled proportional to votes (with same-vendor bias)
+    For each vendor, draft examples are sampled proportional to votes (with same-vendor bias)
     and included in the rewrite prompt so the rewriter can draw from the best drafts.
+    Count defaults to AGENTIC_REFINE_SAMPLE_COUNT or 2; API may override.
     Allow when status is feedback_done OR when feedback has stopped (feedback_ongoing false).
     If threads_override is provided, use it instead of state threads (e.g. user-edited).
     """
@@ -2645,18 +2927,19 @@ def run_agentic_refine(session, threads_override: Optional[Dict[str, List[Dict]]
         return state
 
     user_id = _user_id(session)
+    sample_n = _default_refine_sample_n() if refine_sample_count is None else max(1, min(20, int(refine_sample_count)))
     refine_samples: Dict[str, List[str]] = {}
-    for vendor, d_letter in draft_letters.items():
-        if not d_letter.strip():
-            final_letters_dict[vendor] = d_letter
-            continue
-        if not combined.strip():
-            final_letters_dict[vendor] = d_letter
-            continue
+    vendor_errors: Dict[str, str] = dict(state.get("vendor_errors") or {})
 
+    # Pre-compute per-vendor prompts (cheap, no I/O) before launching threads.
+    refine_tasks: Dict[str, Tuple[str, str]] = {}  # vendor -> (d_letter, instruction_fb)
+    for vendor, d_letter in draft_letters.items():
+        if not d_letter.strip() or not combined.strip():
+            final_letters_dict[vendor] = d_letter
+            continue
         if draft_votes and len(draft_letters) > 1:
             sampled_vendors = _sample_drafts_for_vendor(
-                draft_letters, draft_votes, vendor, num_agents, n=3
+                draft_letters, draft_votes, vendor, num_agents, n=sample_n
             )
             refine_samples[vendor] = sampled_vendors
             _log(f"AGENTIC refine {vendor}: sampled drafts from {sampled_vendors} (votes={draft_votes})")
@@ -2671,25 +2954,43 @@ def run_agentic_refine(session, threads_override: Optional[Dict[str, List[Dict]]
             )
         else:
             instruction_fb = combined
+        refine_tasks[vendor] = (d_letter, instruction_fb)
 
+    def _one_refine(vendor: str) -> Tuple[str, str, float]:
+        d_letter, instruction_fb = refine_tasks[vendor]
         ai_client = get_client(ModelVendor(vendor))
-        final_letter = rewrite_letter(
+        letter = rewrite_letter(
             d_letter,
             instruction_fb, "NO COMMENT", "NO COMMENT",
             "NO COMMENT", "NO COMMENT", "NO COMMENT",
             ai_client, trace_dir,
         )
-        final_letters_dict[vendor] = final_letter
         cost_inc = getattr(ai_client, "total_cost", 0.0) or 0.0
-        total_cost += cost_inc
-        if cost_inc > 0:
-            track_api_cost(user_id, "refine", vendor, cost_inc)
+        return vendor, letter, cost_inc
+
+    with ThreadPoolExecutor(max_workers=len(refine_tasks) or 1) as executor:
+        futures = {executor.submit(_one_refine, v): v for v in refine_tasks}
+        for fut in as_completed(futures):
+            vendor = futures[fut]
+            try:
+                vendor, final_letter, cost_inc = fut.result()
+                final_letters_dict[vendor] = final_letter
+                total_cost += cost_inc
+                if cost_inc > 0:
+                    track_api_cost(user_id, "refine", vendor, cost_inc)
+            except Exception as exc:
+                logger.exception("AGENTIC refine error vendor=%s: %s", vendor, exc)
+                vendor_errors[vendor] = f"Refine failed: {exc}"
+                # Fall back to the unrefined draft so the vendor slot is still populated.
+                final_letters_dict[vendor] = refine_tasks[vendor][0]
 
     first_v = list(final_letters_dict.keys())[0] if final_letters_dict else draft_vendor
     state["final_letters"] = final_letters_dict
     state["final_letter"] = final_letters_dict.get(first_v) or final_letters_dict.get(draft_vendor) or ""
     if refine_samples:
         state["refine_samples"] = refine_samples
+    if vendor_errors:
+        state["vendor_errors"] = vendor_errors
     state["status"] = STATUS_DONE
     state["cost"] = state.get("cost", 0) + total_cost
     save_agentic_state(session, state)

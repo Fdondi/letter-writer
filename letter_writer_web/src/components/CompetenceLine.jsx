@@ -20,6 +20,9 @@ export default function CompetenceLine({
   onRemove,
   onImportanceChange,
   onPresenceChange,
+  isSelected = false,
+  onClick,
+  count = 0,
 }) {
   const getBackgroundColor = () => {
     if (presence == null || importance == null) return "transparent";
@@ -80,6 +83,7 @@ export default function CompetenceLine({
 
   return (
     <div
+      onClick={!editable && onClick ? onClick : undefined}
       style={{
         display: "flex",
         flexDirection: "row",
@@ -92,6 +96,9 @@ export default function CompetenceLine({
         borderRadius: 3,
         backgroundColor: getBackgroundColor(),
         minHeight: 24,
+        cursor: !editable && onClick ? "pointer" : undefined,
+        boxShadow: isSelected ? "0 0 0 2px rgba(234, 179, 8, 0.8)" : undefined,
+        transition: "box-shadow 0.15s",
       }}
     >
       {editable && onRemove && (
@@ -151,9 +158,14 @@ export default function CompetenceLine({
           }}
         />
       ) : (
-        <span style={{ flex: 1, fontSize: 12, color: "var(--text-color)", paddingRight: 4, minWidth: 0 }}>
-          {text ?? ""}
-        </span>
+        <>
+          <span style={{ flex: 1, fontSize: 12, color: "var(--text-color)", paddingRight: 4, minWidth: 0 }}>
+            {text ?? ""}
+          </span>
+          <span style={{ fontSize: 12, color: "var(--secondary-text-color)", fontWeight: 500, minWidth: 28, textAlign: "right", flexShrink: 0 }}>
+            {count}
+          </span>
+        </>
       )}
     </div>
   );

@@ -18,6 +18,19 @@ const FEEDBACK_DESCRIPTIONS = {
 
 const TOPIC_KEYS = ["instruction", "company_fit", "precision", "user_fit", "human", "accuracy"];
 const VOTE_COUNTDOWN_SECONDS = 15;
+const REFINE_SAMPLE_COUNT_KEY = "agenticRefineSampleCount";
+const REFINE_START_DELAY_SEC = 3;
+
+function readRefineSampleCountFromStorage() {
+  try {
+    const raw = localStorage.getItem(REFINE_SAMPLE_COUNT_KEY);
+    const n = parseInt(raw ?? "2", 10);
+    if (Number.isFinite(n) && n >= 1 && n <= 20) return n;
+  } catch (_) {
+    /* ignore */
+  }
+  return 2;
+}
 
 const DRAFT_FIELD_ID = "agentic_draft";
 
@@ -116,6 +129,8 @@ export default function AgenticFlow({
   const pollInFlightRef = useRef(false);
   const hasAutoStartedVoteRef = useRef(false);
   const hasAutoStartedRefineRef = useRef(false);
+  const [refineSampleCount, setRefineSampleCount] = useState(readRefineSampleCountFromStorage);
+  const [refineStartCountdown, setRefineStartCountdown] = useState(null);
   const status = agenticState?.status;
   const draftLetter = agenticState?.draft_letter;
   const draftLetters = agenticState?.draft_letters ?? (draftLetter != null && agenticState?.draft_vendor ? { [agenticState.draft_vendor]: draftLetter } : {});
@@ -152,6 +167,17 @@ export default function AgenticFlow({
     Boolean(onRefine);
 
   const translation = useTranslation();
+
+  const setRefineSampleCountPersist = (value) => {
+    const raw = typeof value === "number" ? value : parseInt(String(value), 10);
+    const clamped = Number.isFinite(raw) ? Math.max(1, Math.min(20, Math.floor(raw))) : 2;
+    setRefineSampleCount(clamped);
+    try {
+      localStorage.setItem(REFINE_SAMPLE_COUNT_KEY, String(clamped));
+    } catch (_) {
+      /* ignore */
+    }
+  };
 
   // Start feedback once when a fresh draft is ready (status feedback, round 0) and we have vendors.
   // If a prior run ended, clear the one-shot guard so a new run can auto-start again.
@@ -195,7 +221,21 @@ export default function AgenticFlow({
         });
       }
     }, tickMs);
-    return () => clearInterval(id);
+    // When the tab is suspended the interval is throttled or frozen. If a fetch was
+    // in-flight when the browser suspended the tab and the promise never settled,
+    // pollInFlightRef stays true and every subsequent tick is a no-op. Reset it on
+    // visibility so the next tick fires a fresh poll.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        pollInFlightRef.current = false;
+        startRef.current = 0; // ensure p >= 1 on the next tick
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [status, ongoing, onPollState, pollIntervalMs]);
 
   useEffect(() => {
@@ -252,15 +292,42 @@ export default function AgenticFlow({
   useEffect(() => {
     if (!canAutoRefine) {
       hasAutoStartedRefineRef.current = false;
-      return;
+      setRefineStartCountdown(null);
     }
-    if (loading || hasAutoStartedRefineRef.current) return;
+  }, [canAutoRefine]);
+
+  useEffect(() => {
+    if (!canAutoRefine || refineStartCountdown !== null) return;
+    setRefineStartCountdown(REFINE_START_DELAY_SEC);
+  }, [canAutoRefine, refineStartCountdown]);
+
+  useEffect(() => {
+    if (refineStartCountdown === null || refineStartCountdown <= 0) return;
+    const t = setTimeout(
+      () => setRefineStartCountdown((c) => (c === null ? null : c - 1)),
+      1000
+    );
+    return () => clearTimeout(t);
+  }, [refineStartCountdown]);
+
+  useEffect(() => {
+    if (!canAutoRefine || loading || refineStartCountdown !== 0 || hasAutoStartedRefineRef.current) return;
     hasAutoStartedRefineRef.current = true;
     const refineThreads = editedHasComments || !stateHasComments
       ? (editedThreads ?? threadsFromState)
       : threadsFromState;
-    onRefine?.(refineThreads);
-  }, [canAutoRefine, loading, onRefine, editedThreads, threadsFromState, editedHasComments, stateHasComments]);
+    onRefine?.(refineThreads, { refine_sample_count: refineSampleCount });
+  }, [
+    canAutoRefine,
+    loading,
+    refineStartCountdown,
+    onRefine,
+    editedThreads,
+    threadsFromState,
+    editedHasComments,
+    stateHasComments,
+    refineSampleCount,
+  ]);
 
   // Default draft tab when draft vendors change
   useEffect(() => {
@@ -427,7 +494,7 @@ export default function AgenticFlow({
             border: "1px solid var(--warning-border, #fde047)",
           }}
         >
-          <strong>Some vendors were skipped:</strong>
+          <strong>Some vendors had errors:</strong>
           <ul style={{ margin: "8px 0 0", paddingLeft: 20 }}>
             {Object.entries(vendorErrors).map(([vendor, msg]) => (
               <li key={vendor}>
@@ -436,7 +503,7 @@ export default function AgenticFlow({
             ))}
           </ul>
           <div style={{ marginTop: 8, fontSize: 13, opacity: 0.9 }}>
-            The flow continued with the other vendors. You can change models in Settings and try again for the failed ones.
+            The flow continued with the remaining vendors. Vendors that failed during refinement show their unrefined draft.
           </div>
         </div>
       )}
@@ -721,6 +788,49 @@ export default function AgenticFlow({
                             </span>
                           ))}
                       </div>
+                    </div>
+                  )}
+                  {hasVotes && draftVendorList.length > 1 && (
+                    <div
+                      style={{
+                        marginBottom: 12,
+                        padding: "10px 12px",
+                        backgroundColor: "var(--bg-color)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 8,
+                        fontSize: 13,
+                        color: "var(--text-color)",
+                        display: "flex",
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        gap: 12,
+                      }}
+                    >
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: loading ? "default" : "pointer" }}>
+                        <span>Reference drafts sampled for final letter (per vendor)</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={20}
+                          value={refineSampleCount}
+                          onChange={(e) => setRefineSampleCountPersist(e.target.value)}
+                          disabled={loading}
+                          style={{
+                            width: 56,
+                            padding: "4px 6px",
+                            fontSize: 13,
+                            borderRadius: 4,
+                            border: "1px solid var(--border-color)",
+                            background: "var(--input-bg)",
+                            color: "var(--text-color)",
+                          }}
+                        />
+                      </label>
+                      {refineStartCountdown != null && refineStartCountdown > 0 && (
+                        <span style={{ color: "var(--secondary-text-color)" }}>
+                          Starting refinement in {refineStartCountdown}s…
+                        </span>
+                      )}
                     </div>
                   )}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>

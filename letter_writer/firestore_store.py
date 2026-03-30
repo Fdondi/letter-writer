@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import logging
 from typing import Any, Dict, Iterable, List, Optional, Union, cast
 from uuid import uuid4
 
@@ -10,6 +11,8 @@ from google.cloud.firestore_v1.vector import Vector
 
 from .config import env_default
 from .vector_store import embed, query_vector_similarity
+
+logger = logging.getLogger(__name__)
 
 
 # Internal-only fields that should never be exposed via /api/documents responses.
@@ -584,9 +587,9 @@ def save_company_info(
             vec = embed(company_name, openai_client)
         if vec is not None:
             update_data["vector"] = vec if isinstance(vec, Vector) else Vector(vec)
-    except Exception:
+    except Exception as e:
+        logger.warning("vector enrichment failed: %s", e)
         # Vector enrichment is best-effort and should not block company cache writes.
-        pass
     
     collection.document(doc_id).set(update_data, merge=True)
     return update_data
@@ -637,8 +640,8 @@ def save_company_alias(alias_company_name: str, canonical_doc_id: str, canonical
         from openai import OpenAI
         openai_client = OpenAI()
         payload["vector"] = embed(alias_company_name, openai_client)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("vector alias embedding failed: %s", e)
 
     collection.document(alias_id).set(payload, merge=True)
     return payload

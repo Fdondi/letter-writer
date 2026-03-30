@@ -115,11 +115,15 @@ export default function App({ flow = "vendor" }) {
   const [agenticLoading, setAgenticLoading] = useState(false);
   const [agenticError, setAgenticError] = useState(null);
   const [agenticMaxRounds, setAgenticMaxRounds] = useState(3);
+  const [agenticSubCommentRounds, setAgenticSubCommentRounds] = useState(0);
   const [agenticSavingFinal, setAgenticSavingFinal] = useState(false);
   const [agenticSaveError, setAgenticSaveError] = useState(null);
   const [agenticFinalParagraphs, setAgenticFinalParagraphs] = useState([]);
   const rehydrationAttemptedRef = useRef(false);
   const latestFormSnapshotRef = useRef(null);
+  // Best-known threads ref: updated whenever we receive non-empty threads.
+  // Used as a last-resort fallback so the UI never loses comments it has already seen.
+  const bestKnownThreadsRef = useRef(null);
 
   const normalizeAgenticThreads = useCallback((threadsPayload = {}, topicMetaPayload = {}) => {
     const threadsOut = AGENTIC_TOPICS.reduce((acc, topic) => ({ ...acc, [topic]: [] }), {});
@@ -163,8 +167,13 @@ export default function App({ flow = "vendor" }) {
           ...(done != null && { done: done === true }),
         };
         if ("waiting_for" in rawValue) {
-          if (rawValue.waiting_for != null && String(rawValue.waiting_for).trim() !== "") {
-            nextMeta.waiting_for = String(rawValue.waiting_for).trim();
+          const wf = rawValue.waiting_for;
+          if (wf != null && typeof wf === "object") {
+            // Structured progress object from phase_progress — pass through as-is.
+            nextMeta.waiting_for = wf;
+          } else if (wf != null && String(wf).trim() !== "") {
+            // Legacy string fallback.
+            nextMeta.waiting_for = String(wf).trim();
           } else {
             delete nextMeta.waiting_for;
           }
@@ -210,6 +219,13 @@ export default function App({ flow = "vendor" }) {
     const n = Number(value);
     if (!Number.isFinite(n)) return;
     setAgenticMaxRounds(n);
+  }, []);
+
+  const syncAgenticSubCommentRoundsFromServer = useCallback((value) => {
+    if (value == null || value === "") return;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return;
+    setAgenticSubCommentRounds(Math.max(0, Math.min(8, Math.floor(n))));
   }, []);
 
   const isFormSnapshotPristine = useCallback((snapshot) => {
@@ -659,6 +675,7 @@ export default function App({ flow = "vendor" }) {
           if (restoredAgentic && restoredAgentic.status) {
             setAgenticState(restoredAgentic);
             if (restoredAgentic.max_rounds != null) syncAgenticMaxRoundsFromServer(restoredAgentic.max_rounds);
+            if (restoredAgentic.sub_comment_rounds != null) syncAgenticSubCommentRoundsFromServer(restoredAgentic.sub_comment_rounds);
             if (restoredAgentic.status === "done") setAgenticStage("assembly");
             else setAgenticStage("agentic");
             restoredSomething = true;
@@ -683,6 +700,7 @@ export default function App({ flow = "vendor" }) {
     normalizeAgenticThreads,
     stripAgenticThreadFields,
     syncAgenticMaxRoundsFromServer,
+    syncAgenticSubCommentRoundsFromServer,
     isFormSnapshotPristine,
   ]);
 
@@ -1489,6 +1507,7 @@ export default function App({ flow = "vendor" }) {
     setAgenticError(null);
     setError(null);
     setAgenticState(null);
+    bestKnownThreadsRef.current = null;
     navigate("/flows/agentic", { state: { startAgentic: true } });
     setAgenticStage("agentic");
     const initialSessionId = phaseSessionId || (
@@ -1554,6 +1573,7 @@ export default function App({ flow = "vendor" }) {
       // Honor vendor selection: one draft per selected vendor
       if (vendorsList.length > 0) body.draft_vendors = vendorsList;
       body.max_rounds = agenticMaxRounds;
+      body.sub_comment_rounds = agenticSubCommentRounds;
       const res = await fetchWithHeartbeat("/api/phases/agentic/draft/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1566,6 +1586,7 @@ export default function App({ flow = "vendor" }) {
       const nextAgentic = stripAgenticThreadFields(res.data?.agentic_state ?? null);
       setAgenticState(nextAgentic);
       if (nextAgentic?.max_rounds != null) syncAgenticMaxRoundsFromServer(nextAgentic.max_rounds);
+      if (nextAgentic?.sub_comment_rounds != null) syncAgenticSubCommentRoundsFromServer(nextAgentic.sub_comment_rounds);
       setAgenticStage("agentic");
     } catch (e) {
       console.error("Agentic draft error", e);
@@ -1583,16 +1604,47 @@ export default function App({ flow = "vendor" }) {
       const data = await res.json();
       publishUserMonthlyCost(data);
       const normalized = normalizeAgenticThreads(data.threads || {}, data.topic_meta || {});
-      setAgenticState((prev) => ({
-        ...(prev || {}),
-        threads: normalized.threads,
-        status: data.status ?? prev?.status,
-        ongoing: data.ongoing,
-        feedback_suspended: data.feedback_suspended,
-        topic_meta: normalized.topicMeta,
-        ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
-      }));
+      // Update best-known threads outside of React state so the ref is always current
+      // regardless of React batching order. Any non-empty list per topic is saved.
+      const best = bestKnownThreadsRef.current || {};
+      let bestUpdated = false;
+      for (const topic of AGENTIC_TOPICS) {
+        const incoming = normalized.threads[topic] || [];
+        if (incoming.length > (best[topic]?.length || 0)) {
+          best[topic] = incoming;
+          bestUpdated = true;
+        }
+      }
+      if (bestUpdated) bestKnownThreadsRef.current = { ...best };
+
+      setAgenticState((prev) => {
+        // Threads are append-only: comments are marked removed, never deleted.
+        // Merge per topic: keep the longest list seen (server response, previous React state,
+        // or the best-known ref) so the UI never regresses to "No comments yet."
+        const threads = {};
+        for (const topic of AGENTIC_TOPICS) {
+          const prevList = prev?.threads?.[topic] || [];
+          const nextList = normalized.threads[topic] || [];
+          const refList = bestKnownThreadsRef.current?.[topic] || [];
+          const longest = [prevList, nextList, refList].reduce(
+            (a, b) => (b.length > a.length ? b : a),
+            [],
+          );
+          threads[topic] = longest;
+        }
+        return {
+          ...(prev || {}),
+          threads,
+          status: data.status ?? prev?.status,
+          ongoing: data.ongoing,
+          feedback_suspended: data.feedback_suspended,
+          topic_meta: normalized.topicMeta,
+          ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
+          ...(data.sub_comment_rounds != null && { sub_comment_rounds: data.sub_comment_rounds }),
+        };
+      });
       if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
+      if (data.sub_comment_rounds != null) syncAgenticSubCommentRoundsFromServer(data.sub_comment_rounds);
       return data.ongoing === true;
     } catch (e) {
       console.warn("Failed to poll agentic feedback:", e);
@@ -1622,8 +1674,10 @@ export default function App({ flow = "vendor" }) {
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
+        ...(data.sub_comment_rounds != null && { sub_comment_rounds: data.sub_comment_rounds }),
       }));
       if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
+      if (data.sub_comment_rounds != null) syncAgenticSubCommentRoundsFromServer(data.sub_comment_rounds);
     } catch (e) {
       setAgenticError(e?.message || String(e));
     } finally {
@@ -1652,8 +1706,10 @@ export default function App({ flow = "vendor" }) {
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
+        ...(data.sub_comment_rounds != null && { sub_comment_rounds: data.sub_comment_rounds }),
       }));
       if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
+      if (data.sub_comment_rounds != null) syncAgenticSubCommentRoundsFromServer(data.sub_comment_rounds);
     } catch (e) {
       setAgenticError(e?.message || String(e));
     } finally {
@@ -1682,8 +1738,10 @@ export default function App({ flow = "vendor" }) {
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
+        ...(data.sub_comment_rounds != null && { sub_comment_rounds: data.sub_comment_rounds }),
       }));
       if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
+      if (data.sub_comment_rounds != null) syncAgenticSubCommentRoundsFromServer(data.sub_comment_rounds);
     } catch (e) {
       setAgenticError(e?.message || String(e));
     } finally {
@@ -1712,8 +1770,10 @@ export default function App({ flow = "vendor" }) {
         ongoing: data.ongoing,
         feedback_suspended: data.feedback_suspended,
         ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
+        ...(data.sub_comment_rounds != null && { sub_comment_rounds: data.sub_comment_rounds }),
       }));
       if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
+      if (data.sub_comment_rounds != null) syncAgenticSubCommentRoundsFromServer(data.sub_comment_rounds);
     } catch (e) {
       setAgenticError(e?.message || String(e));
     } finally {
@@ -1748,14 +1808,22 @@ export default function App({ flow = "vendor" }) {
     }
   };
 
-  const handleAgenticRefine = async (threadsOverride = null) => {
+  const handleAgenticRefine = async (threadsOverride = null, options = {}) => {
     setAgenticLoading(true);
     setAgenticError(null);
     try {
       const opts = { method: "POST" };
+      const body = {};
       if (threadsOverride != null && typeof threadsOverride === "object") {
+        body.threads = threadsOverride;
+      }
+      const n = options.refine_sample_count;
+      if (n != null && Number.isFinite(Number(n))) {
+        body.refine_sample_count = Math.max(1, Math.min(20, Math.floor(Number(n))));
+      }
+      if (Object.keys(body).length > 0) {
         opts.headers = { "Content-Type": "application/json" };
-        opts.body = JSON.stringify({ threads: threadsOverride });
+        opts.body = JSON.stringify(body);
       }
       const res = await fetchWithHeartbeat("/api/phases/agentic/refine/", opts);
       if (res.isHeartbeat) return;
@@ -1898,6 +1966,7 @@ export default function App({ flow = "vendor" }) {
     setVendorStage("input");
     setAgenticStage("input");
     setAgenticState(null);
+    bestKnownThreadsRef.current = null;
     setAgenticError(null);
     setPhaseSessionId(null);
     // phaseState, phaseEdits, phaseErrors removed - cards own their state
@@ -2048,27 +2117,6 @@ export default function App({ flow = "vendor" }) {
               readOnly={jobTextViewLanguage !== "source"}
             />
           </div>
-          <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-            <button
-              onClick={extractData}
-              disabled={extracting || !jobText.trim()}
-              style={{
-                padding: "10px 20px",
-                backgroundColor: extracting || !jobText.trim() ? "var(--header-bg)" : "#10b981",
-                color: "white",
-                border: "none",
-                borderRadius: "4px",
-                cursor: extracting || !jobText.trim() ? "not-allowed" : "pointer",
-              }}
-            >
-              {extracting ? "Extracting..." : "Extract data"}
-            </button>
-            {extractionError && (
-              <div style={{ color: "var(--error-text)", padding: "10px 0", fontSize: "14px" }}>
-                {extractionError}
-              </div>
-            )}
-          </div>
 
           {/* Additional Information - collapsible section */}
           <div style={{ marginTop: 15, textAlign: "center" }}>
@@ -2143,6 +2191,28 @@ export default function App({ flow = "vendor" }) {
             )}
           </div>
           
+          <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+            <button
+              onClick={extractData}
+              disabled={extracting || !jobText.trim()}
+              style={{
+                padding: "10px 20px",
+                backgroundColor: extracting || !jobText.trim() ? "var(--header-bg)" : "#10b981",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: extracting || !jobText.trim() ? "not-allowed" : "pointer",
+              }}
+            >
+              {extracting ? "Extracting..." : "Extract data"}
+            </button>
+            {extractionError && (
+              <div style={{ color: "var(--error-text)", padding: "10px 0", fontSize: "14px" }}>
+                {extractionError}
+              </div>
+            )}
+          </div>
+
           <div style={{ marginTop: 20, padding: 15, border: "1px solid var(--border-color)", borderRadius: 8, backgroundColor: "var(--input-bg)" }}>
              <h3 style={{ marginTop: 0, fontSize: "16px", fontWeight: 600 }}>Company & Job Details</h3>
              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
@@ -2456,6 +2526,17 @@ export default function App({ flow = "vendor" }) {
                   style={{ width: 48, padding: "6px 8px", borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }}
                 />
               </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6 }} title="Per main round: add-subcomment phases then vote/prune, after top-level comments (0 = skip sub-comments).">
+                <span style={{ fontSize: 13, color: "var(--text-color)" }}>Sub-comment rounds:</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={8}
+                  value={agenticSubCommentRounds}
+                  onChange={(e) => setAgenticSubCommentRounds(Math.max(0, Math.min(8, parseInt(e.target.value, 10) || 0)))}
+                  style={{ width: 48, padding: "6px 8px", borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }}
+                />
+              </label>
             </div>
           </div>
         </>
@@ -2667,6 +2748,16 @@ export default function App({ flow = "vendor" }) {
                 vendorFeedback={vendorFeedback}
                 setVendorFeedback={setVendorFeedback}
                 refineSamples={flow === "agentic" ? (agenticState?.refine_samples || {}) : {}}
+                vendorDraftParagraphs={
+                  flow === "agentic" && agenticState?.draft_letters
+                    ? Object.fromEntries(
+                        Object.entries(agenticState.draft_letters).map(([v, text]) => [
+                          v,
+                          splitIntoParagraphs(text || "", v),
+                        ])
+                      )
+                    : undefined
+                }
               />
             </div>
           )}

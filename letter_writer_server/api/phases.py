@@ -8,15 +8,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Lock
 from fastapi import APIRouter, Request, HTTPException, Depends, Body
-from typing import Dict, Any, List, Optional, Set, Tuple, cast
-from pydantic import BaseModel
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, cast
+from pydantic import BaseModel, Field
 
 from letter_writer_server.core.session import (
     Session,
     get_session,
-    get_agentic_last_poll_at_from_storage,
     load_session_from_storage,
     save_session_to_storage,
+    save_agentic_state_to_storage,
+    save_agentic_topic_slice_to_storage,
     persist_agentic_last_poll_at,
     try_acquire_agentic_lock,
     release_agentic_lock,
@@ -55,12 +56,8 @@ from letter_writer.agentic_service import (
     warn_agentic_round_limit_issues,
     _get_topic_cursors,
     _empty_threads,
-    clear_topic_feedback_wait,
+    clear_phase_progress,
     PHASE_A1,
-    PHASE_A2A1,
-    PHASE_A2A2,
-    PHASE_A2B1,
-    PHASE_A2B2,
     PHASE_A3,
     PHASE_B,
     PHASES_SUBCOMMENT_ADD,
@@ -72,11 +69,15 @@ from letter_writer.agentic_service import (
     prune_downvoted_subcomments,
     apply_phase_addendums,
     format_global_threads_for_voting,
+    format_topic_thread_for_voting,
     apply_global_votes_and_prune,
     build_phase_b_schema,
+    build_phase_b_schema_for_topic,
+    agentic_topic_human_label,
     build_phase_subcomment_vote_schema,
+    build_agentic_phase_a_labels,
+    _get_sub_comment_rounds,
     DEFAULT_MAX_ROUNDS,
-    POLL_ABORT_SECONDS,
     STATUS_DRAFT,
     STATUS_FEEDBACK,
     STATUS_FEEDBACK_DONE,
@@ -115,6 +116,12 @@ class AgenticDraftRequest(BaseModel):
     top_docs: Optional[List[Dict[str, Any]]] = None
     style_instructions: Optional[str] = None
     max_rounds: Optional[int] = None
+    sub_comment_rounds: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=8,
+        description="Sub-comment add+vote cycles after A1 per main round (default 0).",
+    )
 
 
 class AgenticRunRoundRequest(BaseModel):
@@ -124,6 +131,12 @@ class AgenticRunRoundRequest(BaseModel):
 class AgenticRefineRequest(BaseModel):
     """Optional edited threads to use for the rewrite (user may have edited/removed comments)."""
     threads: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    refine_sample_count: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=20,
+        description="How many draft letters to sample as references when refining (default 2 from server/env).",
+    )
 
 
 class AgenticSuspendRequest(BaseModel):
@@ -230,12 +243,20 @@ async def get_session_state(session: Session = Depends(get_session)):
 async def clear_session(session: Session = Depends(get_session)):
     old_id = session.session_key
     user = session.get("user")
+    # Stop any running agentic worker for this session before discarding it.
+    if old_id:
+        entry = _get_agentic_live(old_id)
+        if entry:
+            with entry["meta_lock"]:
+                entry["state"]["feedback_ongoing"] = False
+                entry["state"]["worker_running"] = False
+            with _agentic_live_store_lock:
+                _agentic_live_store.pop(old_id, None)
     session.clear()
     if user:
         session["user"] = user
     # Rotate to a brand-new session id while keeping authenticated user context.
     session.session_key = secrets.token_urlsafe(32)
-    # Cost flush logic omitted for brevity/simplicity, can add later
     return {
         "status": "ok",
         "old_session_id": old_id,
@@ -406,6 +427,7 @@ async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Se
                 top_docs_override=cast(Optional[List[TopDocument]], data.top_docs),
                 style_instructions=data.style_instructions or "",
                 max_rounds=data.max_rounds,
+                sub_comment_rounds=data.sub_comment_rounds,
             )
             return with_user_monthly_cost({"status": "ok", "agentic_state": slim_agentic_state_for_response(state)}, session)
         except Exception as e:
@@ -429,6 +451,7 @@ async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Se
             top_docs_override=cast(Optional[List[TopDocument]], data.top_docs),
             style_instructions=data.style_instructions or "",
             max_rounds=data.max_rounds,
+            sub_comment_rounds=data.sub_comment_rounds,
         )
         return with_user_monthly_cost({"status": "ok", "agentic_state": slim_agentic_state_for_response(state)}, session)
     except Exception as e:
@@ -440,7 +463,27 @@ async def agentic_state(session: Session = Depends(get_session)):
     user = session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
+    session_key = session.session_key
     state = get_agentic_state(session)
+    # Prefer live store (has threads) over session (which never has threads).
+    entry = _get_agentic_live(session_key) if session_key else None
+    if entry:
+        with entry["meta_lock"]:
+            live_state = dict(entry["state"])
+        # Merge: use live state as base (has threads) with session fields for anything missing.
+        merged = {**(state or {}), **{k: v for k, v in live_state.items() if v is not None}}
+        state = merged
+    elif session_key:
+        # No live entry — try disk so threads are included in the restore response.
+        try:
+            persisted = load_session_from_storage(session_key)
+            disk_state = (persisted or {}).get("agentic") if persisted else None
+            if disk_state and any(
+                (disk_state.get("threads") or {}).get(t) for t in AGENTIC_TOPIC_KEYS
+            ):
+                state = disk_state
+        except Exception as e:
+            logger.warning("agentic state disk load fallback failed: %s", e)
     return with_user_monthly_cost({"status": "ok", "agentic_state": slim_agentic_state_for_response(state)}, session)
 
 
@@ -471,9 +514,17 @@ async def agentic_feedback_start(data: AgenticRunRoundRequest, request: Request,
                 # We update the state in-place so any running worker sees the fresh state.
                 with entry["meta_lock"]:
                     was_running = entry["state"].get("worker_running", False)
+                    # Preserve threads from the live state: session["agentic"] is written
+                    # before threads are built, so the session state used here may not have
+                    # them.  Threads from the live entry are the authoritative copy.
+                    live_threads = entry["state"].get("threads")
                     entry["state"].clear()
                     entry["state"].update(copy.deepcopy(state))
                     entry["state"]["worker_running"] = was_running
+                    if live_threads and not any(
+                        entry["state"].get("threads", {}).get(t) for t in AGENTIC_TOPIC_KEYS
+                    ):
+                        entry["state"]["threads"] = live_threads
             with entry["meta_lock"]:
                 entry["state"]["last_poll_at"] = start_poll_at
                 if not entry["state"].get("worker_running"):
@@ -483,6 +534,7 @@ async def agentic_feedback_start(data: AgenticRunRoundRequest, request: Request,
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        logger.exception("AGENTIC feedback/start failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -538,74 +590,65 @@ def _create_agentic_live(session_key: str, initial_agentic_state: Dict[str, Any]
     return entry
 
 
-def _topic_wait_strings_phase_a(
-    active_topics: List[str],
-    feedback_vendors: List[str],
+def _init_phase_a_progress(
+    state: Dict[str, Any],
+    topic: str,
     phase_label: str,
     round_num: int,
-    done_pairs: Set[Tuple[str, str]],
-) -> Dict[str, str]:
-    """One line per topic with vendor progress and cross-topic barrier sync status."""
-    out: Dict[str, str] = {}
-    topic_pending_vendors: Dict[str, List[str]] = {
-        t: sorted(v for v in feedback_vendors if (t, v) not in done_pairs)
-        for t in active_topics
-    }
-    topics_still_running = sorted(t for t, pending in topic_pending_vendors.items() if pending)
-    for t in active_topics:
-        done_list = sorted(v for v in feedback_vendors if (t, v) in done_pairs)
-        pending_list = topic_pending_vendors[t]
-        msg = (
-            f"{phase_label} (r{round_num}) — "
-            f"API returned: {', '.join(done_list) if done_list else 'none'} | "
-            f"still running: {', '.join(pending_list) if pending_list else 'none'}"
-        )
-        if not pending_list:
-            waiting_topics = [x for x in topics_still_running if x != t]
-            msg += (
-                f" | waiting on topic sync: {', '.join(waiting_topics) if waiting_topics else 'none'}"
-            )
-        out[t] = msg
-    return out
-
-
-def _topic_wait_strings_phase_b(
-    active_topics: List[str],
     feedback_vendors: List[str],
+) -> None:
+    """Initialise all vendor tasks for one topic's Phase-A sub-phase as pending (False).
+
+    Called once per topic per sub-phase, before API calls are submitted, so
+    waiting_for is never null during the window before the first result arrives.
+    Each worker thread then independently flips its own flag to True when done.
+    """
+    prog = state.setdefault("phase_progress", {})
+    prog["phase"] = phase_label
+    prog["round"] = round_num
+    tasks = prog.setdefault("tasks", {})
+    for vendor in feedback_vendors:
+        tasks.setdefault(f"{topic}::{vendor}", False)
+
+
+def _mark_phase_a_done(state: Dict[str, Any], topic: str, vendor: str) -> None:
+    """Mark one Phase-A (topic, vendor) task as complete."""
+    tasks = (state.get("phase_progress") or {}).get("tasks")
+    if tasks is not None:
+        tasks[f"{topic}::{vendor}"] = True
+
+
+def _init_phase_b_progress(
+    state: Dict[str, Any],
     round_num: int,
-    done_vendors: Set[str],
-) -> Dict[str, str]:
-    """Same global vote progress shown on every active topic column."""
-    done_list = sorted(done_vendors)
-    pending_list = sorted(v for v in feedback_vendors if v not in done_vendors)
-    msg = (
-        f"Phase B: global cross-topic vote (r{round_num}) — "
-        f"API returned: {', '.join(done_list) if done_list else 'none'} | "
-        f"still running: {', '.join(pending_list) if pending_list else 'none'}"
-    )
-    return {t: msg for t in active_topics}
+    vote_tuples: List[Tuple[str, str, str]],
+) -> None:
+    """Initialise all (src, target, vendor) tasks for Phase B as pending."""
+    tasks = {f"{src}::{tgt}::{vendor}": False for vendor, src, tgt in vote_tuples}
+    state["phase_progress"] = {
+        "phase": "Cross-topic vote",
+        "round": round_num,
+        "tasks": tasks,
+    }
+
+
+def _mark_phase_b_done(
+    state: Dict[str, Any], vendor: str, source_topic: str, target_topic: str
+) -> None:
+    """Mark one Phase-B (src, target, vendor) task as complete."""
+    tasks = (state.get("phase_progress") or {}).get("tasks")
+    if tasks is not None:
+        tasks[f"{source_topic}::{target_topic}::{vendor}"] = True
 
 
 def _run_ordered_feedback_loop(session_key: str) -> None:
-    """Run feedback in global rounds: A1 → A2a1 → A2a2 → A2b1 → A2b2 → A3 → B."""
+    """Run feedback in global rounds: A1 → (optional sub-comment cycles)×N → A3 → B."""
     entry = _get_agentic_live(session_key)
     if not entry:
         return
     state = entry["state"]
     meta_lock = entry["meta_lock"]
     Path("trace", "agentic.feedback").mkdir(parents=True, exist_ok=True)
-
-    def _stale_poll_gap() -> float:
-        with meta_lock:
-            last_poll_at_mem = float(state.get("last_poll_at") or 0.0)
-        try:
-            last_poll_at_disk = float(get_agentic_last_poll_at_from_storage(session_key) or 0.0)
-        except Exception:
-            last_poll_at_disk = 0.0
-        last_poll_at = max(last_poll_at_mem, last_poll_at_disk)
-        if last_poll_at <= 0.0:
-            return 0.0
-        return time.time() - last_poll_at
 
     def _stop_feedback_worker() -> None:
         with meta_lock:
@@ -614,42 +657,28 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
             if state.get("status") not in (STATUS_DRAFT, STATUS_FEEDBACK_DONE):
                 state["status"] = STATUS_FEEDBACK
             state["worker_running"] = False
-            clear_topic_feedback_wait(state)
-            if "threads" in locals():
-                state["threads"] = threads
-            if "topic_cursors" in locals():
-                state["topic_cursors"] = topic_cursors
+            clear_phase_progress(state)
             _persist_agentic_from_live(session_key, state)
 
     while True:
-        now = time.time()
         with meta_lock:
             if not state.get("feedback_ongoing"):
                 state["worker_running"] = False
-                clear_topic_feedback_wait(state)
+                clear_phase_progress(state)
                 _persist_agentic_from_live(session_key, state)
                 return
-            last_poll_at_mem = float(state.get("last_poll_at") or 0.0)
-            try:
-                last_poll_at_disk = float(get_agentic_last_poll_at_from_storage(session_key) or 0.0)
-            except Exception:
-                last_poll_at_disk = 0.0
-            last_poll_at = max(last_poll_at_mem, last_poll_at_disk)
-            state["last_poll_at"] = last_poll_at
             if bool(state.get("feedback_suspended")):
                 state["feedback_ongoing"] = False
                 state["worker_running"] = False
-                clear_topic_feedback_wait(state)
+                clear_phase_progress(state)
                 _persist_agentic_from_live(session_key, state)
-                return
-            if (now - last_poll_at) > POLL_ABORT_SECONDS:
-                _stop_feedback_worker()
                 return
             threads = state.get("threads") or _empty_threads()
             state["threads"] = threads
             topic_cursors = state.get("topic_cursors") or {}
             state["topic_cursors"] = topic_cursors
             max_rounds = int(state.get("max_rounds", DEFAULT_MAX_ROUNDS))
+            sub_comment_rounds_cfg = _get_sub_comment_rounds(state)
             draft_letter = state.get("draft_letter") or ""
             draft_vendor = state.get("draft_vendor") or ""
             top_docs = state.get("top_docs") or []
@@ -670,7 +699,7 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
                 state["feedback_ongoing"] = False
                 state["status"] = STATUS_FEEDBACK_DONE
                 state["worker_running"] = False
-                clear_topic_feedback_wait(state)
+                clear_phase_progress(state)
                 state["threads"] = threads
                 state["topic_cursors"] = topic_cursors
                 _persist_agentic_from_live(session_key, state)
@@ -698,142 +727,188 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
         }
         round_num = min(rounds.get(t, 1) for t in active_topics)
 
-        phase_labels = [
-            (PHASE_A1, "Phase A1: top-level comments"),
-            (PHASE_A2A1, "Phase A2a1: sub-comments add (pass 1)"),
-            (PHASE_A2A2, "Phase A2a2: sub-comments vote & prune"),
-            (PHASE_A2B1, "Phase A2b1: sub-comments add (pass 2)"),
-            (PHASE_A2B2, "Phase A2b2: sub-comments vote & prune"),
-            (PHASE_A3, "Phase A3: edit suggestions"),
-        ]
-        for phase_key, phase_label in phase_labels:
-            if _stale_poll_gap() > POLL_ABORT_SECONDS:
-                _stop_feedback_worker()
-                return
-            with meta_lock:
-                snapshot_threads = {t: copy.deepcopy(threads.get(t) or []) for t in active_topics}
-                state["topic_feedback_wait"] = _topic_wait_strings_phase_a(
-                    active_topics, feedback_vendors, phase_label, round_num, set()
-                )
+        phase_labels = build_agentic_phase_a_labels(sub_comment_rounds_cfg)
+        # --- Phase A: each topic pipelines through A1→A3 independently ---
+        # Topics run concurrently; within each topic, sub-phases are sequential
+        # (A1 results feed into A2a1, etc.).  The only sync barrier is after all
+        # topics complete Phase A, before entering Phase B (global voting).
+        #
+        # Phase-resume: each topic cursor stores ``last_completed_phase_idx``
+        # so that if the worker is restarted mid-round (e.g. stale-poll abort
+        # + auto-resume) we skip already-completed sub-phases instead of
+        # re-running them, which would appear as the status going backwards.
 
-            phase_jobs = []
-            for topic in active_topics:
-                for vendor in feedback_vendors:
-                    phase_jobs.append((topic, vendor, topic_contexts[topic], snapshot_threads[topic]))
-            results: List[Tuple[str, str, Dict[str, Any]]] = []
-            done_pairs: Set[Tuple[str, str]] = set()
-            with ThreadPoolExecutor(max_workers=max(1, len(phase_jobs))) as executor:
-                phase_a_futures = {}
-                for (topic, vendor, context, thread_snapshot) in phase_jobs:
-                    schema_ov = (
-                        build_phase_subcomment_vote_schema(thread_snapshot)
-                        if phase_key in PHASES_SUBCOMMENT_VOTE
-                        else None
+        # Per-topic progress tracking (topic → current phase label).
+        topic_phase_status: Dict[str, str] = {t: phase_labels[0][1] for t in active_topics}
+
+        def _run_topic_pipeline(topic: str) -> None:
+            """Run one topic through all Phase-A sub-phases sequentially."""
+            with meta_lock:
+                cur = topic_cursors.get(topic) or {}
+                resume_from = int(cur.get("last_completed_phase_idx", -1)) + 1
+            for phase_idx, (phase_key, phase_label) in enumerate(phase_labels):
+                if phase_idx < resume_from:
+                    continue  # already completed in a previous worker run
+                with meta_lock:
+                    topic_phase_status[topic] = phase_label
+                    thread_snapshot = copy.deepcopy(threads.get(topic) or [])
+
+                # Run all vendors in parallel for this topic + phase.
+                vendor_results: List[Tuple[str, Dict[str, Any]]] = []
+                done_vendors: Set[str] = set()
+                # Initialise all tasks as pending before submitting so
+                # waiting_for is never null while API calls are in flight.
+                with meta_lock:
+                    _init_phase_a_progress(
+                        state, topic, phase_label, round_num, feedback_vendors
                     )
-                    fut = executor.submit(
-                        call_agentic_phase_action,
-                        vendor=vendor,
-                        phase=phase_key,
-                        topic=topic,
-                        context=context,
-                        thread=thread_snapshot,
-                        schema_override=schema_ov,
-                    )
-                    phase_a_futures[fut] = (topic, vendor)
-                for fut in as_completed(phase_a_futures):
-                    topic, vendor = phase_a_futures[fut]
-                    try:
-                        payload = fut.result() or {}
-                    except Exception as e:
-                        logger.exception(
-                            "AGENTIC phase error phase=%s topic=%s vendor=%s err=%s",
-                            phase_key,
-                            topic,
-                            vendor,
-                            e,
+                with ThreadPoolExecutor(max_workers=max(1, len(feedback_vendors))) as executor:
+                    vendor_futures = {}
+                    for vendor in feedback_vendors:
+                        schema_ov = (
+                            build_phase_subcomment_vote_schema(thread_snapshot)
+                            if phase_key in PHASES_SUBCOMMENT_VOTE
+                            else None
                         )
-                        payload = {}
+                        fut = executor.submit(
+                            cast(Callable[..., None], call_agentic_phase_action),
+                            vendor=vendor,
+                            phase=phase_key,
+                            topic=topic,
+                            context=topic_contexts[topic],
+                            thread=thread_snapshot,
+                            schema_override=schema_ov,
+                        )
+                        vendor_futures[fut] = vendor
+                    for fut in as_completed(vendor_futures):
+                        vendor = vendor_futures[fut]
+                        try:
+                            payload: Dict[str, Any] = fut.result() or {}
+                        except Exception as e:
+                            logger.exception(
+                                "AGENTIC phase error phase=%s topic=%s vendor=%s err=%s",
+                                phase_key, topic, vendor, e,
+                            )
+                            payload = {}
+                            with meta_lock:
+                                state.setdefault("vendor_errors", {})[vendor] = (
+                                    f"Error in {phase_key} ({topic}): {e}"
+                                )
+                        vendor_results.append((vendor, payload))
+                        done_vendors.add(vendor)
                         with meta_lock:
-                            state.setdefault("vendor_errors", {})[vendor] = f"Error in {phase_key} ({topic}): {e}"
-                    results.append((topic, vendor, payload))
-                    done_pairs.add((topic, vendor))
-                    with meta_lock:
-                        state["topic_feedback_wait"] = _topic_wait_strings_phase_a(
-                            active_topics,
-                            feedback_vendors,
-                            phase_label,
-                            round_num,
-                            done_pairs,
-                        )
+                            _mark_phase_a_done(state, topic, vendor)
 
-            with meta_lock:
-                for topic, vendor, payload in results:
+                # Apply results to the live thread under lock.
+                with meta_lock:
                     thread = threads.get(topic) or []
-                    if phase_key == PHASE_A1:
-                        apply_phase_a1_comment(thread, vendor, payload.get("new_comment"), round_num=round_num)
-                    elif phase_key in PHASES_SUBCOMMENT_ADD:
-                        apply_phase_subcomments(thread, vendor, payload.get("subcomments") or [])
-                    elif phase_key in PHASES_SUBCOMMENT_VOTE:
-                        apply_phase_subcomment_votes(
-                            thread, vendor, payload.get("subcomment_votes") or []
-                        )
-                    elif phase_key == PHASE_A3:
-                        apply_phase_addendums(thread, vendor, payload.get("addendums") or [])
+                    for vendor, payload in vendor_results:
+                        if phase_key == PHASE_A1:
+                            apply_phase_a1_comment(thread, vendor, payload.get("new_comment"), round_num=round_num)
+                        elif phase_key in PHASES_SUBCOMMENT_ADD:
+                            apply_phase_subcomments(thread, vendor, payload.get("subcomments") or [])
+                        elif phase_key in PHASES_SUBCOMMENT_VOTE:
+                            apply_phase_subcomment_votes(
+                                thread, vendor, payload.get("subcomment_votes") or []
+                            )
+                        elif phase_key == PHASE_A3:
+                            apply_phase_addendums(thread, vendor, payload.get("addendums") or [])
                     threads[topic] = thread
-                if phase_key in PHASES_SUBCOMMENT_VOTE:
-                    for t in active_topics:
-                        prune_downvoted_subcomments(threads.get(t) or [])
-                state["threads"] = threads
-                _persist_agentic_from_live(session_key, state)
+                    if phase_key in PHASES_SUBCOMMENT_VOTE:
+                        prune_downvoted_subcomments(threads.get(topic) or [])
+                    # Record completed phase so a restarted worker resumes
+                    # from the next sub-phase instead of replaying from A1.
+                    cur = topic_cursors.setdefault(topic, {})
+                    cur["last_completed_phase_idx"] = phase_idx
+                    state["topic_cursors"] = topic_cursors
+                    state["threads"] = threads
+                    # Only persist this topic's slice — other topics' disk data
+                    # is untouched, so concurrent workers can't clobber each other.
+                    save_agentic_topic_slice_to_storage(
+                        session_key, topic, threads.get(topic), cur
+                    )
 
-        if _stale_poll_gap() > POLL_ABORT_SECONDS:
-            _stop_feedback_worker()
-            return
+        # Launch all topic pipelines concurrently; wait for all to finish.
+        with ThreadPoolExecutor(max_workers=max(1, len(active_topics))) as topic_executor:
+            topic_futures = {
+                topic_executor.submit(_run_topic_pipeline, t): t
+                for t in active_topics
+            }
+            for fut in as_completed(topic_futures):
+                t = topic_futures[fut]
+                try:
+                    fut.result()
+                except Exception as e:
+                    logger.exception("AGENTIC topic pipeline error topic=%s err=%s", t, e)
+
+        # --- Phase B: per-tuple cross-topic voting ---
+        # For every (vendor, source_topic, target_topic) tuple, the vendor
+        # acts in the context of source_topic and votes on comments from
+        # target_topic.  All tuples run fully in parallel.
+
+        # Pre-build per-topic thread strings and schemas under lock.
+        with meta_lock:
+            per_topic_threads_str: Dict[str, str] = {}
+            per_topic_schema: Dict[str, Dict[str, Any]] = {}
+            for t in active_topics:
+                t_thread = threads.get(t) or []
+                per_topic_threads_str[t] = format_topic_thread_for_voting(t_thread, t)
+                per_topic_schema[t] = build_phase_b_schema_for_topic(t_thread, t)
+
+        # Build all (vendor, source_topic, target_topic) tuples — including
+        # same-topic pairs so each topic also evaluates its own comments.
+        vote_tuples: List[Tuple[str, str, str]] = []
+        for vendor in feedback_vendors:
+            for source_topic in active_topics:
+                for target_topic in active_topics:
+                    vote_tuples.append((vendor, source_topic, target_topic))
 
         with meta_lock:
-            state["topic_feedback_wait"] = _topic_wait_strings_phase_b(
-                active_topics, feedback_vendors, round_num, set()
-            )
-            global_threads_str = format_global_threads_for_voting(threads, active_topics)
-            phase_b_schema = build_phase_b_schema(threads, active_topics)
+            _init_phase_b_progress(state, round_num, vote_tuples)
 
-        global_context = (
-            "Cross-topic voting context.\n\n"
-            f"Job:\n{job_text}\n\n"
-            f"Draft vendor: {draft_vendor}\n\n"
-            f"Draft letter:\n{draft_letter}\n\n"
-            f"Company report:\n{company_report}\n"
-        )
-        vote_results: List[Tuple[str, Dict[str, Any]]] = []
-        done_vote_vendors: Set[str] = set()
-        with ThreadPoolExecutor(max_workers=max(1, len(feedback_vendors))) as executor:
-            vote_futures = {
-                executor.submit(
-                    call_agentic_phase_action,
+        vote_results: List[Tuple[str, str, Dict[str, Any]]] = []
+        done_count = 0
+        with ThreadPoolExecutor(max_workers=min(len(vote_tuples), 24)) as executor:
+            vote_futures: Dict[Any, Tuple[str, str, str]] = {}
+            for vendor, source_topic, target_topic in vote_tuples:
+                source_label = agentic_topic_human_label(source_topic)
+                target_label = agentic_topic_human_label(target_topic)
+                tuple_context = (
+                    f"You are reviewing from the perspective of '{source_label}'.\n"
+                    f"Vote on the '{target_label}' comments below.\n\n"
+                    f"Job:\n{job_text}\n\n"
+                    f"Draft vendor: {draft_vendor}\n\n"
+                    f"Draft letter:\n{draft_letter}\n\n"
+                    f"Company report:\n{company_report}\n"
+                )
+                fut = executor.submit(
+                    cast(Callable[..., None], call_agentic_phase_action),
                     vendor=vendor,
                     phase=PHASE_B,
-                    topic="global",
-                    context=global_context,
-                    global_threads_str=global_threads_str,
-                    schema_override=phase_b_schema,
-                ): vendor
-                for vendor in feedback_vendors
-            }
+                    topic=target_topic,
+                    context=tuple_context,
+                    global_threads_str=per_topic_threads_str[target_topic],
+                    schema_override=per_topic_schema[target_topic],
+                )
+                vote_futures[fut] = (vendor, source_topic, target_topic)
             for fut in as_completed(vote_futures):
-                vote_vendor = vote_futures[fut]
+                vendor, source_topic, target_topic = vote_futures[fut]
                 try:
-                    payload = fut.result() or {}
+                    payload: Dict[str, Any] = fut.result() or {}
                 except Exception as e:
-                    logger.exception("AGENTIC phase B error vendor=%s err=%s", vote_vendor, e)
+                    logger.exception(
+                        "AGENTIC phase B error vendor=%s source=%s target=%s err=%s",
+                        vendor, source_topic, target_topic, e,
+                    )
                     payload = {}
                     with meta_lock:
-                        state.setdefault("vendor_errors", {})[vote_vendor] = f"Error in cross-topic voting: {e}"
-                vote_results.append((vote_vendor, payload))
-                done_vote_vendors.add(vote_vendor)
+                        state.setdefault("vendor_errors", {})[vendor] = (
+                            f"Error in cross-topic voting ({source_topic}→{target_topic}): {e}"
+                        )
+                vote_results.append((vendor, source_topic, payload))
+                done_count += 1
                 with meta_lock:
-                    state["topic_feedback_wait"] = _topic_wait_strings_phase_b(
-                        active_topics, feedback_vendors, round_num, done_vote_vendors
-                    )
+                    _mark_phase_b_done(state, vendor, source_topic, target_topic)
 
         with meta_lock:
             apply_global_votes_and_prune(threads, vote_results, round_num=round_num)
@@ -841,6 +916,7 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
                 cur = dict(topic_cursors.get(topic) or {"round": 1, "vendor_index": 0, "vendor_order": []})
                 cur["round"] = int(cur.get("round", 1)) + 1
                 cur["vendor_index"] = 0
+                cur.pop("last_completed_phase_idx", None)  # reset for next round
                 order = list(cur.get("vendor_order") or feedback_vendors)
                 if order:
                     random.shuffle(order)
@@ -852,14 +928,14 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
 
 
 def _persist_agentic_from_live(session_key: str, state: Dict[str, Any]) -> None:
-    """Write live agentic state back to session on disk."""
+    """Write live agentic state back to session on disk.
+
+    Uses save_agentic_state_to_storage which holds the exclusive file lock for
+    the entire read-modify-write cycle, preventing concurrent topic workers from
+    clobbering each other's thread updates.
+    """
     try:
-        data = load_session_from_storage(session_key)
-        merged_state = dict(state)
-        # Heartbeat is stored separately from agentic state; never persist it here.
-        merged_state.pop("last_poll_at", None)
-        data["agentic"] = merged_state
-        save_session_to_storage(session_key, data)
+        save_agentic_state_to_storage(session_key, state)
     except Exception as e:
         logger.exception("AGENTIC persist from live failed: %s", e)
 
@@ -905,27 +981,27 @@ async def agentic_feedback_poll(
     now = time.time()
     entry = _get_agentic_live(session_key)
     if entry:
-        state = entry["state"]
+        live_state = entry["state"]
         with entry["meta_lock"]:
-            state["last_poll_at"] = now
+            live_state["last_poll_at"] = now
             should_auto_resume = (
-                state.get("status") == STATUS_FEEDBACK
-                and not bool(state.get("feedback_suspended"))
-                and not bool(state.get("feedback_ongoing"))
-                and not bool(state.get("worker_running"))
-                and _has_pending_feedback(state)
+                live_state.get("status") == STATUS_FEEDBACK
+                and not bool(live_state.get("feedback_suspended"))
+                and not bool(live_state.get("feedback_ongoing"))
+                and not bool(live_state.get("worker_running"))
+                and _has_pending_feedback(live_state)
             )
             if should_auto_resume:
-                state["feedback_ongoing"] = True
-                state["worker_running"] = True
-                _persist_agentic_from_live(session_key, state)
+                live_state["feedback_ongoing"] = True
+                live_state["worker_running"] = True
+                _persist_agentic_from_live(session_key, live_state)
                 _start_ordered_worker(session_key)
-            if state and normalize_agentic_feedback_if_rounds_exhausted(state):
-                _persist_agentic_from_live(session_key, state)
-            warn_agentic_round_limit_issues(state)
-            snapshot = {
-                "threads": copy.deepcopy(state.get("threads") or _empty_threads()),
-                "topic_cursors": copy.deepcopy(state.get("topic_cursors") or {}),
+            if live_state and normalize_agentic_feedback_if_rounds_exhausted(live_state):
+                _persist_agentic_from_live(session_key, live_state)
+            warn_agentic_round_limit_issues(live_state)
+            snapshot: Dict[str, Any] = {
+                "threads": copy.deepcopy(live_state.get("threads") or _empty_threads()),
+                "topic_cursors": copy.deepcopy(live_state.get("topic_cursors") or {}),
                 "last_poll_at": now,
             }
             for k in (
@@ -940,14 +1016,39 @@ async def agentic_feedback_poll(
                 "draft_letters",
                 "final_letters",
                 "max_rounds",
+                "sub_comment_rounds",
                 "draft_votes",
                 # Required for poll_response / _build_topic_meta waiting_for (per-topic progress)
                 "worker_running",
-                "topic_feedback_wait",
+                "phase_progress",
             ):
-                if k in state:
-                    snapshot[k] = state[k]
+                if k in live_state:
+                    snapshot[k] = live_state[k]
         persist_agentic_last_poll_at(session_key, now)
+        # If the live state has no thread content, fall back to persisted threads so
+        # the client never receives a blank response while a valid history exists on disk.
+        snap_threads = snapshot.get("threads") or {}
+        if not any(bool(snap_threads.get(t)) for t in AGENTIC_TOPIC_KEYS):
+            logger.warning(
+                "AGENTIC poll live-state threads empty session=%s ongoing=%s status=%s — trying disk fallback",
+                session_key,
+                snapshot.get("feedback_ongoing"),
+                snapshot.get("status"),
+            )
+            try:
+                disk_session = load_session_from_storage(session_key)
+                persisted_threads = (disk_session or {}).get("agentic", {}).get("threads") or {}
+                if any(bool(persisted_threads.get(t)) for t in AGENTIC_TOPIC_KEYS):
+                    snapshot["threads"] = persisted_threads
+                    with entry["meta_lock"]:
+                        live_state["threads"] = copy.deepcopy(persisted_threads)
+                else:
+                    logger.warning(
+                        "AGENTIC poll disk fallback also empty session=%s",
+                        session_key,
+                    )
+            except Exception as e:
+                logger.warning("AGENTIC poll disk load fallback failed: %s", e)
         tc_raw = snapshot.get("topic_cursors")
         tc = tc_raw if isinstance(tc_raw, dict) else {}
         rounds_live = {}
@@ -955,12 +1056,21 @@ async def agentic_feedback_poll(
             cur_tc = tc.get(t)
             cur_dict = cur_tc if isinstance(cur_tc, dict) else {}
             rounds_live[t] = int(cur_dict.get("round", 1))
+        prog_raw = snapshot.get("phase_progress")
+        prog: Dict[str, Any] = prog_raw if isinstance(prog_raw, dict) else {}
+        tasks_raw = prog.get("tasks")
+        tasks: Dict[str, Any] = tasks_raw if isinstance(tasks_raw, dict) else {}
+        pending_count = sum(1 for v in tasks.values() if v is not True)
+        total_count = len(tasks)
         logger.info(
-            "AGENTIC poll source=live session=%s ongoing=%s status=%s rounds=%s",
+            "AGENTIC poll source=live session=%s ongoing=%s status=%s rounds=%s phase=%s pending=%d/%d",
             session_key,
             snapshot.get("feedback_ongoing"),
             snapshot.get("status"),
             rounds_live,
+            prog.get("phase") or "—",
+            pending_count,
+            total_count,
         )
         return with_user_monthly_cost(
             poll_response(snapshot),
@@ -969,39 +1079,40 @@ async def agentic_feedback_poll(
     if "agentic" not in session:
         session["agentic"] = {}
     persist_agentic_last_poll_at(session_key, now)
+    poll_agentic: Optional[Dict[str, Any]]
     try:
         persisted = load_session_from_storage(session_key) if session_key else None
-        state = (persisted or {}).get("agentic") or get_agentic_state(session)
+        poll_agentic = (persisted or {}).get("agentic") or get_agentic_state(session)
         should_auto_resume = (
-            state
-            and state.get("status") == STATUS_FEEDBACK
-            and not bool(state.get("feedback_suspended"))
-            and not bool(state.get("feedback_ongoing"))
-            and _has_pending_feedback(state)
+            poll_agentic
+            and poll_agentic.get("status") == STATUS_FEEDBACK
+            and not bool(poll_agentic.get("feedback_suspended"))
+            and not bool(poll_agentic.get("feedback_ongoing"))
+            and _has_pending_feedback(poll_agentic)
         )
         if should_auto_resume and try_acquire_agentic_lock(session_key, timeout_seconds=15.0):
             try:
                 latest_payload = load_session_from_storage(session_key) if session_key else {}
                 latest = (latest_payload or {}).get("agentic") or {}
                 if latest:
-                    state = latest
+                    poll_agentic = latest
                 if (
-                    state
-                    and state.get("status") == STATUS_FEEDBACK
-                    and not bool(state.get("feedback_suspended"))
-                    and not bool(state.get("feedback_ongoing"))
-                    and _has_pending_feedback(state)
+                    poll_agentic
+                    and poll_agentic.get("status") == STATUS_FEEDBACK
+                    and not bool(poll_agentic.get("feedback_suspended"))
+                    and not bool(poll_agentic.get("feedback_ongoing"))
+                    and _has_pending_feedback(poll_agentic)
                 ):
-                    state = dict(state)
-                    state["feedback_ongoing"] = True
-                    state["worker_running"] = True
+                    poll_agentic = dict(poll_agentic)
+                    poll_agentic["feedback_ongoing"] = True
+                    poll_agentic["worker_running"] = True
                     payload = latest_payload or {}
-                    payload["agentic"] = state
+                    payload["agentic"] = poll_agentic
                     save_session_to_storage(session_key, payload)
                     with _agentic_live_store_lock:
                         if _agentic_live_store.get(session_key) is None:
                             _agentic_live_store[session_key] = {
-                                "state": state,
+                                "state": poll_agentic,
                                 "meta_lock": Lock(),
                                 "worker_running": True,
                             }
@@ -1009,45 +1120,54 @@ async def agentic_feedback_poll(
             finally:
                 release_agentic_lock(session_key)
         rounds_persisted = {
-            t: int((((state or {}).get("topic_cursors") or {}).get(t) or {}).get("round", 1))
+            t: int(
+                (((poll_agentic or {}).get("topic_cursors") or {}).get(t) or {}).get("round", 1)
+            )
             for t in AGENTIC_TOPIC_KEYS
         }
+        prog_p = (poll_agentic or {}).get("phase_progress") or {}
+        tasks_p = prog_p.get("tasks") or {}
         logger.info(
-            "AGENTIC poll source=persisted session=%s ongoing=%s status=%s rounds=%s",
+            "AGENTIC poll source=persisted session=%s ongoing=%s status=%s rounds=%s phase=%s pending=%d/%d",
             session_key,
-            (state or {}).get("feedback_ongoing"),
-            (state or {}).get("status"),
+            (poll_agentic or {}).get("feedback_ongoing"),
+            (poll_agentic or {}).get("status"),
             rounds_persisted,
+            prog_p.get("phase") or "—",
+            sum(1 for v in tasks_p.values() if not v),
+            len(tasks_p),
         )
     except Exception:
-        state = get_agentic_state(session)
+        poll_agentic = get_agentic_state(session)
         rounds_session = {
-            t: int((((state or {}).get("topic_cursors") or {}).get(t) or {}).get("round", 1))
+            t: int(
+                (((poll_agentic or {}).get("topic_cursors") or {}).get(t) or {}).get("round", 1)
+            )
             for t in AGENTIC_TOPIC_KEYS
         }
         logger.info(
             "AGENTIC poll source=session-fallback session=%s ongoing=%s status=%s rounds=%s",
             session_key,
-            (state or {}).get("feedback_ongoing"),
-            (state or {}).get("status"),
+            (poll_agentic or {}).get("feedback_ongoing"),
+            (poll_agentic or {}).get("status"),
             rounds_session,
         )
-    if state and normalize_agentic_feedback_if_rounds_exhausted(state):
+    if poll_agentic and normalize_agentic_feedback_if_rounds_exhausted(poll_agentic):
         payload = load_session_from_storage(session_key) if session_key else {}
         if not isinstance(payload, dict):
             payload = {}
-        payload["agentic"] = state
+        payload["agentic"] = poll_agentic
         if session_key:
             save_session_to_storage(session_key, payload)
-        session["agentic"] = state
-    warn_agentic_round_limit_issues(state)
-    
+        session["agentic"] = poll_agentic
+    warn_agentic_round_limit_issues(poll_agentic)
+
     # Ensure threads are preserved in the fallback response
-    if state and "threads" not in state:
-        state["threads"] = _empty_threads()
-        
+    if poll_agentic and "threads" not in poll_agentic:
+        poll_agentic["threads"] = _empty_threads()
+
     return with_user_monthly_cost(
-        poll_response(state),
+        poll_response(poll_agentic),
         session,
     )
 
@@ -1259,7 +1379,8 @@ async def agentic_refine(request: Request, session: Session = Depends(get_sessio
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
         threads_override = body.threads if body and body.threads is not None else None
-        state = run_agentic_refine(session, threads_override=threads_override)
+        refine_n = body.refine_sample_count if body and body.refine_sample_count is not None else None
+        state = run_agentic_refine(session, threads_override=threads_override, refine_sample_count=refine_n)
         # Refine produces final output; send only fields the client does not already have.
         response: Dict[str, Any] = {
             "status": "ok",

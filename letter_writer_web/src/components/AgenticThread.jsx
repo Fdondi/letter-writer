@@ -4,7 +4,7 @@
  * Block color = author vendor (same palette as assembly). Shapes: root = speech bubble, addendum = red +, subcomment = thought bubble.
  * Status color (done/active) is only used for the status badge at the top.
  */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import LanguageSelector from "./LanguageSelector";
 
 // Opacity by level so hierarchy is clear; hue comes from vendor color.
@@ -65,6 +65,99 @@ function topicStatusColor(meta) {
   if (!meta) return "var(--secondary-text-color)";
   if (meta.done) return "#16a34a";
   return "#0d9488";
+}
+
+/** Stable string for comparing structured waiting_for across polls. */
+function waitingForStableKey(wf) {
+  if (wf == null) return null;
+  if (typeof wf === "string") return `s:${wf}`;
+  if (typeof wf !== "object") return `x:${String(wf)}`;
+  const { phase, round, pending = [], done = [] } = wf;
+  const pd = [...pending].sort().join("\u0001");
+  const dd = [...done].sort().join("\u0001");
+  return `${phase}|${round}|${dd}|${pd}`;
+}
+
+/** Done count / total tasks (A / B). Returns null when there is no task set. */
+function waitingForDisplayAB(wf) {
+  if (wf == null) return null;
+  if (typeof wf === "string") return null;
+  if (typeof wf !== "object") return null;
+  const { pending = [], done = [] } = wf;
+  const b = done.length + pending.length;
+  if (b === 0) return null;
+  return `${done.length} / ${b}`;
+}
+
+/**
+ * Horizontal scroll of A/B snapshots whenever structured waiting_for changes (poll deltas).
+ * Shown beside the topic title; does not replace the phase label in the meta line.
+ */
+function WaitingForTimeline({ waitingFor, topic }) {
+  const [segments, setSegments] = useState([]);
+  const lastKeyRef = useRef(null);
+
+  useEffect(() => {
+    setSegments([]);
+    lastKeyRef.current = null;
+  }, [topic]);
+
+  useEffect(() => {
+    if (!waitingFor) {
+      lastKeyRef.current = null;
+      return;
+    }
+    const key = waitingForStableKey(waitingFor);
+    if (key == null || key === lastKeyRef.current) return;
+    lastKeyRef.current = key;
+
+    const ab = waitingForDisplayAB(waitingFor);
+    let label = ab;
+    if (label == null && typeof waitingFor === "string") label = waitingFor;
+    if (label == null) return;
+
+    setSegments((prev) => [...prev.slice(-39), { key, label, t: Date.now() }]);
+  }, [waitingFor]);
+
+  if (segments.length === 0) return null;
+
+  return (
+    <div
+      title="Waiting-for progress over time: done / total parallel tasks"
+      style={{
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 4,
+        maxWidth: 132,
+        minWidth: 0,
+        overflowX: "auto",
+        flexShrink: 1,
+        fontSize: 10,
+        lineHeight: 1.2,
+        padding: "1px 0",
+        scrollbarWidth: "thin",
+        WebkitOverflowScrolling: "touch",
+      }}
+    >
+      {segments.map((s, i) => (
+        <span
+          key={`${s.t}_${i}`}
+          style={{
+            flexShrink: 0,
+            padding: "1px 5px",
+            borderRadius: 4,
+            border: "1px solid var(--border-color)",
+            background: "var(--panel-bg)",
+            color: "var(--secondary-text-color)",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {s.label}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 /** Renders a translation bar above and translated content. Used for addendums and subcomments.
@@ -194,7 +287,21 @@ export default function AgenticThread({
           flexWrap: "wrap",
         }}
       >
-        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-color)" }}>{label}</div>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 8,
+            minWidth: 0,
+            flex: "1 1 auto",
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-color)", flexShrink: 0 }}>
+            {label}
+          </div>
+          <WaitingForTimeline waitingFor={meta.waiting_for} topic={topic} />
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           {statusLabel != null && (
             <span
@@ -214,9 +321,28 @@ export default function AgenticThread({
               <>
                 {" "}
                 ·{" "}
-                <span style={{ fontWeight: 500, color: "var(--text-color)" }} title={meta.waiting_for}>
-                  {meta.waiting_for}
-                </span>
+                {typeof meta.waiting_for === "object" ? (() => {
+                  const { phase, round: wfRound, pending = [], done = [] } = meta.waiting_for;
+                  const phaseLabel = `${phase || "?"}${wfRound != null ? ` r${wfRound}` : ""}`;
+                  const tip = [
+                    done.length ? `Done: ${done.join(", ")}` : null,
+                    pending.length ? `Pending: ${pending.join(", ")}` : null,
+                  ].filter(Boolean).join(" | ") || phaseLabel;
+                  return (
+                    <span title={tip} style={{ fontWeight: 500, color: "var(--text-color)" }}>
+                      {phaseLabel}
+                      {pending.length > 0 && (
+                        <span style={{ color: "var(--secondary-text-color)", fontWeight: 400 }}>
+                          {" "}⏳{pending.length}
+                        </span>
+                      )}
+                    </span>
+                  );
+                })() : (
+                  <span style={{ fontWeight: 500, color: "var(--text-color)" }} title={meta.waiting_for}>
+                    {meta.waiting_for}
+                  </span>
+                )}
               </>
             ) : null}
           </span>
@@ -335,55 +461,43 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
     ? comment.votes_by_round
     : null;
   const voteRows = [];
-  const reasonLines = [];
   if (votesByRoundRaw) {
     Object.entries(votesByRoundRaw).forEach(([roundKey, data]) => {
-      const [topicFromKey] = String(roundKey).includes("::")
-        ? String(roundKey).split("::", 2)
-        : [null];
-      const voteTopic = typeof data?.topic === "string" && data.topic.trim()
-        ? data.topic
-        : (topicFromKey || topic);
+      // Key formats:
+      //   "{source_topic}::{round}"  — Phase B cross-topic vote (source perspective label)
+      //   "{round}"                  — legacy
+      const keyParts = String(roundKey).split("::");
+      let voteTopic = null;
+      let roundFromKey = null;
+      if (keyParts.length >= 2) {
+        voteTopic = keyParts[0];
+        roundFromKey = Number(keyParts[1]);
+      } else {
+        roundFromKey = Number(keyParts[0]);
+      }
+      // Prefer explicit metadata field from the bucket when present.
+      if (typeof data?.topic === "string" && data.topic.trim()) voteTopic = data.topic;
       const upList = Array.isArray(data?.up) ? data.up : [];
       const downList = Array.isArray(data?.down) ? data.down : [];
       const abstainList = Array.isArray(data?.abstain) ? data.abstain : [];
       upList.forEach((v) => up.add(v));
       downList.forEach((v) => down.add(v));
       abstainList.forEach((v) => abstain.add(v));
-      const roundFromKey = String(roundKey).includes("::")
-        ? Number(String(roundKey).split("::", 2)[1])
-        : Number(roundKey);
       const roundNum = Number.isFinite(Number(data?.round))
         ? Number(data.round)
         : (Number.isFinite(roundFromKey) ? roundFromKey : null);
+      const reasons = data?.reasons && typeof data.reasons === "object" ? data.reasons : {};
       voteRows.push({
         topic: voteTopic,
         round: roundNum,
         up: upList,
         down: downList,
         abstain: abstainList,
+        reasons,
       });
-      const reasons = data?.reasons && typeof data.reasons === "object" ? data.reasons : {};
-      Object.entries(reasons)
-        .map(([vendor, reason]) => `${vendor}: ${reason}`)
-        .filter((line) => line.trim() !== "")
-        .forEach((line) => {
-          const voteTopicLabel = topicLabels[voteTopic] || voteTopic;
-          const roundTag = roundNum != null ? ` r${roundNum}` : "";
-          reasonLines.push(`[${voteTopicLabel}${roundTag}] ${line}`);
-        });
     });
   }
-  // Legacy fallback for older sessions without topic-aware vote buckets.
-  if (up.size === 0 && down.size === 0 && abstain.size === 0) {
-    const legacyUp = (comment.votes && comment.votes.up) || [];
-    const legacyDown = (comment.votes && comment.votes.down) || [];
-    const legacyAbstain = (comment.votes && comment.votes.abstain) || [];
-    legacyUp.forEach((v) => up.add(v));
-    legacyDown.forEach((v) => down.add(v));
-    legacyAbstain.forEach((v) => abstain.add(v));
-    voteRows.push({ topic, round: null, up: legacyUp, down: legacyDown, abstain: legacyAbstain });
-  }
+
   const upList = Array.from(up);
   const downList = Array.from(down);
   const abstainList = Array.from(abstain);
@@ -876,16 +990,23 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
           const rowUp = Array.isArray(row.up) ? row.up : [];
           const rowDown = Array.isArray(row.down) ? row.down : [];
           const rowAbstain = Array.isArray(row.abstain) ? row.abstain : [];
-          const rowTopicLabel = topicLabels[row.topic] || row.topic;
+          const rowReasons = row.reasons || {};
+          const rowTopicLabel = topicLabels[row.topic] || row.topic || "?";
+          const rowTitle = (() => {
+            const lines = [];
+            const fmt = (tag, vendors) => vendors.forEach((v) => {
+              const r = rowReasons[v];
+              lines.push(`[${tag}] ${v}${r ? `: ${r}` : ""}`);
+            });
+            fmt("UP", rowUp);
+            fmt("DOWN", rowDown);
+            fmt("ABSTAIN", rowAbstain);
+            return lines.join("\n") || "No votes";
+          })();
           return (
             <div
               key={`${row.topic || "unknown"}_${row.round ?? "na"}_${idx}`}
-              title={[
-                rowUp.length ? `Up: ${rowUp.join(", ")}` : null,
-                rowDown.length ? `Down: ${rowDown.join(", ")}` : null,
-                rowAbstain.length ? `Abstain: ${rowAbstain.join(", ")}` : null,
-                reasonLines.length ? `Why:\n${reasonLines.join("\n")}` : null,
-              ].filter(Boolean).join("\n\n") || "No votes"}
+              title={rowTitle}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -899,6 +1020,15 @@ function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, tra
               <span style={{ color: rowUp.length > rowDown.length ? "#16a34a" : "var(--secondary-text-color)" }}>↑ {rowUp.length}</span>
               <span style={{ color: rowDown.length > 0 ? "#dc2626" : "var(--secondary-text-color)" }}>↓ {rowDown.length}</span>
               <span style={{ color: rowAbstain.length > 0 ? "#0d9488" : "var(--secondary-text-color)" }}>⏭ {rowAbstain.length}</span>
+              {(() => {
+                const all = [...rowUp, ...rowDown, ...rowAbstain];
+                const seen = new Set();
+                const dupes = new Set();
+                all.forEach((v) => { if (seen.has(v)) dupes.add(v); else seen.add(v); });
+                return dupes.size > 0
+                  ? <span style={{ color: "#dc2626", fontWeight: 700 }} title={`Duplicate vendors: ${[...dupes].join(", ")}`}>⚠ dup</span>
+                  : null;
+              })()}
             </div>
           );
         })}

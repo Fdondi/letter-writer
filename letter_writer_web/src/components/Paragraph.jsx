@@ -7,6 +7,55 @@ import { ItemTypes } from "../constants";
 import LanguageSelector from "./LanguageSelector";
 import { useLanguages } from "../contexts/LanguageContext";
 
+/**
+ * Split text into an array of strings and <mark> elements highlighting key terms.
+ * Returns the original string if no terms match (safe to use as React children).
+ */
+function renderWithHighlights(text, keyTerms, selectedKeyTerm) {
+  if (!text || !keyTerms || keyTerms.length === 0) return text;
+  const terms = keyTerms.filter((t) => t && t.trim());
+  if (terms.length === 0) return text;
+
+  // Sort longest first so "project management" matches before "management"
+  const sorted = [...terms].sort((a, b) => b.length - a.length);
+  const escaped = sorted.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  let regex;
+  try {
+    regex = new RegExp(`(?<![a-zA-Z0-9])(${escaped.join("|")})(?![a-zA-Z0-9])`, "gi");
+  } catch {
+    return text;
+  }
+
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
+    const matched = match[1];
+    const isSelected =
+      selectedKeyTerm && matched.toLowerCase() === selectedKeyTerm.toLowerCase();
+    parts.push(
+      <mark
+        key={match.index}
+        style={{
+          backgroundColor: isSelected
+            ? "rgba(234, 179, 8, 0.65)"
+            : "rgba(250, 204, 21, 0.3)",
+          borderRadius: 2,
+          padding: "0 1px",
+          color: "inherit",
+          transition: "background-color 0.2s",
+        }}
+      >
+        {matched}
+      </mark>
+    );
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts.length > 0 ? parts : text;
+}
+
 function splitTextIntoFragments(text, originalParagraph) {
   if (!text) return [];
   
@@ -22,17 +71,19 @@ function splitTextIntoFragments(text, originalParagraph) {
   }));
 }
 
-export default function Paragraph({ 
-  paragraph, 
-  index, 
-  moveParagraph, 
-  color, 
-  editable = false, 
+export default function Paragraph({
+  paragraph,
+  index,
+  moveParagraph,
+  color,
+  editable = false,
   onTextChange,
   onFragmentSplit,
   onDelete,
   dropZoneRef = null,
   languages = [],
+  keyTerms = [],
+  selectedKeyTerm = null,
   // Controlled mode props
   translations: externalTranslations,
   viewLanguage: externalViewLanguage,
@@ -566,19 +617,19 @@ export default function Paragraph({
                 userSelect: "text"
               }}
             >
-              {displayText || "Click to edit..."}
+              {renderWithHighlights(displayText, keyTerms, selectedKeyTerm) || "Click to edit..."}
             </div>
           )
         ) : (
-          <div 
+          <div
             ref={textRef}
-            style={{ 
-              whiteSpace: "pre-wrap", 
+            style={{
+              whiteSpace: "pre-wrap",
               userSelect: isCopyMode ? "text" : "none",
               cursor: isCopyMode ? "text" : "move"
             }}
           >
-            {displayText}
+            {renderWithHighlights(displayText, keyTerms, selectedKeyTerm)}
           </div>
         )}
       </div>
@@ -761,19 +812,19 @@ export default function Paragraph({
               userSelect: "text"
             }}
           >
-            {displayText || "Click to edit..."}
+            {renderWithHighlights(displayText, keyTerms, selectedKeyTerm) || "Click to edit..."}
           </div>
         )
       ) : (
-        <div 
+        <div
           ref={textRef}
-          style={{ 
-            whiteSpace: "pre-wrap", 
+          style={{
+            whiteSpace: "pre-wrap",
             userSelect: isCopyMode ? "text" : "none",
             cursor: isCopyMode ? "text" : "move"
           }}
         >
-          {displayText}
+          {renderWithHighlights(displayText, keyTerms, selectedKeyTerm)}
         </div>
       )}
     </div>

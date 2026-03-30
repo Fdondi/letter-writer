@@ -92,8 +92,74 @@ def save_session_to_storage(session_key: str, data: Dict[str, Any]) -> None:
                 _save_to_filesystem(session_key, data)
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-    except Exception:
+    except Exception as e:
+        logger.warning("save_session_to_storage lock fallback: %s", e)
         # Fallback best-effort write if lock acquisition fails unexpectedly.
+        _save_to_filesystem(session_key, data)
+
+
+def save_agentic_topic_slice_to_storage(
+    session_key: str, topic: str, thread: Any, cursor: Any
+) -> None:
+    """Atomically update a single topic's thread + cursor on disk.
+
+    Holds the exclusive file lock for the entire read-modify-write so that two
+    concurrent topic workers never overwrite each other's slices.  Only the
+    two sub-keys owned by `topic` are touched; all other topics' data and the
+    rest of the session are left unchanged.
+    """
+    lock_path = _get_lock_file_path(session_key)
+    try:
+        with open(lock_path, 'w') as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                data = _load_from_filesystem(session_key)
+                if data is None:
+                    data = {}
+                agentic = data.setdefault("agentic", {})
+                agentic.setdefault("threads", {})[topic] = thread
+                agentic.setdefault("topic_cursors", {})[topic] = cursor
+                _save_to_filesystem(session_key, data)
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except Exception as e:
+        logger.warning("save_agentic_topic_slice_to_storage lock fallback: %s", e)
+        # Fallback best-effort write.
+        data = _load_from_filesystem(session_key) or {}
+        agentic = data.setdefault("agentic", {})
+        agentic.setdefault("threads", {})[topic] = thread
+        agentic.setdefault("topic_cursors", {})[topic] = cursor
+        _save_to_filesystem(session_key, data)
+
+
+def save_agentic_state_to_storage(session_key: str, state: Dict[str, Any]) -> None:
+    """Atomically update data["agentic"] on disk.
+
+    Holds the exclusive file lock for the entire read-modify-write cycle so
+    concurrent calls (e.g. two topic workers finishing Phase A at the same
+    time) cannot clobber each other's thread updates.
+    """
+    lock_path = _get_lock_file_path(session_key)
+    try:
+        with open(lock_path, 'w') as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                data = _load_from_filesystem(session_key)
+                if data is None:
+                    data = {}
+                merged_state = dict(state)
+                merged_state.pop("last_poll_at", None)
+                data["agentic"] = merged_state
+                _save_to_filesystem(session_key, data)
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except Exception as e:
+        logger.warning("save_agentic_state_to_storage lock fallback: %s", e)
+        # Fallback best-effort write if lock acquisition fails unexpectedly.
+        data = _load_from_filesystem(session_key) or {}
+        merged_state = dict(state)
+        merged_state.pop("last_poll_at", None)
+        data["agentic"] = merged_state
         _save_to_filesystem(session_key, data)
 
 
@@ -113,7 +179,8 @@ def persist_agentic_last_poll_at(session_key: str, last_poll_at: float) -> None:
                 _save_to_filesystem(session_key, data)
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-    except Exception:
+    except Exception as e:
+        logger.warning("persist_agentic_last_poll_at lock fallback: %s", e)
         data = _load_from_filesystem(session_key) or {}
         prev = float(data.get(AGENTIC_LAST_POLL_AT_KEY) or 0.0)
         data[AGENTIC_LAST_POLL_AT_KEY] = max(prev, float(last_poll_at))
@@ -137,15 +204,16 @@ def try_acquire_agentic_lock(session_key: str, timeout_seconds: float = 120.0) -
             lock_path.unlink(missing_ok=True)
         lock_path.write_text(str(time.time()))
         return True
-    except Exception:
+    except Exception as e:
+        logger.warning("try_acquire_agentic_lock failed: %s", e)
         return False
 
 
 def release_agentic_lock(session_key: str) -> None:
     try:
         agentic_processing_lock_path(session_key).unlink(missing_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("release_agentic_lock failed: %s", e)
 
 
 class Session(dict):

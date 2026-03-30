@@ -109,8 +109,8 @@ def _write_trace(trace_dir: Path | None, system: str, prompt: str, raw: str) -> 
     try:
         (trace_dir / "prompt.txt").write_text(f"SYSTEM:\n{system}\n\nPROMPT:\n{prompt}", encoding="utf-8")
         (trace_dir / "raw.txt").write_text(raw, encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("trace write failed: %s", e)
 
 
 # Shared system for all job-extraction calls. Keeps the prompt prefix identical across
@@ -149,7 +149,8 @@ def extract_job_metadata_no_requirements(
 
     try:
         data = json.loads(raw)
-    except Exception:
+    except Exception as e:
+        logger.warning("extract_job_metadata JSON parse failed: %s", e)
         data = {}
 
     poc_data = data.get("point_of_contact")
@@ -224,7 +225,8 @@ def extract_key_competences(
 
     try:
         data = json.loads(raw)
-    except Exception:
+    except Exception as e:
+        logger.warning("extract_key_competences JSON parse failed: %s", e)
         data = {}
 
     out: Dict[str, List[str]] = {}
@@ -307,7 +309,8 @@ def grade_competence_cv_match(
 
     try:
         data = json.loads(raw)
-    except Exception:
+    except Exception as e:
+        logger.warning("score_competences_against_cv JSON parse failed: %s", e)
         data = {}
 
     label_set = frozenset(labels)
@@ -480,12 +483,13 @@ def extract_job_metadata(
         try:
             (trace_dir / "prompt.txt").write_text(f"SYSTEM:\n{system}\n\nPROMPT:\n{prompt}", encoding="utf-8")
             (trace_dir / "raw.txt").write_text(raw, encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("trace write failed: %s", e)
 
     try:
         data = json.loads(raw)
-    except Exception:
+    except Exception as e:
+        logger.warning("extract_job_info JSON parse failed: %s", e)
         data = {}
 
     requirements = data.get("requirements")
@@ -620,8 +624,8 @@ def company_research(
             import json
             with open("/home/fdondi/Documents/#GitHub/letter-writer/.cursor/debug-5b1b21.log", "a") as _f:
                 _f.write(json.dumps({"sessionId": "5b1b21", "hypothesisId": "H1", "location": "generation.py:company_research", "message": "company_research returning None (empty prompt)", "data": {"company_name": company_name, "job_text_is_none": job_text is None}, "timestamp": __import__("time").time() * 1000}) + "\n")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("trace write failed: %s", e)
         # #endregion
         return None
 
@@ -632,8 +636,8 @@ def company_research(
         import json
         with open("/home/fdondi/Documents/#GitHub/letter-writer/.cursor/debug-5b1b21.log", "a") as _f:
             _f.write(json.dumps({"sessionId": "5b1b21", "hypothesisId": "H1", "location": "generation.py:company_research", "message": "company_research return", "data": {"result_is_none": result is None, "result_type": type(result).__name__}, "timestamp": __import__("time").time() * 1000}) + "\n")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("trace write failed: %s", e)
     # #endregion
     return result
 
@@ -658,8 +662,8 @@ def generate_letter(
         import json
         with open("/home/fdondi/Documents/#GitHub/letter-writer/.cursor/debug-5b1b21.log", "a") as _f:
             _f.write(json.dumps({"sessionId": "5b1b21", "hypothesisId": "H3", "location": "generation.py:generate_letter", "message": "generate_letter entry", "data": {"company_report_is_none": company_report is None, "job_text_is_none": job_text is None, "company_report_type": type(company_report).__name__, "job_text_type": type(job_text).__name__}, "timestamp": __import__("time").time() * 1000}) + "\n")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("trace write failed: %s", e)
     # #endregion
     company_report = company_report if company_report is not None else ""
     job_text = job_text if job_text is not None else ""
@@ -705,8 +709,8 @@ def generate_letter(
         import json
         with open("/home/fdondi/Documents/#GitHub/letter-writer/.cursor/debug-5b1b21.log", "a") as _f:
             _f.write(json.dumps({"sessionId": "5b1b21", "hypothesisId": "H3", "location": "generation.py:generate_letter:before_prompt", "message": "before prompt build", "data": {"company_report_is_none": company_report is None, "job_text_is_none": job_text is None}, "timestamp": __import__("time").time() * 1000}) + "\n")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("trace write failed: %s", e)
     # #endregion
     prompt = (
         "========== User CV:\n" + cv_text + "\n==========\n" +

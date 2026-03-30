@@ -18,6 +18,9 @@ export default function CompetencesList({
   displayTexts = null,
   onRequirementsChange,
   onCompetencesChange,
+  selectedKeyTerm = null,
+  onTermClick,
+  competenceCounts = {},
 }) {
   const comp = typeof competences === "object" && competences !== null ? competences : {};
   const list = Array.isArray(requirements) ? requirements : requirements ? [requirements] : [];
@@ -151,6 +154,9 @@ export default function CompetencesList({
             onRemove={editable ? () => handleRemove(displayIndex) : undefined}
             onImportanceChange={editable && onOverridesChange ? (v) => handleImportanceChange(displayIndex, v) : undefined}
             onPresenceChange={editable && onOverridesChange ? (v) => handlePresenceChange(displayIndex, v) : undefined}
+            isSelected={skill != null && selectedKeyTerm != null && skill.toLowerCase() === selectedKeyTerm.toLowerCase()}
+            onClick={onTermClick ? () => onTermClick(skill) : undefined}
+            count={competenceCounts[(skill ?? "").trim()] ?? 0}
           />
         );
       })}

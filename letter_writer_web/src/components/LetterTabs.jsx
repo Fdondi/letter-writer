@@ -56,6 +56,53 @@ const FeedbackForm = ({ rating, comment, onChange }) => {
   );
 };
 
+// Count occurrences of each competence in all vendor letters (same paragraph source as columns: draft when toggled)
+function countCompetenceOccurrences(
+  vendorParagraphs,
+  requirements,
+  vendorDraftParagraphs,
+  swapDraftForFinal
+) {
+  const counts = {};
+  if (!Array.isArray(requirements)) return counts;
+
+  // Initialize counts for each requirement
+  requirements.forEach(req => {
+    const trimmed = (req ?? "").trim();
+    if (trimmed) counts[trimmed] = 0;
+  });
+
+  const vendors = Object.keys(vendorParagraphs || {});
+  const allText = vendors
+    .flatMap((v) => {
+      const useDraft =
+        swapDraftForFinal?.[v] &&
+        vendorDraftParagraphs &&
+        Array.isArray(vendorDraftParagraphs[v]) &&
+        vendorDraftParagraphs[v].length > 0;
+      const paragraphs = useDraft
+        ? vendorDraftParagraphs[v]
+        : vendorParagraphs[v] || [];
+      return Array.isArray(paragraphs) ? paragraphs : [];
+    })
+    .map((p) => p?.text ?? "")
+    .join(" ");
+
+  // Count matches for each requirement
+  Object.keys(counts).forEach(requirement => {
+    if (!requirement) return;
+    try {
+      const escaped = requirement.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const regex = new RegExp(`(?<![a-zA-Z0-9])(${escaped})(?![a-zA-Z0-9])`, "gi");
+      counts[requirement] = (allText.match(regex) || []).length;
+    } catch {
+      counts[requirement] = 0;
+    }
+  });
+
+  return counts;
+}
+
 export default function LetterTabs({ 
   vendorsList, 
   vendorParagraphs, 
@@ -77,9 +124,13 @@ export default function LetterTabs({
   vendorFeedback = {},
   setVendorFeedback = () => {},
   refineSamples = {}, // vendor -> [sampled draft vendors used as reference]
+  vendorDraftParagraphs, // optional vendor -> paragraphs for initial draft (e.g. agentic draft_letters)
 }) {
   const [collapsed, setCollapsed] = useState([]);
+  const [swapDraftForFinal, setSwapDraftForFinal] = useState({}); // vendor -> show initial draft instead of refined
   const [savedState, setSavedState] = useState("save_copy"); // "save_copy" | "copy"
+  const [selectedKeyTerm, setSelectedKeyTerm] = useState(null);
+  const handleTermClick = (term) => setSelectedKeyTerm((prev) => (prev === term ? null : term));
   const [saveError, setSaveError] = useState(null);
   const [finalLetter, setFinalLetter] = useState("");
   const [originalLetter, setOriginalLetter] = useState(originalText || "");
@@ -89,6 +140,16 @@ export default function LetterTabs({
     setExpandedColumn((prev) => (prev === id ? null : id));
   };
   const closeExpand = () => setExpandedColumn(null);
+
+  // Calculate competence occurrence counts across all vendors
+  const competenceCounts = React.useMemo(() => {
+    return countCompetenceOccurrences(
+      vendorParagraphs,
+      requirements,
+      vendorDraftParagraphs,
+      swapDraftForFinal
+    );
+  }, [vendorParagraphs, requirements, vendorDraftParagraphs, swapDraftForFinal]);
 
   // Sync originalLetter when originalText prop changes
   useEffect(() => {
@@ -154,6 +215,22 @@ export default function LetterTabs({
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([sv, n]) => (n > 1 ? `${sv} ×${n}` : sv))
       .join(", ");
+  };
+
+  const paragraphsForVendorColumn = (vendor) => {
+    if (
+      swapDraftForFinal[vendor] &&
+      vendorDraftParagraphs &&
+      Array.isArray(vendorDraftParagraphs[vendor]) &&
+      vendorDraftParagraphs[vendor].length > 0
+    ) {
+      return vendorDraftParagraphs[vendor];
+    }
+    return vendorParagraphs[vendor] || [];
+  };
+
+  const toggleVendorDraftSource = (vendorKey) => {
+    setSwapDraftForFinal((prev) => ({ ...prev, [vendorKey]: !prev[vendorKey] }));
   };
 
   const vendorKeys = Object.keys(vendorParagraphs);
@@ -755,6 +832,8 @@ export default function LetterTabs({
                     moveParagraph={moveFinalParagraph}
                     color={paragraphColor}
                     editable
+                    keyTerms={requirements}
+                    selectedKeyTerm={selectedKeyTerm}
                     // Controlled translation props
                     translations={tState.translations}
                     viewLanguage={tState.viewLanguage}
@@ -841,7 +920,7 @@ export default function LetterTabs({
 
   const ExpandedVendorColumn = ({
     vendor,
-    vendorParagraphs,
+    displayParagraphs,
     vendorColors,
     vendorCosts,
     vendorRefineCosts,
@@ -851,6 +930,9 @@ export default function LetterTabs({
     setVendorFeedback,
     languageOptions,
     onClose,
+    showDraftSwap,
+    swapDraftActive,
+    onToggleDraftSource,
   }) => (
     <div style={{ width: "100%", minWidth: 0, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       <div style={{
@@ -866,8 +948,33 @@ export default function LetterTabs({
       }}>
         <span style={{ fontWeight: 600 }} title={refineSampleTooltip(vendor) || ""}>
           {vendor}
+          {swapDraftActive && (
+            <span style={{ fontWeight: 500, fontSize: 11, marginLeft: 8, opacity: 0.95 }}>(initial draft)</span>
+          )}
         </span>
         <div style={{ display: "flex", alignItems: "flex-end", gap: 8, flexDirection: "column" }}>
+          {showDraftSwap && (
+            <button
+              type="button"
+              onClick={() => onToggleDraftSource?.(vendor)}
+              title={
+                swapDraftActive
+                  ? "Show refined letter for this column"
+                  : "Show initial draft for this column instead of refined letter"
+              }
+              style={{
+                padding: "2px 8px",
+                fontSize: "12px",
+                background: "var(--panel-bg)",
+                color: "var(--text-color)",
+                border: "1px solid var(--border-color)",
+                borderRadius: 4,
+                cursor: "pointer",
+              }}
+            >
+              {swapDraftActive ? "Show refined" : "Show draft"}
+            </button>
+          )}
           {vendorCosts?.[vendor] !== undefined && vendorCosts[vendor] > 0 && (
             <div style={{ fontSize: "11px", color: "rgba(255, 255, 255, 0.9)", textAlign: "right" }}>
               {vendorRefineCosts?.[vendor] !== undefined && vendorRefineCosts[vendor] > 0 && (
@@ -928,7 +1035,7 @@ export default function LetterTabs({
             </button>
           </div>
         ) : (
-          (vendorParagraphs[vendor] || []).map((p, i) => (
+          (displayParagraphs || []).map((p, i) => (
             <Paragraph
               key={p.id}
               paragraph={p}
@@ -937,6 +1044,8 @@ export default function LetterTabs({
               color={vendorColors?.[vendor]}
               editable={false}
               languages={languageOptions}
+              keyTerms={requirements}
+              selectedKeyTerm={selectedKeyTerm}
             />
           ))
         )}
@@ -1029,12 +1138,15 @@ export default function LetterTabs({
                 onHeaderClick={undefined}
                 isExpanded
                 onClose={closeExpand}
+                selectedKeyTerm={selectedKeyTerm}
+                onTermClick={handleTermClick}
+                competenceCounts={competenceCounts}
               />
             )}
             {expandedVendor && (
               <ExpandedVendorColumn
                 vendor={expandedVendor}
-                vendorParagraphs={vendorParagraphs}
+                displayParagraphs={paragraphsForVendorColumn(expandedVendor)}
                 vendorColors={vendorColors}
                 vendorCosts={vendorCosts}
                 vendorRefineCosts={vendorRefineCosts}
@@ -1044,6 +1156,11 @@ export default function LetterTabs({
                 setVendorFeedback={setVendorFeedback}
                 languageOptions={languageOptions}
                 onClose={closeExpand}
+                showDraftSwap={
+                  Boolean(vendorDraftParagraphs?.[expandedVendor]?.length)
+                }
+                swapDraftActive={Boolean(swapDraftForFinal[expandedVendor])}
+                onToggleDraftSource={toggleVendorDraftSource}
               />
             )}
           </div>
@@ -1182,39 +1299,27 @@ export default function LetterTabs({
         }}>
           {visibleInRowVendors.map((v) => (
             <div key={v} style={{ width: columnWidth, minWidth: `${minColumnWidth}px`, display: "flex", flexDirection: "column", position: "relative", background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', height: "100%" }}>
-              <h4
-                style={{ 
-                  textTransform: "capitalize", 
-                  margin: 0, 
-                  background: vendorColors?.[v] || "var(--header-bg)",
-                  padding: "8px 12px",
-                  borderRadius: "4px 4px 0 0",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  color: 'var(--text-color)',
-                  flexShrink: 0,
-                }}
-              >
-                <span title={refineSampleTooltip(v) || ""}>
-                  {v}
-                </span>
-                <div style={{ display: "flex", alignItems: "flex-end", gap: 8, flexDirection: "column" }}>
-                  {vendorCosts && vendorCosts[v] !== undefined && vendorCosts[v] > 0 && (
-                    <div style={{ fontSize: "11px", color: "rgba(255, 255, 255, 0.9)", textAlign: "right" }}>
-                      {vendorRefineCosts[v] !== undefined && vendorRefineCosts[v] > 0 && (
-                        <div>${vendorRefineCosts[v].toFixed(4)}</div>
-                      )}
-                    </div>
-                  )}
-                  {refineSamples?.[v]?.length > 0 && (
-                    <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.9, textTransform: "none", textAlign: "right", maxWidth: "100%" }}>
-                      refs: {refineRefsText(v)}
-                    </div>
-                  )}
-                  {failedVendors[v] && (
-                    <span style={{ fontSize: "12px", color: "var(--error-text)" }}>Failed</span>
-                  )}
+              <div>
+                <h4
+                  style={{
+                    textTransform: "capitalize",
+                    margin: 0,
+                    background: vendorColors?.[v] || "var(--header-bg)",
+                    padding: "8px 12px",
+                    borderRadius: "4px 4px 0 0",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    color: 'var(--text-color)',
+                    flexShrink: 0,
+                  }}
+                >
+                  <span title={refineSampleTooltip(v) || ""}>
+                    {v}
+                    {swapDraftForFinal[v] && vendorDraftParagraphs?.[v]?.length > 0 && (
+                      <span style={{ fontWeight: 500, fontSize: 11, marginLeft: 8, opacity: 0.95 }}>(initial draft)</span>
+                    )}
+                  </span>
                   <button
                     type="button"
                     onClick={() => toggleExpand(`vendor:${v}`)}
@@ -1231,8 +1336,45 @@ export default function LetterTabs({
                   >
                     Expand
                   </button>
-                </div>
-              </h4>
+                </h4>
+                {vendorDraftParagraphs?.[v]?.length > 0 && (
+                  <div style={{ padding: "4px 12px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, background: "var(--header-bg)" }}>
+                    <button
+                      type="button"
+                      onClick={() => toggleVendorDraftSource(v)}
+                      title={
+                        swapDraftForFinal[v]
+                          ? "Show refined letter for this column"
+                          : "Show initial draft for this column instead of refined letter"
+                      }
+                      style={{
+                        padding: "2px 8px",
+                        fontSize: "12px",
+                        background: "var(--panel-bg)",
+                        color: "var(--text-color)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {swapDraftForFinal[v] ? "Show refined" : "Show draft"}
+                    </button>
+                    <div style={{ fontSize: "11px", color: "var(--secondary-text-color)", textAlign: "right", marginLeft: "auto" }}>
+                      {vendorCosts && vendorCosts[v] !== undefined && vendorCosts[v] > 0 && vendorRefineCosts[v] !== undefined && vendorRefineCosts[v] > 0 && (
+                        <>${vendorRefineCosts[v].toFixed(4)}</>
+                      )}
+                      {refineSamples?.[v]?.length > 0 && (
+                        <> · refs: {refineRefsText(v)}</>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {failedVendors[v] && (
+                  <div style={{ padding: "4px 12px", background: "var(--error-bg)", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: "12px", color: "var(--error-text)" }}>Failed</span>
+                  </div>
+                )}
+              </div>
               
               <div style={{ padding: "8px", flex: 1, overflowY: "auto" }}>
                 {failedVendors[v] ? (
@@ -1261,15 +1403,17 @@ export default function LetterTabs({
                     </button>
                   </div>
                 ) : (
-                  (vendorParagraphs[v] || []).map((p, i) => (
-                    <Paragraph 
-                      key={p.id} 
-                      paragraph={p} 
-                      index={i} 
-                      moveParagraph={() => {}} 
-                      color={vendorColors?.[v]} 
-                    editable={false}
-                    languages={languageOptions}
+                  paragraphsForVendorColumn(v).map((p, i) => (
+                    <Paragraph
+                      key={p.id}
+                      paragraph={p}
+                      index={i}
+                      moveParagraph={() => {}}
+                      color={vendorColors?.[v]}
+                      editable={false}
+                      languages={languageOptions}
+                      keyTerms={requirements}
+                      selectedKeyTerm={selectedKeyTerm}
                     />
                   ))
                 )}
@@ -1304,6 +1448,9 @@ export default function LetterTabs({
               onHeaderClick={() => toggleExpand("job-description")}
               isExpanded={expandedColumn === "job-description"}
               onClose={closeExpand}
+              selectedKeyTerm={selectedKeyTerm}
+              onTermClick={handleTermClick}
+              competenceCounts={competenceCounts}
             />
           )}
         </div>
