@@ -1,5 +1,5 @@
 /**
- * Vendor-flow feedback: each category is a list of { id, observation, type }
+ * Vendor-flow feedback: each category is a list of { id, observation, type, status?, context_field?, user_context?, user_instructions? }
  * with type ALREADY_GOOD | PLEASE_FIX. Legacy string feedback is normalized client-side.
  */
 
@@ -31,7 +31,32 @@ export function normalizeCategoryItems(raw, categoryKey = "") {
         if (typ === FEEDBACK_TYPES.ALREADY_GOOD && !observation) return null;
         const existing = String(it.id ?? "").trim();
         const id = existing || (categoryKey ? `${categoryKey}-${idx}` : newId());
-        return { id, observation, type: typ };
+        const statusRaw = String(it.status ?? "").toUpperCase().trim();
+        let status =
+          statusRaw === "NOT_NEEDED" || statusRaw === "SUFFICIENT" || statusRaw === "INPUT_NEEDED"
+            ? statusRaw
+            : "NOT_NEEDED";
+
+        const cf = it.context_field && typeof it.context_field === "object" ? it.context_field : null;
+        const cfItems = Array.isArray(cf?.items) ? cf.items.map((x) => String(x ?? "").trim()).filter(Boolean) : [];
+
+        // Enforce invariants to keep UI logic simple.
+        const contextItems = status === "NOT_NEEDED" ? [] : cfItems;
+        if (status === "SUFFICIENT" && contextItems.length === 0) status = "NOT_NEEDED";
+
+        // Preserve exactly what the user typed; do not trim (otherwise trailing spaces disappear).
+        const userContext = status === "INPUT_NEEDED" ? String(it.user_context ?? "") : "";
+        const userInstructions = status === "INPUT_NEEDED" ? String(it.user_instructions ?? "").trim() : "";
+
+        return {
+          id,
+          observation,
+          type: typ,
+          status,
+          context_field: { items: contextItems },
+          user_context: userContext,
+          user_instructions: userInstructions,
+        };
       })
       .filter(Boolean);
   }
@@ -81,6 +106,10 @@ export function categoryAllItemsApproved(items, itemApprovals) {
   if (items.length === 0) return true;
   return items.every((it) => {
     if (it.type !== FEEDBACK_TYPES.PLEASE_FIX) return true;
+    if (String(it.status || "").toUpperCase() === "INPUT_NEEDED") {
+      const filled = String(it.user_context || "").trim().length > 0;
+      if (!filled) return false;
+    }
     return itemApprovals[it.id] === true;
   });
 }

@@ -88,6 +88,14 @@ export function FeedbackItemsPanel({
   };
 
   const onApprovePleaseFix = (id) => {
+    const it = items.find((x) => x.id === id);
+    if (it) {
+      const status = String(it.status || "NOT_NEEDED").toUpperCase();
+      if (status === "INPUT_NEEDED") {
+        const filled = String(it.user_context || "").trim().length > 0;
+        if (!filled) return;
+      }
+    }
     const nextApr = { ...feedbackItemApprovals, [id]: true };
     setFeedbackItemApprovals(nextApr);
     const nextTab = selectNextTabIfCategoryDone(
@@ -196,10 +204,25 @@ export function FeedbackItemsPanel({
     const approved = feedbackItemApprovals[it.id] === true;
     const isEditing = editingId === it.id;
     const fieldId = `feedback_${categoryKey}_${it.id}`;
+    const status = String(it.status || "NOT_NEEDED").toUpperCase();
+    const needsInput = status === "INPUT_NEEDED";
+    const contextItems = Array.isArray(it?.context_field?.items) ? it.context_field.items : [];
+    const userContext = String(it.user_context || "");
+    const userInstructions = String(it.user_instructions || "");
+    const userContextPlaceholder =
+      userInstructions.trim() ||
+      "Paste the missing facts/context here (or delete the item).";
     const displayedObservation =
       translation && fieldId
         ? translation.getTranslatedText(fieldId, it.observation || "")
         : it.observation || "";
+
+    const setUserContext = (next) => {
+      const nextItems = items.map((x) =>
+        x.id === it.id ? { ...x, user_context: String(next ?? "") } : x,
+      );
+      persistItems(nextItems);
+    };
 
     return (
       <li
@@ -215,6 +238,11 @@ export function FeedbackItemsPanel({
           <span style={{ fontSize: 11, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: "0.04em" }}>
             Critique
           </span>
+          {needsInput ? (
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#b91c1c", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              INPUT NEEDED
+            </span>
+          ) : null}
           {translation && (
             <div style={{ marginLeft: "auto" }}>
               <LanguageSelectorTiny fieldId={fieldId} observation={it.observation || ""} translation={translation} disabled={disabled} />
@@ -229,6 +257,39 @@ export function FeedbackItemsPanel({
               onChange={(e) => setDraftObservation(e.target.value)}
               disabled={disabled}
             />
+            {contextItems.length > 0 ? (
+              <div style={{ marginTop: 8, fontSize: 12, color: "#374151" }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>Context to use (already available)</div>
+                <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+                  {contextItems.map((x, idx) => (
+                    <li key={`${it.id}-ctx-${idx}`} style={{ margin: "2px 0" }}>
+                      {String(x)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {needsInput ? (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#b91c1c", marginBottom: 6 }}>
+                  Provide missing context before approving
+                </div>
+                <textarea
+                  style={{
+                    width: "100%",
+                    minHeight: 72,
+                    padding: 8,
+                    fontSize: 13,
+                    border: "1px solid #fca5a5",
+                    background: "#fef2f2",
+                  }}
+                  value={userContext}
+                  onChange={(e) => setUserContext(e.target.value)}
+                  disabled={disabled}
+                  placeholder={userContextPlaceholder}
+                />
+              </div>
+            ) : null}
             <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <button type="button" onClick={saveEdit} disabled={disabled} style={{ fontSize: 12 }}>
                 Save
@@ -249,12 +310,46 @@ export function FeedbackItemsPanel({
           </>
         ) : (
           <>
+            {needsInput ? (
+              <div
+                style={{
+                  border: "1px solid #fca5a5",
+                  background: "#fef2f2",
+                  borderRadius: 6,
+                  padding: 8,
+                  marginBottom: 8,
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 800, color: "#b91c1c", marginBottom: 6 }}>
+                  Input needed
+                </div>
+                <textarea
+                  style={{ width: "100%", minHeight: 72, padding: 8, fontSize: 13, border: "1px solid #fca5a5" }}
+                  value={userContext}
+                  onChange={(e) => setUserContext(e.target.value)}
+                  disabled={disabled}
+                  placeholder={userContextPlaceholder}
+                />
+              </div>
+            ) : null}
             <div style={{ fontSize: 13, whiteSpace: "pre-wrap", color: "#111827" }}>{displayedObservation || "(empty)"}</div>
+            {contextItems.length > 0 ? (
+              <div style={{ marginTop: 8, fontSize: 12, color: "#374151" }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>Context to use (already available)</div>
+                <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+                  {contextItems.map((x, idx) => (
+                    <li key={`${it.id}-ctx-${idx}`} style={{ margin: "2px 0" }}>
+                      {String(x)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
               <button
                 type="button"
                 onClick={() => onApprovePleaseFix(it.id)}
-                disabled={disabled || approved}
+                disabled={disabled || approved || (needsInput && !String(userContext || "").trim())}
                 style={{ fontSize: 11 }}
               >
                 {approved ? "Approved" : "Approve"}

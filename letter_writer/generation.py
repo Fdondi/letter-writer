@@ -49,6 +49,24 @@ VENDOR_FEEDBACK_JSON_SCHEMA: Dict[str, Any] = {
                                 "type": "string",
                                 "enum": ["ALREADY_GOOD", "PLEASE_FIX"],
                             },
+                            "status": {
+                                "type": "string",
+                                "enum": ["NOT_NEEDED", "SUFFICIENT", "INPUT_NEEDED"],
+                            },
+                            "context_field": {
+                                "type": "object",
+                                "properties": {
+                                    "items": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    }
+                                },
+                                "required": ["items"],
+                            },
+                            # Only used when status == INPUT_NEEDED. UI forces user to fill before approval.
+                            "user_context": {"type": "string"},
+                            # Optional template / hint for the user. Shown as placeholder in UI input.
+                            "user_instructions": {"type": "string"},
                         },
                         "required": ["observation", "type"],
                     },
@@ -86,6 +104,7 @@ def normalize_parsed_feedback_items(data: Any) -> List[Dict[str, Any]]:
     elif isinstance(data, list):
         raw_items = data
     out: List[Dict[str, Any]] = []
+    input_needed_count = 0
     for it in raw_items:
         if not isinstance(it, dict):
             continue
@@ -97,7 +116,46 @@ def normalize_parsed_feedback_items(data: Any) -> List[Dict[str, Any]]:
             continue
         if typ == "ALREADY_GOOD" and not obs:
             continue
-        out.append({"id": str(uuid.uuid4()), "observation": obs, "type": typ})
+        status = str(it.get("status") or "").strip().upper()
+        if status not in ("NOT_NEEDED", "SUFFICIENT", "INPUT_NEEDED"):
+            status = "NOT_NEEDED"
+
+        context_items: List[str] = []
+        cf = it.get("context_field")
+        if isinstance(cf, dict) and isinstance(cf.get("items"), list):
+            context_items = [str(x).strip() for x in cf.get("items", []) if str(x).strip()]
+
+        # Enforce status invariants (do not drop item; just normalize field).
+        if status == "NOT_NEEDED":
+            context_items = []
+        elif status == "SUFFICIENT":
+            if not context_items:
+                status = "NOT_NEEDED"
+        # INPUT_NEEDED: context_items optional.
+        if status == "INPUT_NEEDED":
+            input_needed_count += 1
+            # Hard reject: too many user-input requests. Raise to trigger retry.
+            if input_needed_count > 2:
+                raise ValueError("Too many INPUT_NEEDED items (hard max 2)")
+
+        # Do not let models pre-fill user_context; this field is for the user to supply.
+        # Keep it empty even if the model emits it.
+        user_context = ""
+        user_instructions = str(it.get("user_instructions") or "").strip()
+        if status != "INPUT_NEEDED":
+            user_instructions = ""
+
+        out.append(
+            {
+                "id": str(uuid.uuid4()),
+                "observation": obs,
+                "type": typ,
+                "status": status,
+                "context_field": {"items": context_items},
+                "user_context": user_context,
+                "user_instructions": user_instructions,
+            }
+        )
     return out
 
 
@@ -121,7 +179,28 @@ def _call_vendor_feedback_items(
         "If there is nothing substantive to critique, that's great, emit an empty items array. Avoid padding with nitpicks or non-problems. "
         "Include all the needed information, since the reviewer will ONLY see your comment, don't assume they have additional information. "
         "For example, 'include concrete metrics/examples' is not a good observation; if you have metrics or examples include them explicitly. "
-        "If you don't have the data that would be needed, it is not available. Suggest ways of working around this absence instead."
+        "If you don't have the data that would be needed, it is not available. Suggest ways of working around this absence instead.\n\n"
+        "Optional enrichment fields per item (use them to avoid vague feedback):\n"
+        "- \"status\": one of NOT_NEEDED | SUFFICIENT | INPUT_NEEDED.\n"
+        "- \"context_field\": {\"items\": [string, ...]}.\n"
+        "- \"user_context\": string (only when status=INPUT_NEEDED).\n"
+        "Rules:\n"
+        "1) context_field.items is NOT for talking to the user. It must contain only neutral, paste-ready snippets extracted from your context "
+        "(verbatim quotes when possible, otherwise short faithful paraphrases/summaries). Each item should read like something that can be dropped into a cover letter.\n"
+        "2) Do not add headings like 'Vorschläge' / 'suggestion:' / 'you should...' / imperatives in context_field.items. No instructions, no meta commentary.\n"
+        "2b) context_field.items should usually be empty. Optimum count is 0. Maximum recommended is 1.\n"
+        "2c) Do not cite or invent 'reference examples'. Only refer to reference examples if they were explicitly included in your input. "
+        "If you want to propose sample phrasing but it is NOT a quote/paraphrase from your provided context, put it in user_instructions (not context_field.items).\n"
+        "3) If your observation depends on specific concrete facts you CAN SEE in your context (numbers, dates, named projects, tools, outcomes, scope, etc.), "
+        "set status=SUFFICIENT and include those facts in context_field.items.\n"
+        "2) If your observation does NOT need extra facts (it is fully actionable as written), set status=NOT_NEEDED and set context_field.items to [].\n"
+        "4) If your observation would require facts you DO NOT HAVE (despite the instruction above), set status=INPUT_NEEDED and write the observation as a precise request for input "
+        "(what exact info is missing, why it matters, and a minimal template the user can fill). Put that template into user_instructions (for the UI placeholder). You may leave context_field.items empty.\n"
+        "4b) User-input requests (status=INPUT_NEEDED) should usually be zero. Optimum count is 0. Maximum recommended is 1. Hard maximum is 2. Never exceed 2 INPUT_NEEDED items in total.\n"
+        "4c) If the issue is missing factual content (e.g. languages) and you cannot quote it from your context, it is INPUT_NEEDED. "
+        "If it is purely a stylistic preference and no new facts are required, it is NOT_NEEDED.\n"
+        "4) Do NOT write generic requests like 'add metrics' or 'add examples' unless you can provide the concrete metrics/examples in context_field.items (SUFFICIENT) \n"
+        "Never invent facts."
     )
     enforced_system = system + common_instructions
 
@@ -193,7 +272,34 @@ def normalize_feedback_value(val: Any) -> List[Dict[str, Any]]:
             iid = str(it.get("id") or "").strip()
             if not iid:
                 iid = str(uuid.uuid4())
-            out.append({"id": iid, "observation": obs, "type": typ})
+            status = str(it.get("status") or "").strip().upper()
+            if status not in ("NOT_NEEDED", "SUFFICIENT", "INPUT_NEEDED"):
+                status = "NOT_NEEDED"
+
+            context_items: List[str] = []
+            cf = it.get("context_field")
+            if isinstance(cf, dict) and isinstance(cf.get("items"), list):
+                context_items = [str(x).strip() for x in cf.get("items", []) if str(x).strip()]
+            if status == "NOT_NEEDED":
+                context_items = []
+            elif status == "SUFFICIENT":
+                if not context_items:
+                    status = "NOT_NEEDED"
+
+            user_context = str(it.get("user_context") or "").strip()
+            if status != "INPUT_NEEDED":
+                user_context = ""
+
+            out.append(
+                {
+                    "id": iid,
+                    "observation": obs,
+                    "type": typ,
+                    "status": status,
+                    "context_field": {"items": context_items},
+                    "user_context": user_context,
+                }
+            )
         return out
     if isinstance(val, str):
         return _legacy_feedback_string_to_items(val)
@@ -956,6 +1062,8 @@ def user_fit_check(letter: str, examples: Sequence[TopDocument], client: BaseCli
         "Flag divergences: tone, structure, emphasis, or how weaknesses are handled compared with the references. \n"
         "Do not praise imitation or \"good fit\" with the examples; only output items where the draft should change.\n"
         "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
+        "NOTE: The reference examples are prior cover letters written by/about the SAME applicant. "
+        "If the difference is that some information isn't provided, any factual claims that appear in the reference examples may be used. \n"
     )
     prompt = (
         "========== Reference Examples:\n" + examples_formatted + "\n==========\n" +
@@ -1172,7 +1280,27 @@ def _rewrite_dimension_text(val: Any) -> str:
             if it.get("type") != "PLEASE_FIX":
                 continue
             o = (it.get("observation") or "").strip()
-            if o:
+            if not o:
+                continue
+
+            status = str(it.get("status") or "").strip().upper()
+            if status not in ("NOT_NEEDED", "SUFFICIENT", "INPUT_NEEDED"):
+                status = "NOT_NEEDED"
+            context_items: List[str] = []
+            cf = it.get("context_field")
+            if isinstance(cf, dict) and isinstance(cf.get("items"), list):
+                context_items = [str(x).strip() for x in cf.get("items", []) if str(x).strip()]
+            user_context = (it.get("user_context") or "").strip() if isinstance(it.get("user_context") or "", str) else ""
+
+            # Keep the base observation first (this is the actionable critique).
+            extra: List[str] = []
+            if context_items:
+                extra.append("Context to use (already available): " + "; ".join(context_items))
+            if status == "INPUT_NEEDED" and user_context:
+                extra.append("User-provided context: " + user_context)
+            if extra:
+                lines.append(o + "\n  - " + "\n  - ".join(extra))
+            else:
                 lines.append(o)
         return "\n".join(lines)
     return ""
