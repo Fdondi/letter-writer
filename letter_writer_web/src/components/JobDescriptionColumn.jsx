@@ -5,7 +5,7 @@ import CompetencesList from "./CompetencesList";
 import { getEffectiveRating, getEffectiveImportance } from "../utils/competenceScales";
 
 // Job Description Column with resizable/collapsible requirements section
-const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, scaleConfig, overrides, width, minWidth, languages = [], onHeaderClick, isExpanded, onClose, selectedKeyTerm, onTermClick, competenceCounts = {} }) => {
+const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, scaleConfig, overrides, width, minWidth, languages = [], onHeaderClick, isExpanded, onClose, selectedKeyTerm, onTermClick, competenceCounts = {}, finalAssemblyText = "" }) => {
   const [requirementsHeight, setRequirementsHeight] = useState(25); // Percentage of column height
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -460,6 +460,7 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
               selectedKeyTerm={selectedKeyTerm}
               onTermClick={onTermClick}
               competenceCounts={competenceCounts}
+              finalAssemblyText={finalAssemblyText}
             />
           ) : (
             <div

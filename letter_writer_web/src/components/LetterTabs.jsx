@@ -10,6 +10,7 @@ import { useLanguages } from "../contexts/LanguageContext";
 import JobDescriptionColumn from "./JobDescriptionColumn";
 import LanguageSelector from "./LanguageSelector";
 import { translateText } from "../utils/translate";
+import { normalizeForMatch } from "../utils/textMatch";
 
 const FeedbackForm = ({ rating, comment, onChange }) => {
   return (
@@ -533,6 +534,18 @@ export default function LetterTabs({
       setSaveError(e.message || "Failed to save letter");
     }
   };
+
+  // This reflects exactly what the user sees/edits/translates in the Final Letter column.
+  const finalAssemblyText = React.useMemo(() => {
+    try {
+      return finalParagraphs.map(getDisplayText).join("\n\n");
+    } catch {
+      return "";
+    }
+  }, [finalParagraphs, translationStates]);
+
+  // Warm normalization once so downstream checks are cheap.
+  const finalAssemblyTextNormalized = React.useMemo(() => normalizeForMatch(finalAssemblyText), [finalAssemblyText]);
 
   // Translate all final paragraphs to the same language (column-wide)
   const translateAllParagraphsTo = async (targetLanguage) => {
@@ -1141,6 +1154,7 @@ export default function LetterTabs({
                 selectedKeyTerm={selectedKeyTerm}
                 onTermClick={handleTermClick}
                 competenceCounts={competenceCounts}
+                finalAssemblyText={finalAssemblyTextNormalized}
               />
             )}
             {expandedVendor && (
@@ -1451,6 +1465,7 @@ export default function LetterTabs({
               selectedKeyTerm={selectedKeyTerm}
               onTermClick={handleTermClick}
               competenceCounts={competenceCounts}
+              finalAssemblyText={finalAssemblyTextNormalized}
             />
           )}
         </div>

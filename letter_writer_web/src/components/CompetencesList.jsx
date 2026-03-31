@@ -1,6 +1,7 @@
 import React from "react";
 import CompetenceLine from "./CompetenceLine";
 import { getEffectiveRating, getEffectiveImportance } from "../utils/competenceScales";
+import { textMentionsPhrase } from "../utils/textMatch";
 
 /**
  * List of competences: each line = stars (level + need) + text. Optional edit/add/remove.
@@ -21,6 +22,7 @@ export default function CompetencesList({
   selectedKeyTerm = null,
   onTermClick,
   competenceCounts = {},
+  finalAssemblyText = "",
 }) {
   const comp = typeof competences === "object" && competences !== null ? competences : {};
   const list = Array.isArray(requirements) ? requirements : requirements ? [requirements] : [];
@@ -141,6 +143,10 @@ export default function CompetencesList({
         const text = texts[actualIndex];
         const rating = getRating(skill);
         const labels = getLabels(skill);
+        const mentioned =
+          !editable &&
+          Boolean(finalAssemblyText) &&
+          (textMentionsPhrase(finalAssemblyText, skill) || textMentionsPhrase(finalAssemblyText, text));
         return (
           <CompetenceLine
             key={actualIndex}
@@ -157,6 +163,7 @@ export default function CompetencesList({
             isSelected={skill != null && selectedKeyTerm != null && skill.toLowerCase() === selectedKeyTerm.toLowerCase()}
             onClick={onTermClick ? () => onTermClick(skill) : undefined}
             count={competenceCounts[(skill ?? "").trim()] ?? 0}
+            isMentioned={mentioned}
           />
         );
       })}

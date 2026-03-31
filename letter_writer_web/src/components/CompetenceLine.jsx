@@ -23,6 +23,7 @@ export default function CompetenceLine({
   isSelected = false,
   onClick,
   count = 0,
+  isMentioned = false,
 }) {
   const getBackgroundColor = () => {
     if (presence == null || importance == null) return "transparent";
@@ -159,7 +160,18 @@ export default function CompetenceLine({
         />
       ) : (
         <>
-          <span style={{ flex: 1, fontSize: 12, color: "var(--text-color)", paddingRight: 4, minWidth: 0 }}>
+          <span
+            style={{
+              flex: 1,
+              fontSize: 12,
+              color: "var(--text-color)",
+              paddingRight: 4,
+              minWidth: 0,
+              textDecoration: isMentioned ? "line-through" : "none",
+              opacity: isMentioned ? 0.65 : 1,
+            }}
+            title={isMentioned ? "Mentioned in final letter" : undefined}
+          >
             {text ?? ""}
           </span>
           <span style={{ fontSize: 12, color: "var(--secondary-text-color)", fontWeight: 500, minWidth: 28, textAlign: "right", flexShrink: 0 }}>
