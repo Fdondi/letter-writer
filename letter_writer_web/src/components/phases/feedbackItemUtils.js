@@ -38,11 +38,25 @@ export function normalizeCategoryItems(raw, categoryKey = "") {
             : "NOT_NEEDED";
 
         const cf = it.context_field && typeof it.context_field === "object" ? it.context_field : null;
-        const cfItems = Array.isArray(cf?.items) ? cf.items.map((x) => String(x ?? "").trim()).filter(Boolean) : [];
+        const rawCfItems = Array.isArray(cf?.items) ? cf.items.map((x) => String(x ?? "")) : [];
 
-        // Enforce invariants to keep UI logic simple.
-        const contextItems = status === "NOT_NEEDED" ? [] : cfItems;
-        if (status === "SUFFICIENT" && contextItems.length === 0) status = "NOT_NEEDED";
+        // Server may send NOT_NEEDED while the user is adding rows in the UI (including empty placeholders).
+        if (status === "NOT_NEEDED" && rawCfItems.length > 0) {
+          status = "SUFFICIENT";
+        }
+
+        // Keep rows for SUFFICIENT / INPUT_NEEDED (including empty strings while editing).
+        // NOT_NEEDED always clears context_field.
+        let contextItems = [];
+        if (status === "NOT_NEEDED") {
+          contextItems = [];
+        } else {
+          contextItems = rawCfItems.map((s) => s.trimEnd());
+        }
+
+        if (status === "SUFFICIENT" && contextItems.length === 0) {
+          status = "NOT_NEEDED";
+        }
 
         // Preserve exactly what the user typed; do not trim (otherwise trailing spaces disappear).
         const userContext = status === "INPUT_NEEDED" ? String(it.user_context ?? "") : "";

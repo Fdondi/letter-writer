@@ -1295,7 +1295,7 @@ def _rewrite_dimension_text(val: Any) -> str:
             # Keep the base observation first (this is the actionable critique).
             extra: List[str] = []
             if context_items:
-                extra.append("Context to use (already available): " + "; ".join(context_items))
+                extra.append("Available context: " + "; ".join(context_items))
             if status == "INPUT_NEEDED" and user_context:
                 extra.append("User-provided context: " + user_context)
             if extra:
