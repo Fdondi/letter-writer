@@ -6,7 +6,15 @@ from pydantic import BaseModel
 from letter_writer_server.core.session import Session, get_session
 from letter_writer.firestore_store import get_user_data, get_personal_data_document, update_user_data_cache
 from letter_writer.generation import get_style_instructions, get_search_instructions
-from letter_writer.personal_data_sections import get_cv_revisions, get_models, get_background_models, get_agentic_draft_model, unwrap_for_response, wrap_new_field
+from letter_writer.personal_data_sections import (
+    get_cv_revisions,
+    get_extra_info,
+    get_models,
+    get_background_models,
+    get_agentic_draft_model,
+    unwrap_for_response,
+    wrap_new_field,
+)
 from letter_writer.personal_data_sections import get_style_instructions as get_user_style_instructions
 from letter_writer.personal_data_sections import get_search_instructions as get_user_search_instructions
 from letter_writer.cost_tracker import get_all_model_pricing
@@ -45,6 +53,40 @@ def _normalize_competence_ratings(raw: Any) -> Dict[str, int]:
             n = 5
         normalized[key] = n
     return normalized
+
+
+def _normalize_extra_info(raw: Any) -> List[Dict[str, Any]]:
+    """Validate extra_info array for Firestore: list of dicts with required id."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("extra_info must be a list")
+    out: List[Dict[str, Any]] = []
+    for it in raw:
+        if not isinstance(it, dict):
+            raise ValueError("each extra_info item must be an object")
+        eid = str(it.get("id") or "").strip()
+        if not eid:
+            raise ValueError("each extra_info item must have a non-empty id")
+        src = str(it.get("source") or "").strip().lower()
+        if src and src not in ("feedback", "manual"):
+            raise ValueError("extra_info.source must be 'feedback' or 'manual' if set")
+        lines_raw = it.get("context_lines")
+        ctx_lines: List[str] = []
+        if isinstance(lines_raw, list):
+            ctx_lines = [str(x) for x in lines_raw]
+        entry: Dict[str, Any] = {
+            "id": eid,
+            "source": src or "manual",
+            "category": str(it.get("category") or ""),
+            "observation": str(it.get("observation") or ""),
+            "user_context": str(it.get("user_context") or ""),
+            "user_instructions": str(it.get("user_instructions") or "").strip(),
+            "context_lines": ctx_lines,
+            "manual_text": str(it.get("manual_text") or "").strip(),
+        }
+        out.append(entry)
+    return out
 
 
 def _append_cv_revision(user_id: str, content: str, source: str = "manual_edit") -> None:
@@ -99,6 +141,7 @@ async def get_personal_data(session: Session = Depends(get_session)):
     return {
         "cv": latest_content,
         "revisions": response_revisions,
+        "extra_info": get_extra_info(user_data),
         "default_languages": default_languages,
         "default_models": default_models,
         "default_background_models": default_background_models,
@@ -139,7 +182,12 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
         revisions = get_cv_revisions(user_data)
         latest_content = revisions[-1].get("content", "") if revisions else ""
         
-        return {"status": "ok", "cv": latest_content, "revisions": revisions}
+        return {
+            "status": "ok",
+            "cv": latest_content,
+            "revisions": revisions,
+            "extra_info": get_extra_info(user_data),
+        }
     else:
         try:
             data = await request.json()
@@ -187,6 +235,13 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             normalized_ratings = _normalize_competence_ratings(data["competence_ratings"])
             if normalized_ratings:
                 updates["competences"] = wrap_new_field("competences", normalized_ratings, now)
+
+        if "extra_info" in data:
+            try:
+                normalized_extra = _normalize_extra_info(data["extra_info"])
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            updates["extra_info"] = wrap_new_field("extra_info", normalized_extra, now)
             
         if "content" in data and data["content"]:
             content = str(data["content"]).strip()
@@ -204,6 +259,9 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             latest = revisions[-1] if revisions else {}
             response["cv"] = latest.get("content", "")
             response["revisions"] = revisions
+        if "extra_info" in data:
+            user_data = get_user_data(user_id, use_cache=True) or {}
+            response["extra_info"] = get_extra_info(user_data)
         return response
 
 @router.get("/style-instructions/")

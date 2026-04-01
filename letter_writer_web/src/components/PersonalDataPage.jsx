@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
+import { newId } from "./phases/feedbackItemUtils";
 
 // Extract headers from markdown text
 const extractHeaders = (markdown) => {
@@ -61,6 +62,9 @@ export default function PersonalDataPage() {
   const [error, setError] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedCv, setEditedCv] = useState("");
+  /** @type {[Array<Record<string, unknown>>, function]} */
+  const [extraInfo, setExtraInfo] = useState([]);
+  const [savingExtra, setSavingExtra] = useState(false);
 
   const fetchCv = async () => {
     try {
@@ -72,6 +76,7 @@ export default function PersonalDataPage() {
       const data = await res.json();
       setCv(data.cv || "");
       setRevisions(data.revisions || []);
+      setExtraInfo(Array.isArray(data.extra_info) ? data.extra_info : []);
     } catch (e) {
       setError(`Failed to load CV: ${e.message || e}`);
     } finally {
@@ -282,6 +287,7 @@ export default function PersonalDataPage() {
       const data = result.data;
       setCv(data.cv || "");
       setRevisions(data.revisions || []);
+      if (Array.isArray(data.extra_info)) setExtraInfo(data.extra_info);
       // Clear file input
       event.target.value = "";
     } catch (e) {
@@ -314,6 +320,51 @@ export default function PersonalDataPage() {
     const element = document.getElementById(slug);
     if (element) {
       element.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+
+  const updateExtraRow = (index, patch) => {
+    setExtraInfo((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], ...patch };
+      return next;
+    });
+  };
+
+  const addManualExtraRow = () => {
+    setExtraInfo((prev) => [
+      ...prev,
+      {
+        id: newId(),
+        source: "manual",
+        category: "",
+        observation: "",
+        user_context: "",
+        user_instructions: "",
+        context_lines: [],
+        manual_text: "",
+      },
+    ]);
+  };
+
+  const removeExtraRow = (index) => {
+    setExtraInfo((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSaveExtraInfo = async () => {
+    try {
+      setSavingExtra(true);
+      setError(null);
+      const result = await fetchWithHeartbeat("/api/personal-data/", {
+        method: "POST",
+        body: JSON.stringify({ extra_info: extraInfo }),
+      });
+      const data = result.data;
+      if (Array.isArray(data.extra_info)) setExtraInfo(data.extra_info);
+    } catch (e) {
+      setError(`Failed to save notes: ${e.message || e}`);
+    } finally {
+      setSavingExtra(false);
     }
   };
 
@@ -663,6 +714,215 @@ export default function PersonalDataPage() {
           placeholder="Enter your CV content here..."
         />
       )}
+
+      <div style={{ marginTop: 28 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 12,
+            flexWrap: "wrap",
+            gap: 8,
+          }}
+        >
+          <h3 style={{ margin: 0, color: "var(--text-color)" }}>Additional notes (with your CV)</h3>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              onClick={addManualExtraRow}
+              style={{
+                padding: "8px 12px",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                backgroundColor: "var(--button-bg)",
+                color: "var(--button-text)",
+                cursor: "pointer",
+                fontSize: "14px",
+              }}
+            >
+              Add note
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveExtraInfo}
+              disabled={savingExtra}
+              style={{
+                padding: "8px 12px",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                backgroundColor: "#3b82f6",
+                color: "white",
+                cursor: savingExtra ? "not-allowed" : "pointer",
+                fontSize: "14px",
+                opacity: savingExtra ? 0.6 : 1,
+              }}
+            >
+              {savingExtra ? "Saving…" : "Save notes"}
+            </button>
+          </div>
+        </div>
+        <p style={{ color: "var(--secondary-text-color)", fontSize: "14px", marginBottom: 16, maxWidth: 720 }}>
+          Text you add in feedback (missing context, instructions) and notes you add here are stored in your profile and
+          appended to your CV when the app generates letters or checks accuracy, so models see them as part of your background.
+        </p>
+        {extraInfo.length === 0 ? (
+          <div style={{ color: "var(--text-color)", opacity: 0.65, fontStyle: "italic" }}>
+            No saved notes yet. They appear when you fill context in the draft feedback step, or when you add a note above.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {extraInfo.map((row, idx) => {
+              const src = String(row.source || "manual");
+              const lines = Array.isArray(row.context_lines) ? row.context_lines : [];
+              return (
+                <div
+                  key={String(row.id || idx)}
+                  style={{
+                    padding: 16,
+                    backgroundColor: "var(--bg-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                    <span style={{ fontSize: "12px", color: "var(--secondary-text-color)" }}>
+                      {src === "feedback" ? "From feedback" : "Manual"} · id {String(row.id || "").slice(0, 8)}…
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeExtraRow(idx)}
+                      style={{
+                        padding: "4px 8px",
+                        fontSize: "12px",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "4px",
+                        background: "var(--button-bg)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  <label style={{ display: "block", fontSize: "12px", marginBottom: 4, color: "var(--text-color)" }}>
+                    Category
+                  </label>
+                  <input
+                    type="text"
+                    value={String(row.category ?? "")}
+                    onChange={(e) => updateExtraRow(idx, { category: e.target.value })}
+                    style={{
+                      width: "100%",
+                      maxWidth: 480,
+                      marginBottom: 8,
+                      padding: 8,
+                      borderRadius: 4,
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-color)",
+                      color: "var(--text-color)",
+                    }}
+                  />
+                  <label style={{ display: "block", fontSize: "12px", marginBottom: 4, color: "var(--text-color)" }}>
+                    Related feedback (optional)
+                  </label>
+                  <textarea
+                    value={String(row.observation ?? "")}
+                    onChange={(e) => updateExtraRow(idx, { observation: e.target.value })}
+                    rows={2}
+                    style={{
+                      width: "100%",
+                      marginBottom: 8,
+                      padding: 8,
+                      borderRadius: 4,
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-color)",
+                      color: "var(--text-color)",
+                      resize: "vertical",
+                    }}
+                  />
+                  <label style={{ display: "block", fontSize: "12px", marginBottom: 4, color: "var(--text-color)" }}>
+                    Your context
+                  </label>
+                  <textarea
+                    value={String(row.user_context ?? "")}
+                    onChange={(e) => updateExtraRow(idx, { user_context: e.target.value })}
+                    rows={3}
+                    style={{
+                      width: "100%",
+                      marginBottom: 8,
+                      padding: 8,
+                      borderRadius: 4,
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-color)",
+                      color: "var(--text-color)",
+                      resize: "vertical",
+                    }}
+                  />
+                  <label style={{ display: "block", fontSize: "12px", marginBottom: 4, color: "var(--text-color)" }}>
+                    Instructions
+                  </label>
+                  <input
+                    type="text"
+                    value={String(row.user_instructions ?? "")}
+                    onChange={(e) => updateExtraRow(idx, { user_instructions: e.target.value })}
+                    style={{
+                      width: "100%",
+                      maxWidth: 640,
+                      marginBottom: 8,
+                      padding: 8,
+                      borderRadius: 4,
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-color)",
+                      color: "var(--text-color)",
+                    }}
+                  />
+                  <label style={{ display: "block", fontSize: "12px", marginBottom: 4, color: "var(--text-color)" }}>
+                    Context lines (one per line)
+                  </label>
+                  <textarea
+                    value={lines.join("\n")}
+                    onChange={(e) =>
+                      updateExtraRow(idx, {
+                        context_lines: e.target.value.split("\n"),
+                      })
+                    }
+                    rows={3}
+                    style={{
+                      width: "100%",
+                      marginBottom: 8,
+                      padding: 8,
+                      borderRadius: 4,
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-color)",
+                      color: "var(--text-color)",
+                      resize: "vertical",
+                      fontFamily: "monospace",
+                      fontSize: "13px",
+                    }}
+                  />
+                  <label style={{ display: "block", fontSize: "12px", marginBottom: 4, color: "var(--text-color)" }}>
+                    Freeform note
+                  </label>
+                  <textarea
+                    value={String(row.manual_text ?? "")}
+                    onChange={(e) => updateExtraRow(idx, { manual_text: e.target.value })}
+                    rows={2}
+                    style={{
+                      width: "100%",
+                      padding: 8,
+                      borderRadius: 4,
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-color)",
+                      color: "var(--text-color)",
+                      resize: "vertical",
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {revisions.length > 0 && (
         <div style={{ marginTop: 30 }}>

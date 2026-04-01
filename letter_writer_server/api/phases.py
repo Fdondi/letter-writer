@@ -41,7 +41,7 @@ from letter_writer.clients.base import ModelVendor
 from letter_writer.generation import MissingCVError
 from letter_writer.session_store import load_session_common_data, check_session_exists
 from letter_writer.firestore_store import get_user_data
-from letter_writer.personal_data_sections import get_models, get_agentic_draft_model
+from letter_writer.personal_data_sections import cv_text_with_extra_info, get_models, get_agentic_draft_model
 from letter_writer.typed_shapes import TopDocument
 from letter_writer.agentic_service import (
     get_agentic_state,
@@ -199,7 +199,8 @@ async def init_session(request: Request, data: InitSessionRequest, session: Sess
                 # Find latest
                 if cv_revisions:
                     latest = max(cv_revisions, key=lambda x: x.get('created_at', ''))
-                    session['cv_text'] = latest.get('content', '')
+                    base_cv = latest.get('content', '')
+                    session['cv_text'] = cv_text_with_extra_info(base_cv, user_data)
     
     if data.job_text:
         session['job_text'] = data.job_text

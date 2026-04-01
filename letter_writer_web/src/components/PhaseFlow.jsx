@@ -28,7 +28,7 @@ import { phases as phaseModules } from "./phases";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
 import { useTranslation } from "../utils/useTranslation";
 import LanguageSelector from "./LanguageSelector";
-import { mergeCategoryItems } from "./phases/feedbackItemUtils";
+import { mergeCategoryItems, mergeExtraInfoFromFeedback } from "./phases/feedbackItemUtils";
 
 // Card status enum - cards report their status to phases
 const CardStatus = {
@@ -1001,6 +1001,29 @@ function VendorCard({
     // Also notify parent if callback provided
     if (onSaveFeedbackOverride) {
       onSaveFeedbackOverride(key, val);
+    }
+    if (feedbackKeys.length > 0 && feedbackData) {
+      void (async () => {
+        try {
+          const res = await fetch("/api/personal-data/");
+          if (!res.ok) return;
+          const pdata = await res.json();
+          const existing = Array.isArray(pdata.extra_info) ? pdata.extra_info : [];
+          const merged = mergeExtraInfoFromFeedback(existing, feedback, updatedOverrides, feedbackKeys);
+          if (JSON.stringify(existing) === JSON.stringify(merged)) return;
+          const saveRes = await fetch("/api/personal-data/", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ extra_info: merged }),
+          });
+          if (!saveRes.ok) {
+            const t = await saveRes.text();
+            console.warn("extra_info sync failed:", saveRes.status, t);
+          }
+        } catch (e) {
+          console.warn("extra_info sync error", e);
+        }
+      })();
     }
   };
 

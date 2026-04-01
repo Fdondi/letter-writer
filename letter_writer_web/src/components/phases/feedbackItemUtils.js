@@ -171,3 +171,65 @@ export function selectNextTabIfCategoryDone(
     itemApprovals,
   );
 }
+
+/**
+ * Build one personal_data.extra_info row from a normalized feedback item (user-supplied parts only).
+ * @param {string} categoryKey
+ * @param {{ id: string, observation?: string, user_context?: string, user_instructions?: string, context_field?: { items?: unknown[] } }} it
+ * @returns {Record<string, unknown> | null}
+ */
+export function extractFeedbackEntryToExtraInfo(categoryKey, it) {
+  const ucRaw = String(it.user_context ?? "");
+  const uc = ucRaw.trim();
+  const ui = String(it.user_instructions ?? "").trim();
+  const rawLines = Array.isArray(it?.context_field?.items)
+    ? it.context_field.items.map((x) => String(x ?? ""))
+    : [];
+  const ctxLinesNonEmpty = rawLines.map((s) => s.trim()).filter(Boolean);
+  if (!uc && !ui && ctxLinesNonEmpty.length === 0) {
+    return null;
+  }
+  return {
+    id: String(it.id),
+    source: "feedback",
+    category: categoryKey,
+    observation: String(it.observation ?? "").trim(),
+    user_context: ucRaw,
+    user_instructions: ui,
+    context_lines: rawLines,
+    manual_text: "",
+  };
+}
+
+/**
+ * Merge feedback-derived rows into existing extra_info (manual rows keep stable ids; feedback upserts by item id).
+ * @param {unknown[]} existing
+ * @param {Record<string, unknown>} feedback
+ * @param {Record<string, unknown>} overrides
+ * @param {string[]} feedbackKeys
+ */
+export function mergeExtraInfoFromFeedback(existing, feedback, overrides, feedbackKeys) {
+  const map = new Map((Array.isArray(existing) ? existing : []).map((e) => [String(e.id), { ...e }]));
+  const seenFeedbackIds = new Set();
+  for (const key of feedbackKeys) {
+    const items = mergeCategoryItems(feedback, overrides, key);
+    for (const it of items) {
+      seenFeedbackIds.add(String(it.id));
+      const extracted = extractFeedbackEntryToExtraInfo(key, it);
+      if (extracted) {
+        map.set(String(it.id), extracted);
+      } else {
+        const prev = map.get(String(it.id));
+        if (prev && prev.source === "feedback") {
+          map.delete(String(it.id));
+        }
+      }
+    }
+  }
+  for (const [id, entry] of [...map.entries()]) {
+    if (entry.source === "feedback" && !seenFeedbackIds.has(id)) {
+      map.delete(id);
+    }
+  }
+  return Array.from(map.values());
+}

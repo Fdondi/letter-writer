@@ -14,6 +14,90 @@ VALID_VENDOR_KEYS: Set[str] = {"openai", "anthropic", "gemini", "mistral", "grok
 def get_cv_revisions(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return user_data.get("cv_revisions", [])
 
+
+def get_extra_info(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """User-saved notes (from feedback flow and/or CV tab). Each entry should have a stable string id."""
+    raw = user_data.get("extra_info")
+    if raw is None:
+        return []
+    unwrapped = unwrap_for_response("extra_info", raw)
+    if not isinstance(unwrapped, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for it in unwrapped:
+        if isinstance(it, dict) and it.get("id"):
+            out.append(dict(it))
+    return out
+
+
+def _extra_info_entry_has_body(it: Dict[str, Any]) -> bool:
+    if str(it.get("manual_text") or "").strip():
+        return True
+    if str(it.get("user_context") or "").strip():
+        return True
+    if str(it.get("user_instructions") or "").strip():
+        return True
+    if str(it.get("observation") or "").strip():
+        return True
+    lines = it.get("context_lines")
+    if isinstance(lines, list) and any(str(x).strip() for x in lines):
+        return True
+    return False
+
+
+def format_extra_info_for_cv_appendix(extra_info: List[Dict[str, Any]]) -> str:
+    """Markdown block appended to base CV so models treat user notes as part of the CV."""
+    nonempty = [it for it in extra_info if isinstance(it, dict) and _extra_info_entry_has_body(it)]
+    if not nonempty:
+        return ""
+    parts: List[str] = [
+        "\n\n---\n\n## Additional context (saved notes)\n\n",
+        "The following notes were saved from your feedback or your CV settings. Treat them as part of your background, alongside the CV above.\n\n",
+    ]
+    for i, it in enumerate(nonempty, 1):
+        src = str(it.get("source") or "").strip().lower()
+        cat = str(it.get("category") or "").strip()
+        obs = str(it.get("observation") or "").strip()
+        uc = str(it.get("user_context") or "")
+        ui = str(it.get("user_instructions") or "").strip()
+        lines = it.get("context_lines")
+        if isinstance(lines, list):
+            ctx_lines = [str(x).strip() for x in lines if str(x).strip()]
+        else:
+            ctx_lines = []
+        manual = str(it.get("manual_text") or "").strip()
+
+        title = f"### Note {i}"
+        if cat:
+            title += f" ({cat})"
+        parts.append(title + "\n\n")
+        if src:
+            parts.append(f"*Source:* {src}" + ("  \n" if obs or uc or ui or ctx_lines or manual else "\n"))
+        if obs:
+            parts.append(f"*Related feedback:* {obs}\n\n")
+        if ui:
+            parts.append(f"*Instructions:* {ui}\n\n")
+        if ctx_lines:
+            parts.append("*Context lines:*\n")
+            for ln in ctx_lines:
+                parts.append(f"- {ln}\n")
+            parts.append("\n")
+        if uc:
+            parts.append(f"*Your context:*\n\n{uc}\n\n")
+        if manual:
+            parts.append(f"{manual}\n\n")
+    return "".join(parts).rstrip() + "\n"
+
+
+def cv_text_with_extra_info(base_cv: str, user_data: Dict[str, Any]) -> str:
+    """Base CV text plus formatted extra_info for prompts and checks."""
+    appendix = format_extra_info_for_cv_appendix(get_extra_info(user_data))
+    if not str(base_cv or "").strip() and appendix:
+        return appendix.strip()
+    if not appendix:
+        return base_cv or ""
+    return (base_cv or "").rstrip() + appendix
+
 def get_models(user_data: Dict[str, Any]) -> List[str]:
     # Check for "models" field, which might be wrapped
     models_data = user_data.get("models")

@@ -18,8 +18,7 @@ from letter_writer.generation import (
 from letter_writer.service import write_cover_letter, refresh_repository
 from letter_writer.firestore_store import get_collection, upsert_document, get_user_data
 from letter_writer.retrieval import embed, retrieve_similar_job_offers, select_top_documents, sanitize_search_results
-from letter_writer.personal_data_sections import get_models
-from letter_writer.personal_data_sections import get_competence_ratings
+from letter_writer.personal_data_sections import get_competence_ratings, get_models, cv_text_with_extra_info
 from letter_writer.spam_prevention import get_in_flight_requests, clear_in_flight_requests
 from letter_writer_server.api.cost_utils import with_user_monthly_cost, check_spending_limits
 from letter_writer_server.core.session import require_auth
@@ -103,10 +102,12 @@ async def extract_job(request: Request, data: ExtractRequest, session: Session =
             cv_revisions = user_data.get('cv_revisions', [])
             if cv_revisions:
                 sorted_revs = sorted(cv_revisions, key=lambda x: x.get('created_at', ''), reverse=True)
-                cv_text = sorted_revs[0].get('content', '')
-                session['cv_text'] = cv_text
+                base_cv = sorted_revs[0].get('content', '')
+                session['cv_text'] = cv_text_with_extra_info(base_cv, user_data)
         elif user:
             user_data = get_user_data(user['id'], use_cache=True)
+
+        cv_text = session.get("cv_text", "")
 
         if not cv_text:
             raise HTTPException(status_code=400, detail="CV text is missing")
