@@ -491,6 +491,9 @@ def track_api_cost(
         search_queries: Number of web/grounding search calls (Gemini, Grok)
         cached_tokens: Number of prompt tokens served from cache (e.g. OpenAI prompt cache)
     """
+    # Be defensive: callers sometimes forget to pass a phase.
+    # We still want the spend recorded, just attributed to "unknown".
+    phase = (phase or "").strip() or "unknown"
     _ensure_flush_thread()
 
     redis_client = _get_redis_client()

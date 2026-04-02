@@ -8,8 +8,40 @@ from letter_writer.generation import extract_job_metadata_no_requirements
 from letter_writer.research import perform_company_research, perform_poc_research
 from letter_writer_server.core.session import Session, get_session
 from letter_writer_server.api.cost_utils import check_spending_limits
+from letter_writer.cost_tracker import track_api_cost
 
 router = APIRouter()
+
+def _reset_client_counters(client) -> None:
+    client.total_cost = 0.0
+    client.total_input_tokens = 0
+    client.total_output_tokens = 0
+    if hasattr(client, "total_cached_tokens"):
+        client.total_cached_tokens = 0
+    if hasattr(client, "total_search_queries"):
+        client.total_search_queries = 0
+
+
+def _track_and_reset_client_cost(*, user_id: str, phase: str, vendor: str, client) -> None:
+    cost = float(getattr(client, "total_cost", 0.0) or 0.0)
+    if cost <= 0:
+        _reset_client_counters(client)
+        return
+    input_tokens = int(getattr(client, "total_input_tokens", 0) or 0)
+    output_tokens = int(getattr(client, "total_output_tokens", 0) or 0)
+    cached_tokens = int(getattr(client, "total_cached_tokens", 0) or 0)
+    search_queries = int(getattr(client, "total_search_queries", 0) or 0)
+    track_api_cost(
+        user_id=user_id,
+        phase=phase,
+        vendor=vendor,
+        cost=cost,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        search_queries=search_queries if search_queries else None,
+        cached_tokens=cached_tokens if cached_tokens else None,
+    )
+    _reset_client_counters(client)
 
 
 class ExtractCompanyMetadataRequest(BaseModel):
@@ -36,9 +68,12 @@ async def extract_company_metadata(data: ExtractCompanyMetadataRequest, session:
     if not session.get('user'):
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
+        user_id = (session.get("user") or {}).get("id") or "anonymous"
         ai_client = get_client(ModelVendor.OPENAI)
+        _reset_client_counters(ai_client)
         trace_dir = Path("trace", "research.company.extraction")
         extraction = extract_job_metadata_no_requirements(data.job_text, ai_client, trace_dir=trace_dir)
+        _track_and_reset_client_cost(user_id=user_id, phase="extract", vendor=ModelVendor.OPENAI.value, client=ai_client)
         return {"status": "ok", "extraction": extraction}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Company extraction failed: {e}")

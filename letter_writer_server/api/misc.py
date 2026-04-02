@@ -23,6 +23,7 @@ from letter_writer.spam_prevention import get_in_flight_requests, clear_in_fligh
 from letter_writer_server.api.cost_utils import with_user_monthly_cost, check_spending_limits
 from letter_writer_server.core.session import require_auth
 from openai import OpenAI
+from letter_writer.cost_tracker import track_api_cost
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -71,6 +72,39 @@ class RefreshRequest(BaseModel):
     negative_letters_source_suffix: Optional[str] = None
     clear: bool = False
 
+
+def _reset_client_counters(client) -> None:
+    client.total_cost = 0.0
+    client.total_input_tokens = 0
+    client.total_output_tokens = 0
+    if hasattr(client, "total_cached_tokens"):
+        client.total_cached_tokens = 0
+    if hasattr(client, "total_search_queries"):
+        client.total_search_queries = 0
+
+
+def _track_and_reset_client_cost(*, user_id: str, phase: str, vendor: str, client) -> None:
+    cost = float(getattr(client, "total_cost", 0.0) or 0.0)
+    if cost <= 0:
+        _reset_client_counters(client)
+        return
+    input_tokens = int(getattr(client, "total_input_tokens", 0) or 0)
+    output_tokens = int(getattr(client, "total_output_tokens", 0) or 0)
+    cached_tokens = int(getattr(client, "total_cached_tokens", 0) or 0)
+    search_queries = int(getattr(client, "total_search_queries", 0) or 0)
+
+    track_api_cost(
+        user_id=user_id,
+        phase=phase,
+        vendor=vendor,
+        cost=cost,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        search_queries=search_queries if search_queries else None,
+        cached_tokens=cached_tokens if cached_tokens else None,
+    )
+    _reset_client_counters(client)
+
 @router.post("/refresh/")
 async def refresh(request: Request, data: RefreshRequest, _user: dict = Depends(require_auth)):
     try:
@@ -94,6 +128,11 @@ async def extract_job(request: Request, data: ExtractRequest, session: Session =
         trace_dir = Path("trace", "extraction.openai")
 
         user_id = (user or {}).get("id") or None
+        if not user_id:
+            user_id = "anonymous"
+
+        # Ensure extraction is tracked as its own phase (avoid mixing with earlier calls).
+        _reset_client_counters(ai_client)
 
         cv_text = session.get('cv_text', "")
         user_data = {}
@@ -285,6 +324,8 @@ async def extract_job(request: Request, data: ExtractRequest, session: Session =
             len(similar_documents),
             len(top_docs),
         )
+        # Track all LLM usage in this endpoint as extraction.
+        _track_and_reset_client_cost(user_id=user_id, phase="extract", vendor=ModelVendor.OPENAI.value, client=ai_client)
         return with_user_monthly_cost({
             "status": "ok",
             "extraction": extraction,
