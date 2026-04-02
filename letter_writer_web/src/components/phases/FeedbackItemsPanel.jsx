@@ -289,6 +289,21 @@ export function FeedbackItemsPanel({
       const raw = String(inputNeededDraftById[it.id] ?? "");
       if (!raw.trim()) return;
       setUserContext(raw);
+      // Providing required info should approve the item immediately.
+      setFeedbackItemApprovals((prev) => {
+        const nextApr = { ...prev, [it.id]: true };
+        const nextTab = selectNextTabIfCategoryDone(
+          activeFeedbackKey,
+          feedbackKeys,
+          feedback,
+          feedbackOverrides,
+          categoryKey,
+          items.map((x) => (x.id === it.id ? { ...x, user_context: raw } : x)),
+          nextApr,
+        );
+        if (nextTab) setSelectedFeedbackTab(nextTab);
+        return nextApr;
+      });
       setInputNeededDraftById((prev) => {
         if (!(it.id in prev)) return prev;
         const n = { ...prev };
@@ -382,6 +397,12 @@ export function FeedbackItemsPanel({
     const saveUserContextRowInline = () => {
       if (editingUserContextId !== it.id) return;
       setUserContext(draftUserContext);
+      // Updating required info should also mark the item approved.
+      if (String(draftUserContext || "").trim()) {
+        setFeedbackItemApprovals((prev) => ({ ...prev, [it.id]: true }));
+      } else {
+        setFeedbackItemApprovals((prev) => ({ ...prev, [it.id]: false }));
+      }
       setEditingUserContextId(null);
       setDraftUserContext("");
     };
@@ -515,6 +536,8 @@ export function FeedbackItemsPanel({
               type="button"
               onClick={() => {
                 setUserContext("");
+                  // Clearing required info revokes approval.
+                  setFeedbackItemApprovals((prev) => ({ ...prev, [it.id]: false }));
                 setEditingUserContextId(null);
                 setDraftUserContext("");
                 setInputNeededDraftById((prev) => {

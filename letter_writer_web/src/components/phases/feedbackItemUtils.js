@@ -115,17 +115,21 @@ export function categoryHasPleaseFix(items) {
   return items.some((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX);
 }
 
+function itemIsApproved(it, itemApprovals) {
+  if (!it || it.type !== FEEDBACK_TYPES.PLEASE_FIX) return true;
+  const status = String(it.status || "").toUpperCase();
+  if (status === "INPUT_NEEDED") {
+    // Once the user has provided the required info, treat the item as approved.
+    // Approval is UI-local state and shouldn't block progress after reload.
+    return String(it.user_context || "").trim().length > 0;
+  }
+  return itemApprovals[it.id] === true;
+}
+
 /** Only PLEASE_FIX items must be explicitly approved; ALREADY_GOOD is informational. */
 export function categoryAllItemsApproved(items, itemApprovals) {
   if (items.length === 0) return true;
-  return items.every((it) => {
-    if (it.type !== FEEDBACK_TYPES.PLEASE_FIX) return true;
-    if (String(it.status || "").toUpperCase() === "INPUT_NEEDED") {
-      const filled = String(it.user_context || "").trim().length > 0;
-      if (!filled) return false;
-    }
-    return itemApprovals[it.id] === true;
-  });
+  return items.every((it) => itemIsApproved(it, itemApprovals));
 }
 
 export function findNextUnseenCategory(currentKey, feedbackKeys, feedback, overrides, itemApprovals) {
@@ -137,7 +141,7 @@ export function findNextUnseenCategory(currentKey, feedbackKeys, feedback, overr
     const items = mergeCategoryItems(feedback, overrides, k);
     const fixItems = items.filter((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX);
     if (fixItems.length === 0) continue;
-    if (fixItems.some((it) => !itemApprovals[it.id])) return k;
+    if (fixItems.some((it) => !itemIsApproved(it, itemApprovals))) return k;
   }
   return null;
 }
@@ -161,7 +165,7 @@ export function selectNextTabIfCategoryDone(
   const merged = mergeCategoryItems(feedback, nextOverrides, categoryKey);
   const fixItems = merged.filter((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX);
   const hasPending =
-    fixItems.length > 0 && fixItems.some((it) => itemApprovals[it.id] !== true);
+    fixItems.length > 0 && fixItems.some((it) => !itemIsApproved(it, itemApprovals));
   if (hasPending) return null;
   return findNextUnseenCategory(
     activeFeedbackKey,
