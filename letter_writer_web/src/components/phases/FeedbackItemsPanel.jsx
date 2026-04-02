@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import LanguageSelector from "../LanguageSelector";
-import { FEEDBACK_TYPES, newId, selectNextTabIfCategoryDone } from "./feedbackItemUtils";
+import { CONTEXT_SOURCES, FEEDBACK_TYPES, newId, selectNextTabIfCategoryDone } from "./feedbackItemUtils";
 
 function LanguageSelectorTiny({ fieldId, observation, translation, disabled }) {
   const fieldViewLanguage = translation.getFieldViewLanguage(fieldId);
@@ -315,7 +315,7 @@ export function FeedbackItemsPanel({
     const setContextItems = (nextContextItems) => {
       const arr = Array.isArray(nextContextItems) ? nextContextItems : [];
       const hasRows = arr.length > 0;
-      const nonEmpty = arr.some((x) => String(x ?? "").trim().length > 0);
+      const nonEmpty = arr.some((x) => String(x?.text ?? x ?? "").trim().length > 0);
       const nextStatus =
         status === "INPUT_NEEDED"
           ? "INPUT_NEEDED"
@@ -334,9 +334,19 @@ export function FeedbackItemsPanel({
       persistItems(nextItems);
     };
 
-    const updateContextItem = (idx, value) => {
+    const updateContextItem = (idx, patch) => {
       const next = [...(contextItems || [])];
-      next[idx] = String(value ?? "");
+      const prev = next[idx];
+      const base =
+        prev && typeof prev === "object" && !Array.isArray(prev)
+          ? { ...prev }
+          : { text: String(prev ?? ""), source: "CV" };
+      const merged = { ...base, ...(patch || {}) };
+      merged.text = String(merged.text ?? "");
+      merged.source = CONTEXT_SOURCES.includes(String(merged.source ?? "").toUpperCase())
+        ? String(merged.source ?? "").toUpperCase()
+        : "CV";
+      next[idx] = merged;
       setContextItems(next);
     };
 
@@ -354,7 +364,7 @@ export function FeedbackItemsPanel({
       if (e && typeof e.stopPropagation === "function") e.stopPropagation();
       setEditingUserContextId(null);
       setDraftUserContext("");
-      const next = [...(contextItems || []), ""];
+      const next = [...(contextItems || []), { text: "", source: "CV" }];
       setContextItems(next);
       const newIdx = next.length - 1;
       setEditingContextRow({ itemId: it.id, index: newIdx });
@@ -363,7 +373,7 @@ export function FeedbackItemsPanel({
 
     const saveContextRowInline = () => {
       if (!editingContextRow || editingContextRow.itemId !== it.id) return;
-      updateContextItem(editingContextRow.index, draftContextLine);
+      updateContextItem(editingContextRow.index, { text: draftContextLine });
       setEditingContextRow(null);
       setDraftContextLine("");
     };
@@ -371,7 +381,7 @@ export function FeedbackItemsPanel({
     const cancelContextRowInline = () => {
       if (!editingContextRow || editingContextRow.itemId !== it.id) return;
       const idx = editingContextRow.index;
-      const line = String(contextItems[idx] ?? "");
+      const line = String((contextItems[idx] && typeof contextItems[idx] === "object") ? contextItems[idx].text : (contextItems[idx] ?? ""));
       if (!line.trim() && contextItems.length > 0) {
         removeContextItem(idx);
         return;
@@ -384,7 +394,10 @@ export function FeedbackItemsPanel({
       setEditingUserContextId(null);
       setDraftUserContext("");
       setEditingContextRow({ itemId: it.id, index: idx });
-      setDraftContextLine(String(contextItems[idx] ?? ""));
+      const prev = contextItems[idx];
+      setDraftContextLine(
+        String(prev && typeof prev === "object" && !Array.isArray(prev) ? prev.text : (prev ?? "")),
+      );
     };
 
     const startEditUserContextRow = () => {
@@ -424,7 +437,7 @@ export function FeedbackItemsPanel({
       color: "#374151",
     };
 
-    const machineContextVisible = contextItems.some((x) => String(x ?? "").trim().length > 0);
+    const machineContextVisible = contextItems.some((x) => String(x?.text ?? x ?? "").trim().length > 0);
     const hasDisplayContext =
       machineContextVisible ||
       userContextFilled ||
@@ -432,20 +445,40 @@ export function FeedbackItemsPanel({
       (editingUserContextId === it.id && !isEditing);
 
     const renderMachineRow = (idx) => {
-      const text = String(contextItems[idx] ?? "");
+      const raw = contextItems[idx];
+      const text = String(raw && typeof raw === "object" && !Array.isArray(raw) ? raw.text : (raw ?? ""));
+      const src = String(raw && typeof raw === "object" && !Array.isArray(raw) ? raw.source : "CV").toUpperCase();
+      const normalizedSrc = CONTEXT_SOURCES.includes(src) ? src : "CV";
       const isRowEditing = editingContextRow?.itemId === it.id && editingContextRow?.index === idx;
       if (!text.trim() && !isRowEditing && !isEditing) return null;
 
       if (isRowEditing) {
         return (
           <div key={`${it.id}-ctx-${idx}`} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 8 }}>
-            <textarea
-              style={{ flex: 1, minHeight: 56, fontSize: 13, padding: 8, resize: "vertical" }}
-              value={draftContextLine}
-              onChange={(e) => setDraftContextLine(e.target.value)}
-              disabled={disabled}
-              placeholder="Paste-ready fact/snippet (no instructions)"
-            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 4 }}>
+                Source
+              </div>
+              <select
+                value={normalizedSrc}
+                onChange={(e) => updateContextItem(idx, { source: e.target.value })}
+                disabled={disabled}
+                style={{ fontSize: 12, padding: "4px 8px", marginBottom: 6, maxWidth: 220 }}
+              >
+                {CONTEXT_SOURCES.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+              <textarea
+                style={{ width: "100%", minHeight: 56, fontSize: 13, padding: 8, resize: "vertical" }}
+                value={draftContextLine}
+                onChange={(e) => setDraftContextLine(e.target.value)}
+                disabled={disabled}
+                placeholder="Paste-ready fact/snippet (no instructions)"
+              />
+            </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 2, flexShrink: 0 }}>
               <button type="button" onClick={saveContextRowInline} disabled={disabled} style={iconBtnStyle} title="Save" aria-label="Save">
                 ✓
@@ -460,8 +493,11 @@ export function FeedbackItemsPanel({
 
       return (
         <div key={`${it.id}-ctx-${idx}`} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 8 }}>
-          <div style={{ flex: 1, minWidth: 0, whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.45, color: "#111827" }}>
-            {text.trim() ? text : "(empty)"}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 2 }}>{normalizedSrc}</div>
+            <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.45, color: "#111827" }}>
+              {text.trim() ? text : "(empty)"}
+            </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, flexShrink: 0 }}>
             <button

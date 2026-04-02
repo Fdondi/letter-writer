@@ -58,7 +58,22 @@ VENDOR_FEEDBACK_JSON_SCHEMA: Dict[str, Any] = {
                                 "properties": {
                                     "items": {
                                         "type": "array",
-                                        "items": {"type": "string"},
+                                        "items": {
+                                            "anyOf": [
+                                                {"type": "string"},
+                                                {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "text": {"type": "string"},
+                                                        "source": {
+                                                            "type": "string",
+                                                            "enum": ["CV", "EXAMPLE", "BACKGROUND_RESEARCH"],
+                                                        },
+                                                    },
+                                                    "required": ["text", "source"],
+                                                },
+                                            ]
+                                        },
                                     }
                                 },
                                 "required": ["items"],
@@ -120,10 +135,23 @@ def normalize_parsed_feedback_items(data: Any) -> List[Dict[str, Any]]:
         if status not in ("NOT_NEEDED", "SUFFICIENT", "INPUT_NEEDED"):
             status = "NOT_NEEDED"
 
-        context_items: List[str] = []
+        context_items: List[Dict[str, str]] = []
         cf = it.get("context_field")
         if isinstance(cf, dict) and isinstance(cf.get("items"), list):
-            context_items = [str(x).strip() for x in cf.get("items", []) if str(x).strip()]
+            for raw in (cf.get("items", []) or []):
+                if isinstance(raw, str):
+                    t = raw.strip()
+                    if t:
+                        context_items.append({"text": t, "source": "CV"})
+                    continue
+                if isinstance(raw, dict):
+                    t = str(raw.get("text") or "").strip()
+                    src = str(raw.get("source") or "").strip().upper()
+                    if not t:
+                        continue
+                    if src not in ("CV", "EXAMPLE", "BACKGROUND_RESEARCH"):
+                        src = "CV"
+                    context_items.append({"text": t, "source": src})
 
         # Enforce status invariants (do not drop item; just normalize field).
         if status == "NOT_NEEDED":
@@ -276,10 +304,23 @@ def normalize_feedback_value(val: Any) -> List[Dict[str, Any]]:
             if status not in ("NOT_NEEDED", "SUFFICIENT", "INPUT_NEEDED"):
                 status = "NOT_NEEDED"
 
-            context_items: List[str] = []
+            context_items: List[Dict[str, str]] = []
             cf = it.get("context_field")
             if isinstance(cf, dict) and isinstance(cf.get("items"), list):
-                context_items = [str(x).strip() for x in cf.get("items", []) if str(x).strip()]
+                for raw in (cf.get("items", []) or []):
+                    if isinstance(raw, str):
+                        t = raw.strip()
+                        if t:
+                            context_items.append({"text": t, "source": "CV"})
+                        continue
+                    if isinstance(raw, dict):
+                        t = str(raw.get("text") or "").strip()
+                        src = str(raw.get("source") or "").strip().upper()
+                        if not t:
+                            continue
+                        if src not in ("CV", "EXAMPLE", "BACKGROUND_RESEARCH"):
+                            src = "CV"
+                        context_items.append({"text": t, "source": src})
             if status == "NOT_NEEDED":
                 context_items = []
             elif status == "SUFFICIENT":
@@ -1289,7 +1330,21 @@ def _rewrite_dimension_text(val: Any) -> str:
             context_items: List[str] = []
             cf = it.get("context_field")
             if isinstance(cf, dict) and isinstance(cf.get("items"), list):
-                context_items = [str(x).strip() for x in cf.get("items", []) if str(x).strip()]
+                for raw in (cf.get("items", []) or []):
+                    if isinstance(raw, str):
+                        t = raw.strip()
+                        if t:
+                            context_items.append(t)
+                        continue
+                    if isinstance(raw, dict):
+                        t = str(raw.get("text") or "").strip()
+                        src = str(raw.get("source") or "").strip().upper()
+                        if not t:
+                            continue
+                        if src in ("CV", "EXAMPLE", "BACKGROUND_RESEARCH"):
+                            context_items.append(f"[{src}] {t}")
+                        else:
+                            context_items.append(t)
             user_context = (it.get("user_context") or "").strip() if isinstance(it.get("user_context") or "", str) else ""
 
             # Keep the base observation first (this is the actionable critique).

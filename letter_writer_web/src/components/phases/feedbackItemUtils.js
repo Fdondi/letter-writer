@@ -8,9 +8,35 @@ export const FEEDBACK_TYPES = {
   PLEASE_FIX: "PLEASE_FIX",
 };
 
+export const CONTEXT_SOURCES = ["CV", "EXAMPLE", "BACKGROUND_RESEARCH"];
+
 export function newId() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
   return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function normalizeContextSource(raw) {
+  const s = String(raw ?? "").trim().toUpperCase();
+  if (CONTEXT_SOURCES.includes(s)) return s;
+  return "CV";
+}
+
+function normalizeContextItems(rawItems) {
+  const arr = Array.isArray(rawItems) ? rawItems : [];
+  const out = [];
+  for (const it of arr) {
+    if (typeof it === "string") {
+      const text = String(it ?? "").trimEnd();
+      if (text.trim()) out.push({ text, source: "CV" });
+      continue;
+    }
+    if (it && typeof it === "object") {
+      const text = String(it.text ?? "").trimEnd();
+      if (!text.trim()) continue;
+      out.push({ text, source: normalizeContextSource(it.source) });
+    }
+  }
+  return out;
 }
 
 /**
@@ -38,7 +64,7 @@ export function normalizeCategoryItems(raw, categoryKey = "") {
             : "NOT_NEEDED";
 
         const cf = it.context_field && typeof it.context_field === "object" ? it.context_field : null;
-        const rawCfItems = Array.isArray(cf?.items) ? cf.items.map((x) => String(x ?? "")) : [];
+        const rawCfItems = normalizeContextItems(cf?.items);
 
         // Server may send NOT_NEEDED while the user is adding rows in the UI (including empty placeholders).
         if (status === "NOT_NEEDED" && rawCfItems.length > 0) {
@@ -51,7 +77,7 @@ export function normalizeCategoryItems(raw, categoryKey = "") {
         if (status === "NOT_NEEDED") {
           contextItems = [];
         } else {
-          contextItems = rawCfItems.map((s) => s.trimEnd());
+          contextItems = rawCfItems.map((x) => ({ text: String(x.text ?? "").trimEnd(), source: normalizeContextSource(x.source) }));
         }
 
         if (status === "SUFFICIENT" && contextItems.length === 0) {
@@ -187,7 +213,7 @@ export function extractFeedbackEntryToExtraInfo(categoryKey, it) {
   const uc = ucRaw.trim();
   const ui = String(it.user_instructions ?? "").trim();
   const rawLines = Array.isArray(it?.context_field?.items)
-    ? it.context_field.items.map((x) => String(x ?? ""))
+    ? it.context_field.items.map((x) => (typeof x === "string" ? String(x ?? "") : String(x?.text ?? "")))
     : [];
   const ctxLinesNonEmpty = rawLines.map((s) => s.trim()).filter(Boolean);
   if (!uc && !ui && ctxLinesNonEmpty.length === 0) {
