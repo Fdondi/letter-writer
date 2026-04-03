@@ -115,7 +115,8 @@ export function FeedbackItemsPanel({
       const status = String(it.status || "NOT_NEEDED").toUpperCase();
       if (status === "INPUT_NEEDED") {
         const filled = String(it.user_context || "").trim().length > 0;
-        if (!filled) return;
+        const declined = it.input_declined === true;
+        if (!filled && !declined) return;
       }
     }
     const nextApr = { ...feedbackItemApprovals, [id]: true };
@@ -267,8 +268,10 @@ export function FeedbackItemsPanel({
     const userContext = String(it.user_context || "");
     const userInstructions = String(it.user_instructions || "");
     const userContextFilled = userContext.trim().length > 0;
+    const inputDeclined = it.input_declined === true;
+    const persistUserContextToCv = it.persist_user_context_to_cv !== false;
     /** Initial capture only; after Save, user text lives in user_context and is edited like other context lines. */
-    const showInputEditor = needsInput && !userContextFilled;
+    const showInputEditor = needsInput && !userContextFilled && !inputDeclined;
     const inputDraft = inputNeededDraftById[it.id] ?? "";
     const userContextPlaceholder =
       userInstructions.trim() ||
@@ -278,9 +281,16 @@ export function FeedbackItemsPanel({
         ? translation.getTranslatedText(fieldId, it.observation || "")
         : it.observation || "";
 
-    const setUserContext = (next) => {
+    const setUserContext = (next, patch = {}) => {
       const nextItems = items.map((x) =>
-        x.id === it.id ? { ...x, user_context: String(next ?? "") } : x,
+        x.id === it.id ? { ...x, user_context: String(next ?? ""), ...patch } : x,
+      );
+      persistItems(nextItems);
+    };
+
+    const setPersistUserContextToCv = (nextBool) => {
+      const nextItems = items.map((x) =>
+        x.id === it.id ? { ...x, persist_user_context_to_cv: nextBool } : x,
       );
       persistItems(nextItems);
     };
@@ -288,7 +298,12 @@ export function FeedbackItemsPanel({
     const commitInputNeededDraft = () => {
       const raw = String(inputNeededDraftById[it.id] ?? "");
       if (!raw.trim()) return;
-      setUserContext(raw);
+      const nextItems = items.map((x) =>
+        x.id === it.id
+          ? { ...x, user_context: raw, input_declined: false, persist_user_context_to_cv: persistUserContextToCv }
+          : x,
+      );
+      persistItems(nextItems);
       // Providing required info should approve the item immediately.
       setFeedbackItemApprovals((prev) => {
         const nextApr = { ...prev, [it.id]: true };
@@ -298,7 +313,7 @@ export function FeedbackItemsPanel({
           feedback,
           feedbackOverrides,
           categoryKey,
-          items.map((x) => (x.id === it.id ? { ...x, user_context: raw } : x)),
+          nextItems,
           nextApr,
         );
         if (nextTab) setSelectedFeedbackTab(nextTab);
@@ -311,6 +326,51 @@ export function FeedbackItemsPanel({
         return n;
       });
     };
+
+    const approveWithoutInput = () => {
+      const nextItems = items.map((x) =>
+        x.id === it.id ? { ...x, input_declined: true } : x,
+      );
+      persistItems(nextItems);
+      const nextApr = { ...feedbackItemApprovals, [it.id]: true };
+      setFeedbackItemApprovals(nextApr);
+      const nextTab = selectNextTabIfCategoryDone(
+        activeFeedbackKey,
+        feedbackKeys,
+        feedback,
+        feedbackOverrides,
+        categoryKey,
+        nextItems,
+        nextApr,
+      );
+      if (nextTab) setSelectedFeedbackTab(nextTab);
+    };
+
+    const renderPersistRadios = () => (
+      <div style={{ marginTop: 8, fontSize: 12, color: "#374151" }}>
+        <div style={{ marginBottom: 4, fontWeight: 600 }}>Save your reply to profile / CV</div>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer", marginBottom: 4 }}>
+          <input
+            type="radio"
+            name={`persist-${it.id}`}
+            checked={persistUserContextToCv}
+            onChange={() => setPersistUserContextToCv(true)}
+            disabled={disabled}
+          />
+          Yes (default) — reuse in future letters
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer" }}>
+          <input
+            type="radio"
+            name={`persist-${it.id}`}
+            checked={!persistUserContextToCv}
+            onChange={() => setPersistUserContextToCv(false)}
+            disabled={disabled}
+          />
+          No — only use for this revision
+        </label>
+      </div>
+    );
 
     const setContextItems = (nextContextItems) => {
       const arr = Array.isArray(nextContextItems) ? nextContextItems : [];
@@ -409,7 +469,7 @@ export function FeedbackItemsPanel({
 
     const saveUserContextRowInline = () => {
       if (editingUserContextId !== it.id) return;
-      setUserContext(draftUserContext);
+      setUserContext(draftUserContext, { input_declined: false });
       // Updating required info should also mark the item approved.
       if (String(draftUserContext || "").trim()) {
         setFeedbackItemApprovals((prev) => ({ ...prev, [it.id]: true }));
@@ -441,6 +501,7 @@ export function FeedbackItemsPanel({
     const hasDisplayContext =
       machineContextVisible ||
       userContextFilled ||
+      inputDeclined ||
       (editingContextRow?.itemId === it.id && !isEditing) ||
       (editingUserContextId === it.id && !isEditing);
 
@@ -528,69 +589,82 @@ export function FeedbackItemsPanel({
     const renderUserContextRow = () => {
       if (showInputEditor) return null;
       const isEditingUser = editingUserContextId === it.id;
+      if (inputDeclined && !userContextFilled && !isEditingUser) {
+        return (
+          <div key={`${it.id}-ctx-user`} style={{ marginTop: 8, fontSize: 12, color: "#6b7280", fontStyle: "italic" }}>
+            You approved this critique without adding missing facts. The model will not receive new facts for this point.
+          </div>
+        );
+      }
       if (!userContextFilled && !isEditingUser) return null;
 
       if (isEditingUser) {
         return (
-          <div key={`${it.id}-ctx-user`} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 8 }}>
-            <textarea
-              style={{ flex: 1, minHeight: 56, fontSize: 13, padding: 8, resize: "vertical", border: "1px solid #fca5a5", background: "#fff" }}
-              value={draftUserContext}
-              onChange={(e) => setDraftUserContext(e.target.value)}
-              disabled={disabled}
-              placeholder={userContextPlaceholder}
-            />
-            <div style={{ display: "flex", flexDirection: "column", gap: 2, flexShrink: 0 }}>
-              <button type="button" onClick={saveUserContextRowInline} disabled={disabled} style={iconBtnStyle} title="Save" aria-label="Save">
-                ✓
-              </button>
-              <button type="button" onClick={cancelUserContextRowInline} disabled={disabled} style={iconBtnStyle} title="Cancel" aria-label="Cancel">
-                ×
-              </button>
+          <div key={`${it.id}-ctx-user`} style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <textarea
+                style={{ flex: 1, minHeight: 56, fontSize: 13, padding: 8, resize: "vertical", border: "1px solid #fca5a5", background: "#fff" }}
+                value={draftUserContext}
+                onChange={(e) => setDraftUserContext(e.target.value)}
+                disabled={disabled}
+                placeholder={userContextPlaceholder}
+              />
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, flexShrink: 0 }}>
+                <button type="button" onClick={saveUserContextRowInline} disabled={disabled} style={iconBtnStyle} title="Save" aria-label="Save">
+                  ✓
+                </button>
+                <button type="button" onClick={cancelUserContextRowInline} disabled={disabled} style={iconBtnStyle} title="Cancel" aria-label="Cancel">
+                  ×
+                </button>
+              </div>
             </div>
+            {needsInput ? renderPersistRadios() : null}
           </div>
         );
       }
 
       return (
-        <div key={`${it.id}-ctx-user`} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 8 }}>
-          <div style={{ flex: 1, minWidth: 0, whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.45, color: "#111827" }}>
-            {userContext}
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 2, flexShrink: 0 }}>
-            <button
-              type="button"
-              onClick={startEditUserContextRow}
-              disabled={disabled}
-              style={iconBtnStyle}
-              title="Edit"
-              aria-label="Edit context line"
-            >
-              ✎
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setUserContext("");
+        <div key={`${it.id}-ctx-user`} style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+            <div style={{ flex: 1, minWidth: 0, whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.45, color: "#111827" }}>
+              {userContext}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 2, flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={startEditUserContextRow}
+                disabled={disabled}
+                style={iconBtnStyle}
+                title="Edit"
+                aria-label="Edit context line"
+              >
+                ✎
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setUserContext("", { input_declined: false });
                   // Clearing required info revokes approval.
                   setFeedbackItemApprovals((prev) => ({ ...prev, [it.id]: false }));
-                setEditingUserContextId(null);
-                setDraftUserContext("");
-                setInputNeededDraftById((prev) => {
-                  if (!(it.id in prev)) return prev;
-                  const n = { ...prev };
-                  delete n[it.id];
-                  return n;
-                });
-              }}
-              disabled={disabled}
-              style={{ ...iconBtnStyle, color: "#b91c1c", borderColor: "#fca5a5" }}
-              title="Remove"
-              aria-label="Remove context line"
-            >
-              ×
-            </button>
+                  setEditingUserContextId(null);
+                  setDraftUserContext("");
+                  setInputNeededDraftById((prev) => {
+                    if (!(it.id in prev)) return prev;
+                    const n = { ...prev };
+                    delete n[it.id];
+                    return n;
+                  });
+                }}
+                disabled={disabled}
+                style={{ ...iconBtnStyle, color: "#b91c1c", borderColor: "#fca5a5" }}
+                title="Remove"
+                aria-label="Remove context line"
+              >
+                ×
+              </button>
+            </div>
           </div>
+          {needsInput && userContextFilled ? renderPersistRadios() : null}
         </div>
       );
     };
@@ -649,7 +723,8 @@ export function FeedbackItemsPanel({
                   disabled={disabled}
                   placeholder={userContextPlaceholder}
                 />
-                <div style={{ marginTop: 8 }}>
+                {renderPersistRadios()}
+                <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
                   <button
                     type="button"
                     onClick={commitInputNeededDraft}
@@ -657,6 +732,21 @@ export function FeedbackItemsPanel({
                     style={{ fontSize: 12, padding: "4px 12px" }}
                   >
                     Save input
+                  </button>
+                  <button
+                    type="button"
+                    onClick={approveWithoutInput}
+                    disabled={disabled}
+                    style={{
+                      fontSize: 12,
+                      padding: "4px 12px",
+                      color: "#4b5563",
+                      border: "1px solid #d1d5db",
+                      background: "#fff",
+                    }}
+                    title="Approve this critique for the letter without supplying missing facts"
+                  >
+                    Approve without adding data
                   </button>
                 </div>
               </div>
@@ -674,7 +764,7 @@ export function FeedbackItemsPanel({
                 </button>
                 {status === "INPUT_NEEDED" ? (
                   <span style={{ fontSize: 11, color: "#b91c1c" }}>
-                    This item still requires user input before approval.
+                    Provide missing context (or use Approve without adding data above).
                   </span>
                 ) : null}
               </div>
@@ -721,7 +811,8 @@ export function FeedbackItemsPanel({
                   disabled={disabled}
                   placeholder={userContextPlaceholder}
                 />
-                <div style={{ marginTop: 8 }}>
+                {renderPersistRadios()}
+                <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
                   <button
                     type="button"
                     onClick={commitInputNeededDraft}
@@ -729,6 +820,21 @@ export function FeedbackItemsPanel({
                     style={{ fontSize: 12, padding: "4px 12px" }}
                   >
                     Save input
+                  </button>
+                  <button
+                    type="button"
+                    onClick={approveWithoutInput}
+                    disabled={disabled}
+                    style={{
+                      fontSize: 12,
+                      padding: "4px 12px",
+                      color: "#4b5563",
+                      border: "1px solid #d1d5db",
+                      background: "#fff",
+                    }}
+                    title="Approve this critique for the letter without supplying missing facts"
+                  >
+                    Approve without adding data
                   </button>
                 </div>
               </div>
@@ -744,7 +850,11 @@ export function FeedbackItemsPanel({
               <button
                 type="button"
                 onClick={() => onApprovePleaseFix(it.id)}
-                disabled={disabled || approved || (needsInput && !String(userContext || "").trim())}
+                disabled={
+                  disabled ||
+                  approved ||
+                  (needsInput && !String(userContext || "").trim() && !inputDeclined)
+                }
                 style={{ fontSize: 11 }}
               >
                 {approved ? "Approved" : "Approve"}

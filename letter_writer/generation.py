@@ -328,8 +328,18 @@ def normalize_feedback_value(val: Any) -> List[Dict[str, Any]]:
                     status = "NOT_NEEDED"
 
             user_context = str(it.get("user_context") or "").strip()
+            user_instructions = str(it.get("user_instructions") or "").strip()
             if status != "INPUT_NEEDED":
                 user_context = ""
+                user_instructions = ""
+            input_declined = bool(it.get("input_declined")) if status == "INPUT_NEEDED" else False
+            persist_uc = it.get("persist_user_context_to_cv")
+            if persist_uc is None:
+                persist_uc = True
+            else:
+                persist_uc = bool(persist_uc)
+            if status != "INPUT_NEEDED":
+                input_declined = False
 
             out.append(
                 {
@@ -339,6 +349,9 @@ def normalize_feedback_value(val: Any) -> List[Dict[str, Any]]:
                     "status": status,
                     "context_field": {"items": context_items},
                     "user_context": user_context,
+                    "user_instructions": user_instructions,
+                    "input_declined": input_declined,
+                    "persist_user_context_to_cv": persist_uc,
                 }
             )
         return out
@@ -1346,6 +1359,7 @@ def _rewrite_dimension_text(val: Any) -> str:
                         else:
                             context_items.append(t)
             user_context = (it.get("user_context") or "").strip() if isinstance(it.get("user_context") or "", str) else ""
+            input_declined = bool(it.get("input_declined")) if status == "INPUT_NEEDED" else False
 
             # Keep the base observation first (this is the actionable critique).
             extra: List[str] = []
@@ -1353,6 +1367,10 @@ def _rewrite_dimension_text(val: Any) -> str:
                 extra.append("Available context: " + "; ".join(context_items))
             if status == "INPUT_NEEDED" and user_context:
                 extra.append("User-provided context: " + user_context)
+            if status == "INPUT_NEEDED" and input_declined and not user_context:
+                extra.append(
+                    "User approved this point without supplying missing facts; do not invent facts."
+                )
             if extra:
                 lines.append(o + "\n  - " + "\n  - ".join(extra))
             else:

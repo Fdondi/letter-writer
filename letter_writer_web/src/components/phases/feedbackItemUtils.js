@@ -87,6 +87,8 @@ export function normalizeCategoryItems(raw, categoryKey = "") {
         // Preserve exactly what the user typed; do not trim (otherwise trailing spaces disappear).
         const userContext = status === "INPUT_NEEDED" ? String(it.user_context ?? "") : "";
         const userInstructions = status === "INPUT_NEEDED" ? String(it.user_instructions ?? "").trim() : "";
+        const persistUserContextToCv = it.persist_user_context_to_cv === false ? false : true;
+        const inputDeclined = status === "INPUT_NEEDED" && it.input_declined === true;
 
         return {
           id,
@@ -96,6 +98,8 @@ export function normalizeCategoryItems(raw, categoryKey = "") {
           context_field: { items: contextItems },
           user_context: userContext,
           user_instructions: userInstructions,
+          persist_user_context_to_cv: persistUserContextToCv,
+          input_declined: inputDeclined,
         };
       })
       .filter(Boolean);
@@ -145,6 +149,7 @@ function itemIsApproved(it, itemApprovals) {
   if (!it || it.type !== FEEDBACK_TYPES.PLEASE_FIX) return true;
   const status = String(it.status || "").toUpperCase();
   if (status === "INPUT_NEEDED") {
+    if (it.input_declined === true) return true;
     // Once the user has provided the required info, treat the item as approved.
     // Approval is UI-local state and shouldn't block progress after reload.
     return String(it.user_context || "").trim().length > 0;
@@ -205,13 +210,14 @@ export function selectNextTabIfCategoryDone(
 /**
  * Build one personal_data.extra_info row from a normalized feedback item (user-supplied parts only).
  * @param {string} categoryKey
- * @param {{ id: string, observation?: string, user_context?: string, user_instructions?: string, context_field?: { items?: unknown[] } }} it
+ * @param {{ id: string, observation?: string, user_context?: string, user_instructions?: string, persist_user_context_to_cv?: boolean, context_field?: { items?: unknown[] } }} it
  * @returns {Record<string, unknown> | null}
  */
 export function extractFeedbackEntryToExtraInfo(categoryKey, it) {
-  const ucRaw = String(it.user_context ?? "");
+  const persist = it.persist_user_context_to_cv !== false;
+  const ucRaw = persist ? String(it.user_context ?? "") : "";
   const uc = ucRaw.trim();
-  const ui = String(it.user_instructions ?? "").trim();
+  const ui = persist ? String(it.user_instructions ?? "").trim() : "";
   const rawLines = Array.isArray(it?.context_field?.items)
     ? it.context_field.items.map((x) => (typeof x === "string" ? String(x ?? "") : String(x?.text ?? "")))
     : [];
