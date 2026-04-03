@@ -54,12 +54,13 @@ export default function ResearchComponent({
     return groups;
   }, [modelOptions]);
 
-  // Trigger effect
+  // Trigger effect — only fire when externalTrigger changes (not on every query keystroke)
   useEffect(() => {
     if (externalTrigger && (query || "").trim()) {
       runResearch(Array.from(vendors));
     }
-  }, [externalTrigger, query, context?.job_text, type, vendors]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalTrigger]);
 
   const buildPayload = (models) => {
     const payload = {
