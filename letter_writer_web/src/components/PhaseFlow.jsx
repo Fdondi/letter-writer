@@ -28,7 +28,7 @@ import { phases as phaseModules } from "./phases";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
 import { useTranslation } from "../utils/useTranslation";
 import LanguageSelector from "./LanguageSelector";
-import { mergeCategoryItems, mergeExtraInfoFromFeedback } from "./phases/feedbackItemUtils";
+import { FEEDBACK_TYPES, mergeCategoryItems, mergeExtraInfoFromFeedback } from "./phases/feedbackItemUtils";
 
 // Card status enum - cards report their status to phases
 const CardStatus = {
@@ -705,6 +705,8 @@ function VendorCardWrapper({
   onCloseExpand,
   useOverlayWidth,
   onAfterApproveInExpanded,
+  inputClusterText,
+  broadcastInputCluster,
 }) {
   // Get previous phase data (to check if we SHOULD be loading)
   const previousPhaseApproved = phaseObj.previous ? phaseObj.previous.approvedVendors.has(vendor) : true;
@@ -788,6 +790,8 @@ function VendorCardWrapper({
       onCloseExpand={onCloseExpand}
       useOverlayWidth={useOverlayWidth}
       onAfterApproveInExpanded={onAfterApproveInExpanded}
+      inputClusterText={inputClusterText}
+      broadcastInputCluster={broadcastInputCluster}
     />
   );
 }
@@ -820,6 +824,8 @@ function VendorCard({
   onCloseExpand,
   useOverlayWidth,
   onAfterApproveInExpanded,
+  inputClusterText,
+  broadcastInputCluster,
 }) {
   // This card knows which phase it belongs to
   const cardPhase = phaseObj?.phase || null;
@@ -1027,6 +1033,76 @@ function VendorCard({
     }
   };
 
+  // Pre-fill INPUT_NEEDED rows from the same input_cluster_key answered on another vendor card.
+  useEffect(() => {
+    if (!inputClusterText || !Object.keys(inputClusterText).length) return;
+    if (cardPhase !== "draft" && cardPhase !== "refine") return;
+    if (!data?.feedback || !feedbackKeys?.length) return;
+    const baseFeedback = data.feedback;
+    setEdits((prev) => {
+      const overrides = prev.feedback_overrides || {};
+      const nextOverrides = { ...overrides };
+      let any = false;
+      for (const key of feedbackKeys) {
+        const merged = mergeCategoryItems(baseFeedback, nextOverrides, key);
+        const newItems = merged.map((item) => {
+          const ck = item.input_cluster_key;
+          if (!ck || String(item.status || "").toUpperCase() !== "INPUT_NEEDED") return item;
+          const v = inputClusterText[ck];
+          if (v == null || String(v).trim() === "") return item;
+          const current = String(item.user_context || "").trim();
+          if (current) return item;
+          return { ...item, user_context: v };
+        });
+        if (JSON.stringify(newItems) !== JSON.stringify(merged)) {
+          nextOverrides[key] = newItems;
+          any = true;
+        }
+      }
+      if (!any) return prev;
+      const next = { ...prev, feedback_overrides: nextOverrides };
+      if (onEditChange) onEditChange(vendor, cardPhase, "feedback_overrides", nextOverrides);
+      return next;
+    });
+  }, [inputClusterText, cardPhase, data, feedbackKeys]);
+
+  // Pre-approve all INPUT_NEEDED items sharing input_cluster_key when any has an answer (or declined).
+  React.useEffect(() => {
+    if (cardPhase !== "draft" && cardPhase !== "refine") return;
+    const base = data?.feedback;
+    if (!base || !feedbackKeys?.length) return;
+    const overrides = edits?.feedback_overrides || {};
+    const byCluster = new Map();
+    for (const k of feedbackKeys) {
+      for (const it of mergeCategoryItems(base, overrides, k)) {
+        if (it.type !== FEEDBACK_TYPES.PLEASE_FIX) continue;
+        const ck = it.input_cluster_key;
+        if (!ck || String(it.status || "").toUpperCase() !== "INPUT_NEEDED") continue;
+        if (!byCluster.has(ck)) byCluster.set(ck, []);
+        byCluster.get(ck).push({
+          id: it.id,
+          filled: String(it.user_context || "").trim().length > 0,
+          declined: it.input_declined === true,
+        });
+      }
+    }
+    setFeedbackItemApprovals((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const rows of byCluster.values()) {
+        const anyReady = rows.some((r) => r.filled || r.declined);
+        if (!anyReady) continue;
+        for (const r of rows) {
+          if (next[r.id] !== true) {
+            next[r.id] = true;
+            changed = true;
+          }
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [cardPhase, data, feedbackKeys, edits?.feedback_overrides]);
+
   // Auto-collapse when done
   useEffect(() => {
     if (isDone && !collapsed) {
@@ -1233,6 +1309,8 @@ function VendorCard({
             setFeedbackItemApprovals,
             handleSaveFeedbackOverride,
             translation,
+            inputClusterText,
+            broadcastInputCluster,
           })
         )}
       </div>
@@ -1444,6 +1522,15 @@ export default function PhaseFlow({
   
   // Track phase updates to trigger re-renders when status changes
   const [phaseUpdateTrigger, setPhaseUpdateTrigger] = useState(0);
+
+  /** Shared INPUT_NEEDED answers across vendor cards (same input_cluster_key). */
+  const [inputClusterText, setInputClusterText] = useState({});
+  const broadcastInputCluster = useCallback((clusterKey, text) => {
+    if (!clusterKey) return;
+    const t = String(text ?? "").trim();
+    if (!t) return;
+    setInputClusterText((prev) => ({ ...prev, [clusterKey]: text }));
+  }, []);
   
   // Store counters per phase (preserved across re-renders)
   // readyCount: number of cards ready for approval (starts at 0, incremented when card becomes ready)
@@ -1582,11 +1669,13 @@ export default function PhaseFlow({
           onCloseExpand={overlayMode ? closeExpand : undefined}
           useOverlayWidth={overlayMode}
           onAfterApproveInExpanded={overlayMode ? onAfterApproveInExpanded : undefined}
+          inputClusterText={inputClusterText}
+          broadcastInputCluster={broadcastInputCluster}
         />
       ));
     });
     return renderFunctions;
-  }, [phases, sessionId, onEditChange, onApprove, onPhaseComplete, saveFeedbackOverride, toggleExpand, closeExpand, onAfterApproveInExpanded]);
+  }, [phases, sessionId, onEditChange, onApprove, onPhaseComplete, saveFeedbackOverride, toggleExpand, closeExpand, onAfterApproveInExpanded, inputClusterText, broadcastInputCluster]);
   
   phases.forEach(phaseObj => {
     const phaseName = phaseObj.phase;

@@ -134,7 +134,26 @@ export function renderContent({
   setSelectedFeedbackTab,
   handleSaveFeedbackOverride,
   translation,
+  inputClusterText,
+  broadcastInputCluster,
 }) {
+  const duplicateLinkFlat = React.useMemo(() => {
+    const out = [];
+    for (const k of feedbackKeys) {
+      for (const it of mergeCategoryItems(feedback, feedbackOverrides, k)) {
+        if (it.duplicate_group_id || it.input_cluster_key) {
+          out.push({
+            id: it.id,
+            categoryKey: k,
+            duplicate_group_id: it.duplicate_group_id,
+            input_cluster_key: it.input_cluster_key,
+          });
+        }
+      }
+    }
+    return out;
+  }, [feedback, feedbackOverrides, feedbackKeys]);
+
   return (
     <>
       <div style={{ fontSize: 13, color: "#374151" }}>
@@ -208,6 +227,9 @@ export function renderContent({
               setSelectedFeedbackTab={setSelectedFeedbackTab}
               disabled={isLoading}
               translation={translation}
+              duplicateLinkFlat={duplicateLinkFlat}
+              inputClusterText={inputClusterText || {}}
+              onInputClusterBroadcast={broadcastInputCluster}
             />
           )}
         </div>

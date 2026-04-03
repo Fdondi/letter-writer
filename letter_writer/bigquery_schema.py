@@ -25,7 +25,7 @@ TABLE_CONFIG = {
 }
 
 # Valid phases for cost tracking
-VALID_PHASES = ["background", "draft", "feedback", "refine", "translate", "extract"]
+VALID_PHASES = ["background", "draft", "feedback", "feedback_review", "refine", "translate", "extract"]
 
 # Valid vendors
 VALID_VENDORS = ["openai", "anthropic", "gemini", "mistral", "grok", "deepseek", "google_translate"]

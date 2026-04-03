@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import LanguageSelector from "../LanguageSelector";
-import { CONTEXT_SOURCES, FEEDBACK_TYPES, newId, selectNextTabIfCategoryDone } from "./feedbackItemUtils";
+import { CONTEXT_SOURCES, FEEDBACK_TYPES, mergeCategoryItems, newId, selectNextTabIfCategoryDone } from "./feedbackItemUtils";
 
 function LanguageSelectorTiny({ fieldId, observation, translation, disabled }) {
   const fieldViewLanguage = translation.getFieldViewLanguage(fieldId);
@@ -35,6 +35,9 @@ export function FeedbackItemsPanel({
   setSelectedFeedbackTab,
   disabled,
   translation,
+  duplicateLinkFlat = [],
+  inputClusterText = {},
+  onInputClusterBroadcast = undefined,
 }) {
   const [editingId, setEditingId] = useState(null);
   const [draftObservation, setDraftObservation] = useState("");
@@ -49,10 +52,30 @@ export function FeedbackItemsPanel({
   const [editingContextRow, setEditingContextRow] = useState(null);
   const [draftContextLine, setDraftContextLine] = useState("");
 
-  const fixItems = useMemo(
-    () => items.filter((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX),
-    [items],
+  /** Same duplicate_group_id (phase 3) or input_cluster_key (phase 4) → one approval applies to all. */
+  const linkedApprovalIds = useCallback(
+    (item) => {
+      const ids = new Set([item.id]);
+      const dg = item.duplicate_group_id;
+      const ick = item.input_cluster_key;
+      for (const row of duplicateLinkFlat) {
+        if (dg && row.duplicate_group_id === dg) ids.add(row.id);
+        if (ick && row.input_cluster_key === ick) ids.add(row.id);
+      }
+      return [...ids];
+    },
+    [duplicateLinkFlat],
   );
+
+  const fixItems = useMemo(() => {
+    const raw = items.filter((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX);
+    return [...raw].sort((a, b) => {
+      const ap = feedbackItemApprovals[a.id] === true;
+      const bp = feedbackItemApprovals[b.id] === true;
+      if (ap !== bp) return ap ? 1 : -1;
+      return 0;
+    });
+  }, [items, feedbackItemApprovals]);
   const goodItems = useMemo(
     () => items.filter((it) => it.type === FEEDBACK_TYPES.ALREADY_GOOD),
     [items],
@@ -111,7 +134,8 @@ export function FeedbackItemsPanel({
 
   const onApprovePleaseFix = (id) => {
     const it = items.find((x) => x.id === id);
-    if (it) {
+    if (!it) return;
+    {
       const status = String(it.status || "NOT_NEEDED").toUpperCase();
       if (status === "INPUT_NEEDED") {
         const filled = String(it.user_context || "").trim().length > 0;
@@ -119,7 +143,11 @@ export function FeedbackItemsPanel({
         if (!filled && !declined) return;
       }
     }
-    const nextApr = { ...feedbackItemApprovals, [id]: true };
+    const idsToApprove = linkedApprovalIds(it);
+    const nextApr = { ...feedbackItemApprovals };
+    idsToApprove.forEach((i) => {
+      nextApr[i] = true;
+    });
     setFeedbackItemApprovals(nextApr);
     const nextTab = selectNextTabIfCategoryDone(
       activeFeedbackKey,
@@ -196,12 +224,21 @@ export function FeedbackItemsPanel({
     const it = items.find((i) => i.id === editingId);
     if (!it) return;
     const obs = (draftObservation || "").trim();
+    const baseRow = mergeCategoryItems(feedback, {}, categoryKey).find((x) => x.id === editingId);
+    const origObs = String(baseRow?.observation || "").trim();
+    const obsChanged = origObs !== obs;
 
     if (it.type === FEEDBACK_TYPES.PLEASE_FIX) {
       if (!obs) return;
-      const next = items.map((x) =>
-        x.id === editingId ? { ...x, observation: obs, type: FEEDBACK_TYPES.PLEASE_FIX } : x,
-      );
+      const next = items.map((x) => {
+        if (x.id !== editingId) return x;
+        let row = { ...x, observation: obs, type: FEEDBACK_TYPES.PLEASE_FIX };
+        if (obsChanged && row.duplicate_group_id) {
+          const { duplicate_group_id: _d, ...rest } = row;
+          row = rest;
+        }
+        return row;
+      });
       persistItems(next);
       const nextApr = { ...feedbackItemApprovals, [editingId]: true };
       setFeedbackItemApprovals(nextApr);
@@ -218,15 +255,27 @@ export function FeedbackItemsPanel({
     } else {
       if (!obs) return;
       if (editingPromoteToFix) {
-        const next = items.map((x) =>
-          x.id === editingId ? { ...x, observation: obs, type: FEEDBACK_TYPES.PLEASE_FIX } : x,
-        );
+        const next = items.map((x) => {
+          if (x.id !== editingId) return x;
+          let row = { ...x, observation: obs, type: FEEDBACK_TYPES.PLEASE_FIX };
+          if (obsChanged && row.duplicate_group_id) {
+            const { duplicate_group_id: _d, ...rest } = row;
+            row = rest;
+          }
+          return row;
+        });
         persistItems(next);
         setFeedbackItemApprovals((prev) => ({ ...prev, [editingId]: false }));
       } else {
-        const next = items.map((x) =>
-          x.id === editingId ? { ...x, observation: obs, type: FEEDBACK_TYPES.ALREADY_GOOD } : x,
-        );
+        const next = items.map((x) => {
+          if (x.id !== editingId) return x;
+          let row = { ...x, observation: obs, type: FEEDBACK_TYPES.ALREADY_GOOD };
+          if (obsChanged && row.duplicate_group_id) {
+            const { duplicate_group_id: _d, ...rest } = row;
+            row = rest;
+          }
+          return row;
+        });
         persistItems(next);
       }
     }
@@ -272,7 +321,10 @@ export function FeedbackItemsPanel({
     const persistUserContextToCv = it.persist_user_context_to_cv !== false;
     /** Initial capture only; after Save, user text lives in user_context and is edited like other context lines. */
     const showInputEditor = needsInput && !userContextFilled && !inputDeclined;
-    const inputDraft = inputNeededDraftById[it.id] ?? "";
+    const clusterPre = it.input_cluster_key && inputClusterText[it.input_cluster_key];
+    const inputDraftEffective =
+      inputNeededDraftById[it.id] ??
+      (clusterPre && !userContextFilled ? clusterPre : "");
     const userContextPlaceholder =
       userInstructions.trim() ||
       "Paste the missing facts/context here (or delete the item).";
@@ -282,10 +334,14 @@ export function FeedbackItemsPanel({
         : it.observation || "";
 
     const setUserContext = (next, patch = {}) => {
+      const text = String(next ?? "");
       const nextItems = items.map((x) =>
-        x.id === it.id ? { ...x, user_context: String(next ?? ""), ...patch } : x,
+        x.id === it.id ? { ...x, user_context: text, ...patch } : x,
       );
       persistItems(nextItems);
+      if (onInputClusterBroadcast && it.input_cluster_key && text.trim()) {
+        onInputClusterBroadcast(it.input_cluster_key, text);
+      }
     };
 
     const setPersistUserContextToCv = (nextBool) => {
@@ -296,7 +352,7 @@ export function FeedbackItemsPanel({
     };
 
     const commitInputNeededDraft = () => {
-      const raw = String(inputNeededDraftById[it.id] ?? "");
+      const raw = String(inputDraftEffective ?? "");
       if (!raw.trim()) return;
       const nextItems = items.map((x) =>
         x.id === it.id
@@ -304,9 +360,15 @@ export function FeedbackItemsPanel({
           : x,
       );
       persistItems(nextItems);
-      // Providing required info should approve the item immediately.
+      if (onInputClusterBroadcast && it.input_cluster_key) {
+        onInputClusterBroadcast(it.input_cluster_key, raw);
+      }
+      // Providing required info should approve this and all linked items (same input cluster).
       setFeedbackItemApprovals((prev) => {
-        const nextApr = { ...prev, [it.id]: true };
+        const nextApr = { ...prev };
+        linkedApprovalIds(it).forEach((i) => {
+          nextApr[i] = true;
+        });
         const nextTab = selectNextTabIfCategoryDone(
           activeFeedbackKey,
           feedbackKeys,
@@ -332,7 +394,10 @@ export function FeedbackItemsPanel({
         x.id === it.id ? { ...x, input_declined: true } : x,
       );
       persistItems(nextItems);
-      const nextApr = { ...feedbackItemApprovals, [it.id]: true };
+      const nextApr = { ...feedbackItemApprovals };
+      linkedApprovalIds(it).forEach((i) => {
+        nextApr[i] = true;
+      });
       setFeedbackItemApprovals(nextApr);
       const nextTab = selectNextTabIfCategoryDone(
         activeFeedbackKey,
@@ -470,11 +535,22 @@ export function FeedbackItemsPanel({
     const saveUserContextRowInline = () => {
       if (editingUserContextId !== it.id) return;
       setUserContext(draftUserContext, { input_declined: false });
-      // Updating required info should also mark the item approved.
       if (String(draftUserContext || "").trim()) {
-        setFeedbackItemApprovals((prev) => ({ ...prev, [it.id]: true }));
+        setFeedbackItemApprovals((prev) => {
+          const next = { ...prev };
+          linkedApprovalIds(it).forEach((i) => {
+            next[i] = true;
+          });
+          return next;
+        });
       } else {
-        setFeedbackItemApprovals((prev) => ({ ...prev, [it.id]: false }));
+        setFeedbackItemApprovals((prev) => {
+          const next = { ...prev };
+          linkedApprovalIds(it).forEach((i) => {
+            next[i] = false;
+          });
+          return next;
+        });
       }
       setEditingUserContextId(null);
       setDraftUserContext("");
@@ -673,16 +749,25 @@ export function FeedbackItemsPanel({
       <li
         key={it.id}
         style={{
-          border: "1px solid #fcd34d",
+          border: approved ? "1px solid #e5e7eb" : "1px solid #fcd34d",
           borderRadius: 6,
           padding: 10,
-          background: "#fffbeb",
+          background: approved ? "#f3f4f6" : "#fffbeb",
+          color: approved ? "#6b7280" : undefined,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: approved ? "#9ca3af" : "#92400e", textTransform: "uppercase", letterSpacing: "0.04em" }}>
             Critique
           </span>
+          {it.duplicate_group_id ? (
+            <span
+              style={{ fontSize: 10, color: "#9ca3af" }}
+              title="Linked to the same issue in another category; approve once to approve all."
+            >
+              Linked
+            </span>
+          ) : null}
           {needsInput ? (
             <span style={{ fontSize: 11, fontWeight: 700, color: "#b91c1c", textTransform: "uppercase", letterSpacing: "0.04em" }}>
               INPUT NEEDED
@@ -716,7 +801,7 @@ export function FeedbackItemsPanel({
                     border: "1px solid #fca5a5",
                     background: "#fef2f2",
                   }}
-                  value={inputDraft}
+                  value={inputDraftEffective}
                   onChange={(e) =>
                     setInputNeededDraftById((prev) => ({ ...prev, [it.id]: e.target.value }))
                   }
@@ -728,7 +813,7 @@ export function FeedbackItemsPanel({
                   <button
                     type="button"
                     onClick={commitInputNeededDraft}
-                    disabled={disabled || !String(inputDraft).trim()}
+                    disabled={disabled || !String(inputDraftEffective).trim()}
                     style={{ fontSize: 12, padding: "4px 12px" }}
                   >
                     Save input
@@ -804,7 +889,7 @@ export function FeedbackItemsPanel({
                 <div style={{ fontSize: 12, fontWeight: 800, color: "#b91c1c" }}>Input needed</div>
                 <textarea
                   style={{ width: "100%", minHeight: 72, padding: 8, fontSize: 13, border: "1px solid #fca5a5", marginTop: 6 }}
-                  value={inputDraft}
+                  value={inputDraftEffective}
                   onChange={(e) =>
                     setInputNeededDraftById((prev) => ({ ...prev, [it.id]: e.target.value }))
                   }
@@ -816,7 +901,7 @@ export function FeedbackItemsPanel({
                   <button
                     type="button"
                     onClick={commitInputNeededDraft}
-                    disabled={disabled || !String(inputDraft).trim()}
+                    disabled={disabled || !String(inputDraftEffective).trim()}
                     style={{ fontSize: 12, padding: "4px 12px" }}
                   >
                     Save input

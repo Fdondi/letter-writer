@@ -482,7 +482,7 @@ def track_api_cost(
 
     Args:
         user_id: User ID (required - all API calls require authentication)
-        phase: Processing phase (background, draft, feedback, refine, translate, extract)
+        phase: Processing phase (background, draft, feedback, feedback_review, refine, translate, extract)
         vendor: AI vendor (openai, anthropic, gemini, etc.)
         cost: Cost in USD
         metadata: Additional metadata (character_count for translate, etc.)

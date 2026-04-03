@@ -341,19 +341,24 @@ def normalize_feedback_value(val: Any) -> List[Dict[str, Any]]:
             if status != "INPUT_NEEDED":
                 input_declined = False
 
-            out.append(
-                {
-                    "id": iid,
-                    "observation": obs,
-                    "type": typ,
-                    "status": status,
-                    "context_field": {"items": context_items},
-                    "user_context": user_context,
-                    "user_instructions": user_instructions,
-                    "input_declined": input_declined,
-                    "persist_user_context_to_cv": persist_uc,
-                }
-            )
+            row = {
+                "id": iid,
+                "observation": obs,
+                "type": typ,
+                "status": status,
+                "context_field": {"items": context_items},
+                "user_context": user_context,
+                "user_instructions": user_instructions,
+                "input_declined": input_declined,
+                "persist_user_context_to_cv": persist_uc,
+            }
+            dg = str(it.get("duplicate_group_id") or "").strip()
+            if dg:
+                row["duplicate_group_id"] = dg
+            ick = str(it.get("input_cluster_key") or "").strip()
+            if ick:
+                row["input_cluster_key"] = ick
+            out.append(row)
         return out
     if isinstance(val, str):
         return _legacy_feedback_string_to_items(val)

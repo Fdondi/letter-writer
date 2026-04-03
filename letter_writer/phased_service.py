@@ -28,6 +28,11 @@ from .generation import (
     normalize_feedback_map,
     extract_job_metadata,
 )
+from .feedback_review import (
+    FEEDBACK_REVIEW_PHASE,
+    merge_input_clusters_across_session_vendors,
+    review_feedback_for_vendor,
+)
 from .cost_tracker import track_api_cost
 from .retrieval import retrieve_similar_job_offers, select_top_documents
 from .session_store import get_session as get_session_from_store, save_session
@@ -446,6 +451,27 @@ def advance_to_draft(
         
         # Capture feedback cost separately
         _update_cost(state, ai_client, phase="feedback", user_id=user_id, vendor_str=vendor.value)
+        _reset_client_counters(ai_client)
+
+        feedback = review_feedback_for_vendor(
+            client=ai_client,
+            draft_letter=draft_letter,
+            feedback=feedback,
+            style_instructions=style_instructions,
+            cv_text=cv_text,
+            additional_user_info=additional_user_info,
+            company_report=company_report,
+            job_text=job_text,
+            top_docs=top_docs,
+            vendor=vendor.value,
+        )
+        state.feedback = feedback
+        session.vendors[vendor.value] = state
+        merge_input_clusters_across_session_vendors(session=session, client=ai_client)
+        state = session.vendors[vendor.value]
+        feedback = state.feedback
+
+        _update_cost(state, ai_client, phase=FEEDBACK_REVIEW_PHASE, user_id=user_id, vendor_str=vendor.value)
         
     except Exception:
         logger.exception("advance_to_draft failed for vendor=%s session_id=%s", vendor.value, session.session_id)
@@ -456,7 +482,8 @@ def advance_to_draft(
     
     # Save vendor-specific data to session_vendors collection (lock-free)
     from .session_store import save_vendor_data
-    save_vendor_data(session.session_id, vendor.value, state)
+    for v_name, v_state in session.vendors.items():
+        save_vendor_data(session.session_id, v_name, v_state)
     
     return state
 
