@@ -7,6 +7,11 @@ import { HTML5Backend } from "react-dnd-html5-backend";
 import { setupApiNotifications } from "./utils/apiNotifications";
 import { LanguageProvider } from "./contexts/LanguageContext";
 
+// Vite base URL for runtime-only static assets (e.g. public/app-version.txt). Set before render; not part of the bundle graph.
+if (typeof document !== "undefined") {
+  document.documentElement.dataset.viteBaseUrl = import.meta.env.BASE_URL;
+}
+
 // Install global fetch wrapper for API completion notifications.
 setupApiNotifications();
 

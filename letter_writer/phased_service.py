@@ -437,7 +437,9 @@ def advance_to_draft(
             company_fit_future = executor.submit(
                 company_fit_check, draft_letter, company_report, job_text, ai_client
             )
-            user_fit_future = executor.submit(user_fit_check, draft_letter, top_docs, ai_client)
+            user_fit_future = executor.submit(
+                user_fit_check, draft_letter, top_docs, ai_client, cv_text, additional_user_info
+            )
             human_future = executor.submit(human_check, draft_letter, top_docs, ai_client)
 
         feedback = {
@@ -539,7 +541,7 @@ def advance_to_refinement(
         state.feedback = merged
 
     try:
-        feedback = normalize_feedback_map(state.feedback)
+        feedback = normalize_feedback_map(state.feedback, top_docs=top_docs)
         logger.info("[PHASE] refine -> %s :: rewrite_letter (XLARGE)", vendor.value)
         refined = rewrite_letter(
             draft_letter,

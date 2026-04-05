@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 import uuid
@@ -5,7 +6,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from threading import Lock
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from pathlib import Path
 from langsmith import traceable
 
@@ -27,6 +28,76 @@ _EXTRACTION_CACHE_LOCK = Lock()
 class MissingCVError(Exception):
     """Catastrophic error: CV text is missing or empty when it should be present."""
     pass
+
+# Allowed values for feedback context_field.items[].source (API + UI must stay aligned).
+FEEDBACK_CONTEXT_SOURCES_FROZEN = frozenset(
+    {"CV", "EXAMPLE", "BACKGROUND_RESEARCH", "LETTER"}
+)
+FEEDBACK_CONTEXT_SOURCES_JSON_ENUM = sorted(FEEDBACK_CONTEXT_SOURCES_FROZEN)
+
+
+def _user_fit_has_example_letters(top_docs: Optional[Sequence[Any]]) -> bool:
+    if not top_docs:
+        return False
+    for ex in top_docs:
+        if (ex.get("letter_text") or "").strip():
+            return True
+    return False
+
+
+def _human_has_revision_examples(top_docs: Optional[Sequence[Any]]) -> bool:
+    if not top_docs:
+        return False
+    for ex in top_docs:
+        if ex.get("letter_text") and isinstance(ex.get("ai_letters"), list) and (ex.get("ai_letters") or []):
+            return True
+    return False
+
+
+def allowed_feedback_context_sources_for_category(
+    category: str,
+    *,
+    top_docs: Optional[Sequence[Any]] = None,
+) -> frozenset:
+    """Sources that may appear in context_field for this checker (must match prompt sections)."""
+    cat = (category or "").strip().lower()
+    if cat == "instruction":
+        return frozenset({"LETTER", "BACKGROUND_RESEARCH"})
+    if cat == "accuracy":
+        return frozenset({"CV", "LETTER"})
+    if cat in ("precision", "company_fit"):
+        return frozenset({"BACKGROUND_RESEARCH", "LETTER"})
+    if cat == "user_fit":
+        allowed = frozenset({"CV", "LETTER"})
+        if _user_fit_has_example_letters(top_docs):
+            allowed = allowed | frozenset({"EXAMPLE"})
+        return allowed
+    if cat == "human":
+        if _human_has_revision_examples(top_docs):
+            return frozenset({"EXAMPLE", "LETTER"})
+        return frozenset({"LETTER"})
+    return frozenset(FEEDBACK_CONTEXT_SOURCES_FROZEN)
+
+
+def legacy_context_string_default_source_for_category(
+    category: str,
+    *,
+    top_docs: Optional[Sequence[Any]] = None,
+) -> str:
+    """Default source for legacy bare-string context lines (must lie in allowed_feedback_context_sources_for_category)."""
+    cat = (category or "").strip().lower()
+    if cat == "instruction":
+        return "BACKGROUND_RESEARCH"
+    if cat == "accuracy":
+        return "CV"
+    if cat in ("precision", "company_fit"):
+        return "BACKGROUND_RESEARCH"
+    if cat == "user_fit":
+        return "EXAMPLE" if _user_fit_has_example_letters(top_docs) else "CV"
+    if cat == "human":
+        return "EXAMPLE" if _human_has_revision_examples(top_docs) else "LETTER"
+    return "CV"
+
 
 # In agentic flow, agents may output SKIP or NO COMMENT to leave no feedback
 AGENTIC_SKIP_PHRASES = ("NO COMMENT", "SKIP")
@@ -67,7 +138,7 @@ VENDOR_FEEDBACK_JSON_SCHEMA: Dict[str, Any] = {
                                                         "text": {"type": "string"},
                                                         "source": {
                                                             "type": "string",
-                                                            "enum": ["CV", "EXAMPLE", "BACKGROUND_RESEARCH"],
+                                                            "enum": FEEDBACK_CONTEXT_SOURCES_JSON_ENUM,
                                                         },
                                                     },
                                                     "required": ["text", "source"],
@@ -111,7 +182,12 @@ def _extract_json_value(raw: str) -> Any:
     return json.loads(text)
 
 
-def normalize_parsed_feedback_items(data: Any) -> List[Dict[str, Any]]:
+def normalize_parsed_feedback_items(
+    data: Any,
+    *,
+    allowed_context_sources: frozenset,
+    legacy_string_source: str = "CV",
+) -> List[Dict[str, Any]]:
     """Normalize parsed JSON (object with items, or bare list) into feedback item dicts."""
     raw_items: List[Any] = []
     if isinstance(data, dict) and isinstance(data.get("items"), list):
@@ -135,22 +211,26 @@ def normalize_parsed_feedback_items(data: Any) -> List[Dict[str, Any]]:
         if status not in ("NOT_NEEDED", "SUFFICIENT", "INPUT_NEEDED"):
             status = "NOT_NEEDED"
 
+        allowed = allowed_context_sources & FEEDBACK_CONTEXT_SOURCES_FROZEN
+        if not allowed:
+            allowed = frozenset(FEEDBACK_CONTEXT_SOURCES_FROZEN)
+
         context_items: List[Dict[str, str]] = []
         cf = it.get("context_field")
         if isinstance(cf, dict) and isinstance(cf.get("items"), list):
             for raw in (cf.get("items", []) or []):
                 if isinstance(raw, str):
                     t = raw.strip()
-                    if t:
-                        context_items.append({"text": t, "source": "CV"})
+                    if t and legacy_string_source in allowed:
+                        context_items.append({"text": t, "source": legacy_string_source})
                     continue
                 if isinstance(raw, dict):
                     t = str(raw.get("text") or "").strip()
                     src = str(raw.get("source") or "").strip().upper()
                     if not t:
                         continue
-                    if src not in ("CV", "EXAMPLE", "BACKGROUND_RESEARCH"):
-                        src = "CV"
+                    if src not in allowed:
+                        continue
                     context_items.append({"text": t, "source": src})
 
         # Enforce status invariants (do not drop item; just normalize field).
@@ -194,10 +274,17 @@ def _call_vendor_feedback_items(
     system: str,
     prompt: str,
     *,
+    allowed_context_sources: frozenset,
+    legacy_string_source: str = "CV",
     search: bool = False,
     max_retries: int = 2,
 ) -> List[Dict[str, Any]]:
     """Call an LLM; response must be JSON with an items array of {observation, type}."""
+    allowed = allowed_context_sources & FEEDBACK_CONTEXT_SOURCES_FROZEN
+    if not allowed:
+        allowed = frozenset(FEEDBACK_CONTEXT_SOURCES_FROZEN)
+    allowed_sorted = ", ".join(sorted(allowed))
+    response_schema = vendor_feedback_json_schema_for_allowed_sources(allowed)
     common_instructions = (
         " Reply with JSON only. The answer must be an object with key \"items\" whose value is an array. "
         "Each array element must be {\"observation\": string, \"type\": either \"ALREADY_GOOD\" or \"PLEASE_FIX\"}. "
@@ -210,8 +297,16 @@ def _call_vendor_feedback_items(
         "If you don't have the data that would be needed, it is not available. Suggest ways of working around this absence instead.\n\n"
         "Optional enrichment fields per item (use them to avoid vague feedback):\n"
         "- \"status\": one of NOT_NEEDED | SUFFICIENT | INPUT_NEEDED.\n"
-        "- \"context_field\": {\"items\": [string, ...]}.\n"
+        "- \"context_field\": {\"items\": [{\"text\": string, \"source\": string}, ...]} — use ONLY objects with \"source\", never bare strings.\n"
         "- \"user_context\": string (only when status=INPUT_NEEDED).\n"
+        "Rules for context_field.items[].source (must match where the snippet came from in THIS prompt):\n"
+        "- CV: quoted or summarized from a \"User CV\" / \"========== User CV\" section, or from \"User's additional info\" when that block is present.\n"
+        "- EXAMPLE: from \"Reference Examples\" / prior cover letters in the examples section.\n"
+        "- LETTER: from \"Cover Letter to Check\" / the current draft only.\n"
+        "- BACKGROUND_RESEARCH: from company report, job offer, and/or style instructions when those sections appear in this prompt.\n"
+        "Never label a snippet from reference letters as CV, or vice versa. If you are unsure of the origin, omit the snippet.\n"
+        f"Hard constraint for THIS check: each context_field item's \"source\" must be exactly one of: {allowed_sorted}. "
+        "Do not use any other source label.\n"
         "Rules:\n"
         "1) context_field.items is NOT for talking to the user. It must contain only neutral, paste-ready snippets extracted from your context "
         "(verbatim quotes when possible, otherwise short faithful paraphrases/summaries). Each item should read like something that can be dropped into a cover letter.\n"
@@ -240,10 +335,14 @@ def _call_vendor_feedback_items(
                 enforced_system,
                 [prompt],
                 search=search,
-                response_format=VENDOR_FEEDBACK_JSON_SCHEMA,
+                response_format=response_schema,
             )
             data = _extract_json_value(last_raw)
-            items = normalize_parsed_feedback_items(data)
+            items = normalize_parsed_feedback_items(
+                data,
+                allowed_context_sources=allowed,
+                legacy_string_source=legacy_string_source,
+            )
             return items
         except (json.JSONDecodeError, TypeError, ValueError) as e:
             logger.warning(
@@ -264,6 +363,370 @@ def _call_vendor_feedback_items(
     return []
 
 
+MISSING_CONTEXT_ITEMS_SCHEMA: Dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "missing_feedback_context_items",
+        "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "text": {"type": "string"},
+                            "source": {
+                                "type": "string",
+                                "enum": FEEDBACK_CONTEXT_SOURCES_JSON_ENUM,
+                            },
+                        },
+                        "required": ["text", "source"],
+                    },
+                }
+            },
+            "required": ["items"],
+        },
+    },
+}
+
+
+def vendor_feedback_json_schema_for_allowed_sources(allowed: frozenset) -> Dict[str, Any]:
+    """Copy of VENDOR_FEEDBACK_JSON_SCHEMA with context source enum restricted to ``allowed``."""
+    sch = copy.deepcopy(VENDOR_FEEDBACK_JSON_SCHEMA)
+    enum_list = sorted(allowed & FEEDBACK_CONTEXT_SOURCES_FROZEN)
+    if not enum_list:
+        enum_list = list(FEEDBACK_CONTEXT_SOURCES_JSON_ENUM)
+    target = sch["json_schema"]["schema"]["properties"]["items"]["items"]["properties"]["context_field"]["properties"][
+        "items"
+    ]["items"]["anyOf"][1]["properties"]["source"]
+    target["enum"] = enum_list
+    return sch
+
+
+def missing_context_items_schema_for_allowed_sources(allowed: frozenset) -> Dict[str, Any]:
+    sch = copy.deepcopy(MISSING_CONTEXT_ITEMS_SCHEMA)
+    enum_list = sorted(allowed & FEEDBACK_CONTEXT_SOURCES_FROZEN)
+    if not enum_list:
+        enum_list = list(FEEDBACK_CONTEXT_SOURCES_JSON_ENUM)
+    sch["json_schema"]["schema"]["properties"]["items"]["items"]["properties"]["source"]["enum"] = enum_list
+    return sch
+
+
+# Keys must match phased feedback buckets (instruction, accuracy, …).
+PHASED_FEEDBACK_CATEGORY_KEYS = (
+    "instruction",
+    "accuracy",
+    "precision",
+    "company_fit",
+    "user_fit",
+    "human",
+)
+
+
+def build_phased_feedback_checker_prompts(
+    category: str,
+    *,
+    letter: str,
+    style_instructions: str = "",
+    cv_text: str = "",
+    additional_user_info: str = "",
+    company_report: str = "",
+    job_text: str = "",
+    top_docs: Optional[Sequence[TopDocument]] = None,
+) -> Optional[Tuple[str, str]]:
+    """Same (system, user_prompt) as the corresponding *check* LLM, or None if that dimension is skipped (human: no AI examples)."""
+    cat = (category or "").strip().lower()
+    if cat not in PHASED_FEEDBACK_CATEGORY_KEYS:
+        raise ValueError(f"Unknown feedback category: {category}")
+
+    if cat == "instruction":
+        si = style_instructions or get_style_instructions()
+        system = (
+            "You are an expert in style and tone. Check the letter for consistency with the style instructions. "
+            "Keep each observation brief. Report only concrete mismatches or omissions, not praise.\n"
+        )
+        prompt = (
+            "========== Style Instructions:\n" + si + "\n==========\n\n" +
+            "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
+            "List any strong inconsistencies with the instructions, or use empty items if none."
+        )
+        return system, prompt
+
+    if cat == "accuracy":
+        additional_context = ""
+        if additional_user_info and additional_user_info.strip():
+            additional_context = (
+                "\n\nIMPORTANT: The user has provided additional information about themselves that is relevant but not in their CV. "
+                "Consider this when evaluating accuracy - if a claim is supported by this additional information (e.g., recent certifications, "
+                "ongoing learning, planned relocation), it may be acceptable:\n"
+                f"User's additional info: {additional_user_info}\n"
+            )
+        system = (
+            "You are an expert proofreader. Check the cover letter for factual accuracy against the user's CV. "
+            "Look for any claims or statements that are not supported by the CV or are inconsistent with it. "
+            "Provide specific feedback on any inaccuracies found. In particular:\n"
+            "1. Is what is written in the letter coherent with itself?\n"
+            "Examples of incoherhence:  'I am highly expert in Go, I used it once' (using once is not enough to claim experitise), or 'I used Python libraries such as Boost' (Boost is a C++ library)\n"
+            "2. Is what is written coherent with the user's CV? Is every claimed expertise supported?"
+            "Also pay attention to claims not strictly about tools, they also need to be supported in some way.\n"
+            "Example: 'Crypto made me a programmer' [it's a claim, it needs to be supported by the CV]\n"
+            "Be especially wary of claims of a 'common thread' or 'throughout my carreer' if it's not supported by the CV.\n"
+            "Keep each observation brief; no praise or reassurance. If there is no meaningful issue, return an empty items list.\n"
+            + additional_context
+        )
+        prompt = (
+            "========== User CV:\n" + cv_text + "\n==========\n" +
+            "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
+            "Review factual accuracy against the CV. Point out claims that cannot be verified or are inconsistent."
+        )
+        return system, prompt
+
+    if cat == "precision":
+        system = (
+            "You are a senior HR manager at the company. Evaluate how well the cover letter addresses the needs of the company, as described in the company report and job description. "
+            "1. Were all the requests in the letter addressed, either by claiming and substantiating the necessary competence, or a reasonably substitutable one, or at least ability and willingness to learn in this specific field?\n"
+            "Example: 'required: Python, GO' -> 'I have several years of Python experience' [GO is missing]\n"
+            "Example: 'required: GO' -> 'while I have not used GO professionally, I have 5 years of C++ experience, and I have follwed a course on GO. When I tried GO on LeetCode, it was easy for me to use' [OK, demonstrates ability to learn]\n"
+            "2. Is there on the contrary any claimed competence that really is superflous, does not adress the explicit or implicit requirements for the job or the company, to the point it makes you wonder if the person understands the job at all?\n"
+            "Example: 'we look for a C++ developer' -> 'I have trained several AI models'\n"
+            "3. Is there any claim about the company that is not supported by the company report or company information presented in the job offer; or even if it is technically supported, is presented in a way that makes you suspect the writer doesn't understand the company?\n"
+            "Example: the company entered crypto last year -> 'excited to apply to a company that has been a pioneer in crypto since its origin' [incorrect, user clearly didn't follow the company for long]\n"
+            "Example: the company originated in the F1 racing world, but has pivoted to banking and not worked in racing in a while -> 'excited to enter the world of racing [user is either not up to date on the company, or making up misinterpreting partial information]\n"
+            "Keep each observation brief; do not praise coverage or fit. If there is no meaningful issue, return an empty items list.\n"
+        )
+        prompt = (
+            "========== Company Report:\n" + company_report + "\n==========\n" +
+            "========== Job Offer:\n" + job_text + "\n==========\n" +
+            "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
+            "Review consistency with the company report and job description; note misalignment or superfluous claims."
+        )
+        return system, prompt
+
+    if cat == "company_fit":
+        system = (
+            "You are a senior HR manager at the company. Evaluate how well the cover letter "
+            "demonstrates understanding of and alignment with the company's values, mission, tone, and culture "
+            "as described in the company report and implied by the job offer.\n"
+            "Focus on generic, shallow, or mismatched signals—not on affirming that the letter is personalized. "
+            "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
+        )
+        prompt = (
+            "========== Company Report:\n" + company_report + "\n==========\n" +
+            "========== Job Offer:\n" + job_text + "\n==========\n" +
+            "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
+            "Review alignment with the company's values, tone, and culture; note generic or mismatched content."
+        )
+        return system, prompt
+
+    if cat == "user_fit":
+        examples = top_docs or ()
+        examples_formatted = "\n\n".join(
+            f"---- Example #{i+1} - {ex['company_name']} ----\n"
+            f"Cover Letter:\n{ex['letter_text']}\n\n"
+            for i, ex in enumerate(examples) if ex.get("letter_text")
+        )
+        if not examples_formatted.strip():
+            examples_formatted = "(No reference letters available.)"
+        cv_block = (cv_text or "").strip()
+        if not cv_block:
+            cv_block = "(No CV text was provided in this session.)"
+        additional_block = ""
+        if additional_user_info and additional_user_info.strip():
+            additional_block = (
+                "\n\n========== User's additional info (relevant but not fully captured in CV):\n"
+                + additional_user_info.strip()
+                + "\n==========\n"
+            )
+        system = (
+            "You are an expert in style and tone. Evaluate how well the cover letter follows the pattern of the previous examples. \n"
+            "You also have the applicant's CV (and optional additional info): use it to judge whether factual content "
+            "(languages, degrees, dates, tools, etc.) is missing from the draft when it exists in the CV, or only appeared in older letters.\n"
+            "Flag divergences: tone, structure, emphasis, or how weaknesses are handled compared with the references. \n"
+            "Do not praise imitation or \"good fit\" with the examples; only output items where the draft should change.\n"
+            "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
+            "NOTE: The reference examples are prior cover letters written by/about the SAME applicant. "
+            "If the difference is that some information isn't provided, any factual claims that appear in the reference examples may be used. \n"
+            "When you attach context_field snippets, tag sources correctly: EXAMPLE for reference letters; LETTER for the draft under "
+            "\"Cover Letter to Check\"; CV for the User CV block and for the User's additional info block (both are authoritative facts about the applicant).\n"
+        )
+        prompt = (
+            "========== Reference Examples:\n" + examples_formatted + "\n==========\n\n"
+            "========== User CV:\n" + cv_block + "\n==========\n"
+            + additional_block
+            + "\n========== Cover Letter to Check:\n" + letter + "\n==========\n\n"
+            "Compare to the reference letters and CV; note where the draft diverges in style, emphasis, handling of weaknesses, or omits relevant facts from the CV."
+        )
+        return system, prompt
+
+    if cat == "human":
+        examples = top_docs or ()
+        rewritten_examples = [
+            ex
+            for ex in examples
+            if ex.get("letter_text") and isinstance(ex.get("ai_letters"), list) and ex["ai_letters"]
+        ]
+        if not rewritten_examples:
+            return None
+        examples_formatted = "\n\n".join(
+            f"---- Example #{i+1} - {ex['company_name']} ----\n"
+            "Initial cover letters:\n"
+            + "\n\n".join(
+                f"[attempt {j+1}]:\n"
+                + (f"(Rating: {al.get('rating')}/5)\n" if al.get("rating") else "")
+                + (f"(Used chunks: {al.get('chunks_used')})\n" if al.get("chunks_used") is not None else "")
+                + (f"(Feedback: \"{al.get('comment')}\")\n" if al.get("comment") else "")
+                + f"{al.get('text','')}"
+                + (
+                    "\n\nUser corrections made to this letter:\n" + "\n".join(
+                        _format_correction(corr)
+                        for corr in (al.get("user_corrections") or [])
+                        if isinstance(corr, dict) and (
+                            (corr.get("type") == "full" and corr.get("original") is not None and corr.get("edited") is not None) or
+                            (corr.get("type") == "diff" and (corr.get("original") is not None or corr.get("edited") is not None))
+                        )
+                    )
+                    if al.get("user_corrections") else ""
+                )
+                for j, al in enumerate(ex["ai_letters"])
+                if isinstance(al, dict) and al.get("text")
+            )
+            + "\n\n"
+            f"Revised cover Letter:\n{ex['letter_text']}\n\n"
+            for i, ex in enumerate(rewritten_examples)
+        )
+        system = (
+            "You are an expert in noticing the patterns behind edits. You will receive a list of examples of job descriptions and corresponding cover letters; "
+            "first the cover letter how it was initially written, then the cover letter how a reviewer rewrote it. "
+            "The reviewer might have copied parts of the initial letter, or rewrote it from scratch. Either way, pay attention to what was changed. "
+            "You might also see ratings, chunk usage counts, explicit feedback comments, and user corrections (compact diffs showing changed portions, or full paragraphs if >20% changed) on the initial letters. "
+            "The corrections use a compact format: -original text+edited text for small changes, or full original/edited paragraphs for larger changes. "
+            "Use these to understand what the reviewer changed and removed, and pay special attention to user corrections.\n"
+            "Once you notice recurring removals or rewrites, flag if the new letter contains similar content the reviewer would likely change.\n"
+            "Do NOT flag elements merely for not appearing in references, and do not output praise—only actionable mismatches with edit patterns.\n"
+            "Keep each observation brief. If nothing in the draft matches a pattern the reviewer would change, return empty items.\n"
+        )
+        prompt = (
+            "========== Reference Examples:\n" + examples_formatted + "\n==========\n" +
+            "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
+            "Flag anything in the draft that resembles content the reviewer typically removes or rewrites in the examples."
+        )
+        return system, prompt
+
+    raise ValueError(f"Unknown feedback category: {category}")
+
+
+def _normalize_missing_context_items_payload(
+    data: Any,
+    *,
+    allowed_context_sources: frozenset,
+    legacy_string_source: str = "CV",
+) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    if not isinstance(data, dict):
+        return out
+    raw_items = data.get("items")
+    if not isinstance(raw_items, list):
+        return out
+    allowed = allowed_context_sources & FEEDBACK_CONTEXT_SOURCES_FROZEN
+    if not allowed:
+        allowed = frozenset(FEEDBACK_CONTEXT_SOURCES_FROZEN)
+    for raw in raw_items:
+        if isinstance(raw, str):
+            t = raw.strip()
+            if t and legacy_string_source in allowed:
+                out.append({"text": t, "source": legacy_string_source})
+            continue
+        if isinstance(raw, dict):
+            t = str(raw.get("text") or "").strip()
+            src = str(raw.get("source") or "").strip().upper()
+            if not t:
+                continue
+            if src not in allowed:
+                continue
+            out.append({"text": t, "source": src})
+    return out
+
+
+@traceable(run_type="chain", name="suggest_additional_feedback_context_items")
+def suggest_additional_feedback_context_items(
+    client: BaseClient,
+    category: str,
+    observation: str,
+    existing_context_items: Sequence[Any],
+    *,
+    letter: str,
+    style_instructions: str = "",
+    cv_text: str = "",
+    additional_user_info: str = "",
+    company_report: str = "",
+    job_text: str = "",
+    top_docs: Optional[Sequence[TopDocument]] = None,
+) -> List[Dict[str, str]]:
+    """
+    Second pass: same checker materials as the original feedback call, focused on finding
+    paste-ready snippets that belong with this observation but were omitted from context_field.
+    """
+    base = build_phased_feedback_checker_prompts(
+        category,
+        letter=letter,
+        style_instructions=style_instructions,
+        cv_text=cv_text,
+        additional_user_info=additional_user_info,
+        company_report=company_report,
+        job_text=job_text,
+        top_docs=top_docs,
+    )
+    if base is None:
+        raise ValueError(
+            "The human-dimension checker has no reference materials (no AI letter examples with revision history)."
+        )
+    system, base_prompt = base
+    allowed = allowed_feedback_context_sources_for_category(category, top_docs=top_docs)
+    legacy = legacy_context_string_default_source_for_category(category, top_docs=top_docs)
+    allowed_sorted = ", ".join(sorted(allowed))
+    existing_texts: List[str] = []
+    for raw in existing_context_items or []:
+        if isinstance(raw, dict):
+            t = str(raw.get("text") or "").strip()
+        else:
+            t = str(raw or "").strip()
+        if t:
+            existing_texts.append(t)
+    existing_block = "\n".join(f"- {t}" for t in existing_texts) if existing_texts else "(none)"
+    task = (
+        "\n\n========== Task (follow-up; same materials as above) ==========\n"
+        "One critique was already produced about this cover letter (below). "
+        "The first pass may have omitted useful paste-ready snippets drawn from the SAME materials you see above.\n\n"
+        f"Critique:\n{(observation or '').strip()}\n\n"
+        f"Snippets already attached to this critique (do not repeat or lightly rephrase):\n{existing_block}\n\n"
+        'Reply with JSON only: an object {"items": [...]} where each element is '
+        '{"text": string, "source": <one of allowed values>}. '
+        f"The only allowed \"source\" values for this category are: {allowed_sorted}. "
+        "Include ONLY additional snippets from the materials in this conversation "
+        "(verbatim quotes or short faithful paraphrases). "
+        'Return {"items": []} if nothing new is available. Never invent facts.\n'
+    )
+    full_prompt = base_prompt + task
+    ctx_schema = missing_context_items_schema_for_allowed_sources(allowed)
+    raw = client.call(
+        ModelSize.TINY,
+        system,
+        [full_prompt],
+        response_format=ctx_schema,
+    )
+    try:
+        data = _extract_json_value(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return _normalize_missing_context_items_payload(
+        data,
+        allowed_context_sources=allowed,
+        legacy_string_source=legacy,
+    )
+
+
 def _legacy_feedback_string_to_items(val: str) -> List[Dict[str, Any]]:
     """Convert legacy suffix-style feedback strings to structured items."""
     t = (val or "").strip()
@@ -280,10 +743,17 @@ def _legacy_feedback_string_to_items(val: str) -> List[Dict[str, Any]]:
     return [{"id": str(uuid.uuid4()), "observation": t, "type": "PLEASE_FIX"}]
 
 
-def normalize_feedback_value(val: Any) -> List[Dict[str, Any]]:
+def normalize_feedback_value(
+    val: Any,
+    *,
+    category_key: str,
+    top_docs: Optional[Sequence[Any]] = None,
+) -> List[Dict[str, Any]]:
     """Normalize feedback stored for one dimension (list, legacy string, or empty)."""
     if val is None:
         return []
+    allowed = allowed_feedback_context_sources_for_category(category_key, top_docs=top_docs)
+    legacy = legacy_context_string_default_source_for_category(category_key, top_docs=top_docs)
     if isinstance(val, list):
         out: List[Dict[str, Any]] = []
         for it in val:
@@ -310,16 +780,18 @@ def normalize_feedback_value(val: Any) -> List[Dict[str, Any]]:
                 for raw in (cf.get("items", []) or []):
                     if isinstance(raw, str):
                         t = raw.strip()
-                        if t:
-                            context_items.append({"text": t, "source": "CV"})
+                        if t and legacy in allowed:
+                            context_items.append({"text": t, "source": legacy})
                         continue
                     if isinstance(raw, dict):
                         t = str(raw.get("text") or "").strip()
                         src = str(raw.get("source") or "").strip().upper()
                         if not t:
                             continue
-                        if src not in ("CV", "EXAMPLE", "BACKGROUND_RESEARCH"):
-                            src = "CV"
+                        if src not in FEEDBACK_CONTEXT_SOURCES_FROZEN:
+                            continue
+                        if src not in allowed:
+                            continue
                         context_items.append({"text": t, "source": src})
             if status == "NOT_NEEDED":
                 context_items = []
@@ -365,11 +837,17 @@ def normalize_feedback_value(val: Any) -> List[Dict[str, Any]]:
     return []
 
 
-def normalize_feedback_map(fb: Optional[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+def normalize_feedback_map(
+    fb: Optional[Dict[str, Any]],
+    top_docs: Optional[Sequence[Any]] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
     """Normalize a full six-key (or partial) feedback dict after load or override."""
     keys = ("instruction", "accuracy", "precision", "company_fit", "user_fit", "human")
     src = fb or {}
-    return {k: normalize_feedback_value(src.get(k)) for k in keys}
+    return {
+        k: normalize_feedback_value(src.get(k), category_key=k, top_docs=top_docs)
+        for k in keys
+    }
 
 
 def _is_no_comment(feedback: str) -> bool:
@@ -1015,19 +1493,22 @@ def generate_letter(
 @traceable(run_type="chain", name="instruction_check")
 def instruction_check(letter: str, client: BaseClient, style_instructions: str = "") -> List[Dict[str, Any]]:
     """Check the letter for consistency with the instructions."""
-    if not style_instructions:
-        style_instructions = get_style_instructions()
-
-    system = (
-        "You are an expert in style and tone. Check the letter for consistency with the style instructions. "
-        "Keep each observation brief. Report only concrete mismatches or omissions, not praise.\n"
+    si = style_instructions or get_style_instructions()
+    prompts = build_phased_feedback_checker_prompts(
+        "instruction", letter=letter, style_instructions=si
     )
-    prompt = (
-        "========== Style Instructions:\n" + style_instructions + "\n==========\n\n" +
-        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "List any strong inconsistencies with the instructions, or use empty items if none."
+    assert prompts is not None
+    system, prompt = prompts
+    allowed = allowed_feedback_context_sources_for_category("instruction")
+    legacy = legacy_context_string_default_source_for_category("instruction")
+    return _call_vendor_feedback_items(
+        client,
+        ModelSize.TINY,
+        system,
+        prompt,
+        allowed_context_sources=allowed,
+        legacy_string_source=legacy,
     )
-    return _call_vendor_feedback_items(client, ModelSize.TINY, system, prompt)
 
 
 @traceable(run_type="chain", name="accuracy_check")
@@ -1037,99 +1518,97 @@ def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_use
     Args:
         additional_user_info: User-provided information about themselves that may explain apparent discrepancies.
     """
-    # Build additional context section if user provided info
-    additional_context = ""
-    if additional_user_info and additional_user_info.strip():
-        additional_context = (
-            "\n\nIMPORTANT: The user has provided additional information about themselves that is relevant but not in their CV. "
-            "Consider this when evaluating accuracy - if a claim is supported by this additional information (e.g., recent certifications, "
-            "ongoing learning, planned relocation), it may be acceptable:\n"
-            f"User's additional info: {additional_user_info}\n"
-        )
-    
-    system = (
-        "You are an expert proofreader. Check the cover letter for factual accuracy against the user's CV. "
-        "Look for any claims or statements that are not supported by the CV or are inconsistent with it. "
-        "Provide specific feedback on any inaccuracies found. In particular:\n"
-        "1. Is what is written in the letter coherent with itself?\n"
-        "Examples of incoherhence:  'I am highly expert in Go, I used it once' (using once is not enough to claim experitise), or 'I used Python libraries such as Boost' (Boost is a C++ library)\n"
-        "2. Is what is written coherent with the user's CV? Is every claimed expertise supported?"
-        "Also pay attention to claims not strictly about tools, they also need to be supported in some way.\n"
-        "Example: 'Crypto made me a programmer' [it's a claim, it needs to be supported by the CV]\n"
-        "Be especially wary of claims of a 'common thread' or 'throughout my carreer' if it's not supported by the CV.\n"
-        "Keep each observation brief; no praise or reassurance. If there is no meaningful issue, return an empty items list.\n"
-        + additional_context
+    prompts = build_phased_feedback_checker_prompts(
+        "accuracy",
+        letter=letter,
+        cv_text=cv_text,
+        additional_user_info=additional_user_info,
     )
-    prompt = (
-        "========== User CV:\n" + cv_text + "\n==========\n" +
-        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Review factual accuracy against the CV. Point out claims that cannot be verified or are inconsistent."
+    assert prompts is not None
+    system, prompt = prompts
+    allowed = allowed_feedback_context_sources_for_category("accuracy")
+    legacy = legacy_context_string_default_source_for_category("accuracy")
+    return _call_vendor_feedback_items(
+        client,
+        ModelSize.TINY,
+        system,
+        prompt,
+        allowed_context_sources=allowed,
+        legacy_string_source=legacy,
     )
-    return _call_vendor_feedback_items(client, ModelSize.TINY, system, prompt)
 
 @traceable(run_type="chain", name="precision_check")
 def precision_check(letter: str, company_report: str, job_text: str, client: BaseClient) -> List[Dict[str, Any]]:
     """Check the precision and style of the cover letter against the company report and job description."""
-    system = (
-        "You are a senior HR manager at the company. Evaluate how well the cover letter addresses the needs of the company, as described in the company report and job description. "
-        "1. Were all the requests in the letter addressed, either by claiming and substantiating the necessary competence, or a reasonably substitutable one, or at least ability and willingness to learn in this specific field?\n"
-        "Example: 'required: Python, GO' -> 'I have several years of Python experience' [GO is missing]\n"
-        "Example: 'required: GO' -> 'while I have not used GO professionally, I have 5 years of C++ experience, and I have follwed a course on GO. When I tried GO on LeetCode, it was easy for me to use' [OK, demonstrates ability to learn]\n"  
-        "2. Is there on the contrary any claimed competence that really is superflous, does not adress the explicit or implicit requirements for the job or the company, to the point it makes you wonder if the person understands the job at all?\n"
-        "Example: 'we look for a C++ developer' -> 'I have trained several AI models'\n"
-        "3. Is there any claim about the company that is not supported by the company report or company information presented in the job offer; or even if it is technically supported, is presented in a way that makes you suspect the writer doesn't understand the company?\n"
-        "Example: the company entered crypto last year -> 'excited to apply to a company that has been a pioneer in crypto since its origin' [incorrect, user clearly didn't follow the company for long]\n"
-        "Example: the company originated in the F1 racing world, but has pivoted to banking and not worked in racing in a while -> 'excited to enter the world of racing [user is either not up to date on the company, or making up misinterpreting partial information]\n"
-        "Keep each observation brief; do not praise coverage or fit. If there is no meaningful issue, return an empty items list.\n"
+    prompts = build_phased_feedback_checker_prompts(
+        "precision",
+        letter=letter,
+        company_report=company_report,
+        job_text=job_text,
     )
-    prompt = (
-        "========== Company Report:\n" + company_report + "\n==========\n" +
-        "========== Job Offer:\n" + job_text + "\n==========\n" +
-        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Review consistency with the company report and job description; note misalignment or superfluous claims."
+    assert prompts is not None
+    system, prompt = prompts
+    allowed = allowed_feedback_context_sources_for_category("precision")
+    legacy = legacy_context_string_default_source_for_category("precision")
+    return _call_vendor_feedback_items(
+        client,
+        ModelSize.TINY,
+        system,
+        prompt,
+        allowed_context_sources=allowed,
+        legacy_string_source=legacy,
     )
-    return _call_vendor_feedback_items(client, ModelSize.TINY, system, prompt)
 
 @traceable(run_type="chain", name="company_fit_check")
 def company_fit_check(letter: str, company_report: str, job_offer: str, client: BaseClient) -> List[Dict[str, Any]]:
     """Check how well the cover letter aligns with the company's values, culture, tone, and needs."""
-    system = (
-        "You are a senior HR manager at the company. Evaluate how well the cover letter "
-        "demonstrates understanding of and alignment with the company's values, mission, tone, and culture "
-        "as described in the company report and implied by the job offer.\n"
-        "Focus on generic, shallow, or mismatched signals—not on affirming that the letter is personalized. "
-        "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
+    prompts = build_phased_feedback_checker_prompts(
+        "company_fit",
+        letter=letter,
+        company_report=company_report,
+        job_text=job_offer,
     )
-    prompt = (
-        "========== Company Report:\n" + company_report + "\n==========\n" +
-        "========== Job Offer:\n" + job_offer + "\n==========\n" +
-        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Review alignment with the company's values, tone, and culture; note generic or mismatched content."
+    assert prompts is not None
+    system, prompt = prompts
+    allowed = allowed_feedback_context_sources_for_category("company_fit")
+    legacy = legacy_context_string_default_source_for_category("company_fit")
+    return _call_vendor_feedback_items(
+        client,
+        ModelSize.TINY,
+        system,
+        prompt,
+        allowed_context_sources=allowed,
+        legacy_string_source=legacy,
     )
-    return _call_vendor_feedback_items(client, ModelSize.TINY, system, prompt)
 
 @traceable(run_type="chain", name="user_fit_check")
-def user_fit_check(letter: str, examples: Sequence[TopDocument], client: BaseClient) -> List[Dict[str, Any]]:
+def user_fit_check(
+    letter: str,
+    examples: Sequence[TopDocument],
+    client: BaseClient,
+    cv_text: str = "",
+    additional_user_info: str = "",
+) -> List[Dict[str, Any]]:
     """Check how well the cover letter showcases the user's unique value proposition."""
-    examples_formatted = "\n\n".join(
-        f"---- Example #{i+1} - {ex['company_name']} ----\n"
-        f"Cover Letter:\n{ex['letter_text']}\n\n"
-        for i, ex in enumerate(examples) if ex['letter_text']
+    prompts = build_phased_feedback_checker_prompts(
+        "user_fit",
+        letter=letter,
+        top_docs=examples,
+        cv_text=cv_text,
+        additional_user_info=additional_user_info,
     )
-    system = (
-        "You are an expert in style and tone. Evaluate how well the cover letter follows the pattern of the previous examples. \n"
-        "Flag divergences: tone, structure, emphasis, or how weaknesses are handled compared with the references. \n"
-        "Do not praise imitation or \"good fit\" with the examples; only output items where the draft should change.\n"
-        "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
-        "NOTE: The reference examples are prior cover letters written by/about the SAME applicant. "
-        "If the difference is that some information isn't provided, any factual claims that appear in the reference examples may be used. \n"
+    assert prompts is not None
+    system, prompt = prompts
+    allowed = allowed_feedback_context_sources_for_category("user_fit", top_docs=examples)
+    legacy = legacy_context_string_default_source_for_category("user_fit", top_docs=examples)
+    return _call_vendor_feedback_items(
+        client,
+        ModelSize.TINY,
+        system,
+        prompt,
+        allowed_context_sources=allowed,
+        legacy_string_source=legacy,
     )
-    prompt = (
-        "========== Reference Examples:\n" + examples_formatted + "\n==========\n" +
-        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Compare to the reference letters; note where the draft diverges in style, emphasis, or handling of weaknesses."
-    )
-    return _call_vendor_feedback_items(client, ModelSize.TINY, system, prompt)
 
 def _format_correction(corr: dict) -> str:
     """Format a correction diff for display in the review agent prompt."""
@@ -1152,63 +1631,24 @@ def _format_correction(corr: dict) -> str:
 @traceable(run_type="chain", name="human_check")
 def human_check(letter: str, examples: Sequence[TopDocument], client: BaseClient) -> List[Dict[str, Any]]:
     """Check the letter for consistency with the instructions."""
-    rewritten_examples = [
-        ex
-        for ex in examples
-        if ex.get("letter_text") and isinstance(ex.get("ai_letters"), list) and ex["ai_letters"]
-    ]
-    
-    if not rewritten_examples:
+    prompts = build_phased_feedback_checker_prompts("human", letter=letter, top_docs=examples)
+    if prompts is None:
         logger.info(
             "none of %s have AI letters, skipping",
             ", ".join(ex.get("company_name", "?") for ex in examples),
         )
         return []
-
-    examples_formatted = "\n\n".join(
-        f"---- Example #{i+1} - {ex['company_name']} ----\n"
-        "Initial cover letters:\n"
-        + "\n\n".join(
-            f"[attempt {j+1}]:\n"
-            + (f"(Rating: {al.get('rating')}/5)\n" if al.get("rating") else "")
-            + (f"(Used chunks: {al.get('chunks_used')})\n" if al.get("chunks_used") is not None else "")
-            + (f"(Feedback: \"{al.get('comment')}\")\n" if al.get("comment") else "")
-            + f"{al.get('text','')}"
-            + (
-                "\n\nUser corrections made to this letter:\n" + "\n".join(
-                    _format_correction(corr)
-                    for corr in (al.get("user_corrections") or [])
-                    if isinstance(corr, dict) and (
-                        (corr.get("type") == "full" and corr.get("original") is not None and corr.get("edited") is not None) or
-                        (corr.get("type") == "diff" and (corr.get("original") is not None or corr.get("edited") is not None))
-                    )
-                )
-                if al.get("user_corrections") else ""
-            )
-            for j, al in enumerate(ex["ai_letters"])
-            if isinstance(al, dict) and al.get("text")
-        )
-        + "\n\n"
-        f"Revised cover Letter:\n{ex['letter_text']}\n\n"
-        for i, ex in enumerate(rewritten_examples)
+    system, prompt = prompts
+    allowed = allowed_feedback_context_sources_for_category("human", top_docs=examples)
+    legacy = legacy_context_string_default_source_for_category("human", top_docs=examples)
+    return _call_vendor_feedback_items(
+        client,
+        ModelSize.TINY,
+        system,
+        prompt,
+        allowed_context_sources=allowed,
+        legacy_string_source=legacy,
     )
-    system = (
-        "You are an expert in noticing the patterns behind edits. You will receive a list of examples of job descriptions and corresponding cover letters; "
-        "first the cover letter how it was initially written, then the cover letter how a reviewer rewrote it. "
-        "The reviewer might have copied parts of the initial letter, or rewrote it from scratch. Either way, pay attention to what was changed. "
-        "You might also see ratings, chunk usage counts, explicit feedback comments, and user corrections (compact diffs showing changed portions, or full paragraphs if >20% changed) on the initial letters. "
-        "The corrections use a compact format: -original text+edited text for small changes, or full original/edited paragraphs for larger changes. "
-        "Use these to understand what the reviewer changed and removed, and pay special attention to user corrections.\n"
-        "Once you notice recurring removals or rewrites, flag if the new letter contains similar content the reviewer would likely change.\n"
-        "Do NOT flag elements merely for not appearing in references, and do not output praise—only actionable mismatches with edit patterns.\n"
-        "Keep each observation brief. If nothing in the draft matches a pattern the reviewer would change, return empty items.\n"
-    )
-    prompt = (  
-        "========== Reference Examples:\n" + examples_formatted + "\n==========\n" +
-        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Flag anything in the draft that resembles content the reviewer typically removes or rewrites in the examples."
-    )
-    return _call_vendor_feedback_items(client, ModelSize.TINY, system, prompt)
 
 
 def _letter_block_for_context(draft_letter: str) -> str:
@@ -1281,9 +1721,29 @@ def get_agentic_topic_context(
             f"Cover Letter:\n{ex.get('letter_text', '')}\n\n"
             for i, ex in enumerate(top_docs) if ex.get("letter_text")
         )
-        if not examples_formatted:
+        if not examples_formatted.strip():
             examples_formatted = "(No reference letters available.)"
-        return "========== Reference Examples:\n" + examples_formatted + "\n==========\n\n" + letter_block
+        cv_block = (cv_text or "").strip()
+        if not cv_block:
+            cv_block = "(No CV text was provided in this session.)"
+        extra = ""
+        if additional_user_info and additional_user_info.strip():
+            extra = (
+                "\n\n========== User's additional info (relevant but not fully captured in CV):\n"
+                + additional_user_info.strip()
+                + "\n==========\n"
+            )
+        return (
+            "========== Reference Examples:\n"
+            + examples_formatted
+            + "\n==========\n\n"
+            + "========== User CV:\n"
+            + cv_block
+            + "\n==========\n"
+            + extra
+            + "\n"
+            + letter_block
+        )
     if topic == "human":
         rewritten = [
             ex for ex in top_docs
@@ -1359,7 +1819,7 @@ def _rewrite_dimension_text(val: Any) -> str:
                         src = str(raw.get("source") or "").strip().upper()
                         if not t:
                             continue
-                        if src in ("CV", "EXAMPLE", "BACKGROUND_RESEARCH"):
+                        if src in FEEDBACK_CONTEXT_SOURCES_FROZEN:
                             context_items.append(f"[{src}] {t}")
                         else:
                             context_items.append(t)

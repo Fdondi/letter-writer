@@ -7,7 +7,9 @@ from typing import Any, Dict, Iterable, List, Optional, Union, cast
 from uuid import uuid4
 
 from google.cloud import firestore
+from google.cloud.firestore import DELETE_FIELD
 from google.cloud.firestore_v1.base_query import FieldFilter
+from google.cloud.firestore_v1.field_path import FieldPath
 from google.cloud.firestore_v1.vector import Vector
 
 from .config import env_default
@@ -550,6 +552,26 @@ def _normalize_poc_key(poc_name: str) -> str:
     return poc_name.strip().lower().replace(" ", "_")
 
 
+def _reports_top_docs_update_key(model_key: str) -> str:
+    """Firestore ``update()`` field key for ``reports.<model_key>.top_docs``.
+
+    Model keys may contain ``/`` (e.g. ``openai/gpt-5-search-api``). Dot-joined
+    strings are invalid; use the API representation with backtick-escaped segments.
+    """
+    return FieldPath("reports", model_key, "top_docs").to_api_repr()
+
+
+def _strip_top_docs_from_reports_map(reports: Dict[str, Any]) -> Dict[str, Any]:
+    """Return copy of per-model report entries without top_docs (not persisted)."""
+    out: Dict[str, Any] = {}
+    for model_key, entry in reports.items():
+        if isinstance(entry, dict):
+            out[model_key] = {k: v for k, v in entry.items() if k != "top_docs"}
+        else:
+            out[model_key] = entry
+    return out
+
+
 def save_company_info(
     company_name: str,
     data: dict,
@@ -569,15 +591,20 @@ def save_company_info(
     doc_id = _normalize_company_doc_id(company_name)
     
     collection = get_companies_collection()
+    doc_ref = collection.document(doc_id)
     
+    raw = dict(data or {})
+    reports = raw.pop("reports", None)
     # Use direct set with merge=True to support arbitrary fields (like reports)
     # upsert_document is too strict and only supports specific document fields
     update_data = {
         "id": doc_id,
         "company_name": company_name,
         "updated_at": datetime.now(timezone.utc),
-        **data
+        **raw,
     }
+    if reports is not None:
+        update_data["reports"] = _strip_top_docs_from_reports_map(reports)
     
     # Add vector (provided or generated from company name) for similarity lookup.
     try:
@@ -592,7 +619,16 @@ def save_company_info(
         logger.warning("vector enrichment failed: %s", e)
         # Vector enrichment is best-effort and should not block company cache writes.
     
-    collection.document(doc_id).set(update_data, merge=True)
+    doc_ref.set(update_data, merge=True)
+    # Merge does not remove nested top_docs on existing reports; delete explicitly.
+    if isinstance(reports, dict):
+        deletes = {
+            _reports_top_docs_update_key(model_key): DELETE_FIELD
+            for model_key in reports
+            if isinstance(reports.get(model_key), dict)
+        }
+        if deletes:
+            doc_ref.update(deletes)
     return update_data
 
 
@@ -669,6 +705,40 @@ def get_company_info(company_name: str) -> Optional[dict]:
             out["resolved_to"] = doc_id
         return out
     return None
+
+
+def strip_top_docs_from_all_company_research_docs(*, dry_run: bool = True) -> Dict[str, Any]:
+    """Remove ``reports.<model>.top_docs`` from every document in the companies collection.
+
+    ``top_docs`` are per-job RAG picks and are not part of durable company research.
+    When ``dry_run`` is True (default), only counts matching documents and does not write.
+
+    Requires Firestore credentials (e.g. ``GOOGLE_APPLICATION_CREDENTIALS`` or ``gcloud auth``).
+    """
+    collection = get_companies_collection()
+    scanned = 0
+    documents_with_top_docs = 0
+    for snap in collection.stream():
+        scanned += 1
+        data = snap.to_dict() or {}
+        reports = data.get("reports")
+        if not isinstance(reports, dict):
+            continue
+        deletes = {
+            _reports_top_docs_update_key(model_key): DELETE_FIELD
+            for model_key, entry in reports.items()
+            if isinstance(entry, dict) and "top_docs" in entry
+        }
+        if not deletes:
+            continue
+        documents_with_top_docs += 1
+        if not dry_run:
+            snap.reference.update(deletes)
+    return {
+        "scanned": scanned,
+        "documents_with_top_docs": documents_with_top_docs,
+        "dry_run": dry_run,
+    }
 
 
 def save_poc_info(company_name: str, poc_name: str, data: dict) -> dict:

@@ -8,7 +8,15 @@ export const FEEDBACK_TYPES = {
   PLEASE_FIX: "PLEASE_FIX",
 };
 
-export const CONTEXT_SOURCES = ["CV", "EXAMPLE", "BACKGROUND_RESEARCH"];
+export const CONTEXT_SOURCES = ["CV", "EXAMPLE", "BACKGROUND_RESEARCH", "LETTER"];
+
+/** Short UI labels aligned with backend `context_field.items[].source` values. */
+export const CONTEXT_SOURCE_LABELS = {
+  CV: "CV",
+  EXAMPLE: "Example letters",
+  BACKGROUND_RESEARCH: "Job / company / brief",
+  LETTER: "This draft",
+};
 
 export function newId() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
@@ -32,7 +40,8 @@ function normalizeContextItems(rawItems) {
     }
     if (it && typeof it === "object") {
       const text = String(it.text ?? "").trimEnd();
-      if (!text.trim()) continue;
+      // Keep empty rows: "Add context" saves { text: "", source } and mergeCategoryItems re-runs this;
+      // dropping blanks made the new row vanish before the user could type.
       out.push({ text, source: normalizeContextSource(it.source) });
     }
   }

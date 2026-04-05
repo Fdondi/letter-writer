@@ -120,7 +120,37 @@ def _build_justification_context(
             + letter
             + "\n==========\n"
         )
-    if category in ("user_fit", "human"):
+    if category == "user_fit":
+        examples_formatted = "\n\n".join(
+            f"---- Example #{i+1} - {ex.get('company_name', '')} ----\n"
+            f"Cover Letter:\n{ex.get('letter_text', '')}\n\n"
+            for i, ex in enumerate(top_docs)
+            if ex.get("letter_text")
+        )
+        if not examples_formatted.strip():
+            examples_formatted = "(No reference letters available.)"
+        cv_block = cv.strip()
+        if not cv_block:
+            cv_block = "(No CV text was provided in this session.)"
+        extra = ""
+        if add:
+            extra = (
+                "\n\n========== User's additional info (relevant but not fully captured in CV):\n"
+                + add
+                + "\n==========\n"
+            )
+        return (
+            "========== Reference Examples:\n"
+            + examples_formatted
+            + "\n==========\n\n========== User CV:\n"
+            + cv_block
+            + "\n==========\n"
+            + extra
+            + "\n========== Cover Letter:\n"
+            + letter
+            + "\n==========\n"
+        )
+    if category == "human":
         examples_formatted = "\n\n".join(
             f"---- Example #{i+1} - {ex.get('company_name', '')} ----\n"
             f"Cover Letter:\n{ex.get('letter_text', '')}\n\n"
@@ -369,7 +399,7 @@ def review_feedback_for_vendor(
     Sequential stages; parallelize independent LLM calls within stages 1 and 2.
     Mutates no inputs; returns new feedback dict.
     """
-    fb = normalize_feedback_map(feedback)
+    fb = normalize_feedback_map(feedback, top_docs=top_docs)
     flat = _flatten_feedback(fb)
     if not flat:
         return fb
@@ -495,7 +525,10 @@ def merge_input_clusters_across_session_vendors(
     """
     rows: List[Dict[str, Any]] = []
     for v_name, v_state in (session.vendors or {}).items():
-        fb = normalize_feedback_map(getattr(v_state, "feedback", None))
+        fb = normalize_feedback_map(
+            getattr(v_state, "feedback", None),
+            top_docs=getattr(v_state, "top_docs", None),
+        )
         for cat in FEEDBACK_CATEGORY_KEYS:
             for it in fb.get(cat) or []:
                 if str(it.get("status", "")).upper() != "INPUT_NEEDED":

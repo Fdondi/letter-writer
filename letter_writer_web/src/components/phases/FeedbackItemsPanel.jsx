@@ -1,6 +1,15 @@
 import React, { useCallback, useMemo, useState } from "react";
 import LanguageSelector from "../LanguageSelector";
-import { CONTEXT_SOURCES, FEEDBACK_TYPES, mergeCategoryItems, newId, selectNextTabIfCategoryDone } from "./feedbackItemUtils";
+import { fetchWithHeartbeat } from "../../utils/apiHelpers";
+import { showNotification } from "../../utils/apiNotifications";
+import {
+  CONTEXT_SOURCES,
+  CONTEXT_SOURCE_LABELS,
+  FEEDBACK_TYPES,
+  mergeCategoryItems,
+  newId,
+  selectNextTabIfCategoryDone,
+} from "./feedbackItemUtils";
 
 function LanguageSelectorTiny({ fieldId, observation, translation, disabled }) {
   const fieldViewLanguage = translation.getFieldViewLanguage(fieldId);
@@ -38,8 +47,11 @@ export function FeedbackItemsPanel({
   duplicateLinkFlat = [],
   inputClusterText = {},
   onInputClusterBroadcast = undefined,
+  vendor = undefined,
 }) {
   const [editingId, setEditingId] = useState(null);
+  /** Set while POST /feedback/request-context/ is in flight for one item id. */
+  const [requestContextLoadingId, setRequestContextLoadingId] = useState(null);
   const [draftObservation, setDraftObservation] = useState("");
   /** When editing a positive note, true after "Turn into critique" — save as PLEASE_FIX. */
   const [editingPromoteToFix, setEditingPromoteToFix] = useState(false);
@@ -169,54 +181,6 @@ export function FeedbackItemsPanel({
     setDraftContextLine("");
     setEditingUserContextId(null);
     setDraftUserContext("");
-  };
-
-  /** Demote a critique to a positive note (hidden section). */
-  const skipToPositive = (id, obsFromDraft) => {
-    const it = items.find((i) => i.id === id);
-    if (!it || it.type !== FEEDBACK_TYPES.PLEASE_FIX) return;
-    const obs = (obsFromDraft !== undefined ? obsFromDraft : it.observation || "").trim();
-    const finalObs = obs || (it.observation || "").trim();
-    if (!finalObs) {
-      onRemove(id);
-      return;
-    }
-    const next = items.map((x) =>
-      x.id === id ? { ...x, type: FEEDBACK_TYPES.ALREADY_GOOD, observation: finalObs } : x,
-    );
-    persistItems(next);
-    const nextApr = { ...feedbackItemApprovals };
-    delete nextApr[id];
-    setFeedbackItemApprovals(nextApr);
-    const nextTab = selectNextTabIfCategoryDone(
-      activeFeedbackKey,
-      feedbackKeys,
-      feedback,
-      feedbackOverrides,
-      categoryKey,
-      next,
-      nextApr,
-    );
-    if (nextTab) setSelectedFeedbackTab(nextTab);
-    if (editingId === id) {
-      setEditingId(null);
-      setDraftObservation("");
-      setEditingPromoteToFix(false);
-    }
-    if (editingContextRow?.itemId === id) {
-      setEditingContextRow(null);
-      setDraftContextLine("");
-    }
-    if (editingUserContextId === id) {
-      setEditingUserContextId(null);
-      setDraftUserContext("");
-    }
-    setInputNeededDraftById((prev) => {
-      if (!(id in prev)) return prev;
-      const n = { ...prev };
-      delete n[id];
-      return n;
-    });
   };
 
   const saveEdit = () => {
@@ -459,6 +423,71 @@ export function FeedbackItemsPanel({
       persistItems(nextItems);
     };
 
+    const requestMoreMachineContext = async () => {
+      if (!vendor) return;
+      const obs = String(it.observation || "").trim();
+      if (!obs) return;
+      setRequestContextLoadingId(it.id);
+      try {
+        const { data, isHeartbeat } = await fetchWithHeartbeat(
+          `/api/phases/feedback/request-context/${encodeURIComponent(vendor)}/`,
+          { method: "POST", body: JSON.stringify({ category: categoryKey, item_id: it.id }) },
+        );
+        if (isHeartbeat) {
+          showNotification("Request still processing; try again in a moment.");
+          return;
+        }
+        const incoming = Array.isArray(data?.items) ? data.items : [];
+        const seen = new Set(
+          contextItems
+            .map((r) => {
+              const t = String(r?.text ?? r ?? "").trim().toLowerCase();
+              return t;
+            })
+            .filter(Boolean),
+        );
+        const appended = [];
+        for (const row of incoming) {
+          const text = String(row?.text ?? "").trim();
+          if (!text) continue;
+          const low = text.toLowerCase();
+          if (seen.has(low)) continue;
+          seen.add(low);
+          let src = String(row?.source ?? "CV").trim().toUpperCase();
+          if (!CONTEXT_SOURCES.includes(src)) src = "CV";
+          appended.push({ text, source: src });
+        }
+        if (appended.length === 0) {
+          showNotification("No additional context lines found in the same materials.");
+          return;
+        }
+        const nextRows = [...contextItems, ...appended];
+        const hasRows = nextRows.some((x) => String(x?.text ?? x ?? "").trim().length > 0);
+        const nonEmpty = nextRows.some((x) => String(x?.text ?? x ?? "").trim().length > 0);
+        const nextStatus =
+          status === "INPUT_NEEDED"
+            ? "INPUT_NEEDED"
+            : hasRows || nonEmpty
+              ? "SUFFICIENT"
+              : "NOT_NEEDED";
+        const nextItems = items.map((x) =>
+          x.id === it.id
+            ? {
+                ...x,
+                status: nextStatus,
+                context_field: { ...(x.context_field || {}), items: nextRows },
+              }
+            : x,
+        );
+        persistItems(nextItems);
+        showNotification(`Added ${appended.length} context line(s).`);
+      } catch (e) {
+        showNotification(e?.message || String(e));
+      } finally {
+        setRequestContextLoadingId(null);
+      }
+    };
+
     const updateContextItem = (idx, patch) => {
       const next = [...(contextItems || [])];
       const prev = next[idx];
@@ -581,6 +610,27 @@ export function FeedbackItemsPanel({
       (editingContextRow?.itemId === it.id && !isEditing) ||
       (editingUserContextId === it.id && !isEditing);
 
+    /** Same gate as showInputEditor: missing saved user_context and not declined — Approve stays off until input or this path. */
+    const needsInputOrDeclineChoice = needsInput && !userContextFilled && !inputDeclined;
+    const renderApproveWithoutInputButton = () => (
+      <button
+        type="button"
+        onClick={approveWithoutInput}
+        disabled={disabled}
+        style={{
+          fontSize: 11,
+          padding: "4px 10px",
+          fontWeight: 600,
+          color: "#1e40af",
+          border: "1px solid #93c5fd",
+          background: "#eff6ff",
+        }}
+        title="Keep this critique in the letter; the model will not receive new facts for this point"
+      >
+        No input needed
+      </button>
+    );
+
     const renderMachineRow = (idx) => {
       const raw = contextItems[idx];
       const text = String(raw && typeof raw === "object" && !Array.isArray(raw) ? raw.text : (raw ?? ""));
@@ -604,7 +654,7 @@ export function FeedbackItemsPanel({
               >
                 {CONTEXT_SOURCES.map((s) => (
                   <option key={s} value={s}>
-                    {s}
+                    {CONTEXT_SOURCE_LABELS[s] ?? s}
                   </option>
                 ))}
               </select>
@@ -631,7 +681,9 @@ export function FeedbackItemsPanel({
       return (
         <div key={`${it.id}-ctx-${idx}`} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 8 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 2 }}>{normalizedSrc}</div>
+            <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 2 }}>
+              {CONTEXT_SOURCE_LABELS[normalizedSrc] ?? normalizedSrc}
+            </div>
             <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.45, color: "#111827" }}>
               {text.trim() ? text : "(empty)"}
             </div>
@@ -816,23 +868,9 @@ export function FeedbackItemsPanel({
                     disabled={disabled || !String(inputDraftEffective).trim()}
                     style={{ fontSize: 12, padding: "4px 12px" }}
                   >
-                    Save input
+                    Save
                   </button>
-                  <button
-                    type="button"
-                    onClick={approveWithoutInput}
-                    disabled={disabled}
-                    style={{
-                      fontSize: 12,
-                      padding: "4px 12px",
-                      color: "#4b5563",
-                      border: "1px solid #d1d5db",
-                      background: "#fff",
-                    }}
-                    title="Approve this critique for the letter without supplying missing facts"
-                  >
-                    Approve without adding data
-                  </button>
+                  {renderApproveWithoutInputButton()}
                 </div>
               </div>
             ) : null}
@@ -847,9 +885,24 @@ export function FeedbackItemsPanel({
                 >
                   Add context
                 </button>
+                {vendor ? (
+                  <button
+                    type="button"
+                    onClick={requestMoreMachineContext}
+                    disabled={
+                      disabled ||
+                      requestContextLoadingId === it.id ||
+                      !String(it.observation || "").trim()
+                    }
+                    style={{ fontSize: 11, padding: "2px 8px" }}
+                    title="Run the checker context again to suggest snippets the first pass may have missed"
+                  >
+                    {requestContextLoadingId === it.id ? "…" : "Request context"}
+                  </button>
+                ) : null}
                 {status === "INPUT_NEEDED" ? (
                   <span style={{ fontSize: 11, color: "#b91c1c" }}>
-                    Provide missing context (or use Approve without adding data above).
+                    Use Save, or the blue &quot;No input needed&quot; button above.
                   </span>
                 ) : null}
               </div>
@@ -860,15 +913,7 @@ export function FeedbackItemsPanel({
               <button type="button" onClick={saveEdit} disabled={disabled} style={{ fontSize: 12 }}>
                 Save
               </button>
-              <button
-                type="button"
-                onClick={() => skipToPositive(it.id, draftObservation)}
-                disabled={disabled}
-                style={{ fontSize: 12, color: "#4b5563", border: "1px solid #d1d5db", background: "#fff" }}
-                title="Treat as a non-issue; move to positive notes"
-              >
-                Skip
-              </button>
+              {needsInputOrDeclineChoice ? renderApproveWithoutInputButton() : null}
               <button type="button" onClick={cancelEdit} style={{ fontSize: 12 }}>
                 Cancel
               </button>
@@ -904,23 +949,9 @@ export function FeedbackItemsPanel({
                     disabled={disabled || !String(inputDraftEffective).trim()}
                     style={{ fontSize: 12, padding: "4px 12px" }}
                   >
-                    Save input
+                    Save
                   </button>
-                  <button
-                    type="button"
-                    onClick={approveWithoutInput}
-                    disabled={disabled}
-                    style={{
-                      fontSize: 12,
-                      padding: "4px 12px",
-                      color: "#4b5563",
-                      border: "1px solid #d1d5db",
-                      background: "#fff",
-                    }}
-                    title="Approve this critique for the letter without supplying missing facts"
-                  >
-                    Approve without adding data
-                  </button>
+                  {renderApproveWithoutInputButton()}
                 </div>
               </div>
             ) : null}
@@ -931,7 +962,7 @@ export function FeedbackItemsPanel({
                 {renderUserContextRow()}
               </div>
             ) : null}
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8, alignItems: "center" }}>
               <button
                 type="button"
                 onClick={() => onApprovePleaseFix(it.id)}
@@ -941,20 +972,32 @@ export function FeedbackItemsPanel({
                   (needsInput && !String(userContext || "").trim() && !inputDeclined)
                 }
                 style={{ fontSize: 11 }}
+                title={
+                  needsInputOrDeclineChoice && !approved
+                    ? "Add facts above and Save, or use No input needed to keep the critique without new data"
+                    : undefined
+                }
               >
                 {approved ? "Approved" : "Approve"}
               </button>
               <button type="button" onClick={() => startEdit(it)} disabled={disabled} style={{ fontSize: 11 }}>
                 Edit
               </button>
-              <button
-                type="button"
-                onClick={() => skipToPositive(it.id, it.observation)}
-                disabled={disabled}
-                style={{ fontSize: 11, color: "#4b5563" }}
-              >
-                Skip
-              </button>
+              {vendor ? (
+                <button
+                  type="button"
+                  onClick={requestMoreMachineContext}
+                  disabled={
+                    disabled ||
+                    requestContextLoadingId === it.id ||
+                    !String(it.observation || "").trim()
+                  }
+                  style={{ fontSize: 11 }}
+                  title="Run the checker context again to suggest snippets the first pass may have missed"
+                >
+                  {requestContextLoadingId === it.id ? "…" : "Request context"}
+                </button>
+              ) : null}
               <button type="button" onClick={() => onRemove(it.id)} disabled={disabled} style={{ fontSize: 11, color: "#b91c1c" }}>
                 Remove
               </button>

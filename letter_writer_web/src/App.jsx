@@ -12,6 +12,7 @@ import OverlayPanel from "./components/OverlayPanel";
 import LanguageConfig from "./components/LanguageConfig";
 import LanguageSelector from "./components/LanguageSelector";
 import AuthButton from "./components/AuthButton";
+import AppVersionLabel from "./components/AppVersionLabel";
 import CostDisplay from "./components/CostDisplay";
 import CostsPage from "./components/CostsPage";
 import CompetencesList from "./components/CompetencesList";
@@ -774,14 +775,36 @@ export default function App({ flow = "vendor" }) {
       <div
         style={{
           display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
+          flexDirection: "column",
           minHeight: "100vh",
           backgroundColor: "var(--bg-color)",
           color: "var(--text-color)",
         }}
       >
-        <div>Checking authentication...</div>
+        <div
+          style={{
+            padding: "12px 20px",
+            display: "flex",
+            alignItems: "baseline",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          <h1 style={{ margin: 0, fontSize: "24px", fontWeight: 600, color: "var(--text-color)" }}>
+            Letter Writer
+          </h1>
+          <AppVersionLabel />
+        </div>
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+          }}
+        >
+          <div>Checking authentication...</div>
+        </div>
       </div>
     );
   }
@@ -811,9 +834,21 @@ export default function App({ flow = "vendor" }) {
             textAlign: "center",
           }}
         >
-          <h1 style={{ marginTop: 0, marginBottom: "10px", fontSize: "24px", fontWeight: 600 }}>
-            Letter Writer
-          </h1>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "center",
+              gap: 8,
+              flexWrap: "wrap",
+              marginBottom: "10px",
+            }}
+          >
+            <h1 style={{ margin: 0, fontSize: "24px", fontWeight: 600 }}>
+              Letter Writer
+            </h1>
+            <AppVersionLabel />
+          </div>
           <p style={{ marginBottom: "30px", color: "var(--text-color)", opacity: 0.8 }}>
             Sign in to continue
           </p>
@@ -2826,9 +2861,22 @@ export default function App({ flow = "vendor" }) {
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
           }}
         >
-          <h1 style={{ margin: 0, color: "var(--text-color)" }}>Letter Writer</h1>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              gap: 8,
+              flexWrap: "wrap",
+              minWidth: 0,
+            }}
+          >
+            <h1 style={{ margin: 0, color: "var(--text-color)" }}>Letter Writer</h1>
+            <AppVersionLabel />
+          </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             {/* NOTE: Flow (vendor vs agentic) is fixed per page load—no switching. Compose/vendor/agentic are not buttons. */}
             <button

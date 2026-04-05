@@ -1,5 +1,21 @@
 import '@testing-library/jest-dom';
 
+// Runtime app version is fetched from public/app-version.txt; stub for Jest (no dev server).
+const __origFetch = global.fetch;
+global.fetch = jest.fn((input, init) => {
+  const url = typeof input === 'string' ? input : input?.url ?? '';
+  if (String(url).includes('app-version.txt')) {
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve('1.0.0'),
+    });
+  }
+  if (typeof __origFetch === 'function') {
+    return __origFetch(input, init);
+  }
+  return Promise.reject(new Error(`Unmocked fetch: ${url}`));
+});
+
 // Mock UUID to make tests deterministic
 jest.mock('uuid', () => ({
   v4: jest.fn(() => 'test-uuid-123')

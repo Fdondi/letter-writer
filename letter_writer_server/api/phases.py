@@ -25,18 +25,27 @@ from letter_writer_server.core.session import (
     release_agentic_lock,
 )
 from letter_writer_server.api.cost_utils import check_spending_limits
-from letter_writer.generation import AGENTIC_TOPIC_KEYS, get_agentic_topic_context, get_style_instructions
+from letter_writer.generation import (
+    AGENTIC_TOPIC_KEYS,
+    get_agentic_topic_context,
+    get_style_instructions,
+    suggest_additional_feedback_context_items,
+    PHASED_FEEDBACK_CATEGORY_KEYS,
+)
 from letter_writer.phased_service import get_metadata_field
 from letter_writer.clients.base import ModelVendor
 from letter_writer_server.api.cost_utils import with_user_monthly_cost
 from letter_writer.phased_service import (
-    _run_background_phase, 
-    advance_to_draft, 
+    _run_background_phase,
+    advance_to_draft,
     advance_to_refinement,
     get_metadata_field,
-    VendorPhaseState
+    VendorPhaseState,
+    _reset_client_counters,
+    _update_cost,
 )
-from letter_writer.session_store import set_current_request, save_vendor_data
+from letter_writer.client import get_client
+from letter_writer.session_store import set_current_request, save_vendor_data, load_vendor_data
 from letter_writer.clients.base import ModelVendor
 from letter_writer.generation import MissingCVError
 from letter_writer.session_store import load_session_common_data, check_session_exists
@@ -108,6 +117,13 @@ class RefinePhaseRequest(BaseModel):
     feedback_override: Optional[Dict[str, Any]] = None
     company_report: Optional[str] = None
     top_docs: Optional[List[Dict[str, Any]]] = None
+
+
+class FeedbackRequestContextBody(BaseModel):
+    """Re-run context extraction for one feedback item with the same materials as the original checker."""
+
+    category: str
+    item_id: str
 
 
 class AgenticDraftRequest(BaseModel):
@@ -409,6 +425,101 @@ async def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, 
         }, session)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/feedback/request-context/{vendor}/")
+async def feedback_request_context(
+    vendor: str,
+    data: FeedbackRequestContextBody,
+    request: Request,
+    session: Session = Depends(get_session),
+    _limit: None = Depends(check_spending_limits),
+):
+    """LLM pass: same checker context as draft feedback, to suggest context_field lines the first pass missed."""
+    set_current_request(request)
+    user = session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    cat = (data.category or "").strip().lower()
+    if cat not in PHASED_FEEDBACK_CATEGORY_KEYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"category must be one of {PHASED_FEEDBACK_CATEGORY_KEYS}",
+        )
+
+    session_key = session.session_key
+    if not session_key:
+        raise HTTPException(status_code=400, detail="No session")
+
+    try:
+        vendor_enum = ModelVendor(vendor)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    vstate = load_vendor_data(session_key, vendor)
+    if vstate is None:
+        raise HTTPException(status_code=404, detail="No saved data for this vendor")
+
+    draft = (vstate.draft_letter or "").strip()
+    if not draft:
+        raise HTTPException(status_code=400, detail="Draft letter is missing; run draft first")
+
+    fb = (vstate.feedback or {}).get(cat)
+    if not isinstance(fb, list):
+        raise HTTPException(status_code=400, detail="Invalid feedback for this category")
+
+    item = next(
+        (x for x in fb if isinstance(x, dict) and str(x.get("id")) == str(data.item_id)),
+        None,
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Feedback item not found")
+
+    obs = str(item.get("observation") or "").strip()
+    if not obs:
+        raise HTTPException(status_code=400, detail="Item has no observation text")
+
+    ctx_items: List[Any] = []
+    cf = item.get("context_field")
+    if isinstance(cf, dict) and isinstance(cf.get("items"), list):
+        ctx_items = cf.get("items") or []
+
+    style_instructions = session.get("style_instructions") or ""
+    cv_text = session.get("cv_text") or ""
+    metadata = session.get("metadata") or {}
+    additional_user_info = get_metadata_field(metadata, vendor_enum, "additional_user_info", "")
+    job_text = session.get("job_text") or ""
+    company_report = vstate.company_report or ""
+    top_docs = vstate.top_docs or []
+
+    ai_client = get_client(vendor_enum)
+    _reset_client_counters(ai_client)
+    try:
+        new_items = suggest_additional_feedback_context_items(
+            ai_client,
+            cat,
+            obs,
+            ctx_items,
+            letter=draft,
+            style_instructions=style_instructions,
+            cv_text=cv_text,
+            additional_user_info=additional_user_info,
+            company_report=company_report,
+            job_text=job_text,
+            top_docs=top_docs,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    user_id = (user or {}).get("id") or "anonymous"
+    _update_cost(vstate, ai_client, phase="feedback", user_id=user_id, vendor_str=vendor_enum.value)
+    save_vendor_data(session_key, vendor, vstate)
+
+    return with_user_monthly_cost(
+        {"status": "ok", "items": new_items, "cost": vstate.cost},
+        session,
+    )
 
 
 # --- Agentic (per-topic) flow ---

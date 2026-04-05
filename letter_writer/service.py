@@ -227,7 +227,7 @@ def _process_single_vendor(
                 company_fit_check, letter, company_report, job_text, ai_client
             )
             user_fit_future = executor.submit(
-                user_fit_check, letter, top_docs, ai_client
+                user_fit_check, letter, top_docs, ai_client, cv_text, ""
             )
             human_future = executor.submit(human_check, letter, top_docs, ai_client)
 

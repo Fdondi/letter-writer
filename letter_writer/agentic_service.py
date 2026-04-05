@@ -1022,7 +1022,9 @@ def _agentic_feedback_prompt_first_agent(topic: str, context: str, topic_label: 
         "If you have substantive feedback (issues or suggestions for the draft), write it in a single comment. "
         "If you have nothing to add, output exactly: NO COMMENT (or SKIP). "
         "Do not add anything after NO COMMENT or SKIP. "
-        "Your response must be either: (1) your feedback text, or (2) exactly 'NO COMMENT' or 'SKIP'."
+        "Your response must be either: (1) your feedback text, or (2) exactly 'NO COMMENT' or 'SKIP'.\n"
+        "Base factual claims only on the labeled sections in the context above; do not say something is absent "
+        "from materials you were not given in this prompt."
     )
     prompt = (
         context + "\n\n"
@@ -1044,7 +1046,9 @@ def _agentic_feedback_prompt_subsequent(
         "- Do NOT pick a 'best' draft or declare any single proposal the winner.\n"
         "- When praising or criticizing a passage, you MUST quote the exact words from the draft "
         "(use quotation marks) so your comment is fully understandable on its own.\n"
-        "- Suggest concrete changes where appropriate.\n\n"
+        "- Suggest concrete changes where appropriate.\n"
+        "Base factual claims only on the labeled sections in the context above; do not say something is absent "
+        "from materials you were not given in this prompt.\n\n"
         "Order of actions:\n"
         "1) Optionally add one new top-level comment (only if you have an original, substantive point not already in the thread).\n"
         "2) For each NEW addendum listed in the thread (those under 'New addendums (you must upvote or downvote each)'): you must either upvote or downvote it by addendum_id. No new addendum text when voting existing addendums.\n"

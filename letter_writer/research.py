@@ -26,6 +26,13 @@ from .retrieval import retrieve_similar_job_offers, select_top_documents
 logger = logging.getLogger(__name__)
 
 
+def _strip_top_docs_from_report_entry(entry: Any) -> Any:
+    """Do not expose cached top_docs (not part of company research; RAG picks are job-specific)."""
+    if isinstance(entry, dict) and "top_docs" in entry:
+        return {k: v for k, v in entry.items() if k != "top_docs"}
+    return entry
+
+
 def _parse_model_str(model_str: str) -> Tuple[ModelVendor, str | ModelSize]:
     """Parse 'vendor/model' or 'vendor' string."""
     parts = model_str.split("/", 1)
@@ -175,7 +182,11 @@ def perform_company_research(
                     company_name, matched_company_name, source,
                 )
                 return {
-                    "results": {k: v for k, v in cached_reports.items() if k in requested_set},
+                    "results": {
+                        k: _strip_top_docs_from_report_entry(v)
+                        for k, v in cached_reports.items()
+                        if k in requested_set
+                    },
                     "source": source,
                     "resolved_name": matched_company_name,
                 }
