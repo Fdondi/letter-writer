@@ -29,11 +29,18 @@ class MissingCVError(Exception):
     """Catastrophic error: CV text is missing or empty when it should be present."""
     pass
 
-# Allowed values for feedback context_field.items[].source (API + UI must stay aligned).
-FEEDBACK_CONTEXT_SOURCES_FROZEN = frozenset(
+# Material sources: model may emit these only (snippets tied to prompt sections).
+FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN = frozenset(
     {"CV", "EXAMPLE", "BACKGROUND_RESEARCH", "LETTER"}
 )
-FEEDBACK_CONTEXT_SOURCES_JSON_ENUM = sorted(FEEDBACK_CONTEXT_SOURCES_FROZEN)
+# User-added lines from the UI ("Add context"); never emitted by feedback LLMs.
+FEEDBACK_CONTEXT_USER_SOURCE = "USER"
+# All sources allowed in stored feedback items (material + user).
+FEEDBACK_CONTEXT_SOURCES_FROZEN = FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN | frozenset(
+    {FEEDBACK_CONTEXT_USER_SOURCE}
+)
+# JSON schema enums sent to LLMs must not include USER (models would misuse it).
+FEEDBACK_CONTEXT_SOURCES_JSON_ENUM = sorted(FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN)
 
 
 def _user_fit_has_example_letters(top_docs: Optional[Sequence[Any]]) -> bool:
@@ -76,7 +83,7 @@ def allowed_feedback_context_sources_for_category(
         if _human_has_revision_examples(top_docs):
             return frozenset({"EXAMPLE", "LETTER"})
         return frozenset({"LETTER"})
-    return frozenset(FEEDBACK_CONTEXT_SOURCES_FROZEN)
+    return frozenset(FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN)
 
 
 def legacy_context_string_default_source_for_category(
@@ -211,9 +218,9 @@ def normalize_parsed_feedback_items(
         if status not in ("NOT_NEEDED", "SUFFICIENT", "INPUT_NEEDED"):
             status = "NOT_NEEDED"
 
-        allowed = allowed_context_sources & FEEDBACK_CONTEXT_SOURCES_FROZEN
+        allowed = allowed_context_sources & FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN
         if not allowed:
-            allowed = frozenset(FEEDBACK_CONTEXT_SOURCES_FROZEN)
+            allowed = frozenset(FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN)
 
         context_items: List[Dict[str, str]] = []
         cf = it.get("context_field")
@@ -280,9 +287,9 @@ def _call_vendor_feedback_items(
     max_retries: int = 2,
 ) -> List[Dict[str, Any]]:
     """Call an LLM; response must be JSON with an items array of {observation, type}."""
-    allowed = allowed_context_sources & FEEDBACK_CONTEXT_SOURCES_FROZEN
+    allowed = allowed_context_sources & FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN
     if not allowed:
-        allowed = frozenset(FEEDBACK_CONTEXT_SOURCES_FROZEN)
+        allowed = frozenset(FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN)
     allowed_sorted = ", ".join(sorted(allowed))
     response_schema = vendor_feedback_json_schema_for_allowed_sources(allowed)
     common_instructions = (
@@ -629,9 +636,9 @@ def _normalize_missing_context_items_payload(
     raw_items = data.get("items")
     if not isinstance(raw_items, list):
         return out
-    allowed = allowed_context_sources & FEEDBACK_CONTEXT_SOURCES_FROZEN
+    allowed = allowed_context_sources & FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN
     if not allowed:
-        allowed = frozenset(FEEDBACK_CONTEXT_SOURCES_FROZEN)
+        allowed = frozenset(FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN)
     for raw in raw_items:
         if isinstance(raw, str):
             t = raw.strip()
@@ -774,7 +781,7 @@ def normalize_feedback_value(
             if status not in ("NOT_NEEDED", "SUFFICIENT", "INPUT_NEEDED"):
                 status = "NOT_NEEDED"
 
-            context_items: List[Dict[str, str]] = []
+            context_items: List[Dict[str, Any]] = []
             cf = it.get("context_field")
             if isinstance(cf, dict) and isinstance(cf.get("items"), list):
                 for raw in (cf.get("items", []) or []):
@@ -784,15 +791,23 @@ def normalize_feedback_value(
                             context_items.append({"text": t, "source": legacy})
                         continue
                     if isinstance(raw, dict):
-                        t = str(raw.get("text") or "").strip()
                         src = str(raw.get("source") or "").strip().upper()
-                        if not t:
-                            continue
                         if src not in FEEDBACK_CONTEXT_SOURCES_FROZEN:
                             continue
-                        if src not in allowed:
+                        if src != FEEDBACK_CONTEXT_USER_SOURCE and src not in allowed:
                             continue
-                        context_items.append({"text": t, "source": src})
+                        is_user = src == FEEDBACK_CONTEXT_USER_SOURCE
+                        if is_user:
+                            t = str(raw.get("text") or "")
+                        else:
+                            t = str(raw.get("text") or "").strip()
+                            if not t:
+                                continue
+                        row: Dict[str, Any] = {"text": t, "source": src}
+                        if is_user:
+                            p = raw.get("persist_to_cv")
+                            row["persist_to_cv"] = True if p is None else bool(p)
+                        context_items.append(row)
             if status == "NOT_NEEDED":
                 context_items = []
             elif status == "SUFFICIENT":
@@ -1805,34 +1820,46 @@ def _rewrite_dimension_text(val: Any) -> str:
             status = str(it.get("status") or "").strip().upper()
             if status not in ("NOT_NEEDED", "SUFFICIENT", "INPUT_NEEDED"):
                 status = "NOT_NEEDED"
-            context_items: List[str] = []
+            machine_ctx: List[str] = []
+            user_ctx_from_field: List[str] = []
             cf = it.get("context_field")
             if isinstance(cf, dict) and isinstance(cf.get("items"), list):
                 for raw in (cf.get("items", []) or []):
                     if isinstance(raw, str):
                         t = raw.strip()
                         if t:
-                            context_items.append(t)
+                            machine_ctx.append(t)
                         continue
                     if isinstance(raw, dict):
                         t = str(raw.get("text") or "").strip()
                         src = str(raw.get("source") or "").strip().upper()
                         if not t:
                             continue
-                        if src in FEEDBACK_CONTEXT_SOURCES_FROZEN:
-                            context_items.append(f"[{src}] {t}")
+                        if src == FEEDBACK_CONTEXT_USER_SOURCE:
+                            user_ctx_from_field.append(t)
+                        elif src in FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN:
+                            machine_ctx.append(f"[{src}] {t}")
                         else:
-                            context_items.append(t)
+                            machine_ctx.append(t)
             user_context = (it.get("user_context") or "").strip() if isinstance(it.get("user_context") or "", str) else ""
             input_declined = bool(it.get("input_declined")) if status == "INPUT_NEEDED" else False
 
             # Keep the base observation first (this is the actionable critique).
             extra: List[str] = []
-            if context_items:
-                extra.append("Available context: " + "; ".join(context_items))
+            if machine_ctx:
+                extra.append("Available context: " + "; ".join(machine_ctx))
+            user_provided_bits: List[str] = []
             if status == "INPUT_NEEDED" and user_context:
-                extra.append("User-provided context: " + user_context)
-            if status == "INPUT_NEEDED" and input_declined and not user_context:
+                user_provided_bits.append(user_context)
+            user_provided_bits.extend(user_ctx_from_field)
+            if user_provided_bits:
+                extra.append("User-provided context: " + "; ".join(user_provided_bits))
+            if (
+                status == "INPUT_NEEDED"
+                and input_declined
+                and not user_context
+                and not user_ctx_from_field
+            ):
                 extra.append(
                     "User approved this point without supplying missing facts; do not invent facts."
                 )

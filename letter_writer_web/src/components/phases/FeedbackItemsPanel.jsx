@@ -5,6 +5,7 @@ import { showNotification } from "../../utils/apiNotifications";
 import {
   CONTEXT_SOURCES,
   CONTEXT_SOURCE_LABELS,
+  CONTEXT_USER_SOURCE,
   FEEDBACK_TYPES,
   mergeCategoryItems,
   newId,
@@ -497,11 +498,46 @@ export function FeedbackItemsPanel({
           : { text: String(prev ?? ""), source: "CV" };
       const merged = { ...base, ...(patch || {}) };
       merged.text = String(merged.text ?? "");
-      merged.source = CONTEXT_SOURCES.includes(String(merged.source ?? "").toUpperCase())
-        ? String(merged.source ?? "").toUpperCase()
-        : "CV";
+      const us = String(merged.source ?? "").toUpperCase();
+      if (us === CONTEXT_USER_SOURCE) {
+        merged.source = CONTEXT_USER_SOURCE;
+        merged.persist_to_cv = merged.persist_to_cv === false ? false : true;
+      } else {
+        merged.source = CONTEXT_SOURCES.includes(us) ? us : "CV";
+        delete merged.persist_to_cv;
+      }
       next[idx] = merged;
       setContextItems(next);
+    };
+
+    const renderPersistUserLineRadios = (idx) => {
+      const row = contextItems[idx];
+      const persistLine = row && typeof row === "object" && row.persist_to_cv === false ? false : true;
+      return (
+        <div style={{ marginTop: 8, fontSize: 12, color: "#374151" }}>
+          <div style={{ marginBottom: 4, fontWeight: 600 }}>Save this line to profile / CV</div>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer", marginBottom: 4 }}>
+            <input
+              type="radio"
+              name={`persist-user-line-${it.id}-${idx}`}
+              checked={persistLine}
+              onChange={() => updateContextItem(idx, { persist_to_cv: true })}
+              disabled={disabled}
+            />
+            Yes (default) — reuse in future letters
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer" }}>
+            <input
+              type="radio"
+              name={`persist-user-line-${it.id}-${idx}`}
+              checked={!persistLine}
+              onChange={() => updateContextItem(idx, { persist_to_cv: false })}
+              disabled={disabled}
+            />
+            No — only use for this revision
+          </label>
+        </div>
+      );
     };
 
     const removeContextItem = (idx) => {
@@ -518,7 +554,7 @@ export function FeedbackItemsPanel({
       if (e && typeof e.stopPropagation === "function") e.stopPropagation();
       setEditingUserContextId(null);
       setDraftUserContext("");
-      const next = [...(contextItems || []), { text: "", source: "CV" }];
+      const next = [...(contextItems || []), { text: "", source: CONTEXT_USER_SOURCE, persist_to_cv: true }];
       setContextItems(next);
       const newIdx = next.length - 1;
       setEditingContextRow({ itemId: it.id, index: newIdx });
@@ -635,11 +671,52 @@ export function FeedbackItemsPanel({
       const raw = contextItems[idx];
       const text = String(raw && typeof raw === "object" && !Array.isArray(raw) ? raw.text : (raw ?? ""));
       const src = String(raw && typeof raw === "object" && !Array.isArray(raw) ? raw.source : "CV").toUpperCase();
-      const normalizedSrc = CONTEXT_SOURCES.includes(src) ? src : "CV";
+      const normalizedSrc =
+        src === CONTEXT_USER_SOURCE
+          ? CONTEXT_USER_SOURCE
+          : CONTEXT_SOURCES.includes(src)
+            ? src
+            : "CV";
+      const isUserAdded = normalizedSrc === CONTEXT_USER_SOURCE;
       const isRowEditing = editingContextRow?.itemId === it.id && editingContextRow?.index === idx;
       if (!text.trim() && !isRowEditing && !isEditing) return null;
 
       if (isRowEditing) {
+        if (isUserAdded) {
+          return (
+            <div key={`${it.id}-ctx-${idx}`} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 8 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#b91c1c", marginBottom: 6 }}>
+                  Your context
+                </div>
+                <textarea
+                  style={{
+                    width: "100%",
+                    minHeight: 56,
+                    fontSize: 13,
+                    padding: 8,
+                    resize: "vertical",
+                    border: "1px solid #fca5a5",
+                    background: "#fff",
+                  }}
+                  value={draftContextLine}
+                  onChange={(e) => setDraftContextLine(e.target.value)}
+                  disabled={disabled}
+                  placeholder="Facts or notes for this critique (not labeled as CV / job material)"
+                />
+                {renderPersistUserLineRadios(idx)}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, flexShrink: 0 }}>
+                <button type="button" onClick={saveContextRowInline} disabled={disabled} style={iconBtnStyle} title="Save" aria-label="Save">
+                  ✓
+                </button>
+                <button type="button" onClick={cancelContextRowInline} disabled={disabled} style={iconBtnStyle} title="Cancel" aria-label="Cancel">
+                  ×
+                </button>
+              </div>
+            </div>
+          );
+        }
         return (
           <div key={`${it.id}-ctx-${idx}`} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 8 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -671,6 +748,44 @@ export function FeedbackItemsPanel({
                 ✓
               </button>
               <button type="button" onClick={cancelContextRowInline} disabled={disabled} style={iconBtnStyle} title="Cancel" aria-label="Cancel">
+                ×
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      if (isUserAdded) {
+        return (
+          <div key={`${it.id}-ctx-${idx}`} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 8 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#b91c1c", marginBottom: 4 }}>
+                Your context
+              </div>
+              <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.45, color: "#111827" }}>
+                {text.trim() ? text : "(empty)"}
+              </div>
+              {text.trim() ? renderPersistUserLineRadios(idx) : null}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 2, flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={() => startEditContextRow(idx)}
+                disabled={disabled}
+                style={iconBtnStyle}
+                title="Edit"
+                aria-label="Edit context line"
+              >
+                ✎
+              </button>
+              <button
+                type="button"
+                onClick={() => removeContextItem(idx)}
+                disabled={disabled}
+                style={{ ...iconBtnStyle, color: "#b91c1c", borderColor: "#fca5a5" }}
+                title="Remove"
+                aria-label="Remove context line"
+              >
                 ×
               </button>
             </div>
@@ -881,7 +996,7 @@ export function FeedbackItemsPanel({
                   onClick={addContextItem}
                   disabled={disabled}
                   style={{ fontSize: 11, padding: "2px 8px" }}
-                  title="Add a paste-ready fact/snippet the model can use"
+                  title="Add your own facts or notes (same as required input — not tied to CV / job labels). Choose whether to save to your profile."
                 >
                   Add context
                 </button>

@@ -8,7 +8,11 @@ export const FEEDBACK_TYPES = {
   PLEASE_FIX: "PLEASE_FIX",
 };
 
+/** Snippet sources from materials (model / "Request context"). */
 export const CONTEXT_SOURCES = ["CV", "EXAMPLE", "BACKGROUND_RESEARCH", "LETTER"];
+
+/** User-typed context via "Add context" (backend `source` value `USER`). */
+export const CONTEXT_USER_SOURCE = "USER";
 
 /** Short UI labels aligned with backend `context_field.items[].source` values. */
 export const CONTEXT_SOURCE_LABELS = {
@@ -25,6 +29,7 @@ export function newId() {
 
 function normalizeContextSource(raw) {
   const s = String(raw ?? "").trim().toUpperCase();
+  if (s === CONTEXT_USER_SOURCE) return CONTEXT_USER_SOURCE;
   if (CONTEXT_SOURCES.includes(s)) return s;
   return "CV";
 }
@@ -42,7 +47,12 @@ function normalizeContextItems(rawItems) {
       const text = String(it.text ?? "").trimEnd();
       // Keep empty rows: "Add context" saves { text: "", source } and mergeCategoryItems re-runs this;
       // dropping blanks made the new row vanish before the user could type.
-      out.push({ text, source: normalizeContextSource(it.source) });
+      const source = normalizeContextSource(it.source);
+      const row = { text, source };
+      if (source === CONTEXT_USER_SOURCE) {
+        row.persist_to_cv = it.persist_to_cv === false ? false : true;
+      }
+      out.push(row);
     }
   }
   return out;
@@ -86,7 +96,14 @@ export function normalizeCategoryItems(raw, categoryKey = "") {
         if (status === "NOT_NEEDED") {
           contextItems = [];
         } else {
-          contextItems = rawCfItems.map((x) => ({ text: String(x.text ?? "").trimEnd(), source: normalizeContextSource(x.source) }));
+          contextItems = rawCfItems.map((x) => {
+            const source = normalizeContextSource(x.source);
+            const base = { text: String(x.text ?? "").trimEnd(), source };
+            if (source === CONTEXT_USER_SOURCE) {
+              base.persist_to_cv = x.persist_to_cv === false ? false : true;
+            }
+            return base;
+          });
         }
 
         if (status === "SUFFICIENT" && contextItems.length === 0) {
@@ -227,9 +244,19 @@ export function extractFeedbackEntryToExtraInfo(categoryKey, it) {
   const ucRaw = persist ? String(it.user_context ?? "") : "";
   const uc = ucRaw.trim();
   const ui = persist ? String(it.user_instructions ?? "").trim() : "";
-  const rawLines = Array.isArray(it?.context_field?.items)
-    ? it.context_field.items.map((x) => (typeof x === "string" ? String(x ?? "") : String(x?.text ?? "")))
-    : [];
+  const rawLines = [];
+  if (Array.isArray(it?.context_field?.items)) {
+    for (const x of it.context_field.items) {
+      const text = typeof x === "string" ? String(x ?? "") : String(x?.text ?? "");
+      const src =
+        typeof x === "object" && x && x.source != null
+          ? String(x.source).toUpperCase()
+          : "CV";
+      const persistLine = src !== CONTEXT_USER_SOURCE || x.persist_to_cv !== false;
+      if (!persistLine) continue;
+      rawLines.push(text);
+    }
+  }
   const ctxLinesNonEmpty = rawLines.map((s) => s.trim()).filter(Boolean);
   if (!uc && !ui && ctxLinesNonEmpty.length === 0) {
     return null;
