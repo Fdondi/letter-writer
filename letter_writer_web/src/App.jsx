@@ -27,6 +27,7 @@ import { translateText } from "./utils/translate";
 import { useLanguages } from "./contexts/LanguageContext";
 import { createTextDiff } from "./utils/diff";
 import { getScaleConfig, getEffectiveRating, getEffectiveImportance, buildCompetenceRatingsForProfile } from "./utils/competenceScales";
+import { mergeExtraInfoFromFeedback } from "./components/phases/feedbackItemUtils";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
@@ -313,6 +314,7 @@ export default function App({ flow = "vendor" }) {
   
   // Registry of phase objects from PhaseFlow
   const phaseRegistryRef = React.useRef(null);
+  const draftFeedbackRegistryRef = useRef({});
   const agenticPhasesRef = useRef(null);
   const [, setPhaseRegistryTrigger] = useState(0); // For re-rendering when registry changes
   
@@ -1134,6 +1136,26 @@ export default function App({ flow = "vendor" }) {
         user_corrections: correctionsByVendor[vendor] || [], // Include user corrections
       };
     });
+
+    let feedbackExtraInfo = null;
+    if (flow === "vendor" && draftFeedbackRegistryRef.current) {
+      const reg = draftFeedbackRegistryRef.current;
+      let acc = [];
+      for (const v of Array.from(selectedVendors)) {
+        const snap = typeof reg[v] === "function" ? reg[v]() : null;
+        if (!snap?.feedbackKeys?.length) continue;
+        acc = mergeExtraInfoFromFeedback(
+          acc,
+          snap.feedback,
+          snap.feedback_overrides || {},
+          snap.feedbackKeys,
+        );
+      }
+      if (acc.length > 0) {
+        feedbackExtraInfo = acc;
+      }
+    }
+
     const payload = {
       company_name: companyName,
       role: jobTitle || "",
@@ -1144,6 +1166,7 @@ export default function App({ flow = "vendor" }) {
       job_text: jobText,
       letter_text: finalText,
       ai_letters: aiLetters,
+      ...(feedbackExtraInfo ? { feedback_extra_info: feedbackExtraInfo } : {}),
     };
     const url = documentId ? `/api/documents/${documentId}/` : "/api/documents/";
     const method = documentId ? "PUT" : "POST";
@@ -2693,6 +2716,8 @@ export default function App({ flow = "vendor" }) {
                 onApprove={approvePhase}
                 onApproveAll={approveAllPhase}
                 sessionId={phaseSessionId}
+                documentId={documentId}
+                draftFeedbackRegistryRef={draftFeedbackRegistryRef}
                 onRegisterPhases={(phases) => {
                   phaseRegistryRef.current = phases;
                 }}

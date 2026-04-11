@@ -28,7 +28,7 @@ import { phases as phaseModules } from "./phases";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
 import { useTranslation } from "../utils/useTranslation";
 import LanguageSelector from "./LanguageSelector";
-import { FEEDBACK_TYPES, mergeCategoryItems, mergeExtraInfoFromFeedback } from "./phases/feedbackItemUtils";
+import { FEEDBACK_TYPES, mergeCategoryItems } from "./phases/feedbackItemUtils";
 
 // Card status enum - cards report their status to phases
 const CardStatus = {
@@ -695,6 +695,8 @@ function VendorCardWrapper({
   phaseObj,
   phaseModule,
   sessionId,
+  documentId,
+  draftFeedbackRegistryRef,
   onEditChange,
   onApprove,
   onSaveFeedbackOverride,
@@ -747,6 +749,8 @@ function VendorCardWrapper({
       onEditChange={onEditChange}
       onApprove={onApprove}
       sessionId={sessionId}
+      documentId={documentId}
+      draftFeedbackRegistryRef={draftFeedbackRegistryRef}
       onStatusChange={useOverlayWidth ? undefined : (status) => phaseObj.registerStatus?.(vendor, status)}
       onSaveFeedbackOverride={(key, val) => {
         // Use the onSaveFeedbackOverride prop (which is the saveFeedbackOverride callback from parent)
@@ -811,6 +815,8 @@ function VendorCard({
   onSaveFeedbackOverride,
   onApprove,
   sessionId, // Required: session ID for API calls
+  documentId,
+  draftFeedbackRegistryRef,
   onStatusChange, // Callback to register status with phase: (status: CardStatus) => void
   disabled = false,
   // Callbacks for when card completes phases (to update parent state)
@@ -998,6 +1004,19 @@ function VendorCard({
   // Get feedback overrides - phase-specific
   const feedbackOverrides = feedbackData ? (edits?.feedback_overrides || {}) : {};
   const activeFeedbackKey = selectedFeedbackTab || feedbackKeys[0] || null;
+
+  React.useEffect(() => {
+    if (cardPhase !== "draft" || !draftFeedbackRegistryRef) return undefined;
+    const fn = () => ({
+      feedback,
+      feedback_overrides: edits?.feedback_overrides || {},
+      feedbackKeys,
+    });
+    draftFeedbackRegistryRef.current[vendor] = fn;
+    return () => {
+      delete draftFeedbackRegistryRef.current[vendor];
+    };
+  }, [cardPhase, vendor, feedback, feedbackKeys, edits?.feedback_overrides, draftFeedbackRegistryRef]);
   
   // Handle feedback override save
   const handleSaveFeedbackOverride = (key, val) => {
@@ -1011,23 +1030,22 @@ function VendorCard({
     if (feedbackKeys.length > 0 && feedbackData) {
       void (async () => {
         try {
-          const res = await fetch("/api/personal-data/");
-          if (!res.ok) return;
-          const pdata = await res.json();
-          const existing = Array.isArray(pdata.extra_info) ? pdata.extra_info : [];
-          const merged = mergeExtraInfoFromFeedback(existing, feedback, updatedOverrides, feedbackKeys);
-          if (JSON.stringify(existing) === JSON.stringify(merged)) return;
-          const saveRes = await fetch("/api/personal-data/", {
+          const result = await fetchWithHeartbeat("/api/phase-feedback/snapshot/", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ extra_info: merged }),
+            body: JSON.stringify({
+              session_id: sessionId,
+              document_id: documentId || null,
+              vendor,
+              feedback,
+              feedback_overrides: updatedOverrides,
+            }),
           });
-          if (!saveRes.ok) {
-            const t = await saveRes.text();
-            console.warn("extra_info sync failed:", saveRes.status, t);
+          if (result.isHeartbeat) return;
+          if (!result.data || result.data.status !== "ok") {
+            console.warn("phase feedback snapshot unexpected:", result);
           }
         } catch (e) {
-          console.warn("extra_info sync error", e);
+          console.warn("phase feedback snapshot error", e);
         }
       })();
     }
@@ -1502,7 +1520,9 @@ export default function PhaseFlow({
   onApprove,
   onApproveAll,
   // Required for cards to make API calls
-  sessionId, 
+  sessionId,
+  documentId = null,
+  draftFeedbackRegistryRef = null,
   // Callback for when a phase completes
   onPhaseComplete, // (vendor, phase, data) => void
   // Callback to register the phase objects with the parent
@@ -1659,6 +1679,8 @@ export default function PhaseFlow({
           phaseObj={phaseObj}
           phaseModule={phaseModule}
           sessionId={sessionId}
+          documentId={documentId}
+          draftFeedbackRegistryRef={draftFeedbackRegistryRef}
           onEditChange={onEditChange}
           onApprove={onApprove}
           onSaveFeedbackOverride={saveFeedbackOverride}
@@ -1675,7 +1697,7 @@ export default function PhaseFlow({
       ));
     });
     return renderFunctions;
-  }, [phases, sessionId, onEditChange, onApprove, onPhaseComplete, saveFeedbackOverride, toggleExpand, closeExpand, onAfterApproveInExpanded, inputClusterText, broadcastInputCluster]);
+  }, [phases, sessionId, documentId, draftFeedbackRegistryRef, onEditChange, onApprove, onPhaseComplete, saveFeedbackOverride, toggleExpand, closeExpand, onAfterApproveInExpanded, inputClusterText, broadcastInputCluster]);
   
   phases.forEach(phaseObj => {
     const phaseName = phaseObj.phase;

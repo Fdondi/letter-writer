@@ -234,7 +234,9 @@ export function selectNextTabIfCategoryDone(
 }
 
 /**
- * Build one personal_data.extra_info row from a normalized feedback item (user-supplied parts only).
+ * Build one personal_data.extra_info row for the CV appendix: Q&A only.
+ * Requires non-empty user_context; user_instructions is optional (answer).
+ * Observation/context lines are not persisted here — full draft state lives in the ``feedbacks`` collection.
  * @param {string} categoryKey
  * @param {{ id: string, observation?: string, user_context?: string, user_instructions?: string, persist_user_context_to_cv?: boolean, context_field?: { items?: unknown[] } }} it
  * @returns {Record<string, unknown> | null}
@@ -243,32 +245,18 @@ export function extractFeedbackEntryToExtraInfo(categoryKey, it) {
   const persist = it.persist_user_context_to_cv !== false;
   const ucRaw = persist ? String(it.user_context ?? "") : "";
   const uc = ucRaw.trim();
-  const ui = persist ? String(it.user_instructions ?? "").trim() : "";
-  const rawLines = [];
-  if (Array.isArray(it?.context_field?.items)) {
-    for (const x of it.context_field.items) {
-      const text = typeof x === "string" ? String(x ?? "") : String(x?.text ?? "");
-      const src =
-        typeof x === "object" && x && x.source != null
-          ? String(x.source).toUpperCase()
-          : "CV";
-      const persistLine = src !== CONTEXT_USER_SOURCE || x.persist_to_cv !== false;
-      if (!persistLine) continue;
-      rawLines.push(text);
-    }
-  }
-  const ctxLinesNonEmpty = rawLines.map((s) => s.trim()).filter(Boolean);
-  if (!uc && !ui && ctxLinesNonEmpty.length === 0) {
+  if (!uc) {
     return null;
   }
+  const ui = persist ? String(it.user_instructions ?? "").trim() : "";
   return {
     id: String(it.id),
     source: "feedback",
     category: categoryKey,
-    observation: String(it.observation ?? "").trim(),
+    observation: "",
     user_context: ucRaw,
     user_instructions: ui,
-    context_lines: rawLines,
+    context_lines: [],
     manual_text: "",
   };
 }

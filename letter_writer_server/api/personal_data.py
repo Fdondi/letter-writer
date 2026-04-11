@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException, Depends
 from starlette.datastructures import UploadFile
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 
 from letter_writer_server.core.session import Session, get_session
@@ -71,6 +71,8 @@ def _normalize_extra_info(raw: Any) -> List[Dict[str, Any]]:
         src = str(it.get("source") or "").strip().lower()
         if src and src not in ("feedback", "manual"):
             raise ValueError("extra_info.source must be 'feedback' or 'manual' if set")
+        if src == "feedback" and not str(it.get("user_context") or "").strip():
+            raise ValueError("extra_info rows from feedback must include non-empty user_context (CV Q&A)")
         lines_raw = it.get("context_lines")
         ctx_lines: List[str] = []
         if isinstance(lines_raw, list):
@@ -86,6 +88,51 @@ def _normalize_extra_info(raw: Any) -> List[Dict[str, Any]]:
             "manual_text": str(it.get("manual_text") or "").strip(),
         }
         out.append(entry)
+    return out
+
+
+def _coerce_utc_datetime(val: Any, default: datetime) -> datetime:
+    if val is None:
+        return default
+    if isinstance(val, datetime):
+        if val.tzinfo is None:
+            return val.replace(tzinfo=timezone.utc)
+        return val.astimezone(timezone.utc)
+    if hasattr(val, "timestamp"):
+        return datetime.fromtimestamp(val.timestamp(), tz=timezone.utc)
+    return default
+
+
+def _stamp_extra_info_items(
+    previous: List[Dict[str, Any]],
+    normalized_incoming: List[Dict[str, Any]],
+    now: datetime,
+) -> List[Dict[str, Any]]:
+    """Set each row's ``updated_at``: unchanged content keeps the prior timestamp; new/changed rows get *now*."""
+    prev_norm_map: Dict[str, Optional[Dict[str, Any]]] = {}
+    prev_ts_map: Dict[str, Any] = {}
+    for e in previous:
+        if not isinstance(e, dict) or not e.get("id"):
+            continue
+        eid = str(e.get("id") or "").strip()
+        if not eid:
+            continue
+        try:
+            prev_norm_map[eid] = _normalize_extra_info([e])[0]
+        except ValueError:
+            prev_norm_map[eid] = None
+        prev_ts_map[eid] = e.get("updated_at")
+
+    out: List[Dict[str, Any]] = []
+    for it in normalized_incoming:
+        row = dict(it)
+        eid = str(row.get("id") or "").strip()
+        old_n = prev_norm_map.get(eid)
+        if old_n is not None and old_n == row:
+            row["updated_at"] = _coerce_utc_datetime(prev_ts_map.get(eid), now)
+        else:
+            row["updated_at"] = now
+        out.append(row)
     return out
 
 
@@ -241,7 +288,10 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
                 normalized_extra = _normalize_extra_info(data["extra_info"])
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e)) from e
-            updates["extra_info"] = wrap_new_field("extra_info", normalized_extra, now)
+            user_data_before = get_user_data(user_id, use_cache=False) or {}
+            previous_rows = get_extra_info(user_data_before)
+            now_ts = datetime.now(timezone.utc)
+            updates["extra_info"] = _stamp_extra_info_items(previous_rows, normalized_extra, now_ts)
             
         if "content" in data and data["content"]:
             content = str(data["content"]).strip()

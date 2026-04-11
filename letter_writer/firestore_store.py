@@ -537,9 +537,48 @@ def append_negatives(collection, doc_id: str, negatives: List[dict], user_id: Op
 
 
 def get_feedbacks_collection():
-    """Return the Firestore collection reference for RLHF feedbacks."""
+    """Return the Firestore collection reference for RLHF feedbacks only."""
     client = get_firestore_client()
     return client.collection("feedbacks")
+
+
+def get_phase_draft_feedback_collection():
+    """Return the Firestore collection for draft-phase feedback edits (not RLHF)."""
+    client = get_firestore_client()
+    return client.collection("phase_draft_feedback")
+
+
+def save_phase_draft_feedback_snapshot(
+    *,
+    user_id: str,
+    session_id: str,
+    document_id: Optional[str],
+    vendor: str,
+    feedback: Dict[str, Any],
+    feedback_overrides: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Persist draft-phase feedback edits (full structured state) for analytics and replay.
+
+    Uses the ``phase_draft_feedback`` collection. RLHF rows stay in ``feedbacks`` via :func:`save_feedback`.
+    """
+    if not user_id or not session_id or not vendor:
+        raise ValueError("user_id, session_id, and vendor are required")
+    coll = get_phase_draft_feedback_collection()
+    safe_vendor = "".join(c if c.isalnum() or c in "._-" else "_" for c in str(vendor))[:200]
+    sid = str(session_id).replace("/", "_")[:400]
+    doc_id = f"phase_draft_{user_id}_{sid}_{safe_vendor}".replace("/", "_")[:800]
+    now = datetime.now(timezone.utc)
+    rec: Dict[str, Any] = {
+        "user_id": user_id,
+        "session_id": session_id,
+        "document_id": document_id or None,
+        "vendor": vendor,
+        "feedback": feedback if isinstance(feedback, dict) else {},
+        "feedback_overrides": feedback_overrides if isinstance(feedback_overrides, dict) else {},
+        "updated_at": now,
+    }
+    coll.document(doc_id).set(rec, merge=True)
+    return doc_id
 
 
 def save_feedback(

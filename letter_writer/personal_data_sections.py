@@ -16,21 +16,37 @@ def get_cv_revisions(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def get_extra_info(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """User-saved notes (from feedback flow and/or CV tab). Each entry should have a stable string id."""
+    """User-saved notes (from feedback flow and/or CV tab). Each entry has a stable id and its own updated_at."""
     raw = user_data.get("extra_info")
     if raw is None:
         return []
-    unwrapped = unwrap_for_response("extra_info", raw)
-    if not isinstance(unwrapped, list):
+    if not isinstance(raw, list):
         return []
     out: List[Dict[str, Any]] = []
-    for it in unwrapped:
+    for it in raw:
         if isinstance(it, dict) and it.get("id"):
             out.append(dict(it))
     return out
 
 
+def merge_manual_extra_with_feedback_rows(
+    user_data: Dict[str, Any], feedback_rows: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Preserve manual (non-feedback) extra_info rows; replace feedback-sourced CV Q&A with *feedback_rows*."""
+    manual: List[Dict[str, Any]] = []
+    for e in get_extra_info(user_data):
+        if not isinstance(e, dict):
+            continue
+        if str(e.get("source") or "manual").lower() != "feedback":
+            manual.append(dict(e))
+    return manual + list(feedback_rows)
+
+
 def _extra_info_entry_has_body(it: Dict[str, Any]) -> bool:
+    src = str(it.get("source") or "").strip().lower()
+    if src == "feedback":
+        # CV appendix: only Q&A (non-empty user_context, optional user_instructions)
+        return bool(str(it.get("user_context") or "").strip())
     if str(it.get("manual_text") or "").strip():
         return True
     if str(it.get("user_context") or "").strip():
@@ -58,7 +74,7 @@ def format_extra_info_for_cv_appendix(extra_info: List[Dict[str, Any]]) -> str:
         src = str(it.get("source") or "").strip().lower()
         cat = str(it.get("category") or "").strip()
         obs = str(it.get("observation") or "").strip()
-        uc = str(it.get("user_context") or "")
+        uc = str(it.get("user_context") or "").strip()
         ui = str(it.get("user_instructions") or "").strip()
         lines = it.get("context_lines")
         if isinstance(lines, list):
@@ -71,6 +87,13 @@ def format_extra_info_for_cv_appendix(extra_info: List[Dict[str, Any]]) -> str:
         if cat:
             title += f" ({cat})"
         parts.append(title + "\n\n")
+
+        if src == "feedback" and uc:
+            parts.append(f"**Q:** {uc}\n\n")
+            if ui:
+                parts.append(f"**A:** {ui}\n\n")
+            continue
+
         if src:
             parts.append(f"*Source:* {src}" + ("  \n" if obs or uc or ui or ctx_lines or manual else "\n"))
         if obs:
@@ -82,7 +105,7 @@ def format_extra_info_for_cv_appendix(extra_info: List[Dict[str, Any]]) -> str:
             for ln in ctx_lines:
                 parts.append(f"- {ln}\n")
             parts.append("\n")
-        if uc:
+        if uc and src != "feedback":
             parts.append(f"*Your context:*\n\n{uc}\n\n")
         if manual:
             parts.append(f"{manual}\n\n")
