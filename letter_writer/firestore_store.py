@@ -536,6 +536,85 @@ def append_negatives(collection, doc_id: str, negatives: List[dict], user_id: Op
     return get_document(collection, doc_id, user_id=user_id)
 
 
+def get_feedbacks_collection():
+    """Return the Firestore collection reference for RLHF feedbacks."""
+    client = get_firestore_client()
+    return client.collection("feedbacks")
+
+
+def save_feedback(
+    *,
+    user_id: str,
+    document_id: str,
+    letter_text: str,
+    ai_letters: List[dict],
+) -> List[dict]:
+    """Save per-vendor RLHF feedback records derived from a document save.
+
+    For each entry in *ai_letters* a feedback document is written to the
+    ``feedbacks`` collection.  The *action* field is inferred automatically:
+
+    * **approved** – vendor paragraphs were used and not edited
+    * **edited** – vendor paragraphs were used but the user applied corrections
+    * **rejected** – none of the vendor's paragraphs made it into the final text
+
+    Args:
+        user_id: Authenticated user id.
+        document_id: The document the feedback relates to.
+        letter_text: The final assembled letter the user saved.
+        ai_letters: The ``ai_letters`` list from the save payload (already
+            prepared via :func:`_prepare_ai_letters` or raw from the client).
+
+    Returns:
+        List of saved feedback dicts (one per ai_letter entry).
+    """
+    if not user_id:
+        raise ValueError("user_id is required for feedback operations")
+    if not ai_letters:
+        return []
+
+    collection = get_feedbacks_collection()
+    now = datetime.now(timezone.utc)
+    saved: List[dict] = []
+
+    for entry in ai_letters:
+        if not isinstance(entry, dict):
+            continue
+
+        corrections = entry.get("user_corrections") or []
+        chunks_used = entry.get("chunks_used") or 0
+
+        if chunks_used > 0 and corrections:
+            action = "edited"
+        elif chunks_used > 0:
+            action = "approved"
+        else:
+            action = "rejected"
+
+        feedback_id = str(uuid4())
+        record = {
+            "user_id": user_id,
+            "document_id": document_id,
+            "vendor": entry.get("vendor"),
+            "model": entry.get("model"),
+            "action": action,
+            "original_text": (entry.get("text") or "").strip(),
+            "final_text": (letter_text or "").strip(),
+            "user_corrections": corrections,
+            "chunks_used": chunks_used,
+            "rating": entry.get("rating"),
+            "comment": entry.get("comment") or "",
+            "cost": entry.get("cost"),
+            "created_at": now,
+        }
+
+        collection.document(feedback_id).set(record)
+        record["id"] = feedback_id
+        saved.append(record)
+
+    return saved
+
+
 def get_companies_collection():
     """Return the Firestore collection reference for companies."""
     client = get_firestore_client()

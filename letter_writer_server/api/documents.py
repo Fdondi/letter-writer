@@ -4,11 +4,12 @@ from pydantic import BaseModel
 
 from letter_writer_server.core.session import Session, get_session
 from letter_writer.firestore_store import (
-    get_collection, 
-    list_documents, 
-    get_document, 
-    upsert_document, 
-    append_negatives
+    get_collection,
+    list_documents,
+    get_document,
+    upsert_document,
+    append_negatives,
+    save_feedback,
 )
 from letter_writer.retrieval import delete_documents, embed, retrieve_similar_job_offers, sanitize_search_results
 from openai import OpenAI
@@ -68,6 +69,13 @@ async def create_doc(request: Request, data: DocumentRequest, session: Session =
     
     try:
         document = upsert_document(collection, doc_data, allow_update=False, user_id=user['id'])
+        if data.ai_letters:
+            save_feedback(
+                user_id=user['id'],
+                document_id=document["id"],
+                letter_text=data.letter_text or "",
+                ai_letters=data.ai_letters,
+            )
         return {"document": document}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -137,6 +145,13 @@ async def update_doc(document_id: str, data: DocumentRequest, session: Session =
     
     try:
         updated = upsert_document(collection, doc_data, allow_update=True, user_id=user['id'])
+        if data.ai_letters:
+            save_feedback(
+                user_id=user['id'],
+                document_id=document_id,
+                letter_text=data.letter_text or "",
+                ai_letters=data.ai_letters,
+            )
         return {"document": updated}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
