@@ -1,0 +1,18 @@
+{
+  "defaults": {
+    "search": 0.0
+  },
+  "sizes": {
+    "tiny": "local-model",
+    "base": "local-model",
+    "medium": "local-model",
+    "large": "local-model",
+    "xlarge": "local-model"
+  },
+  "models": {
+    "local-model": {
+      "input": 0.0,
+      "output": 0.0
+    }
+  }
+}

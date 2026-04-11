@@ -15,6 +15,7 @@ class ModelVendor(Enum):
     MISTRAL = "mistral"
     GROK = "grok"
     DEEPSEEK = "deepseek"
+    LOCAL = "local"
 
 
 class ModelSize(Enum):

@@ -70,6 +70,7 @@ _CLIENT_JSON_VENDORS = {
     "mistral": "Mistral",
     "grok": "xAI",
     "deepseeek": "DeepSeek",
+    "local": "Local (LM Studio)",
 }
 
 
@@ -128,7 +129,7 @@ def get_all_model_pricing(search_only: bool = False) -> Dict[str, List[Dict[str,
                 continue
             input_price = _parse_price_field(model_cfg.get("input", 0.0))
             output_price = _parse_price_field(model_cfg.get("output", 0.0))
-            if input_price == 0 and output_price == 0:
+            if input_price == 0 and output_price == 0 and vendor_key != "local":
                 continue
             supports_search = _supports_search(vendor_key, model_id, model_cfg, default_search)
             if search_only and not supports_search:

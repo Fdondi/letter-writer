@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_BACKGROUND_MODELS = ["gemini/gemini-3-flash-preview"]
 
 # Valid vendor prefixes for model IDs (must match ModelVendor enum values)
-VALID_VENDOR_KEYS: Set[str] = {"openai", "anthropic", "gemini", "mistral", "grok", "deepseek"}
+VALID_VENDOR_KEYS: Set[str] = {"openai", "anthropic", "gemini", "mistral", "grok", "deepseek", "local"}
 
 def get_cv_revisions(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return user_data.get("cv_revisions", [])

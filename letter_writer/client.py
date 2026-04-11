@@ -20,5 +20,8 @@ def get_client(vendor: ModelVendor) -> BaseClient:
     elif vendor == ModelVendor.DEEPSEEK:
         from .clients.deepseeek import DeepSeekClient
         return DeepSeekClient()
+    elif vendor == ModelVendor.LOCAL:
+        from .clients.local import LocalClient
+        return LocalClient()
     else:
         raise ValueError(f"Invalid vendor: {vendor}")

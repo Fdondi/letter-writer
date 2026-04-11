@@ -19,6 +19,21 @@ Set up the required API keys as environment variables (or in a `.env` file):
 - `MISTRAL_API_KEY`: Required for Mistral models (optional)
 - `XAI_API_KEY`: Required for Grok models (optional)
 
+### Local LLM (LM Studio or OpenAI-compatible server)
+
+The **local** model vendor talks to an OpenAI-compatible HTTP API (for example [LM Studio](https://lmstudio.ai/) with the local server enabled). No cloud API key is required; the machine running the server must expose the API (default port **1234**).
+
+Environment variables (optional):
+
+| Variable | Purpose |
+|----------|---------|
+| `LOCAL_LLM_BASE_URL` | Full base URL including `/v1`, e.g. `http://localhost:1234/v1`. If unset, the app uses `http://localhost:1234/v1` when running on the host, and `http://host.docker.internal:1234/v1` when running **inside a container** so the backend can reach LM Studio on the **host** (Docker Desktop on Windows/macOS resolves `host.docker.internal` to the host). |
+| `LOCAL_LLM_API_KEY` | Sent as the API key; LM Studio often accepts any non-empty value. Defaults to `lm-studio`. |
+
+**Docker:** Inside a container, `localhost` refers to the container, not your machine, so connection errors usually mean the URL must target the host (the default `host.docker.internal` behavior above, or set `LOCAL_LLM_BASE_URL` explicitly, e.g. to another host or port). On Linux Docker without `host.docker.internal`, set `LOCAL_LLM_BASE_URL` to a reachable host IP or add `extra_hosts` in Compose.
+
+`docker-compose.yml` passes `LOCAL_LLM_BASE_URL` and `LOCAL_LLM_API_KEY` through from the host environment / `.env`.
+
 ### CV Source
 
 For the web application, CV content is loaded from Firestore (`cv_revisions`) and stored in session state.
