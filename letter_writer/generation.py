@@ -432,196 +432,212 @@ PHASED_FEEDBACK_CATEGORY_KEYS = (
 )
 
 
-def build_phased_feedback_checker_prompts(
-    category: str,
+def _phased_feedback_checker_instruction_prompts(
     *,
     letter: str,
-    style_instructions: str = "",
-    cv_text: str = "",
-    additional_user_info: str = "",
-    company_report: str = "",
-    job_text: str = "",
-    top_docs: Optional[Sequence[TopDocument]] = None,
+    style_instructions: str,
+) -> Tuple[str, str]:
+    si = style_instructions or get_style_instructions()
+    system = (
+        "You are an expert in style and tone. Check the letter for consistency with the style instructions. "
+        "Keep each observation brief. Report only concrete mismatches or omissions, not praise.\n"
+    )
+    prompt = (
+        "========== Style Instructions:\n" + si + "\n==========\n\n" +
+        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
+        "List any strong inconsistencies with the instructions, or use empty items if none."
+    )
+    return system, prompt
+
+
+def _phased_feedback_checker_accuracy_prompts(
+    *,
+    letter: str,
+    cv_text: str,
+    additional_user_info: str,
+) -> Tuple[str, str]:
+    additional_context = ""
+    if additional_user_info and additional_user_info.strip():
+        additional_context = (
+            "\n\nIMPORTANT: The user has provided additional information about themselves that is relevant but not in their CV. "
+            "Consider this when evaluating accuracy - if a claim is supported by this additional information (e.g., recent certifications, "
+            "ongoing learning, planned relocation), it may be acceptable:\n"
+            f"User's additional info: {additional_user_info}\n"
+        )
+    system = (
+        "You are an expert proofreader. Check the cover letter for factual accuracy against the user's CV. "
+        "Look for any claims or statements that are not supported by the CV or are inconsistent with it. "
+        "Provide specific feedback on any inaccuracies found. In particular:\n"
+        "1. Is what is written in the letter coherent with itself?\n"
+        "Examples of incoherhence:  'I am highly expert in Go, I used it once' (using once is not enough to claim experitise), or 'I used Python libraries such as Boost' (Boost is a C++ library)\n"
+        "2. Is what is written coherent with the user's CV? Is every claimed expertise supported?"
+        "Also pay attention to claims not strictly about tools, they also need to be supported in some way.\n"
+        "Example: 'Crypto made me a programmer' [it's a claim, it needs to be supported by the CV]\n"
+        "Be especially wary of claims of a 'common thread' or 'throughout my carreer' if it's not supported by the CV.\n"
+        "Keep each observation brief; no praise or reassurance. If there is no meaningful issue, return an empty items list.\n"
+        + additional_context
+    )
+    prompt = (
+        "========== User CV:\n" + cv_text + "\n==========\n" +
+        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
+        "Review factual accuracy against the CV. Point out claims that cannot be verified or are inconsistent."
+    )
+    return system, prompt
+
+
+def _phased_feedback_checker_precision_prompts(
+    *,
+    letter: str,
+    company_report: str,
+    job_text: str,
+) -> Tuple[str, str]:
+    system = (
+        "You are a senior HR manager at the company. Evaluate how well the cover letter addresses the needs of the company, as described in the company report and job description. "
+        "1. Were all the requests in the letter addressed, either by claiming and substantiating the necessary competence, or a reasonably substitutable one, or at least ability and willingness to learn in this specific field?\n"
+        "Example: 'required: Python, GO' -> 'I have several years of Python experience' [GO is missing]\n"
+        "Example: 'required: GO' -> 'while I have not used GO professionally, I have 5 years of C++ experience, and I have follwed a course on GO. When I tried GO on LeetCode, it was easy for me to use' [OK, demonstrates ability to learn]\n"
+        "2. Is there on the contrary any claimed competence that really is superflous, does not adress the explicit or implicit requirements for the job or the company, to the point it makes you wonder if the person understands the job at all?\n"
+        "Example: 'we look for a C++ developer' -> 'I have trained several AI models'\n"
+        "3. Is there any claim about the company that is not supported by the company report or company information presented in the job offer; or even if it is technically supported, is presented in a way that makes you suspect the writer doesn't understand the company?\n"
+        "Example: the company entered crypto last year -> 'excited to apply to a company that has been a pioneer in crypto since its origin' [incorrect, user clearly didn't follow the company for long]\n"
+        "Example: the company originated in the F1 racing world, but has pivoted to banking and not worked in racing in a while -> 'excited to enter the world of racing [user is either not up to date on the company, or making up misinterpreting partial information]\n"
+        "Keep each observation brief; do not praise coverage or fit. If there is no meaningful issue, return an empty items list.\n"
+    )
+    prompt = (
+        "========== Company Report:\n" + company_report + "\n==========\n" +
+        "========== Job Offer:\n" + job_text + "\n==========\n" +
+        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
+        "Review consistency with the company report and job description; note misalignment or superfluous claims."
+    )
+    return system, prompt
+
+
+def _phased_feedback_checker_company_fit_prompts(
+    *,
+    letter: str,
+    company_report: str,
+    job_text: str,
+) -> Tuple[str, str]:
+    system = (
+        "You are a senior HR manager at the company. Evaluate how well the cover letter "
+        "demonstrates understanding of and alignment with the company's values, mission, tone, and culture "
+        "as described in the company report and implied by the job offer.\n"
+        "Focus on generic, shallow, or mismatched signals—not on affirming that the letter is personalized. "
+        "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
+    )
+    prompt = (
+        "========== Company Report:\n" + company_report + "\n==========\n" +
+        "========== Job Offer:\n" + job_text + "\n==========\n" +
+        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
+        "Review alignment with the company's values, tone, and culture; note generic or mismatched content."
+    )
+    return system, prompt
+
+
+def _phased_feedback_checker_user_fit_prompts(
+    *,
+    letter: str,
+    cv_text: str,
+    additional_user_info: str,
+    top_docs: Optional[Sequence[TopDocument]],
+) -> Tuple[str, str]:
+    examples = top_docs or ()
+    examples_formatted = "\n\n".join(
+        f"---- Example #{i+1} - {ex['company_name']} ----\n"
+        f"Cover Letter:\n{ex['letter_text']}\n\n"
+        for i, ex in enumerate(examples) if ex.get("letter_text")
+    )
+    if not examples_formatted.strip():
+        examples_formatted = "(No reference letters available.)"
+    cv_block = (cv_text or "").strip()
+    if not cv_block:
+        cv_block = "(No CV text was provided in this session.)"
+    additional_block = ""
+    if additional_user_info and additional_user_info.strip():
+        additional_block = (
+            "\n\n========== User's additional info (relevant but not fully captured in CV):\n"
+            + additional_user_info.strip()
+            + "\n==========\n"
+        )
+    system = (
+        "You are an expert in style and tone. Evaluate how well the cover letter follows the pattern of the previous examples. \n"
+        "You also have the applicant's CV (and optional additional info): use it to judge whether factual content "
+        "(languages, degrees, dates, tools, etc.) is missing from the draft when it exists in the CV, or only appeared in older letters.\n"
+        "Flag divergences: tone, structure, emphasis, or how weaknesses are handled compared with the references. \n"
+        "Do not praise imitation or \"good fit\" with the examples; only output items where the draft should change.\n"
+        "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
+        "NOTE: The reference examples are prior cover letters written by/about the SAME applicant. "
+        "If the difference is that some information isn't provided, any factual claims that appear in the reference examples may be used. \n"
+        "When you attach context_field snippets, tag sources correctly: EXAMPLE for reference letters; LETTER for the draft under "
+        "\"Cover Letter to Check\"; CV for the User CV block and for the User's additional info block (both are authoritative facts about the applicant).\n"
+    )
+    prompt = (
+        "========== Reference Examples:\n" + examples_formatted + "\n==========\n\n"
+        "========== User CV:\n" + cv_block + "\n==========\n"
+        + additional_block
+        + "\n========== Cover Letter to Check:\n" + letter + "\n==========\n\n"
+        "Compare to the reference letters and CV; note where the draft diverges in style, emphasis, handling of weaknesses, or omits relevant facts from the CV."
+    )
+    return system, prompt
+
+
+def _phased_feedback_checker_human_prompts(
+    *,
+    letter: str,
+    top_docs: Optional[Sequence[TopDocument]],
 ) -> Optional[Tuple[str, str]]:
-    """Same (system, user_prompt) as the corresponding *check* LLM, or None if that dimension is skipped (human: no AI examples)."""
-    cat = (category or "").strip().lower()
-    if cat not in PHASED_FEEDBACK_CATEGORY_KEYS:
-        raise ValueError(f"Unknown feedback category: {category}")
-
-    if cat == "instruction":
-        si = style_instructions or get_style_instructions()
-        system = (
-            "You are an expert in style and tone. Check the letter for consistency with the style instructions. "
-            "Keep each observation brief. Report only concrete mismatches or omissions, not praise.\n"
-        )
-        prompt = (
-            "========== Style Instructions:\n" + si + "\n==========\n\n" +
-            "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-            "List any strong inconsistencies with the instructions, or use empty items if none."
-        )
-        return system, prompt
-
-    if cat == "accuracy":
-        additional_context = ""
-        if additional_user_info and additional_user_info.strip():
-            additional_context = (
-                "\n\nIMPORTANT: The user has provided additional information about themselves that is relevant but not in their CV. "
-                "Consider this when evaluating accuracy - if a claim is supported by this additional information (e.g., recent certifications, "
-                "ongoing learning, planned relocation), it may be acceptable:\n"
-                f"User's additional info: {additional_user_info}\n"
-            )
-        system = (
-            "You are an expert proofreader. Check the cover letter for factual accuracy against the user's CV. "
-            "Look for any claims or statements that are not supported by the CV or are inconsistent with it. "
-            "Provide specific feedback on any inaccuracies found. In particular:\n"
-            "1. Is what is written in the letter coherent with itself?\n"
-            "Examples of incoherhence:  'I am highly expert in Go, I used it once' (using once is not enough to claim experitise), or 'I used Python libraries such as Boost' (Boost is a C++ library)\n"
-            "2. Is what is written coherent with the user's CV? Is every claimed expertise supported?"
-            "Also pay attention to claims not strictly about tools, they also need to be supported in some way.\n"
-            "Example: 'Crypto made me a programmer' [it's a claim, it needs to be supported by the CV]\n"
-            "Be especially wary of claims of a 'common thread' or 'throughout my carreer' if it's not supported by the CV.\n"
-            "Keep each observation brief; no praise or reassurance. If there is no meaningful issue, return an empty items list.\n"
-            + additional_context
-        )
-        prompt = (
-            "========== User CV:\n" + cv_text + "\n==========\n" +
-            "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-            "Review factual accuracy against the CV. Point out claims that cannot be verified or are inconsistent."
-        )
-        return system, prompt
-
-    if cat == "precision":
-        system = (
-            "You are a senior HR manager at the company. Evaluate how well the cover letter addresses the needs of the company, as described in the company report and job description. "
-            "1. Were all the requests in the letter addressed, either by claiming and substantiating the necessary competence, or a reasonably substitutable one, or at least ability and willingness to learn in this specific field?\n"
-            "Example: 'required: Python, GO' -> 'I have several years of Python experience' [GO is missing]\n"
-            "Example: 'required: GO' -> 'while I have not used GO professionally, I have 5 years of C++ experience, and I have follwed a course on GO. When I tried GO on LeetCode, it was easy for me to use' [OK, demonstrates ability to learn]\n"
-            "2. Is there on the contrary any claimed competence that really is superflous, does not adress the explicit or implicit requirements for the job or the company, to the point it makes you wonder if the person understands the job at all?\n"
-            "Example: 'we look for a C++ developer' -> 'I have trained several AI models'\n"
-            "3. Is there any claim about the company that is not supported by the company report or company information presented in the job offer; or even if it is technically supported, is presented in a way that makes you suspect the writer doesn't understand the company?\n"
-            "Example: the company entered crypto last year -> 'excited to apply to a company that has been a pioneer in crypto since its origin' [incorrect, user clearly didn't follow the company for long]\n"
-            "Example: the company originated in the F1 racing world, but has pivoted to banking and not worked in racing in a while -> 'excited to enter the world of racing [user is either not up to date on the company, or making up misinterpreting partial information]\n"
-            "Keep each observation brief; do not praise coverage or fit. If there is no meaningful issue, return an empty items list.\n"
-        )
-        prompt = (
-            "========== Company Report:\n" + company_report + "\n==========\n" +
-            "========== Job Offer:\n" + job_text + "\n==========\n" +
-            "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-            "Review consistency with the company report and job description; note misalignment or superfluous claims."
-        )
-        return system, prompt
-
-    if cat == "company_fit":
-        system = (
-            "You are a senior HR manager at the company. Evaluate how well the cover letter "
-            "demonstrates understanding of and alignment with the company's values, mission, tone, and culture "
-            "as described in the company report and implied by the job offer.\n"
-            "Focus on generic, shallow, or mismatched signals—not on affirming that the letter is personalized. "
-            "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
-        )
-        prompt = (
-            "========== Company Report:\n" + company_report + "\n==========\n" +
-            "========== Job Offer:\n" + job_text + "\n==========\n" +
-            "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-            "Review alignment with the company's values, tone, and culture; note generic or mismatched content."
-        )
-        return system, prompt
-
-    if cat == "user_fit":
-        examples = top_docs or ()
-        examples_formatted = "\n\n".join(
-            f"---- Example #{i+1} - {ex['company_name']} ----\n"
-            f"Cover Letter:\n{ex['letter_text']}\n\n"
-            for i, ex in enumerate(examples) if ex.get("letter_text")
-        )
-        if not examples_formatted.strip():
-            examples_formatted = "(No reference letters available.)"
-        cv_block = (cv_text or "").strip()
-        if not cv_block:
-            cv_block = "(No CV text was provided in this session.)"
-        additional_block = ""
-        if additional_user_info and additional_user_info.strip():
-            additional_block = (
-                "\n\n========== User's additional info (relevant but not fully captured in CV):\n"
-                + additional_user_info.strip()
-                + "\n==========\n"
-            )
-        system = (
-            "You are an expert in style and tone. Evaluate how well the cover letter follows the pattern of the previous examples. \n"
-            "You also have the applicant's CV (and optional additional info): use it to judge whether factual content "
-            "(languages, degrees, dates, tools, etc.) is missing from the draft when it exists in the CV, or only appeared in older letters.\n"
-            "Flag divergences: tone, structure, emphasis, or how weaknesses are handled compared with the references. \n"
-            "Do not praise imitation or \"good fit\" with the examples; only output items where the draft should change.\n"
-            "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
-            "NOTE: The reference examples are prior cover letters written by/about the SAME applicant. "
-            "If the difference is that some information isn't provided, any factual claims that appear in the reference examples may be used. \n"
-            "When you attach context_field snippets, tag sources correctly: EXAMPLE for reference letters; LETTER for the draft under "
-            "\"Cover Letter to Check\"; CV for the User CV block and for the User's additional info block (both are authoritative facts about the applicant).\n"
-        )
-        prompt = (
-            "========== Reference Examples:\n" + examples_formatted + "\n==========\n\n"
-            "========== User CV:\n" + cv_block + "\n==========\n"
-            + additional_block
-            + "\n========== Cover Letter to Check:\n" + letter + "\n==========\n\n"
-            "Compare to the reference letters and CV; note where the draft diverges in style, emphasis, handling of weaknesses, or omits relevant facts from the CV."
-        )
-        return system, prompt
-
-    if cat == "human":
-        examples = top_docs or ()
-        rewritten_examples = [
-            ex
-            for ex in examples
-            if ex.get("letter_text") and isinstance(ex.get("ai_letters"), list) and ex["ai_letters"]
-        ]
-        if not rewritten_examples:
-            return None
-        examples_formatted = "\n\n".join(
-            f"---- Example #{i+1} - {ex['company_name']} ----\n"
-            "Initial cover letters:\n"
-            + "\n\n".join(
-                f"[attempt {j+1}]:\n"
-                + (f"(Rating: {al.get('rating')}/5)\n" if al.get("rating") else "")
-                + (f"(Used chunks: {al.get('chunks_used')})\n" if al.get("chunks_used") is not None else "")
-                + (f"(Feedback: \"{al.get('comment')}\")\n" if al.get("comment") else "")
-                + f"{al.get('text','')}"
-                + (
-                    "\n\nUser corrections made to this letter:\n" + "\n".join(
-                        _format_correction(corr)
-                        for corr in (al.get("user_corrections") or [])
-                        if isinstance(corr, dict) and (
-                            (corr.get("type") == "full" and corr.get("original") is not None and corr.get("edited") is not None) or
-                            (corr.get("type") == "diff" and (corr.get("original") is not None or corr.get("edited") is not None))
-                        )
+    examples = top_docs or ()
+    rewritten_examples = [
+        ex
+        for ex in examples
+        if ex.get("letter_text") and isinstance(ex.get("ai_letters"), list) and ex["ai_letters"]
+    ]
+    if not rewritten_examples:
+        return None
+    examples_formatted = "\n\n".join(
+        f"---- Example #{i+1} - {ex['company_name']} ----\n"
+        "Initial cover letters:\n"
+        + "\n\n".join(
+            f"[attempt {j+1}]:\n"
+            + (f"(Rating: {al.get('rating')}/5)\n" if al.get("rating") else "")
+            + (f"(Used chunks: {al.get('chunks_used')})\n" if al.get("chunks_used") is not None else "")
+            + (f"(Feedback: \"{al.get('comment')}\")\n" if al.get("comment") else "")
+            + f"{al.get('text','')}"
+            + (
+                "\n\nUser corrections made to this letter:\n" + "\n".join(
+                    _format_correction(corr)
+                    for corr in (al.get("user_corrections") or [])
+                    if isinstance(corr, dict) and (
+                        (corr.get("type") == "full" and corr.get("original") is not None and corr.get("edited") is not None) or
+                        (corr.get("type") == "diff" and (corr.get("original") is not None or corr.get("edited") is not None))
                     )
-                    if al.get("user_corrections") else ""
                 )
-                for j, al in enumerate(ex["ai_letters"])
-                if isinstance(al, dict) and al.get("text")
+                if al.get("user_corrections") else ""
             )
-            + "\n\n"
-            f"Revised cover Letter:\n{ex['letter_text']}\n\n"
-            for i, ex in enumerate(rewritten_examples)
+            for j, al in enumerate(ex["ai_letters"])
+            if isinstance(al, dict) and al.get("text")
         )
-        system = (
-            "You are an expert in noticing the patterns behind edits. You will receive a list of examples of job descriptions and corresponding cover letters; "
-            "first the cover letter how it was initially written, then the cover letter how a reviewer rewrote it. "
-            "The reviewer might have copied parts of the initial letter, or rewrote it from scratch. Either way, pay attention to what was changed. "
-            "You might also see ratings, chunk usage counts, explicit feedback comments, and user corrections (compact diffs showing changed portions, or full paragraphs if >20% changed) on the initial letters. "
-            "The corrections use a compact format: -original text+edited text for small changes, or full original/edited paragraphs for larger changes. "
-            "Use these to understand what the reviewer changed and removed, and pay special attention to user corrections.\n"
-            "Once you notice recurring removals or rewrites, flag if the new letter contains similar content the reviewer would likely change.\n"
-            "Do NOT flag elements merely for not appearing in references, and do not output praise—only actionable mismatches with edit patterns.\n"
-            "Keep each observation brief. If nothing in the draft matches a pattern the reviewer would change, return empty items.\n"
-        )
-        prompt = (
-            "========== Reference Examples:\n" + examples_formatted + "\n==========\n" +
-            "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-            "Flag anything in the draft that resembles content the reviewer typically removes or rewrites in the examples."
-        )
-        return system, prompt
-
-    raise ValueError(f"Unknown feedback category: {category}")
+        + "\n\n"
+        f"Revised cover Letter:\n{ex['letter_text']}\n\n"
+        for i, ex in enumerate(rewritten_examples)
+    )
+    system = (
+        "You are an expert in noticing the patterns behind edits. You will receive a list of examples of job descriptions and corresponding cover letters; "
+        "first the cover letter how it was initially written, then the cover letter how a reviewer rewrote it. "
+        "The reviewer might have copied parts of the initial letter, or rewrote it from scratch. Either way, pay attention to what was changed. "
+        "You might also see ratings, chunk usage counts, explicit feedback comments, and user corrections (compact diffs showing changed portions, or full paragraphs if >20% changed) on the initial letters. "
+        "The corrections use a compact format: -original text+edited text for small changes, or full original/edited paragraphs for larger changes. "
+        "Use these to understand what the reviewer changed and removed, and pay special attention to user corrections.\n"
+        "Once you notice recurring removals or rewrites, flag if the new letter contains similar content the reviewer would likely change.\n"
+        "Do NOT flag elements merely for not appearing in references, and do not output praise—only actionable mismatches with edit patterns.\n"
+        "Keep each observation brief. If nothing in the draft matches a pattern the reviewer would change, return empty items.\n"
+    )
+    prompt = (
+        "========== Reference Examples:\n" + examples_formatted + "\n==========\n" +
+        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
+        "Flag anything in the draft that resembles content the reviewer typically removes or rewrites in the examples."
+    )
+    return system, prompt
 
 
 def _normalize_missing_context_items_payload(
@@ -675,16 +691,43 @@ def suggest_additional_feedback_context_items(
     Second pass: same checker materials as the original feedback call, focused on finding
     paste-ready snippets that belong with this observation but were omitted from context_field.
     """
-    base = build_phased_feedback_checker_prompts(
-        category,
-        letter=letter,
-        style_instructions=style_instructions,
-        cv_text=cv_text,
-        additional_user_info=additional_user_info,
-        company_report=company_report,
-        job_text=job_text,
-        top_docs=top_docs,
-    )
+    cat = (category or "").strip().lower()
+    if cat not in PHASED_FEEDBACK_CATEGORY_KEYS:
+        raise ValueError(f"Unknown feedback category: {category}")
+    if cat == "instruction":
+        base: Optional[Tuple[str, str]] = _phased_feedback_checker_instruction_prompts(
+            letter=letter,
+            style_instructions=style_instructions,
+        )
+    elif cat == "accuracy":
+        base = _phased_feedback_checker_accuracy_prompts(
+            letter=letter,
+            cv_text=cv_text,
+            additional_user_info=additional_user_info,
+        )
+    elif cat == "precision":
+        base = _phased_feedback_checker_precision_prompts(
+            letter=letter,
+            company_report=company_report,
+            job_text=job_text,
+        )
+    elif cat == "company_fit":
+        base = _phased_feedback_checker_company_fit_prompts(
+            letter=letter,
+            company_report=company_report,
+            job_text=job_text,
+        )
+    elif cat == "user_fit":
+        base = _phased_feedback_checker_user_fit_prompts(
+            letter=letter,
+            cv_text=cv_text,
+            additional_user_info=additional_user_info,
+            top_docs=top_docs,
+        )
+    elif cat == "human":
+        base = _phased_feedback_checker_human_prompts(letter=letter, top_docs=top_docs)
+    else:
+        raise ValueError(f"Unknown feedback category: {category}")
     if base is None:
         raise ValueError(
             "The human-dimension checker has no reference materials (no AI letter examples with revision history)."
@@ -1515,11 +1558,10 @@ def generate_letter(
 def instruction_check(letter: str, client: BaseClient, style_instructions: str = "") -> List[Dict[str, Any]]:
     """Check the letter for consistency with the instructions."""
     si = style_instructions or get_style_instructions()
-    prompts = build_phased_feedback_checker_prompts(
-        "instruction", letter=letter, style_instructions=si
+    system, prompt = _phased_feedback_checker_instruction_prompts(
+        letter=letter,
+        style_instructions=si,
     )
-    assert prompts is not None
-    system, prompt = prompts
     allowed = allowed_feedback_context_sources_for_category("instruction")
     legacy = legacy_context_string_default_source_for_category("instruction")
     return _call_vendor_feedback_items(
@@ -1539,14 +1581,11 @@ def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_use
     Args:
         additional_user_info: User-provided information about themselves that may explain apparent discrepancies.
     """
-    prompts = build_phased_feedback_checker_prompts(
-        "accuracy",
+    system, prompt = _phased_feedback_checker_accuracy_prompts(
         letter=letter,
         cv_text=cv_text,
         additional_user_info=additional_user_info,
     )
-    assert prompts is not None
-    system, prompt = prompts
     allowed = allowed_feedback_context_sources_for_category("accuracy")
     legacy = legacy_context_string_default_source_for_category("accuracy")
     return _call_vendor_feedback_items(
@@ -1561,14 +1600,11 @@ def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_use
 @traceable(run_type="chain", name="precision_check")
 def precision_check(letter: str, company_report: str, job_text: str, client: BaseClient) -> List[Dict[str, Any]]:
     """Check the precision and style of the cover letter against the company report and job description."""
-    prompts = build_phased_feedback_checker_prompts(
-        "precision",
+    system, prompt = _phased_feedback_checker_precision_prompts(
         letter=letter,
         company_report=company_report,
         job_text=job_text,
     )
-    assert prompts is not None
-    system, prompt = prompts
     allowed = allowed_feedback_context_sources_for_category("precision")
     legacy = legacy_context_string_default_source_for_category("precision")
     return _call_vendor_feedback_items(
@@ -1583,14 +1619,11 @@ def precision_check(letter: str, company_report: str, job_text: str, client: Bas
 @traceable(run_type="chain", name="company_fit_check")
 def company_fit_check(letter: str, company_report: str, job_offer: str, client: BaseClient) -> List[Dict[str, Any]]:
     """Check how well the cover letter aligns with the company's values, culture, tone, and needs."""
-    prompts = build_phased_feedback_checker_prompts(
-        "company_fit",
+    system, prompt = _phased_feedback_checker_company_fit_prompts(
         letter=letter,
         company_report=company_report,
         job_text=job_offer,
     )
-    assert prompts is not None
-    system, prompt = prompts
     allowed = allowed_feedback_context_sources_for_category("company_fit")
     legacy = legacy_context_string_default_source_for_category("company_fit")
     return _call_vendor_feedback_items(
@@ -1611,15 +1644,12 @@ def user_fit_check(
     additional_user_info: str = "",
 ) -> List[Dict[str, Any]]:
     """Check how well the cover letter showcases the user's unique value proposition."""
-    prompts = build_phased_feedback_checker_prompts(
-        "user_fit",
+    system, prompt = _phased_feedback_checker_user_fit_prompts(
         letter=letter,
         top_docs=examples,
         cv_text=cv_text,
         additional_user_info=additional_user_info,
     )
-    assert prompts is not None
-    system, prompt = prompts
     allowed = allowed_feedback_context_sources_for_category("user_fit", top_docs=examples)
     legacy = legacy_context_string_default_source_for_category("user_fit", top_docs=examples)
     return _call_vendor_feedback_items(
@@ -1652,7 +1682,7 @@ def _format_correction(corr: dict) -> str:
 @traceable(run_type="chain", name="human_check")
 def human_check(letter: str, examples: Sequence[TopDocument], client: BaseClient) -> List[Dict[str, Any]]:
     """Check the letter for consistency with the instructions."""
-    prompts = build_phased_feedback_checker_prompts("human", letter=letter, top_docs=examples)
+    prompts = _phased_feedback_checker_human_prompts(letter=letter, top_docs=examples)
     if prompts is None:
         logger.info(
             "none of %s have AI letters, skipping",
