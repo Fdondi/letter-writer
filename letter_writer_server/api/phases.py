@@ -28,8 +28,14 @@ from letter_writer.generation import (
     AGENTIC_TOPIC_KEYS,
     get_agentic_topic_context,
     get_style_instructions,
-    suggest_additional_feedback_context_items,
     PHASED_FEEDBACK_CATEGORY_KEYS,
+    _phased_feedback_checker_accuracy_prompts,
+    _phased_feedback_checker_company_fit_prompts,
+    _phased_feedback_checker_human_prompts,
+    _phased_feedback_checker_instruction_prompts,
+    _phased_feedback_checker_precision_prompts,
+    _phased_feedback_checker_user_fit_prompts,
+    _run_suggest_additional_feedback_context,
 )
 from letter_writer.clients.base import ModelVendor
 from letter_writer_server.api.cost_utils import with_user_monthly_cost
@@ -484,31 +490,108 @@ def feedback_request_context(
     if isinstance(cf, dict) and isinstance(cf.get("items"), list):
         ctx_items = cf.get("items") or []
 
-    style_instructions = session.get("style_instructions") or ""
-    cv_text = session.get("cv_text") or ""
-    metadata = session.get("metadata") or {}
-    uid = (user or {}).get("id") if user else None
-    additional_user_info = get_effective_additional_user_info(metadata, vendor_enum, uid)
-    job_text = session.get("job_text") or ""
-    company_report = vstate.company_report or ""
-    top_docs = vstate.top_docs or []
-
     ai_client = get_client(vendor_enum)
     _reset_client_counters(ai_client)
     try:
-        new_items = suggest_additional_feedback_context_items(
-            ai_client,
-            cat,
-            obs,
-            ctx_items,
-            letter=draft,
-            style_instructions=style_instructions,
-            cv_text=cv_text,
-            additional_user_info=additional_user_info,
-            company_report=company_report,
-            job_text=job_text,
-            top_docs=top_docs,
-        )
+        if cat == "instruction":
+            system, base_prompt = _phased_feedback_checker_instruction_prompts(
+                letter=draft,
+                style_instructions=session.get("style_instructions") or "",
+            )
+            new_items = _run_suggest_additional_feedback_context(
+                ai_client,
+                cat,
+                obs,
+                ctx_items,
+                system,
+                base_prompt,
+                top_docs=None,
+            )
+        elif cat == "accuracy":
+            metadata = session.get("metadata") or {}
+            uid = (user or {}).get("id") if user else None
+            system, base_prompt = _phased_feedback_checker_accuracy_prompts(
+                letter=draft,
+                cv_text=session.get("cv_text") or "",
+                additional_user_info=get_effective_additional_user_info(metadata, vendor_enum, uid),
+            )
+            new_items = _run_suggest_additional_feedback_context(
+                ai_client,
+                cat,
+                obs,
+                ctx_items,
+                system,
+                base_prompt,
+                top_docs=None,
+            )
+        elif cat == "precision":
+            system, base_prompt = _phased_feedback_checker_precision_prompts(
+                letter=draft,
+                company_report=vstate.company_report or "",
+                job_text=session.get("job_text") or "",
+            )
+            new_items = _run_suggest_additional_feedback_context(
+                ai_client,
+                cat,
+                obs,
+                ctx_items,
+                system,
+                base_prompt,
+                top_docs=None,
+            )
+        elif cat == "company_fit":
+            system, base_prompt = _phased_feedback_checker_company_fit_prompts(
+                letter=draft,
+                company_report=vstate.company_report or "",
+                job_text=session.get("job_text") or "",
+            )
+            new_items = _run_suggest_additional_feedback_context(
+                ai_client,
+                cat,
+                obs,
+                ctx_items,
+                system,
+                base_prompt,
+                top_docs=None,
+            )
+        elif cat == "user_fit":
+            metadata = session.get("metadata") or {}
+            uid = (user or {}).get("id") if user else None
+            top_docs = vstate.top_docs or []
+            system, base_prompt = _phased_feedback_checker_user_fit_prompts(
+                letter=draft,
+                cv_text=session.get("cv_text") or "",
+                additional_user_info=get_effective_additional_user_info(metadata, vendor_enum, uid),
+                top_docs=top_docs,
+            )
+            new_items = _run_suggest_additional_feedback_context(
+                ai_client,
+                cat,
+                obs,
+                ctx_items,
+                system,
+                base_prompt,
+                top_docs=top_docs,
+            )
+        elif cat == "human":
+            top_docs = vstate.top_docs or []
+            human_prompts = _phased_feedback_checker_human_prompts(letter=draft, top_docs=top_docs)
+            if human_prompts is None:
+                raise ValueError(
+                    "The human-dimension checker has no reference materials (no AI letter examples with revision history)."
+                )
+            system, base_prompt = human_prompts
+            new_items = _run_suggest_additional_feedback_context(
+                ai_client,
+                cat,
+                obs,
+                ctx_items,
+                system,
+                base_prompt,
+                top_docs=top_docs,
+            )
+        else:
+            raise AssertionError(f"Unhandled phased feedback category: {cat!r}")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

@@ -675,67 +675,18 @@ def _normalize_missing_context_items_payload(
     return out
 
 
-@traceable(run_type="chain", name="suggest_additional_feedback_context_items")
-def suggest_additional_feedback_context_items(
+@traceable(run_type="chain", name="suggest_additional_feedback_context")
+def _run_suggest_additional_feedback_context(
     client: BaseClient,
     category: str,
     observation: str,
     existing_context_items: Sequence[Any],
+    system: str,
+    base_prompt: str,
     *,
-    letter: str,
-    style_instructions: str = "",
-    cv_text: str = "",
-    additional_user_info: str = "",
-    company_report: str = "",
-    job_text: str = "",
     top_docs: Optional[Sequence[TopDocument]] = None,
 ) -> List[Dict[str, str]]:
-    """
-    Second pass: same checker materials as the original feedback call, focused on finding
-    paste-ready snippets that belong with this observation but were omitted from context_field.
-    """
-    cat = (category or "").strip().lower()
-    if cat not in PHASED_FEEDBACK_CATEGORY_KEYS:
-        raise ValueError(f"Unknown feedback category: {category}")
-    if cat == "instruction":
-        base: Optional[Tuple[str, str]] = _phased_feedback_checker_instruction_prompts(
-            letter=letter,
-            style_instructions=style_instructions,
-        )
-    elif cat == "accuracy":
-        base = _phased_feedback_checker_accuracy_prompts(
-            letter=letter,
-            cv_text=cv_text,
-            additional_user_info=additional_user_info,
-        )
-    elif cat == "precision":
-        base = _phased_feedback_checker_precision_prompts(
-            letter=letter,
-            company_report=company_report,
-            job_text=job_text,
-        )
-    elif cat == "company_fit":
-        base = _phased_feedback_checker_company_fit_prompts(
-            letter=letter,
-            company_report=company_report,
-            job_text=job_text,
-        )
-    elif cat == "user_fit":
-        base = _phased_feedback_checker_user_fit_prompts(
-            letter=letter,
-            cv_text=cv_text,
-            additional_user_info=additional_user_info,
-            top_docs=top_docs,
-        )
-    elif cat == "human":
-        base = _phased_feedback_checker_human_prompts(letter=letter, top_docs=top_docs)
-    else:
-        raise ValueError(f"Unknown feedback category: {category}")
-    if base is None:
-        raise ValueError(
-            "The human-dimension checker has no reference materials (no AI letter examples with revision history)."
-        )
-    system, base_prompt = base
+    """Follow-up LLM pass: snippets for context_field using the same materials as the checker prompt above."""
     allowed = allowed_feedback_context_sources_for_category(category, top_docs=top_docs)
     legacy = legacy_context_string_default_source_for_category(category, top_docs=top_docs)
     allowed_sorted = ", ".join(sorted(allowed))
