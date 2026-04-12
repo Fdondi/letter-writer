@@ -630,6 +630,9 @@ def _phased_feedback_checker_human_prompts(
         "Use these to understand what the reviewer changed and removed, and pay special attention to user corrections.\n"
         "Once you notice recurring removals or rewrites, flag if the new letter contains similar content the reviewer would likely change.\n"
         "Do NOT flag elements merely for not appearing in references, and do not output praise—only actionable mismatches with edit patterns.\n"
+        "Do NOT flag mismatches just for existing. Ask yourself: is this difference relevant to the new job? "
+        "Example: all letters mention German proficiency because German is required or implied, but the new job is clearly in English only -> not relevant. "
+        "Or: all letters are highly formal, but the new company is proud of their informal culture -> not relevant. "
         "Keep each observation brief. If nothing in the draft matches a pattern the reviewer would change, return empty items.\n"
     )
     prompt = (
