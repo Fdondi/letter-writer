@@ -27,9 +27,12 @@ class LocalClient(BaseClient):
         super().__init__()
         self._base_url = os.getenv("LOCAL_LLM_BASE_URL") or _default_local_base_url()
         api_key = os.getenv("LOCAL_LLM_API_KEY", "lm-studio")
+        # Match reverse-proxy long timeouts: local inference often runs many minutes.
+        _timeout_s = float(os.getenv("LOCAL_LLM_HTTP_TIMEOUT_SECONDS", "1800"))
         self.client = OpenAI(
             base_url=self._base_url,
             api_key=api_key,
+            timeout=_timeout_s,
         )
 
     def _format_messages(self, system: str, user_messages: List[str]) -> List[Dict]:

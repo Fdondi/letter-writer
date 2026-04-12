@@ -13,6 +13,9 @@ export default defineConfig({
       "/api": {
         target: process.env.VITE_API_URL || "http://localhost:8000",
         changeOrigin: true,
+        // Align with nginx long waits for slow local LLM responses (avoid dev proxy closing first).
+        timeout: 1_800_000,
+        proxyTimeout: 1_800_000,
       },
       "/accounts": {
         target: process.env.VITE_API_URL || "http://localhost:8000",
