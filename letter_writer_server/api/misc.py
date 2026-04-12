@@ -431,6 +431,8 @@ async def translate(data: TranslateRequest, session: Session = Depends(get_sessi
 
 @router.get("/vendors/")
 async def list_vendors(session: Session = Depends(get_session)):
+    from letter_writer.local_pricing import is_local_energy_pricing_configured
+
     vendors = [v.value for v in ModelVendor]
     active_vendors = set(vendors)
 
@@ -452,7 +454,8 @@ async def list_vendors(session: Session = Depends(get_session)):
 
     return {
         "active": [v for v in vendors if v in active_vendors],
-        "inactive": [v for v in vendors if v not in active_vendors]
+        "inactive": [v for v in vendors if v not in active_vendors],
+        "local_pricing_configured": is_local_energy_pricing_configured(),
     }
 
 @router.get("/debug/in-flight-requests/")

@@ -25,9 +25,16 @@ class ClaudeClient(BaseClient):
         messages = self._format_messages(user_messages)
         if isinstance(model_size, str):
             model = model_size
+            thinking_cfg: dict = {}
         else:
             model = self.get_model_for_size(model_size)
-        typer.echo(f"[INFO] using Anthropic model {model}" + (" with search" if search else ""))
+            thinking_cfg = self.get_thinking_config(model_size)
+        thinking_enabled = bool(thinking_cfg.get("thinking", False))
+        typer.echo(
+            f"[INFO] using Anthropic model {model}"
+            + (" with thinking" if thinking_enabled else "")
+            + (" with search" if search else "")
+        )
 
         if response_format and isinstance(response_format, dict):
             schema = ((response_format.get("json_schema") or {}).get("schema") or {})
@@ -68,13 +75,19 @@ class ClaudeClient(BaseClient):
         total_output_tokens = 0
         
         # Initial request
-        response = self.client.messages.create(
-            model=model,
-            system=system,
-            messages=conversation_messages,
-            tools=tools,
-            max_tokens=max_tokens,
-        )
+        # Thinking is enabled only on non-search paths (search needs max_tokens=2048
+        # which is too low to fit a meaningful thinking budget alongside the response).
+        create_kwargs: Dict[str, Any] = {
+            "model": model,
+            "system": system,
+            "messages": conversation_messages,
+            "tools": tools,
+            "max_tokens": max_tokens,
+        }
+        if thinking_enabled and not search:
+            # budget_tokens must be strictly less than max_tokens; use half as a safe ceiling
+            create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": max_tokens // 2}
+        response = self.client.messages.create(**create_kwargs)
         
         # Track usage from first response
         if response.usage:

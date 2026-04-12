@@ -1,10 +1,19 @@
 from .base import BaseClient, ModelSize
 from openai import OpenAI
 from typing import List, Dict, Any, Optional
+import logging
 import os
+import time
 from pathlib import Path
 import typer
 from langsmith import traceable
+
+from letter_writer.local_pricing import (
+    compute_local_inference_cost_usd,
+    is_local_energy_pricing_configured,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _default_local_base_url() -> str:
@@ -35,6 +44,17 @@ class LocalClient(BaseClient):
             timeout=_timeout_s,
         )
 
+    def _record_local_usage_and_cost(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        energy_cost_usd: float,
+    ) -> None:
+        """Accumulate token counts for stats; dollar cost is energy-based only (not per-token)."""
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
+        self.total_cost += energy_cost_usd
+
     def _format_messages(self, system: str, user_messages: List[str]) -> List[Dict]:
         return [{"role": "system", "content": system}] + [
             {"role": "user", "content": message} for message in user_messages
@@ -61,13 +81,28 @@ class LocalClient(BaseClient):
         }
         if response_format:
             request_kwargs["response_format"] = response_format
+        t0 = time.perf_counter()
         response = self.client.chat.completions.create(**request_kwargs)
+        elapsed = time.perf_counter() - t0
 
+        energy_cost = compute_local_inference_cost_usd(elapsed)
+        in_t = out_t = 0
         if response.usage:
-            self.track_cost(
-                model,
-                response.usage.prompt_tokens,
-                response.usage.completion_tokens,
+            in_t = response.usage.prompt_tokens or 0
+            out_t = response.usage.completion_tokens or 0
+        self._record_local_usage_and_cost(in_t, out_t, energy_cost)
+
+        if not is_local_energy_pricing_configured():
+            logger.debug(
+                "Local inference cost $0.00 (elapsed=%.2fs); set LOCAL_GPU_WATTS_AT_100 and "
+                "LOCAL_ENERGY_PRICE_PER_KWH for energy-based pricing.",
+                elapsed,
+            )
+        else:
+            logger.debug(
+                "Local inference energy cost $%.6f (elapsed=%.2fs)",
+                energy_cost,
+                elapsed,
             )
 
         return response.choices[0].message.content.strip()

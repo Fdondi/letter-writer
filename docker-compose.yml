@@ -57,6 +57,9 @@ services:
       # LM Studio / OpenAI-compatible local server (backend uses host.docker.internal when in Docker unless overridden)
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
       - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
+      # Local energy-based cost (optional; cost stays 0 if unset)
+      - LOCAL_GPU_WATTS_AT_100=${LOCAL_GPU_WATTS_AT_100:-}
+      - LOCAL_ENERGY_PRICE_PER_KWH=${LOCAL_ENERGY_PRICE_PER_KWH:-}
     env_file:
       - .env
     depends_on:

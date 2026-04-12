@@ -3,8 +3,8 @@
     "search": 30.0
   },
   "sizes": {
-    "tiny": "open-mixtral-8x7b",
-    "base": "open-mixtral-8x7b",
+    "tiny": "mistral-small-2506",
+    "base": "mistral-small-latest",
     "medium": "mistral-medium-latest",
     "large": "mistral-large-latest",
     "xlarge": "mistral-large-latest"
@@ -13,6 +13,14 @@
     "open-mixtral-8x7b": {
       "input": 0.70,
       "output": 0.70
+    },
+    "mistral-small-2506": {
+      "input": 0.10,
+      "output": 0.30
+    },
+    "mistral-small-latest": {
+      "input": 0.15,
+      "output": 0.60
     },
     "mistral-medium-latest": {
       "input": 0.40,

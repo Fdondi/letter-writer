@@ -15,6 +15,7 @@ import AuthButton from "./components/AuthButton";
 import AppVersionLabel from "./components/AppVersionLabel";
 import CostDisplay from "./components/CostDisplay";
 import CostsPage from "./components/CostsPage";
+import LocalPricingWarningModal, { dismissLocalPricingWarningForSession } from "./components/LocalPricingWarningModal.jsx";
 import CompetencesList from "./components/CompetencesList";
 import ResearchComponent from "./components/ResearchComponent";
 import SimilarOffersCarousel from "./components/SimilarOffersCarousel";
@@ -100,6 +101,10 @@ export default function App({ flow = "vendor" }) {
   const [showDocumentsOverlay, setShowDocumentsOverlay] = useState(false);
   const [showSettingsOverlay, setShowSettingsOverlay] = useState(false);
   const [showCostsOverlay, setShowCostsOverlay] = useState(false);
+  const [localPricingConfigured, setLocalPricingConfigured] = useState(true);
+  const [localPricingModalOpen, setLocalPricingModalOpen] = useState(false);
+  const [localPricingDismissChecked, setLocalPricingDismissChecked] = useState(false);
+  const pendingLocalEnableActionRef = useRef(null);
   const [assemblyVisible, setAssemblyVisible] = useState(true); // vendor flow: when in assembly stage, show assembly or phases
   const [extractedData, setExtractedData] = useState(null); // Track extracted data to detect modifications
   const [vendorFeedback, setVendorFeedback] = useState({}); // vendor -> { rating, comment }
@@ -540,6 +545,9 @@ export default function App({ flow = "vendor" }) {
         setVendors(allVendors);
         setVendorColors(generateColors(allVendors));
         setSelectedVendors(activeVendors);
+        if (typeof data.local_pricing_configured === "boolean") {
+          setLocalPricingConfigured(data.local_pricing_configured);
+        }
       })
       .catch((e) => setError(String(e)));
   }, []);
@@ -768,6 +776,39 @@ export default function App({ flow = "vendor" }) {
     return hasVendorOutput || hasAgenticOutput;
   }, [documentId, letters, agenticState]);
 
+  const guardBeforeEnablingLocal = useCallback(
+    (fn) => {
+      if (localPricingConfigured) {
+        fn();
+        return;
+      }
+      if (isLocalPricingWarningDismissed()) {
+        fn();
+        return;
+      }
+      pendingLocalEnableActionRef.current = fn;
+      setLocalPricingModalOpen(true);
+    },
+    [localPricingConfigured]
+  );
+
+  const handleLocalPricingModalContinue = useCallback(() => {
+    if (localPricingDismissChecked) {
+      dismissLocalPricingWarningForSession();
+    }
+    const fn = pendingLocalEnableActionRef.current;
+    pendingLocalEnableActionRef.current = null;
+    setLocalPricingModalOpen(false);
+    setLocalPricingDismissChecked(false);
+    if (typeof fn === "function") fn();
+  }, [localPricingDismissChecked]);
+
+  const handleLocalPricingModalCancel = useCallback(() => {
+    pendingLocalEnableActionRef.current = null;
+    setLocalPricingModalOpen(false);
+    setLocalPricingDismissChecked(false);
+  }, []);
+
   // NOW we can do conditional returns (after all hooks are declared)
   
   // While checking authentication or if not authenticated, show loading/login
@@ -885,6 +926,16 @@ export default function App({ flow = "vendor" }) {
   }
 
   const toggleVendor = (vendor, checked) => {
+    if (vendor === "local" && checked) {
+      guardBeforeEnablingLocal(() => {
+        setSelectedVendors((prev) => {
+          const next = new Set(prev);
+          next.add("local");
+          return next;
+        });
+      });
+      return;
+    }
     setSelectedVendors((prev) => {
       const next = new Set(prev);
       checked ? next.add(vendor) : next.delete(vendor);
@@ -893,7 +944,17 @@ export default function App({ flow = "vendor" }) {
   };
 
   const selectAll = (checked) => {
-    setSelectedVendors(checked ? new Set(vendors) : new Set());
+    if (!checked) {
+      setSelectedVendors(new Set());
+      return;
+    }
+    if (vendors.includes("local") && !selectedVendors.has("local")) {
+      guardBeforeEnablingLocal(() => {
+        setSelectedVendors(new Set(vendors));
+      });
+      return;
+    }
+    setSelectedVendors(new Set(vendors));
   };
 
   const extractData = async () => {
@@ -3016,11 +3077,20 @@ export default function App({ flow = "vendor" }) {
           setSelectedVendors={setSelectedVendors}
           setBackgroundModels={setBackgroundModels}
           onCompetenceScalesChange={() => setCompetenceScaleConfig(getScaleConfig())}
+          guardBeforeEnablingLocal={guardBeforeEnablingLocal}
         />
       </OverlayPanel>
       <OverlayPanel title="API Costs" isOpen={showCostsOverlay} onClose={() => setShowCostsOverlay(false)}>
         <CostsPage />
       </OverlayPanel>
+
+      <LocalPricingWarningModal
+        isOpen={localPricingModalOpen}
+        onContinue={handleLocalPricingModalContinue}
+        onCancel={handleLocalPricingModalCancel}
+        dismissChecked={localPricingDismissChecked}
+        onDismissCheckedChange={setLocalPricingDismissChecked}
+      />
 
       {/* Floating toggle to assembly while still in phases (after first refinement ready) */}
       {!showInput && ((flow === "vendor" && vendorStage !== "assembly" && hasVendorAssembly) || (flow === "agentic" && agenticStage !== "assembly" && hasAgenticAssembly)) && (

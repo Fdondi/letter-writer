@@ -10,6 +10,7 @@ export default function SettingsPage({
   setSelectedVendors,
   setBackgroundModels,
   onCompetenceScalesChange,
+  guardBeforeEnablingLocal = (fn) => fn(),
 }) {
   const { languages, saveDefaults, setLanguages } = useLanguages();
   const [savingLanguages, setSavingLanguages] = useState(false);
@@ -198,6 +199,16 @@ export default function SettingsPage({
   };
 
   const toggleModel = (vendor) => {
+    if (!defaultModels.has(vendor) && vendor === "local") {
+      guardBeforeEnablingLocal(() => {
+        setDefaultModels((prev) => {
+          const next = new Set(prev);
+          next.add("local");
+          return next;
+        });
+      });
+      return;
+    }
     setDefaultModels((prev) => {
       const next = new Set(prev);
       if (next.has(vendor)) {
@@ -225,7 +236,17 @@ export default function SettingsPage({
   };
 
   const selectAllModels = (checked) => {
-    setDefaultModels(checked ? new Set(vendors) : new Set());
+    if (!checked) {
+      setDefaultModels(new Set());
+      return;
+    }
+    if (vendors.includes("local") && !defaultModels.has("local")) {
+      guardBeforeEnablingLocal(() => {
+        setDefaultModels(new Set(vendors));
+      });
+      return;
+    }
+    setDefaultModels(new Set(vendors));
   };
 
   // Group available models for display, building correct composite IDs using vendor_key from API

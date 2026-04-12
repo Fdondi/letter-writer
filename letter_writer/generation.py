@@ -1520,7 +1520,7 @@ def instruction_check(letter: str, client: BaseClient, style_instructions: str =
     legacy = legacy_context_string_default_source_for_category("instruction")
     return _call_vendor_feedback_items(
         client,
-        ModelSize.TINY,
+        ModelSize.BASE,
         system,
         prompt,
         allowed_context_sources=allowed,
@@ -1544,7 +1544,7 @@ def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_use
     legacy = legacy_context_string_default_source_for_category("accuracy")
     return _call_vendor_feedback_items(
         client,
-        ModelSize.TINY,
+        ModelSize.BASE,
         system,
         prompt,
         allowed_context_sources=allowed,
@@ -1563,7 +1563,7 @@ def precision_check(letter: str, company_report: str, job_text: str, client: Bas
     legacy = legacy_context_string_default_source_for_category("precision")
     return _call_vendor_feedback_items(
         client,
-        ModelSize.TINY,
+        ModelSize.BASE,
         system,
         prompt,
         allowed_context_sources=allowed,
@@ -1582,7 +1582,7 @@ def company_fit_check(letter: str, company_report: str, job_offer: str, client: 
     legacy = legacy_context_string_default_source_for_category("company_fit")
     return _call_vendor_feedback_items(
         client,
-        ModelSize.TINY,
+        ModelSize.BASE,
         system,
         prompt,
         allowed_context_sources=allowed,
@@ -1608,7 +1608,7 @@ def user_fit_check(
     legacy = legacy_context_string_default_source_for_category("user_fit", top_docs=examples)
     return _call_vendor_feedback_items(
         client,
-        ModelSize.TINY,
+        ModelSize.BASE,
         system,
         prompt,
         allowed_context_sources=allowed,
@@ -1648,7 +1648,7 @@ def human_check(letter: str, examples: Sequence[TopDocument], client: BaseClient
     legacy = legacy_context_string_default_source_for_category("human", top_docs=examples)
     return _call_vendor_feedback_items(
         client,
-        ModelSize.TINY,
+        ModelSize.BASE,
         system,
         prompt,
         allowed_context_sources=allowed,

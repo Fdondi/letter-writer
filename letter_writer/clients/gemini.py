@@ -148,9 +148,16 @@ class GeminiClient(BaseClient):
 
         if isinstance(model_size, str):
             model_name = model_size
+            thinking_cfg: dict = {}
         else:
             model_name = self.get_model_for_size(model_size)
-        typer.echo(f"[INFO] using Gemini model {model_name}" + (" with search" if search else ""))
+            thinking_cfg = self.get_thinking_config(model_size)
+        thinking_level = thinking_cfg.get("thinking_level")  # None | "Low" | "Medium" | "High"
+        typer.echo(
+            f"[INFO] using Gemini model {model_name}"
+            + (f" thinking={thinking_level}" if thinking_level else "")
+            + (" with search" if search else "")
+        )
 
         # Validate and filter user_messages - Gemini API requires all strings to be non-None
         validated_messages = []
@@ -167,12 +174,17 @@ class GeminiClient(BaseClient):
         if not validated_messages:
             raise ValueError("No valid user messages provided to Gemini API (all were None or empty)")
 
+        _THINKING_BUDGETS = {"Low": 1024, "Medium": 8192, "High": -1}
         try:
             schema = ((response_format or {}).get("json_schema") or {}).get("schema")
             cfg: Dict[str, Any] = {
                 "system_instruction": system,
                 "tools": cast(Any, tools),
             }
+            if thinking_level and thinking_level in _THINKING_BUDGETS:
+                cfg["thinking_config"] = types.ThinkingConfig(
+                    thinking_budget=_THINKING_BUDGETS[thinking_level]
+                )
             if schema:
                 cfg["response_mime_type"] = "application/json"
                 cfg["response_schema"] = cast(Any, _strip_unsupported_schema_keys(schema))
@@ -195,7 +207,13 @@ class GeminiClient(BaseClient):
         
         if usage is not None:
             prompt_tokens = getattr(usage, "prompt_token_count", None)
-            output_tokens = getattr(usage, "candidates_token_count", None)
+            # candidates_token_count covers only the visible response; thinking tokens
+            # are reported separately in thoughts_token_count and billed at the same
+            # output rate, so we add them together for accurate cost tracking.
+            thinking_tokens = int(getattr(usage, "thoughts_token_count", 0) or 0)
+            output_tokens = (getattr(usage, "candidates_token_count", None) or 0) + thinking_tokens
+            if thinking_tokens:
+                typer.echo(f"[INFO] Gemini thinking tokens: {thinking_tokens}")
             
             # Get actual search count from grounding metadata when available (Gemini 3 bills per query)
             search_queries = 0

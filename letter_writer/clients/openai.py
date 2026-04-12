@@ -24,19 +24,28 @@ class OpenAIClient(BaseClient):
         messages = self._format_messages(system, user_messages)
         if isinstance(model_size, str):
             model = model_size
+            thinking_cfg: dict = {}
         else:
             model = self.get_model_for_size(model_size)
+            thinking_cfg = self.get_thinking_config(model_size)
         if search and "search" not in model:
             typer.echo(
                 f"[WARNING] search requested for OpenAI model {model} without explicit search capability"
             )
-        typer.echo(f"[INFO] using OpenAI model {model}" + (" with search" if search else ""))
+        reasoning_effort = thinking_cfg.get("reasoning_effort")
+        typer.echo(
+            f"[INFO] using OpenAI model {model}"
+            + (f" reasoning_effort={reasoning_effort}" if reasoning_effort and reasoning_effort != "none" else "")
+            + (" with search" if search else "")
+        )
         request_kwargs: Dict[str, Any] = {
             "model": model,
             "messages": messages,
         }
         if response_format:
             request_kwargs["response_format"] = response_format
+        if reasoning_effort and reasoning_effort != "none":
+            request_kwargs["reasoning_effort"] = reasoning_effort
         response = self.client.chat.completions.create(
             **request_kwargs,
         )

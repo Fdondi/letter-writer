@@ -1,52 +1,47 @@
 {
   "defaults": {
-    "search": 10.0
+    "search": 10.0,
+    "threshold": 275000
   },
   "sizes": {
-    "tiny": "gpt-5-nano",
-    "base": "gpt-5-mini",
-    "medium": "gpt-5.1",
-    "large": "gpt-5.2",
-    "xlarge": "gpt-5.2"
+    "tiny":   { "model": "gpt-5-nano",   "reasoning_effort": "none" },
+    "base":   { "model": "gpt-5-mini",   "reasoning_effort": "low" },
+    "medium": { "model": "gpt-5.4-mini", "reasoning_effort": "medium" },
+    "large":  { "model": "gpt-5.2",      "reasoning_effort": "medium" },
+    "xlarge": { "model": "gpt-5.4",      "reasoning_effort": "high" }
   },
   "models": {
-    "gpt-5-nano": {
-      "input": 0.05,
-      "output": 0.40
+    "gpt-5-nano":       { "input": 0.05,  "input_cached_mult": 0.10, "output": 0.40  },
+    "gpt-5-mini":       { "input": 0.25,  "input_cached_mult": 0.10, "output": 2.00  },
+    "gpt-5":            { "input": 1.25,  "input_cached_mult": 0.10, "output": 10.00 },
+    "gpt-5.1":          { "input": 1.25,  "input_cached_mult": 0.10, "output": 10.00 },
+    "gpt-5.2":          { "input": 1.75,  "input_cached_mult": 0.10, "output": 14.00 },
+    "gpt-5-search-api": { "input": 1.25,  "input_cached_mult": 0.10, "output": 10.00 },
+    "gpt-5-pro":        { "input": 15.00,                            "output": 120.00 },
+    "gpt-5.2-pro":      { "input": 21.00,                            "output": 168.00 },
+    "gpt-5.4": {
+      "input":            { "low": 2.50,  "high": 5.00  },
+      "input_cached_mult": 0.10,
+      "output":           { "low": 15.00, "high": 22.50 },
+      "search": 14.00
     },
-    "gpt-5-mini": {
-      "input": 0.25,
-      "output": 2.00
+    "gpt-5.4-mini":     { "input": 0.75,  "input_cached_mult": 0.10, "output": 4.50  },
+    "gpt-5.4-nano":     { "input": 0.20,  "input_cached_mult": 0.10, "output": 1.25  },
+    "gpt-5.4-pro": {
+      "input":            { "low": 30.00, "high": 60.00  },
+      "output":           { "low": 180.00,"high": 270.00 }
     },
-    "gpt-5": {
-      "input": 1.25,
-      "output": 10.00
-    },
-    "gpt-5.1": {
-      "input": 1.25,
-      "output": 10.00
-    },
-    "gpt-5-search-api": {
-      "input": 1.25,
-      "output": 10.00
-    },
-    "gpt-5.2": {
-      "input": 1.75,
-      "output": 14.00
-    },
-    "gpt-4o-search-preview": {
-      "input": 2.50,
-      "output": 10.00,
-      "search": 25.0
-    },
-    "gpt-4o": {
-      "input": 2.50,
-      "output": 10.00
-    },
-    "gpt-4o-mini": {
-      "input": 0.15,
-      "output": 0.60
-    }
+    "gpt-4.1":          { "input": 2.00,  "input_cached_mult": 0.25, "output": 8.00  },
+    "gpt-4.1-mini":     { "input": 0.40,  "input_cached_mult": 0.25, "output": 1.60  },
+    "gpt-4.1-nano":     { "input": 0.10,  "input_cached_mult": 0.25, "output": 0.40  },
+    "gpt-4o":           { "input": 2.50,  "input_cached_mult": 0.50, "output": 10.00, "search": 25.0 },
+    "gpt-4o-mini":      { "input": 0.15,  "input_cached_mult": 0.50, "output": 0.60  },
+    "gpt-4o-search-preview": { "input": 2.50, "input_cached_mult": 0.50, "output": 10.00, "search": 25.0 },
+    "o4-mini":          { "input": 1.10,  "input_cached_mult": 0.25, "output": 4.40  },
+    "o3":               { "input": 2.00,  "input_cached_mult": 0.25, "output": 8.00  },
+    "o3-mini":          { "input": 1.10,  "input_cached_mult": 0.50, "output": 4.40  },
+    "o3-pro":           { "input": 20.00,                            "output": 80.00 },
+    "o1":               { "input": 15.00, "input_cached_mult": 0.50, "output": 60.00 },
+    "o1-mini":          { "input": 1.10,  "input_cached_mult": 0.50, "output": 4.40  }
   }
 }
-

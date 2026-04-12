@@ -4,11 +4,11 @@
     "threshold": 200000
   },
   "sizes": {
-    "tiny": "gemini-2.5-flash-lite",
-    "base": "gemini-2.5-flash",
-    "medium": "gemini-3-flash-preview",
-    "large": "gemini-2.5-pro",
-    "xlarge": "gemini-3-pro-preview"
+    "tiny":   { "model": "gemini-2.5-flash-lite", "thinking_level": null },
+    "base":   { "model": "gemini-2.5-flash",      "thinking_level": "Low" },
+    "medium": { "model": "gemini-3-flash-preview", "thinking_level": "Low" },
+    "large":  { "model": "gemini-2.5-pro",         "thinking_level": "Medium" },
+    "xlarge": { "model": "gemini-3-pro-preview",   "thinking_level": "High" }
   },
   "models": {
     "gemini-2.5-flash-lite": {
@@ -49,4 +49,3 @@
     }
   }
 }
-

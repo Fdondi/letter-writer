@@ -66,13 +66,39 @@ class BaseClient:
         return self._load_cost_config()
 
     def get_model_for_size(self, model_size: ModelSize) -> str:
-        """Resolve model name from size using hot-reloaded config."""
+        """Resolve model name from size using hot-reloaded config.
+
+        Supports both legacy plain-string entries and new dict entries::
+
+            "tiny": "gpt-5-nano"                           # legacy
+            "tiny": {"model": "gpt-5-nano", ...}           # new
+        """
         sizes = self.config.get("sizes", {})
-        model_name = sizes.get(model_size.value)
-        if not model_name:
-            # Fallback to hardcoded or raise if missing
+        entry = sizes.get(model_size.value)
+        if not entry:
             raise ValueError(f"Model size '{model_size.value}' not defined in {self.__class__.__name__} config")
-        return model_name
+        if isinstance(entry, dict):
+            model_name = entry.get("model")
+            if not model_name:
+                raise ValueError(f"Model size '{model_size.value}' missing 'model' key in {self.__class__.__name__} config")
+            return model_name
+        return entry
+
+    def get_thinking_config(self, model_size: ModelSize) -> dict:
+        """Return per-size thinking/reasoning params (vendor-specific keys).
+
+        Returns an empty dict for plain-string size entries or entries with no
+        extra keys beyond ``model``.  Each vendor client checks for its own key::
+
+            OpenAI:    config.get("reasoning_effort")   # "none"|"low"|"medium"|"high"
+            Anthropic: config.get("thinking")           # False | True
+            Gemini:    config.get("thinking_level")     # None | "Low" | "Medium" | "High"
+        """
+        sizes = self.config.get("sizes", {})
+        entry = sizes.get(model_size.value)
+        if isinstance(entry, dict):
+            return {k: v for k, v in entry.items() if k != "model"}
+        return {}
 
     def get_model_cost(self, model_name: str) -> dict:
         """Retrieve cost dict for a model from the client's JSON config.

@@ -29,10 +29,14 @@ Environment variables (optional):
 |----------|---------|
 | `LOCAL_LLM_BASE_URL` | Full base URL including `/v1`, e.g. `http://localhost:1234/v1`. If unset, the app uses `http://localhost:1234/v1` when running on the host, and `http://host.docker.internal:1234/v1` when running **inside a container** so the backend can reach LM Studio on the **host** (Docker Desktop on Windows/macOS resolves `host.docker.internal` to the host). |
 | `LOCAL_LLM_API_KEY` | Sent as the API key; LM Studio often accepts any non-empty value. Defaults to `lm-studio`. |
+| `LOCAL_GPU_WATTS_AT_100` | **Optional but required for non-zero local cost tracking.** GPU power draw in watts when the GPU is at 100% utilization (e.g. your card’s typical load power). Used with wall-clock inference time and `LOCAL_ENERGY_PRICE_PER_KWH`. |
+| `LOCAL_ENERGY_PRICE_PER_KWH` | **Optional but required for non-zero local cost tracking.** Your local electricity price per kWh (same currency unit as other API costs in the app, typically USD/kWh). |
+
+**Local cost model:** Each local LLM call is charged as \((\text{elapsed hours}) \times (\text{watts}/1000) \times \text{price per kWh}\), assuming the GPU runs at full load for the whole request. Token-based rates in `letter_writer/clients/local.json` are not used for billing. If either `LOCAL_GPU_WATTS_AT_100` or `LOCAL_ENERGY_PRICE_PER_KWH` is missing or invalid, recorded cost stays **0** (tokens are still counted).
 
 **Docker:** Inside a container, `localhost` refers to the container, not your machine, so connection errors usually mean the URL must target the host (the default `host.docker.internal` behavior above, or set `LOCAL_LLM_BASE_URL` explicitly, e.g. to another host or port). On Linux Docker without `host.docker.internal`, set `LOCAL_LLM_BASE_URL` to a reachable host IP or add `extra_hosts` in Compose.
 
-`docker-compose.yml` passes `LOCAL_LLM_BASE_URL` and `LOCAL_LLM_API_KEY` through from the host environment / `.env`.
+`docker-compose.yml` passes `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_API_KEY`, `LOCAL_GPU_WATTS_AT_100`, and `LOCAL_ENERGY_PRICE_PER_KWH` through from the host environment / `.env`.
 
 ### CV Source
 
