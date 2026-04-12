@@ -30,6 +30,47 @@ import { useTranslation } from "../utils/useTranslation";
 import LanguageSelector from "./LanguageSelector";
 import { FEEDBACK_TYPES, mergeCategoryItems } from "./phases/feedbackItemUtils";
 
+function deepCloneJson(obj) {
+  if (obj === undefined || obj === null) return obj;
+  try {
+    return JSON.parse(JSON.stringify(obj));
+  } catch {
+    return obj;
+  }
+}
+
+/**
+ * True if local `edits` differ from `reference` (server snapshot or post-approval baseline).
+ * Mirrors VendorCard dirty detection: only keys present on `edits` are compared.
+ */
+function computeEditsDifferFromReference(cardPhaseEdits, reference) {
+  if (!reference || !cardPhaseEdits) return false;
+  return Object.keys(cardPhaseEdits).some((key) => {
+    const editValue = cardPhaseEdits[key];
+    const dataValue = reference[key];
+
+    if (editValue && typeof editValue === "object" && !Array.isArray(editValue)) {
+      const dataObj = dataValue && typeof dataValue === "object" && !Array.isArray(dataValue) ? dataValue : {};
+      const editKeys = Object.keys(editValue);
+      const dataKeys = Object.keys(dataObj);
+      if (editKeys.length === 0 && dataKeys.length === 0) return false;
+      if (editKeys.length !== dataKeys.length) return true;
+      return editKeys.some((k) => {
+        const ev = editValue[k];
+        const dv = dataObj[k];
+        if (ev !== null && typeof ev === "object") {
+          return JSON.stringify(ev) !== JSON.stringify(dv);
+        }
+        return ev !== dv;
+      });
+    }
+
+    const editStr = (editValue ?? "").toString().trim();
+    const dataStr = (dataValue ?? "").toString().trim();
+    return editStr !== dataStr;
+  });
+}
+
 // Card status enum - cards report their status to phases
 const CardStatus = {
   PENDING: 'pending',
@@ -838,6 +879,8 @@ function VendorCard({
   
   // Card owns its approval and edit state (but not data fetching)
   const [approved, setApproved] = React.useState(false);
+  /** Snapshot of `edits` at last successful approve; dirty vs this = "after final approve" only. */
+  const [approvedEditsBaseline, setApprovedEditsBaseline] = React.useState(null);
   const [edits, setEdits] = React.useState({});
   const [phaseCost, setPhaseCost] = React.useState(0);
   const [runningTotal, setRunningTotal] = React.useState(0);
@@ -881,7 +924,10 @@ function VendorCard({
   
   // Translation support for this card
   const translation = useTranslation();
-  
+
+  /** Last `data` we saw for success; when it changes, sync post-approval baseline from server-shaped edits. */
+  const lastSuccessDataRef = useRef(null);
+
   // Track current registered status to avoid infinite loops
   const registeredStatusRef = useRef(null);
   
@@ -941,7 +987,20 @@ function VendorCard({
       }
     }
   }, [cardPhase, data, selectedFeedbackTab, phaseModule]);
-  
+
+  // After a regeneration (new `data` object), align baseline so "dirty" is not stuck on pre-approve edits.
+  React.useEffect(() => {
+    if (!data || status !== "success") return;
+    if (lastSuccessDataRef.current === data) return;
+    lastSuccessDataRef.current = data;
+    if (!approved) return;
+    const pm = phaseModules[cardPhase];
+    if (!pm?.initializeEditsFromData) return;
+    const initialEdits = pm.initializeEditsFromData(data);
+    if (!initialEdits || Object.keys(initialEdits).length === 0) return;
+    setApprovedEditsBaseline(deepCloneJson(initialEdits));
+  }, [data, status, approved, cardPhase]);
+
   // Get feedback data using phase module (with error handling)
   let feedbackData = null;
   let feedback = {};
@@ -971,32 +1030,12 @@ function VendorCard({
     }
   };
 
-  // Check if this card's phase data is dirty (edits differ from data) - phase-agnostic
-  const thisPhaseDirty = phaseObj ? Object.keys(cardPhaseEdits).some(key => {
-    const editValue = cardPhaseEdits[key];
-    const dataValue = cardPhaseData[key];
-    
-    // Handle objects (like feedback_overrides) - check if they differ in content
-    if (editValue && typeof editValue === "object" && !Array.isArray(editValue)) {
-      const dataObj = dataValue && typeof dataValue === "object" && !Array.isArray(dataValue) ? dataValue : {};
-      const editKeys = Object.keys(editValue);
-      const dataKeys = Object.keys(dataObj);
-      if (editKeys.length === 0 && dataKeys.length === 0) return false;
-      if (editKeys.length !== dataKeys.length) return true;
-      return editKeys.some((k) => {
-        const ev = editValue[k];
-        const dv = dataObj[k];
-        if (ev !== null && typeof ev === "object") {
-          return JSON.stringify(ev) !== JSON.stringify(dv);
-        }
-        return ev !== dv;
-      });
-    }
-    
-    const editStr = (editValue ?? '').toString().trim();
-    const dataStr = (dataValue ?? '').toString().trim();
-    return editStr !== dataStr;
-  }) : false;
+  // Dirty vs server before approve; vs last-approve snapshot after approve (so pre-approve feedback edits don't read as "restart").
+  const referenceForDirty =
+    approved && approvedEditsBaseline != null ? approvedEditsBaseline : cardPhaseData;
+  const thisPhaseDirty = phaseObj
+    ? computeEditsDifferFromReference(cardPhaseEdits, referenceForDirty)
+    : false;
   
   // Check if all phases are done (for "done" state) - use prop
   const isDone = allPhasesDone;
@@ -1358,8 +1397,10 @@ function VendorCard({
               try {
                 // Call parent's approve handler - this triggers the API and returns data for the next phase
                 if (onApprove) {
+                  const snapshotAtApprove = deepCloneJson(cardPhaseEdits);
                   // Mark as approved locally IMMEDIATELY
                   setApproved(true);
+                  setApprovedEditsBaseline(snapshotAtApprove);
                   // Notify parent IMMEDIATELY that this card is approved
                   // This will cause the next phase's card to mount in "Loading" state
                   if (onPhaseComplete) {
@@ -1388,6 +1429,7 @@ function VendorCard({
                 setError(e.message || String(e));
                 // Status is computed by wrapper based on error state
                 setApproved(false); // Revert approval on error
+                setApprovedEditsBaseline(null);
               }
             }}
             disabled={!readyForApproval || (approved && !thisPhaseDirty)}
@@ -1402,7 +1444,12 @@ function VendorCard({
                 ? thisPhaseDirty
                   ? "Save and restart from here"
                   : "Approved"
-                : "Approve"}
+                : readyForApproval
+                  ? "Approve"
+                  : cardPhase === "draft" ||
+                      (cardPhase === "refine" && previousPhaseApproved)
+                    ? "Check feedback"
+                    : "Approve"}
           </button>
         )}
         {cardPhase && phaseModule?.renderAdditionalButtons && (

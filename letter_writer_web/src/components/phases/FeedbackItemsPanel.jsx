@@ -690,6 +690,10 @@ export function FeedbackItemsPanel({
 
     /** Same gate as showInputEditor: missing saved user_context and not declined — Approve stays off until input or this path. */
     const needsInputOrDeclineChoice = needsInput && !userContextFilled && !inputDeclined;
+    const rowGateBlocksApprove =
+      disabled ||
+      approved ||
+      (needsInput && !String(userContext || "").trim() && !inputDeclined);
     const renderApproveWithoutInputButton = () => (
       <button
         type="button"
@@ -1135,7 +1139,7 @@ export function FeedbackItemsPanel({
                     : undefined
                 }
               >
-                {approved ? "Approved" : "Approve"}
+                {approved ? "Approved" : rowGateBlocksApprove ? "Check feedback" : "Approve"}
               </button>
               <button type="button" onClick={() => startEdit(it)} disabled={disabled} style={{ fontSize: 11 }}>
                 Edit
