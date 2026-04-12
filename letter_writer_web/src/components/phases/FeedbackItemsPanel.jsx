@@ -194,7 +194,11 @@ export function FeedbackItemsPanel({
     const obsChanged = origObs !== obs;
 
     if (it.type === FEEDBACK_TYPES.PLEASE_FIX) {
-      if (!obs) return;
+      if (!obs) {
+        // If they cleared the text entirely (or clicked save on an empty new critique), remove it
+        onRemove(editingId);
+        return;
+      }
       const next = items.map((x) => {
         if (x.id !== editingId) return x;
         let row = { ...x, observation: obs, type: FEEDBACK_TYPES.PLEASE_FIX };
@@ -255,6 +259,14 @@ export function FeedbackItemsPanel({
 
   const cancelEdit = () => {
     const closedId = editingId;
+    
+    // If we were adding a brand new critique and cancelled before saving any text, remove it
+    const it = items.find((i) => i.id === closedId);
+    if (it && it.type === FEEDBACK_TYPES.PLEASE_FIX && !String(it.observation || "").trim()) {
+      onRemove(closedId);
+      return;
+    }
+
     setEditingId(null);
     setDraftObservation("");
     setEditingPromoteToFix(false);
