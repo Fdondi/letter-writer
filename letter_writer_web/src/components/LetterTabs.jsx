@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import Paragraph from "./Paragraph";
 import { ItemTypes } from "../constants";
@@ -170,19 +170,31 @@ export default function LetterTabs({
   const finalColumnRef = useRef(null);
   const scrollPositionRef = useRef(0);
   const expandedDialogRef = useRef(null);
-  
+
+  /** Capture scroll before final-column list mutations (drag-reorder often does not emit scroll events). */
+  const captureFinalColumnScroll = () => {
+    const el = finalColumnRef.current;
+    if (!el) return;
+    scrollPositionRef.current = el.scrollTop;
+  };
+
+  const applyFinalColumnScrollRestore = () => {
+    const el = finalColumnRef.current;
+    if (!el) return;
+    const max = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.scrollTop = Math.min(scrollPositionRef.current, max);
+  };
+
   // Save scroll position continuously as user scrolls
   const handleScroll = (e) => {
     if (e.target === finalColumnRef.current) {
       scrollPositionRef.current = e.target.scrollTop;
     }
   };
-  
-  // Restore scroll position after any state change
-  useEffect(() => {
-    if (finalColumnRef.current && scrollPositionRef.current > 0) {
-      finalColumnRef.current.scrollTop = scrollPositionRef.current;
-    }
+
+  // Restore before paint so the column does not jump to the top after reorder / edits
+  useLayoutEffect(() => {
+    applyFinalColumnScrollRestore();
   }, [finalParagraphs, translationStates]);
   
   // Use shared language context instead of local state
@@ -247,11 +259,9 @@ export default function LetterTabs({
   const minColumnWidth = parseInt(localStorage.getItem("minColumnWidth") || "200", 10);
 
   const moveFinalParagraph = (from, to) => {
-    console.log('🔄 moveFinalParagraph called:', { from, to, currentLength: finalParagraphs.length });
-    
+    captureFinalColumnScroll();
+
     setFinalParagraphs((prev) => {
-      console.log('🔄 moveFinalParagraph executing with prev.length:', prev.length);
-      
       // More comprehensive bounds checking
       if (
         typeof from !== 'number' || 
@@ -283,22 +293,17 @@ export default function LetterTabs({
       
       try {
         const copy = [...prev];
-        console.log('📋 Before move - array:', copy.map((p, i) => ({ index: i, id: p.id, text: p.text?.substring(0, 20) })));
-        
+
         const [moved] = copy.splice(from, 1);
-        
+
         // Double-check that we have a valid item to move
         if (!moved) {
           console.warn('❌ No item found at index:', from);
           return prev;
         }
-        
-        console.log('📦 Moving item:', { from, to, movedId: moved.id, movedText: moved.text?.substring(0, 20) });
-        
+
         copy.splice(to, 0, moved);
-        
-        console.log('✅ After move - array:', copy.map((p, i) => ({ index: i, id: p.id, text: p.text?.substring(0, 20) })));
-        
+
         return copy;
       } catch (error) {
         console.error('❌ Error moving paragraph:', error, { from, to, arrayLength: prev.length });
@@ -308,6 +313,8 @@ export default function LetterTabs({
   };
 
   const handleFragmentSplit = (paragraphIndex, fragments, originalText, newText) => {
+    captureFinalColumnScroll();
+
     setFinalParagraphs((prev) => {
       try {
         if (paragraphIndex < 0 || paragraphIndex >= prev.length) {
@@ -378,12 +385,6 @@ export default function LetterTabs({
   };
 
   const addParagraphAtPosition = (paragraph, targetIndex = null) => {
-    console.log('➕ addParagraphAtPosition called:', { 
-      paragraphId: paragraph?.id, 
-      targetIndex, 
-      currentLength: finalParagraphs.length 
-    });
-    
     if (!paragraph || typeof paragraph !== 'object') {
       console.warn('❌ Invalid paragraph to add:', paragraph);
       return;
@@ -397,35 +398,21 @@ export default function LetterTabs({
       originalText: paragraph.text || "" // Track original text for edit tracking
     };
     
-    console.log('📝 Created new paragraph:', { 
-      newId: newParagraph.id, 
-      sourceId: newParagraph.sourceId, 
-      vendor: newParagraph.vendor,
-      text: newParagraph.text?.substring(0, 20)
-    });
+    captureFinalColumnScroll();
 
     setFinalParagraphs((prev) => {
-      console.log('➕ addParagraphAtPosition executing with prev.length:', prev.length);
-      
       try {
         if (targetIndex !== null) {
           // Ensure targetIndex is within valid bounds
           const safeIndex = Math.max(0, Math.min(targetIndex, prev.length));
-          console.log('🎯 Adding at position:', { targetIndex, safeIndex, prevLength: prev.length });
-          
+
           const copy = [...prev];
           copy.splice(safeIndex, 0, newParagraph);
-          
-          console.log('✅ After add - array:', copy.map((p, i) => ({ index: i, id: p.id, text: p.text?.substring(0, 20) })));
-          
+
           return copy;
         }
-        
-        console.log('📎 Adding to end of array');
-        const result = [...prev, newParagraph];
-        console.log('✅ After append - array:', result.map((p, i) => ({ index: i, id: p.id, text: p.text?.substring(0, 20) })));
-        
-        return result;
+
+        return [...prev, newParagraph];
       } catch (error) {
         console.error('❌ Error adding paragraph:', error, { targetIndex, arrayLength: prev.length });
         return prev;
@@ -434,6 +421,8 @@ export default function LetterTabs({
   };
 
   const addNewParagraph = (index) => {
+    captureFinalColumnScroll();
+
     const newParagraph = {
       id: uuidv4(),
       text: "",
@@ -458,6 +447,8 @@ export default function LetterTabs({
   };
 
   const deleteParagraph = (index) => {
+    captureFinalColumnScroll();
+
     setFinalParagraphs((prev) => {
       try {
         if (index < 0 || index >= prev.length) {
@@ -636,6 +627,21 @@ export default function LetterTabs({
     collect: (monitor) => ({
       isOver: monitor.isOver({ shallow: true })
     })
+  });
+
+  const paragraphReorderBtnStyle = (disabled) => ({
+    width: 22,
+    height: 22,
+    padding: 0,
+    fontSize: 11,
+    lineHeight: "20px",
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.35 : 1,
+    background: "var(--panel-bg)",
+    color: "var(--text-color)",
+    border: "1px solid var(--border-color)",
+    borderRadius: 3,
+    flexShrink: 0,
   });
 
   const PlusButton = ({ onClick, style = {} }) => (
@@ -838,54 +844,100 @@ export default function LetterTabs({
 
             return (
               <div key={p.id || `paragraph-${idx}`}>
-                <div data-paragraph-index={idx}>
-                  <Paragraph
-                    paragraph={p}
-                    index={idx}
-                    moveParagraph={moveFinalParagraph}
-                    color={paragraphColor}
-                    editable
-                    keyTerms={requirements}
-                    selectedKeyTerm={selectedKeyTerm}
-                    // Controlled translation props
-                    translations={tState.translations}
-                    viewLanguage={tState.viewLanguage}
-                    onTranslationLoaded={(lang, text) => {
-                        setTranslationStates(prev => ({
-                            ...prev,
-                            [p.id]: {
-                                ...(prev[p.id] || {}),
-                                viewLanguage: lang,
-                                translations: {
-                                    ...(prev[p.id]?.translations || {}),
-                                    [lang]: text
-                                }
-                            }
+                <div
+                  data-paragraph-index={idx}
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <div
+                    style={{
+                      flexShrink: 0,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                      paddingTop: 6,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      aria-label="Move paragraph up"
+                      title="Move up"
+                      disabled={idx <= 0}
+                      style={paragraphReorderBtnStyle(idx <= 0)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (idx <= 0) return;
+                        moveFinalParagraph(idx, idx - 1);
+                      }}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Move paragraph down"
+                      title="Move down"
+                      disabled={idx >= finalParagraphs.length - 1}
+                      style={paragraphReorderBtnStyle(idx >= finalParagraphs.length - 1)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (idx >= finalParagraphs.length - 1) return;
+                        moveFinalParagraph(idx, idx + 1);
+                      }}
+                    >
+                      ↓
+                    </button>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Paragraph
+                      paragraph={p}
+                      index={idx}
+                      moveParagraph={moveFinalParagraph}
+                      color={paragraphColor}
+                      editable
+                      keyTerms={requirements}
+                      selectedKeyTerm={selectedKeyTerm}
+                      translations={tState.translations}
+                      viewLanguage={tState.viewLanguage}
+                      onTranslationLoaded={(lang, text) => {
+                        setTranslationStates((prev) => ({
+                          ...prev,
+                          [p.id]: {
+                            ...(prev[p.id] || {}),
+                            viewLanguage: lang,
+                            translations: {
+                              ...(prev[p.id]?.translations || {}),
+                              [lang]: text,
+                            },
+                          },
                         }));
-                    }}
-                    onViewLanguageChange={(lang) => {
-                        setTranslationStates(prev => ({
-                            ...prev,
-                            [p.id]: {
-                                ...(prev[p.id] || { translations: {} }),
-                                viewLanguage: lang
-                            }
+                      }}
+                      onViewLanguageChange={(lang) => {
+                        setTranslationStates((prev) => ({
+                          ...prev,
+                          [p.id]: {
+                            ...(prev[p.id] || { translations: {} }),
+                            viewLanguage: lang,
+                          },
                         }));
-                    }}
-                    onTextChange={(txt) => updateParagraphText(idx, txt)}
-                    onFragmentSplit={(index, fragments) => {
-                      try {
-                        const fragmentText = Array.isArray(fragments) 
-                          ? fragments.filter(f => f && f.text).map(f => f.text).join('\n\n') 
-                          : '';
-                        handleFragmentSplit(index, fragments, p.text, fragmentText);
-                      } catch (error) {
-                        console.error('Error in fragment split callback:', error);
-                      }
-                    }}
-                    onDelete={() => deleteParagraph(idx)}
-                    languages={languageOptions}
-                  />
+                      }}
+                      onTextChange={(txt) => updateParagraphText(idx, txt)}
+                      onFragmentSplit={(index, fragments) => {
+                        try {
+                          const fragmentText = Array.isArray(fragments)
+                            ? fragments.filter((f) => f && f.text).map((f) => f.text).join("\n\n")
+                            : "";
+                          handleFragmentSplit(index, fragments, p.text, fragmentText);
+                        } catch (error) {
+                          console.error("Error in fragment split callback:", error);
+                        }
+                      }}
+                      onDelete={() => deleteParagraph(idx)}
+                      languages={languageOptions}
+                    />
+                  </div>
                 </div>
                 <PlusButton onClick={() => addNewParagraph(idx + 1)} />
               </div>
