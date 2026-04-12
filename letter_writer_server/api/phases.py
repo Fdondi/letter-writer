@@ -1,4 +1,3 @@
-import asyncio
 import copy
 import logging
 import random
@@ -179,7 +178,7 @@ class AgenticVoteRequest(BaseModel):
     voting_vendors: List[str]
 
 @router.post("/init/")
-async def init_session(request: Request, data: InitSessionRequest, session: Session = Depends(get_session)):
+def init_session(request: Request, data: InitSessionRequest, session: Session = Depends(get_session)):
     # Check if recovery
     is_recovery = bool(data.job_text or data.metadata or data.vendors)
     session_exists = session.session_key is not None and bool(session)
@@ -233,7 +232,7 @@ async def init_session(request: Request, data: InitSessionRequest, session: Sess
     }
 
 @router.post("/restore/")
-async def restore_session(request: Request, data: InitSessionRequest, session: Session = Depends(get_session)):
+def restore_session(request: Request, data: InitSessionRequest, session: Session = Depends(get_session)):
     if data.job_text:
         session['job_text'] = data.job_text
     if data.metadata:
@@ -247,7 +246,7 @@ async def restore_session(request: Request, data: InitSessionRequest, session: S
     }
 
 @router.get("/state/")
-async def get_session_state(session: Session = Depends(get_session)):
+def get_session_state(session: Session = Depends(get_session)):
     # Return full session state (excluding potentially huge/sensitive fields if needed, but logic says allow all except CV)
     state = dict(session)
     if 'cv_text' in state:
@@ -260,7 +259,7 @@ async def get_session_state(session: Session = Depends(get_session)):
     }
 
 @router.post("/clear/")
-async def clear_session(session: Session = Depends(get_session)):
+def clear_session(session: Session = Depends(get_session)):
     old_id = session.session_key
     user = session.get("user")
     # Stop any running agentic worker for this session before discarding it.
@@ -285,7 +284,7 @@ async def clear_session(session: Session = Depends(get_session)):
     }
 
 @router.post("/session/")
-async def update_session_common_data(request: Request, data: Dict[str, Any], session: Session = Depends(get_session)):
+def update_session_common_data(request: Request, data: Dict[str, Any], session: Session = Depends(get_session)):
     # Update common data like job_text, metadata fields
     if "job_text" in data:
         session['job_text'] = data['job_text']
@@ -308,7 +307,7 @@ async def update_session_common_data(request: Request, data: Dict[str, Any], ses
     return {"status": "ok", "session_id": session.session_key}
 
 @router.post("/background/{vendor}/")
-async def background_phase(vendor: str, data: BackgroundPhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
+def background_phase(vendor: str, data: BackgroundPhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     # Set current request for session_store compatibility (if it uses thread locals)
     set_current_request(request)
     
@@ -370,7 +369,7 @@ async def background_phase(vendor: str, data: BackgroundPhaseRequest, request: R
     }, session)
 
 @router.post("/draft/{vendor}/")
-async def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
+def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
     user = session.get('user')
     if not user:
@@ -399,7 +398,7 @@ async def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, se
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/refine/{vendor}/")
-async def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
+def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
     user = session.get('user')
     if not user:
@@ -428,7 +427,7 @@ async def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, 
 
 
 @router.post("/feedback/request-context/{vendor}/")
-async def feedback_request_context(
+def feedback_request_context(
     vendor: str,
     data: FeedbackRequestContextBody,
     request: Request,
@@ -525,7 +524,7 @@ async def feedback_request_context(
 # --- Agentic (per-topic) flow ---
 
 @router.post("/agentic/draft/")
-async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
+def agentic_draft(data: AgenticDraftRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
     user = session.get("user")
     if not user:
@@ -574,7 +573,7 @@ async def agentic_draft(data: AgenticDraftRequest, request: Request, session: Se
 
 
 @router.get("/agentic/state/")
-async def agentic_state(session: Session = Depends(get_session)):
+def agentic_state(session: Session = Depends(get_session)):
     user = session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -603,7 +602,7 @@ async def agentic_state(session: Session = Depends(get_session)):
 
 
 @router.post("/agentic/feedback/start/")
-async def agentic_feedback_start(data: AgenticRunRoundRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
+def agentic_feedback_start(data: AgenticRunRoundRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
     user = session.get("user")
     if not user:
@@ -664,13 +663,16 @@ _agentic_live_store_lock = Lock()
 
 
 def _launch_feedback_worker(session_key: str, entry: Dict[str, Any]) -> None:
-    """Launch the background worker and ensure worker_running is reset on crash."""
-    loop = asyncio.get_event_loop()
-    future = loop.run_in_executor(_feedback_executor, _run_ordered_feedback_loop, session_key)
+    """Launch the background worker and ensure worker_running is reset on crash.
 
-    def _on_done(f, sk=session_key):
+    Uses ThreadPoolExecutor.submit (not asyncio) so this is safe when called from
+    Starlette's sync-route thread pool as well as from the main event-loop thread.
+    """
+    future = _feedback_executor.submit(_run_ordered_feedback_loop, session_key)
+
+    def _on_done(fut: Any, sk: str = session_key) -> None:
         try:
-            f.result()
+            fut.result()
         except Exception:
             logger.exception("AGENTIC ordered worker failed for session %s", sk)
             # Reset worker_running on crash so it can be restarted
@@ -1079,12 +1081,11 @@ def _has_pending_feedback(state: Dict[str, Any]) -> bool:
 
 
 def _start_ordered_worker(session_key: str) -> None:
-    loop = asyncio.get_event_loop()
-    future = loop.run_in_executor(_feedback_executor, _run_ordered_feedback_loop, session_key)
+    future = _feedback_executor.submit(_run_ordered_feedback_loop, session_key)
 
-    def _on_done(f, sk=session_key):
+    def _on_done(fut: Any, sk: str = session_key) -> None:
         try:
-            f.result()
+            fut.result()
         except Exception:
             logger.exception("AGENTIC ordered worker failed for session %s", sk)
 
@@ -1092,7 +1093,7 @@ def _start_ordered_worker(session_key: str) -> None:
 
 
 @router.get("/agentic/feedback/poll/")
-async def agentic_feedback_poll(
+def agentic_feedback_poll(
     session: Session = Depends(get_session),
 ):
     logger.info("AGENTIC poll request")
@@ -1297,7 +1298,7 @@ async def agentic_feedback_poll(
 
 
 @router.post("/agentic/run-round/")
-async def agentic_run_round(data: AgenticRunRoundRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
+def agentic_run_round(data: AgenticRunRoundRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
     user = session.get("user")
     if not user:
@@ -1333,7 +1334,7 @@ def _apply_resume(state: Dict[str, Any]) -> bool:
 
 
 @router.post("/agentic/feedback/suspend/")
-async def agentic_feedback_suspend(
+def agentic_feedback_suspend(
     data: AgenticSuspendRequest,
     request: Request,
     session: Session = Depends(get_session),
@@ -1370,7 +1371,7 @@ async def agentic_feedback_suspend(
 
 
 @router.post("/agentic/feedback/resume/")
-async def agentic_feedback_resume(
+def agentic_feedback_resume(
     data: AgenticResumeRequest,
     request: Request,
     session: Session = Depends(get_session),
@@ -1430,7 +1431,7 @@ async def agentic_feedback_resume(
 
 
 @router.post("/agentic/rounds/add/")
-async def agentic_rounds_add(
+def agentic_rounds_add(
     data: AgenticAddRoundRequest,
     request: Request,
     session: Session = Depends(get_session),
@@ -1469,7 +1470,7 @@ async def agentic_rounds_add(
 
 
 @router.post("/agentic/vote/")
-async def agentic_vote(data: AgenticVoteRequest, request: Request, session: Session = Depends(get_session)):
+def agentic_vote(data: AgenticVoteRequest, request: Request, session: Session = Depends(get_session)):
     set_current_request(request)
     user = session.get("user")
     if not user:
@@ -1496,7 +1497,7 @@ async def agentic_vote(data: AgenticVoteRequest, request: Request, session: Sess
 
 
 @router.post("/agentic/refine/")
-async def agentic_refine(request: Request, session: Session = Depends(get_session), body: Optional[AgenticRefineRequest] = Body(None), _limit: None = Depends(check_spending_limits)):
+def agentic_refine(request: Request, session: Session = Depends(get_session), body: Optional[AgenticRefineRequest] = Body(None), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
     user = session.get("user")
     if not user:
