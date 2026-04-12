@@ -9,6 +9,7 @@ from letter_writer.generation import get_style_instructions, get_search_instruct
 from letter_writer.personal_data_sections import (
     get_cv_revisions,
     get_extra_info,
+    get_agent_feedback_context,
     get_models,
     get_background_models,
     get_agentic_draft_model,
@@ -88,6 +89,69 @@ def _normalize_extra_info(raw: Any) -> List[Dict[str, Any]]:
             "manual_text": str(it.get("manual_text") or "").strip(),
         }
         out.append(entry)
+    return out
+
+
+def _normalize_agent_feedback_context(raw: Any) -> List[Dict[str, Any]]:
+    """Validate agent_feedback_context for Firestore (feedback Q&A for model prompts, not CV appendix)."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("agent_feedback_context must be a list")
+    out: List[Dict[str, Any]] = []
+    for it in raw:
+        if not isinstance(it, dict):
+            raise ValueError("each agent_feedback_context item must be an object")
+        eid = str(it.get("id") or "").strip()
+        if not eid:
+            raise ValueError("each agent_feedback_context item must have a non-empty id")
+        src = str(it.get("source") or "").strip().lower()
+        if src and src != "feedback":
+            raise ValueError('agent_feedback_context.source must be "feedback" if set')
+        if not str(it.get("user_context") or "").strip():
+            raise ValueError("agent_feedback_context rows from feedback must include non-empty user_context")
+        out.append(
+            {
+                "id": eid,
+                "source": "feedback",
+                "category": str(it.get("category") or ""),
+                "user_context": str(it.get("user_context") or ""),
+                "user_instructions": str(it.get("user_instructions") or "").strip(),
+            }
+        )
+    return out
+
+
+def _stamp_agent_feedback_context_items(
+    previous: List[Dict[str, Any]],
+    normalized_incoming: List[Dict[str, Any]],
+    now: datetime,
+) -> List[Dict[str, Any]]:
+    """Set each row's ``updated_at``: unchanged content keeps the prior timestamp; new/changed rows get *now*."""
+    prev_norm_map: Dict[str, Optional[Dict[str, Any]]] = {}
+    prev_ts_map: Dict[str, Any] = {}
+    for e in previous:
+        if not isinstance(e, dict) or not e.get("id"):
+            continue
+        eid = str(e.get("id") or "").strip()
+        if not eid:
+            continue
+        try:
+            prev_norm_map[eid] = _normalize_agent_feedback_context([e])[0]
+        except ValueError:
+            prev_norm_map[eid] = None
+        prev_ts_map[eid] = e.get("updated_at")
+
+    out: List[Dict[str, Any]] = []
+    for it in normalized_incoming:
+        row = dict(it)
+        eid = str(row.get("id") or "").strip()
+        old_n = prev_norm_map.get(eid)
+        if old_n is not None and old_n == row:
+            row["updated_at"] = _coerce_utc_datetime(prev_ts_map.get(eid), now)
+        else:
+            row["updated_at"] = now
+        out.append(row)
     return out
 
 
@@ -292,6 +356,18 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             previous_rows = get_extra_info(user_data_before)
             now_ts = datetime.now(timezone.utc)
             updates["extra_info"] = _stamp_extra_info_items(previous_rows, normalized_extra, now_ts)
+
+        if "agent_feedback_context" in data:
+            try:
+                normalized_agent = _normalize_agent_feedback_context(data["agent_feedback_context"])
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            user_data_before = get_user_data(user_id, use_cache=False) or {}
+            previous_rows = get_agent_feedback_context(user_data_before)
+            now_ts = datetime.now(timezone.utc)
+            updates["agent_feedback_context"] = _stamp_agent_feedback_context_items(
+                previous_rows, normalized_agent, now_ts
+            )
             
         if "content" in data and data["content"]:
             content = str(data["content"]).strip()

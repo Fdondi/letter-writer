@@ -31,7 +31,7 @@ from .generation import (
     is_agentic_skip,
     rewrite_letter,
 )
-from .phased_service import get_metadata_field
+from .phased_service import get_effective_additional_user_info, get_metadata_field
 from .cost_tracker import track_api_cost
 from .retrieval import select_top_documents
 from .research import company_research
@@ -2201,7 +2201,9 @@ def run_agentic_draft(
 
     if not style_instructions:
         style_instructions = session.get("style_instructions", "") or get_style_instructions()
-    additional_user_info = get_metadata_field(metadata, ModelVendor(draft_vendor), "additional_user_info", "")
+    additional_user_info = get_effective_additional_user_info(
+        metadata, ModelVendor(draft_vendor), _user_id(session)
+    )
 
     trace_dir = Path("trace", "agentic.draft")
     trace_dir.mkdir(parents=True, exist_ok=True)
@@ -2303,10 +2305,12 @@ def run_agentic_draft_multi(
     vendor_errors: Dict[str, str] = {}
     total_cost = 0.0
 
+    uid = _user_id(session)
+
     def _one_draft(vendor: str) -> Tuple[str, str, float]:
         trace_dir = Path("trace", "agentic.draft")
         trace_dir.mkdir(parents=True, exist_ok=True)
-        additional_user_info = get_metadata_field(metadata, ModelVendor(vendor), "additional_user_info", "")
+        additional_user_info = get_effective_additional_user_info(metadata, ModelVendor(vendor), uid)
         ai_client = get_client(ModelVendor(vendor))
         letter = generate_letter(
             cv_text, top_docs, company_report, job_text, ai_client, trace_dir,
@@ -2317,7 +2321,6 @@ def run_agentic_draft_multi(
 
     with ThreadPoolExecutor(max_workers=min(len(draft_vendors), 4)) as executor:
         futures = {executor.submit(_one_draft, v): v for v in draft_vendors}
-        user_id = _user_id(session)
         for fut in as_completed(futures):
             vendor = futures[fut]
             try:
@@ -2325,7 +2328,7 @@ def run_agentic_draft_multi(
                 draft_letters_dict[vendor] = letter
                 total_cost += cost
                 if cost > 0:
-                    track_api_cost(user_id, "draft", vendor, cost)
+                    track_api_cost(uid, "draft", vendor, cost)
             except Exception as e:
                 err_msg = str(e)
                 _log(f"AGENTIC draft error for vendor {vendor}: {e}")
@@ -2391,7 +2394,9 @@ def run_agentic_feedback_round(
     cv_text = state.get("cv_text") or ""
     metadata = state.get("metadata") or {}
     style_instructions = state.get("style_instructions") or get_style_instructions()
-    additional_user_info = get_metadata_field(metadata, ModelVendor(draft_vendor), "additional_user_info", "")
+    additional_user_info = get_effective_additional_user_info(
+        metadata, ModelVendor(draft_vendor), _user_id(session)
+    )
 
     round_num = state.get("round", 0) + 1
     state["round"] = round_num
@@ -2683,7 +2688,9 @@ def run_agentic_feedback_step(
     cv_text = state.get("cv_text") or ""
     metadata = state.get("metadata") or {}
     style_instructions = state.get("style_instructions") or get_style_instructions()
-    additional_user_info = get_metadata_field(metadata, ModelVendor(draft_vendor), "additional_user_info", "")
+    additional_user_info = get_effective_additional_user_info(
+        metadata, ModelVendor(draft_vendor), _user_id(session)
+    )
     topic_cursors = _get_topic_cursors(state)
 
     trace_dir = Path("trace", "agentic.feedback")

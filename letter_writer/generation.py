@@ -825,6 +825,11 @@ def normalize_feedback_value(
                 persist_uc = True
             else:
                 persist_uc = bool(persist_uc)
+            persist_ua = it.get("persist_user_context_for_agents")
+            if persist_ua is None:
+                persist_ua = persist_uc
+            else:
+                persist_ua = bool(persist_ua)
             if status != "INPUT_NEEDED":
                 input_declined = False
 
@@ -838,6 +843,7 @@ def normalize_feedback_value(
                 "user_instructions": user_instructions,
                 "input_declined": input_declined,
                 "persist_user_context_to_cv": persist_uc,
+                "persist_user_context_for_agents": persist_ua,
             }
             dg = str(it.get("duplicate_group_id") or "").strip()
             if dg:

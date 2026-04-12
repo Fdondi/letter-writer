@@ -36,8 +36,12 @@ from .feedback_review import (
 from .cost_tracker import track_api_cost
 from .retrieval import retrieve_similar_job_offers, select_top_documents
 from .session_store import get_session as get_session_from_store, save_session
-from .firestore_store import get_collection
+from .firestore_store import get_collection, get_user_data
 from .typed_shapes import TopDocument
+from .personal_data_sections import (
+    format_agent_feedback_context_for_prompt,
+    get_agent_feedback_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +128,32 @@ def get_metadata_field(metadata: dict, vendor: ModelVendor, field: str, default:
     # Fall back to common metadata
     common_metadata = metadata.get("common", {})
     return common_metadata.get(field, default)
+
+
+def get_effective_additional_user_info(
+    metadata: dict,
+    vendor: ModelVendor,
+    user_id: Optional[str],
+) -> str:
+    """Session ``additional_user_info`` plus profile ``agent_feedback_context`` (feedback Q&A for models)."""
+    base = get_metadata_field(metadata, vendor, "additional_user_info", "")
+    if not user_id or str(user_id).strip() in ("", "anonymous"):
+        return base
+    try:
+        user_data = get_user_data(user_id, use_cache=True) or {}
+    except Exception:
+        logger.warning("get_effective_additional_user_info: failed to load user profile", exc_info=True)
+        return base
+    appendix = format_agent_feedback_context_for_prompt(get_agent_feedback_context(user_data))
+    if not (appendix or "").strip():
+        return base
+    if not (base or "").strip():
+        return appendix
+    return (
+        (base or "").rstrip()
+        + "\n\n---\n\nSaved notes for model context (from feedback):\n\n"
+        + appendix
+    )
 
 
 def set_metadata_field(metadata: dict, vendor: ModelVendor, field: str, value: str):
@@ -407,8 +437,8 @@ def advance_to_draft(
     if not style_instructions:
         style_instructions = session.style_instructions
     
-    # Get additional user info from metadata (user's info relevant to this position, not in CV)
-    additional_user_info = get_metadata_field(session.metadata, vendor, "additional_user_info", "")
+    # User notes for this job plus persisted feedback Q&A (agent_feedback_context in profile)
+    additional_user_info = get_effective_additional_user_info(session.metadata, vendor, user_id)
 
     state.company_report = company_report
     state.top_docs = top_docs

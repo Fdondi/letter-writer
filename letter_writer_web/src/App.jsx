@@ -27,7 +27,7 @@ import { translateText } from "./utils/translate";
 import { useLanguages } from "./contexts/LanguageContext";
 import { createTextDiff } from "./utils/diff";
 import { getScaleConfig, getEffectiveRating, getEffectiveImportance, buildCompetenceRatingsForProfile } from "./utils/competenceScales";
-import { mergeExtraInfoFromFeedback } from "./components/phases/feedbackItemUtils";
+import { mergeAgentContextFromFeedback, mergeExtraInfoFromFeedback } from "./components/phases/feedbackItemUtils";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
@@ -1138,10 +1138,12 @@ export default function App({ flow = "vendor" }) {
     });
 
     let feedbackExtraInfo = null;
+    let feedbackAgentContext = null;
     if (flow === "vendor") {
       const draftPhase = phaseRegistryRef.current?.find((p) => p.phase === "draft");
       const reg = draftFeedbackRegistryRef.current || {};
       let acc = [];
+      let agentAcc = [];
       for (const v of Array.from(selectedVendors)) {
         let merged = false;
         if (typeof reg[v] === "function") {
@@ -1149,6 +1151,12 @@ export default function App({ flow = "vendor" }) {
           if (snap?.feedbackKeys?.length) {
             acc = mergeExtraInfoFromFeedback(
               acc,
+              snap.feedback,
+              snap.feedback_overrides || {},
+              snap.feedbackKeys,
+            );
+            agentAcc = mergeAgentContextFromFeedback(
+              agentAcc,
               snap.feedback,
               snap.feedback_overrides || {},
               snap.feedbackKeys,
@@ -1163,6 +1171,7 @@ export default function App({ flow = "vendor" }) {
             : null;
           if (fromShelf?.feedbackKeys?.length) {
             acc = mergeExtraInfoFromFeedback(acc, fromShelf.feedback, {}, fromShelf.feedbackKeys);
+            agentAcc = mergeAgentContextFromFeedback(agentAcc, fromShelf.feedback, {}, fromShelf.feedbackKeys);
           }
         }
       }
@@ -1170,6 +1179,11 @@ export default function App({ flow = "vendor" }) {
         feedbackExtraInfo = acc;
       } else {
         feedbackExtraInfo = [];
+      }
+      if (agentAcc.length > 0) {
+        feedbackAgentContext = agentAcc;
+      } else {
+        feedbackAgentContext = [];
       }
     }
 
@@ -1184,6 +1198,7 @@ export default function App({ flow = "vendor" }) {
       letter_text: finalText,
       ai_letters: aiLetters,
       ...(feedbackExtraInfo !== null ? { feedback_extra_info: feedbackExtraInfo } : {}),
+      ...(feedbackAgentContext !== null ? { feedback_agent_context: feedbackAgentContext } : {}),
     };
     const url = documentId ? `/api/documents/${documentId}/` : "/api/documents/";
     const method = documentId ? "PUT" : "POST";

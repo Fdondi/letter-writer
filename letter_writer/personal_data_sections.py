@@ -29,6 +29,33 @@ def get_extra_info(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+def get_agent_feedback_context(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Feedback-saved Q&A appended to the 'additional user info' block for models (accuracy / user_fit, etc.)."""
+    raw = user_data.get("agent_feedback_context")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for it in raw:
+        if isinstance(it, dict) and it.get("id"):
+            out.append(dict(it))
+    return out
+
+
+def merge_manual_agent_feedback_context_with_feedback_rows(
+    user_data: Dict[str, Any], feedback_rows: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Preserve non-feedback rows; replace feedback-sourced rows with *feedback_rows* from the latest save."""
+    manual: List[Dict[str, Any]] = []
+    for e in get_agent_feedback_context(user_data):
+        if not isinstance(e, dict):
+            continue
+        if str(e.get("source") or "feedback").lower() != "feedback":
+            manual.append(dict(e))
+    return manual + list(feedback_rows)
+
+
 def merge_manual_extra_with_feedback_rows(
     user_data: Dict[str, Any], feedback_rows: List[Dict[str, Any]]
 ) -> List[Dict[str, Any]]:
@@ -120,6 +147,31 @@ def cv_text_with_extra_info(base_cv: str, user_data: Dict[str, Any]) -> str:
     if not appendix:
         return base_cv or ""
     return (base_cv or "").rstrip() + appendix
+
+
+def format_agent_feedback_context_for_prompt(rows: List[Dict[str, Any]]) -> str:
+    """Plain-text block merged into additional_user_info so feedback agents see Q&A outside the CV appendix."""
+    nonempty = [
+        it
+        for it in rows
+        if isinstance(it, dict) and str(it.get("user_context") or "").strip()
+    ]
+    if not nonempty:
+        return ""
+    parts: List[str] = []
+    for i, it in enumerate(nonempty, 1):
+        cat = str(it.get("category") or "").strip()
+        uc = str(it.get("user_context") or "").strip()
+        ui = str(it.get("user_instructions") or "").strip()
+        head = f"Note {i}"
+        if cat:
+            head += f" ({cat})"
+        parts.append(head + "\n")
+        parts.append(f"Q: {uc}\n")
+        if ui:
+            parts.append(f"A: {ui}\n")
+        parts.append("")
+    return "\n".join(parts).rstrip()
 
 def get_models(user_data: Dict[str, Any]) -> List[str]:
     # Check for "models" field, which might be wrapped

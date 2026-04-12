@@ -5,8 +5,11 @@ from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 
 from letter_writer_server.core.session import Session, get_session
-from letter_writer_server.api.personal_data import _normalize_extra_info
-from letter_writer.personal_data_sections import merge_manual_extra_with_feedback_rows
+from letter_writer_server.api.personal_data import _normalize_agent_feedback_context, _normalize_extra_info
+from letter_writer.personal_data_sections import (
+    merge_manual_agent_feedback_context_with_feedback_rows,
+    merge_manual_extra_with_feedback_rows,
+)
 from letter_writer.firestore_store import (
     get_collection,
     list_documents,
@@ -49,6 +52,31 @@ def _apply_feedback_extra_info_merge(user_id: str, raw: Any) -> None:
     update_user_data_cache(user_id, updates)
 
 
+def _apply_feedback_agent_context_merge(user_id: str, raw: Any) -> None:
+    """Merge validated feedback-only agent_feedback_context rows into personal_data (manual rows preserved)."""
+    try:
+        normalized = _normalize_agent_feedback_context(raw)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    for row in normalized:
+        if str(row.get("source") or "").lower() != "feedback":
+            raise HTTPException(
+                status_code=400,
+                detail='each entry in feedback_agent_context must have source "feedback"',
+            )
+    now = datetime.now(timezone.utc)
+    for row in normalized:
+        row["updated_at"] = now
+    user_data = get_user_data(user_id, use_cache=False) or {}
+    combined = merge_manual_agent_feedback_context_with_feedback_rows(user_data, normalized)
+    updates: Dict[str, Any] = {
+        "agent_feedback_context": combined,
+        "updated_at": now,
+    }
+    get_personal_data_document(user_id).set(updates, merge=True)
+    update_user_data_cache(user_id, updates)
+
+
 class DocumentRequest(BaseModel):
     company_name: Optional[str] = None
     role: Optional[str] = None
@@ -60,6 +88,7 @@ class DocumentRequest(BaseModel):
     ai_letters: Optional[List[Dict[str, Any]]] = None
     letter_text: Optional[str] = None
     feedback_extra_info: Optional[List[Dict[str, Any]]] = None
+    feedback_agent_context: Optional[List[Dict[str, Any]]] = None
 
 @router.get("/")
 async def list_docs(request: Request, session: Session = Depends(get_session)):
@@ -112,6 +141,8 @@ async def create_doc(request: Request, data: DocumentRequest, session: Session =
             )
         if data.feedback_extra_info is not None:
             _apply_feedback_extra_info_merge(user["id"], data.feedback_extra_info)
+        if data.feedback_agent_context is not None:
+            _apply_feedback_agent_context_merge(user["id"], data.feedback_agent_context)
         return {"document": document}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -190,6 +221,8 @@ async def update_doc(document_id: str, data: DocumentRequest, session: Session =
             )
         if data.feedback_extra_info is not None:
             _apply_feedback_extra_info_merge(user["id"], data.feedback_extra_info)
+        if data.feedback_agent_context is not None:
+            _apply_feedback_agent_context_merge(user["id"], data.feedback_agent_context)
         return {"document": updated}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

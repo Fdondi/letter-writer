@@ -296,6 +296,16 @@ export function FeedbackItemsPanel({
     const userContextFilled = userContext.trim().length > 0;
     const inputDeclined = it.input_declined === true;
     const persistUserContextToCv = it.persist_user_context_to_cv !== false;
+    const persistUserContextForAgents =
+      it.persist_user_context_for_agents !== undefined
+        ? it.persist_user_context_for_agents !== false
+        : persistUserContextToCv;
+    const persistScope =
+      persistUserContextToCv && persistUserContextForAgents
+        ? "both"
+        : !persistUserContextToCv && persistUserContextForAgents
+          ? "agent"
+          : "none";
     /** Initial capture only; after Save, user text lives in user_context and is edited like other context lines. */
     const showInputEditor = needsInput && !userContextFilled && !inputDeclined;
     const clusterPre = it.input_cluster_key && inputClusterText[it.input_cluster_key];
@@ -321,9 +331,13 @@ export function FeedbackItemsPanel({
       }
     };
 
-    const setPersistUserContextToCv = (nextBool) => {
+    const setPersistScope = (scope) => {
+      const cv = scope === "both";
+      const agent = scope === "both" || scope === "agent";
       const nextItems = items.map((x) =>
-        x.id === it.id ? { ...x, persist_user_context_to_cv: nextBool } : x,
+        x.id === it.id
+          ? { ...x, persist_user_context_to_cv: cv, persist_user_context_for_agents: agent }
+          : x,
       );
       persistItems(nextItems);
     };
@@ -333,7 +347,13 @@ export function FeedbackItemsPanel({
       if (!raw.trim()) return;
       const nextItems = items.map((x) =>
         x.id === it.id
-          ? { ...x, user_context: raw, input_declined: false, persist_user_context_to_cv: persistUserContextToCv }
+          ? {
+              ...x,
+              user_context: raw,
+              input_declined: false,
+              persist_user_context_to_cv: persistUserContextToCv,
+              persist_user_context_for_agents: persistUserContextForAgents,
+            }
           : x,
       );
       persistItems(nextItems);
@@ -390,23 +410,33 @@ export function FeedbackItemsPanel({
 
     const renderPersistRadios = () => (
       <div style={{ marginTop: 8, fontSize: 12, color: "#374151" }}>
-        <div style={{ marginBottom: 4, fontWeight: 600 }}>Save your reply to profile / CV</div>
+        <div style={{ marginBottom: 4, fontWeight: 600 }}>Save your reply</div>
         <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer", marginBottom: 4 }}>
           <input
             type="radio"
             name={`persist-${it.id}`}
-            checked={persistUserContextToCv}
-            onChange={() => setPersistUserContextToCv(true)}
+            checked={persistScope === "both"}
+            onChange={() => setPersistScope("both")}
             disabled={disabled}
           />
-          Yes (default) — reuse in future letters
+          CV appendix and model context — reuse in future checks
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer", marginBottom: 4 }}>
+          <input
+            type="radio"
+            name={`persist-${it.id}`}
+            checked={persistScope === "agent"}
+            onChange={() => setPersistScope("agent")}
+            disabled={disabled}
+          />
+          Model context only (not CV appendix) — if this is already in your CV
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer" }}>
           <input
             type="radio"
             name={`persist-${it.id}`}
-            checked={!persistUserContextToCv}
-            onChange={() => setPersistUserContextToCv(false)}
+            checked={persistScope === "none"}
+            onChange={() => setPersistScope("none")}
             disabled={disabled}
           />
           No — only use for this revision
@@ -536,7 +566,7 @@ export function FeedbackItemsPanel({
               onChange={() => updateContextItem(idx, { persist_to_cv: true })}
               disabled={disabled}
             />
-            Yes (default) — reuse in future letters
+            Yes — reuse in future letters
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer" }}>
             <input

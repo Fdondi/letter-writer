@@ -114,6 +114,10 @@ export function normalizeCategoryItems(raw, categoryKey = "") {
         const userContext = status === "INPUT_NEEDED" ? String(it.user_context ?? "") : "";
         const userInstructions = status === "INPUT_NEEDED" ? String(it.user_instructions ?? "").trim() : "";
         const persistUserContextToCv = it.persist_user_context_to_cv === false ? false : true;
+        const persistUserContextForAgents =
+          it.persist_user_context_for_agents !== undefined
+            ? it.persist_user_context_for_agents !== false
+            : persistUserContextToCv;
         const inputDeclined = status === "INPUT_NEEDED" && it.input_declined === true;
 
         return {
@@ -125,6 +129,7 @@ export function normalizeCategoryItems(raw, categoryKey = "") {
           user_context: userContext,
           user_instructions: userInstructions,
           persist_user_context_to_cv: persistUserContextToCv,
+          persist_user_context_for_agents: persistUserContextForAgents,
           input_declined: inputDeclined,
         };
       })
@@ -238,7 +243,7 @@ export function selectNextTabIfCategoryDone(
  * Requires non-empty user_context; user_instructions is optional (answer).
  * Observation/context lines are not persisted here — full draft state lives in the ``feedbacks`` collection.
  * @param {string} categoryKey
- * @param {{ id: string, observation?: string, user_context?: string, user_instructions?: string, persist_user_context_to_cv?: boolean, context_field?: { items?: unknown[] } }} it
+ * @param {{ id: string, observation?: string, user_context?: string, user_instructions?: string, persist_user_context_to_cv?: boolean, persist_user_context_for_agents?: boolean, context_field?: { items?: unknown[] } }} it
  * @returns {Record<string, unknown> | null}
  */
 export function extractFeedbackEntryToExtraInfo(categoryKey, it) {
@@ -262,6 +267,31 @@ export function extractFeedbackEntryToExtraInfo(categoryKey, it) {
 }
 
 /**
+ * Build one personal_data.agent_feedback_context row (injected into additional_user_info for models).
+ * @param {string} categoryKey
+ * @param {{ id: string, user_context?: string, user_instructions?: string, persist_user_context_for_agents?: boolean, persist_user_context_to_cv?: boolean }} it
+ * @returns {Record<string, unknown> | null}
+ */
+export function extractFeedbackEntryToAgentContext(categoryKey, it) {
+  const persistAgent =
+    it.persist_user_context_for_agents !== undefined
+      ? it.persist_user_context_for_agents !== false
+      : it.persist_user_context_to_cv !== false;
+  const ucRaw = persistAgent ? String(it.user_context ?? "") : "";
+  if (!ucRaw.trim()) {
+    return null;
+  }
+  const ui = persistAgent ? String(it.user_instructions ?? "").trim() : "";
+  return {
+    id: String(it.id),
+    source: "feedback",
+    category: categoryKey,
+    user_context: ucRaw,
+    user_instructions: ui,
+  };
+}
+
+/**
  * Merge feedback-derived rows into existing extra_info (manual rows keep stable ids; feedback upserts by item id).
  * @param {unknown[]} existing
  * @param {Record<string, unknown>} feedback
@@ -274,6 +304,32 @@ export function mergeExtraInfoFromFeedback(existing, feedback, overrides, feedba
     const items = mergeCategoryItems(feedback, overrides, key);
     for (const it of items) {
       const extracted = extractFeedbackEntryToExtraInfo(key, it);
+      if (extracted) {
+        map.set(String(it.id), extracted);
+      } else {
+        const prev = map.get(String(it.id));
+        if (prev && prev.source === "feedback") {
+          map.delete(String(it.id));
+        }
+      }
+    }
+  }
+  return Array.from(map.values());
+}
+
+/**
+ * Merge feedback-derived agent context rows for profile persistence (same shape as mergeExtraInfoFromFeedback).
+ * @param {unknown[]} existing
+ * @param {Record<string, unknown>} feedback
+ * @param {Record<string, unknown>} overrides
+ * @param {string[]} feedbackKeys
+ */
+export function mergeAgentContextFromFeedback(existing, feedback, overrides, feedbackKeys) {
+  const map = new Map((Array.isArray(existing) ? existing : []).map((e) => [String(e.id), { ...e }]));
+  for (const key of feedbackKeys) {
+    const items = mergeCategoryItems(feedback, overrides, key);
+    for (const it of items) {
+      const extracted = extractFeedbackEntryToAgentContext(key, it);
       if (extracted) {
         map.set(String(it.id), extracted);
       } else {

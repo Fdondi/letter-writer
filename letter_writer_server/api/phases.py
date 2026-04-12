@@ -31,13 +31,13 @@ from letter_writer.generation import (
     suggest_additional_feedback_context_items,
     PHASED_FEEDBACK_CATEGORY_KEYS,
 )
-from letter_writer.phased_service import get_metadata_field
 from letter_writer.clients.base import ModelVendor
 from letter_writer_server.api.cost_utils import with_user_monthly_cost
 from letter_writer.phased_service import (
     _run_background_phase,
     advance_to_draft,
     advance_to_refinement,
+    get_effective_additional_user_info,
     get_metadata_field,
     VendorPhaseState,
     _reset_client_counters,
@@ -487,7 +487,8 @@ def feedback_request_context(
     style_instructions = session.get("style_instructions") or ""
     cv_text = session.get("cv_text") or ""
     metadata = session.get("metadata") or {}
-    additional_user_info = get_metadata_field(metadata, vendor_enum, "additional_user_info", "")
+    uid = (user or {}).get("id") if user else None
+    additional_user_info = get_effective_additional_user_info(metadata, vendor_enum, uid)
     job_text = session.get("job_text") or ""
     company_report = vstate.company_report or ""
     top_docs = vstate.top_docs or []
@@ -834,8 +835,10 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
             _stop_feedback_worker()
             return
 
-        additional_user_info = get_metadata_field(
-            metadata, ModelVendor(draft_vendor), "additional_user_info", ""
+        persisted = load_session_from_storage(session_key)
+        uid = (persisted.get("user") or {}).get("id") if isinstance(persisted, dict) else None
+        additional_user_info = get_effective_additional_user_info(
+            metadata, ModelVendor(draft_vendor), uid
         )
         topic_contexts = {
             t: get_agentic_topic_context(
