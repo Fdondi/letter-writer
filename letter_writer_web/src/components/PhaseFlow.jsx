@@ -28,7 +28,7 @@ import { phases as phaseModules } from "./phases";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
 import { useTranslation } from "../utils/useTranslation";
 import LanguageSelector from "./LanguageSelector";
-import { FEEDBACK_TYPES, mergeCategoryItems } from "./phases/feedbackItemUtils";
+import { FEEDBACK_TYPES, firstFeedbackKeyWithItems, mergeCategoryItems } from "./phases/feedbackItemUtils";
 
 function deepCloneJson(obj) {
   if (obj === undefined || obj === null) return obj;
@@ -965,9 +965,6 @@ function VendorCard({
       try {
         const feedbackData = phaseModule.initializeFeedbackFromData(data);
         if (feedbackData && feedbackData.feedbackKeys && feedbackData.feedbackKeys.length > 0) {
-          if (!selectedFeedbackTab) {
-            setSelectedFeedbackTab(feedbackData.feedbackKeys[0]);
-          }
           setFeedbackItemApprovals((prev) => {
             const next = { ...prev };
             feedbackData.feedbackKeys.forEach((k) => {
@@ -986,7 +983,7 @@ function VendorCard({
         // Don't set error here - feedback is optional, just log it
       }
     }
-  }, [cardPhase, data, selectedFeedbackTab, phaseModule]);
+  }, [cardPhase, data, phaseModule]);
 
   // After a regeneration (new `data` object), align baseline so "dirty" is not stuck on pre-approve edits.
   React.useEffect(() => {
@@ -1042,7 +1039,13 @@ function VendorCard({
   
   // Get feedback overrides - phase-specific
   const feedbackOverrides = feedbackData ? (edits?.feedback_overrides || {}) : {};
-  const activeFeedbackKey = selectedFeedbackTab || feedbackKeys[0] || null;
+  const preferredFeedbackTab = useMemo(
+    () => firstFeedbackKeyWithItems(feedbackKeys, feedback, feedbackOverrides),
+    [feedbackKeys, feedback, feedbackOverrides],
+  );
+  /** User-chosen tab wins; otherwise first topic that has items; if all empty, first key. */
+  const activeFeedbackKey =
+    selectedFeedbackTab ?? preferredFeedbackTab ?? feedbackKeys[0] ?? null;
 
   React.useEffect(() => {
     if (cardPhase !== "draft" || !draftFeedbackRegistryRef) return undefined;

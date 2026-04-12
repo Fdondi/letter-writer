@@ -199,6 +199,23 @@ export function mergeCategoryItems(feedback, overrides, key) {
   return normalizeCategoryItems(raw, key);
 }
 
+/**
+ * First category in order that has at least one normalized feedback item.
+ * Used so the UI does not default to an empty topic until the user selects it.
+ * @param {string[]} feedbackKeys
+ * @param {Record<string, unknown>} feedback
+ * @param {Record<string, unknown>} [overrides]
+ * @returns {string | null} null if no keys or every category is empty
+ */
+export function firstFeedbackKeyWithItems(feedbackKeys, feedback, overrides = {}) {
+  if (!Array.isArray(feedbackKeys) || feedbackKeys.length === 0) return null;
+  const ov = overrides && typeof overrides === "object" ? overrides : {};
+  for (const k of feedbackKeys) {
+    if (mergeCategoryItems(feedback, ov, k).length > 0) return k;
+  }
+  return null;
+}
+
 export function categoryHasPleaseFix(items) {
   return items.some((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX);
 }
