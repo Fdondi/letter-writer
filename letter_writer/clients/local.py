@@ -68,7 +68,10 @@ class LocalClient(BaseClient):
         user_messages: List[str],
         search: bool = False,
         response_format: Optional[Dict[str, Any]] = None,
+        cache_prefix: Optional[str] = None,
+        system_cache_prefix: Optional[str] = None,
     ) -> str:
+        _ = cache_prefix, system_cache_prefix
         messages = self._format_messages(system, user_messages)
         # LM Studio uses whatever model is loaded; the model param is ignored.
         model = "local-model"

@@ -25,8 +25,10 @@ class GrokClient(BaseClient):
         user_messages: List[str],
         search: bool = False,
         response_format: Optional[Dict[str, Any]] = None,
+        cache_prefix: Optional[str] = None,
+        system_cache_prefix: Optional[str] = None,
     ) -> str:
-        _ = response_format
+        _ = response_format, cache_prefix, system_cache_prefix
         if isinstance(model_size, str):
             model = model_size
         else:

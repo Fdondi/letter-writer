@@ -180,5 +180,19 @@ class BaseClient:
         user_messages: List[str],
         search: bool = False,
         response_format: Optional[Dict[str, Any]] = None,
+        cache_prefix: Optional[str] = None,
+        system_cache_prefix: Optional[str] = None,
     ) -> str:
+        """Execute an LLM call.
+
+        ``cache_prefix`` — large context block prepended as a cached content
+        block inside the first *user* message (repeated-observation pattern,
+        e.g. feedback_review stage 2).
+
+        ``system_cache_prefix`` — large context block prepended as the first
+        *system* block with cache_control.  Enables cross-call caching when
+        two calls share the same document set but differ in their instructions
+        (e.g. precision_check vs company_fit_check).  Only Anthropic implements
+        both; other vendors silently ignore them.
+        """
         raise NotImplementedError("Subclasses must implement this method")

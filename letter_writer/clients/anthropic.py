@@ -10,8 +10,79 @@ class ClaudeClient(BaseClient):
         super().__init__()
         self.client = Anthropic()
 
-    def _format_messages(self, user_messages: List[str]) -> List[Dict]:
-        return [{"role": "user", "content": [{"type": "text", "text": message}]} for message in user_messages]
+    def _format_messages(
+        self,
+        user_messages: List[str],
+        cache_prefix: Optional[str] = None,
+    ) -> List[Dict]:
+        """Format user messages for the Anthropic API.
+
+        When *cache_prefix* is supplied it becomes a cached text block inside
+        the **first** user message, so all calls sharing the same system +
+        cache_prefix enjoy Anthropic's prompt-cache discount (90 % off input
+        after the first write).
+        """
+        formatted: List[Dict] = []
+        for i, message in enumerate(user_messages):
+            if i == 0 and cache_prefix:
+                # First message: cacheable context block + dynamic observation
+                formatted.append({
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": cache_prefix,
+                         "cache_control": {"type": "ephemeral"}},
+                        {"type": "text", "text": message},
+                    ],
+                })
+            else:
+                formatted.append({
+                    "role": "user",
+                    "content": [{"type": "text", "text": message}],
+                })
+        return formatted
+
+    # ------------------------------------------------------------------
+    # Cost tracking – Anthropic cache pricing
+    # ------------------------------------------------------------------
+    # Cache read  = 10 % of input price
+    # Cache write = 125 % of input price (25 % premium)
+    # Regular     = 100 %
+    # ------------------------------------------------------------------
+    def track_cost(
+        self,
+        model_name: str,
+        input_tokens: int,
+        output_tokens: int,
+        search_queries: int = 0,
+        cached_tokens: int = 0,
+        *,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
+    ):
+        costs = self.get_model_cost(model_name)
+        input_price = costs["input"]
+
+        regular = max(0, input_tokens - cache_read_tokens - cache_write_tokens)
+        input_cost = (
+            (regular / 1_000_000) * input_price
+            + (cache_read_tokens / 1_000_000) * input_price * 0.10
+            + (cache_write_tokens / 1_000_000) * input_price * 1.25
+        )
+        output_cost = (output_tokens / 1_000_000) * costs["output"]
+        search_cost = (search_queries / 1_000) * costs["search"]
+
+        self.total_cost += input_cost + output_cost + search_cost
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
+        self.total_cached_tokens += cache_read_tokens
+        self.total_search_queries += search_queries
+
+    @staticmethod
+    def _extract_cache_metrics(usage) -> tuple:
+        """Return (cache_read, cache_write) from an Anthropic usage object."""
+        cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+        cache_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+        return cache_read, cache_write
 
     @traceable(run_type="llm", name="Anthropic.call")
     def call(
@@ -21,8 +92,10 @@ class ClaudeClient(BaseClient):
         user_messages: List[str],
         search: bool = False,
         response_format: Optional[Dict[str, Any]] = None,
+        cache_prefix: Optional[str] = None,
+        system_cache_prefix: Optional[str] = None,
     ) -> str:
-        messages = self._format_messages(user_messages)
+        messages = self._format_messages(user_messages, cache_prefix=cache_prefix)
         if isinstance(model_size, str):
             model = model_size
             thinking_cfg: dict = {}
@@ -34,14 +107,38 @@ class ClaudeClient(BaseClient):
             f"[INFO] using Anthropic model {model}"
             + (" with thinking" if thinking_enabled else "")
             + (" with search" if search else "")
+            + (" with cache_prefix" if cache_prefix else "")
         )
+
+        # Build system block list.
+        #
+        # When system_cache_prefix is supplied it becomes the FIRST block with
+        # cache_control, enabling cross-call caching for calls that share the
+        # same document set (e.g. precision_check and company_fit_check both
+        # see the same company_report + job_text + letter).  Anthropic keys the
+        # cache on everything up to and including the marked block, so the
+        # category-specific instructions that follow do not affect the key.
+        #
+        # Without system_cache_prefix the regular system text itself is cached,
+        # which still helps for parallel observation-level calls in stage 2.
+        if system_cache_prefix:
+            cached_system: Any = [
+                {"type": "text", "text": system_cache_prefix,
+                 "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": system},
+            ]
+        else:
+            cached_system = [
+                {"type": "text", "text": system,
+                 "cache_control": {"type": "ephemeral"}},
+            ]
 
         if response_format and isinstance(response_format, dict):
             schema = ((response_format.get("json_schema") or {}).get("schema") or {})
             tool_name = ((response_format.get("json_schema") or {}).get("name") or "phase_output")
             response = self.client.messages.create(
                 model=model,
-                system=system,
+                system=cached_system,
                 messages=messages,
                 tools=[{
                     "name": tool_name,
@@ -52,12 +149,17 @@ class ClaudeClient(BaseClient):
                 max_tokens=4000,
             )
             if response.usage:
+                cr, cw = self._extract_cache_metrics(response.usage)
                 self.track_cost(
                     model,
                     response.usage.input_tokens,
                     response.usage.output_tokens,
                     search_queries=0,
+                    cache_read_tokens=cr,
+                    cache_write_tokens=cw,
                 )
+                if cr:
+                    typer.echo(f"[INFO] Anthropic cache read: {cr} tokens")
             if response.content:
                 for block in response.content:
                     if getattr(block, "type", None) == "tool_use":
@@ -68,18 +170,20 @@ class ClaudeClient(BaseClient):
         tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}] if search else []
         # Use 2048 for search, 8000 for everything else (letters, comments, etc.)
         max_tokens = 2048 if search else 8000
-        
+
         # Build conversation history
         conversation_messages = messages.copy()
         total_input_tokens = 0
         total_output_tokens = 0
-        
+        total_cache_read = 0
+        total_cache_write = 0
+
         # Initial request
         # Thinking is enabled only on non-search paths (search needs max_tokens=2048
         # which is too low to fit a meaningful thinking budget alongside the response).
         create_kwargs: Dict[str, Any] = {
             "model": model,
-            "system": system,
+            "system": cached_system,
             "messages": conversation_messages,
             "tools": tools,
             "max_tokens": max_tokens,
@@ -88,25 +192,30 @@ class ClaudeClient(BaseClient):
             # budget_tokens must be strictly less than max_tokens; use half as a safe ceiling
             create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": max_tokens // 2}
         response = self.client.messages.create(**create_kwargs)
-        
+
         # Track usage from first response
         if response.usage:
             total_input_tokens += response.usage.input_tokens
             total_output_tokens += response.usage.output_tokens
-        
+            cr, cw = self._extract_cache_metrics(response.usage)
+            total_cache_read += cr
+            total_cache_write += cw
+            if cr:
+                typer.echo(f"[INFO] Anthropic cache read: {cr} tokens")
+
         # Log stop reason for debugging
         stop_reason = getattr(response, 'stop_reason', None)
         if stop_reason:
             typer.echo(f"[DEBUG] Anthropic stop_reason: {stop_reason}")
             if stop_reason == "max_tokens":
                 typer.echo(f"[WARNING] Response was truncated due to max_tokens limit ({max_tokens})")
-        
+
         # Add assistant's response to conversation
         conversation_messages.append({
             "role": "assistant",
             "content": response.content
         })
-        
+
         # Check if we need to continue (tool use detected)
         needs_continuation = False
         if response.content:
@@ -115,7 +224,7 @@ class ClaudeClient(BaseClient):
                 if hasattr(block, 'type') and block.type == 'tool_use':
                     needs_continuation = True
                     break
-        
+
         # For web_search_20250305, Anthropic handles tool execution automatically,
         # but we may need to continue to get the final synthesized response
         # Continue conversation if stop_reason suggests we should or if we have tool results
@@ -127,7 +236,7 @@ class ClaudeClient(BaseClient):
                     if hasattr(block, 'type') and 'tool_result' in str(block.type).lower():
                         has_tool_results = True
                         break
-            
+
             # If we have tool results but no comprehensive text response, continue
             if has_tool_results:
                 # Extract text so far
@@ -135,7 +244,7 @@ class ClaudeClient(BaseClient):
                 for block in response.content:
                     if hasattr(block, 'text') and block.text:
                         text_so_far.append(block.text)
-                
+
                 # If we only have minimal text, continue the conversation
                 if not text_so_far or len(' '.join(text_so_far)) < 200:
                     typer.echo("[DEBUG] Continuing conversation to synthesize tool results")
@@ -144,43 +253,48 @@ class ClaudeClient(BaseClient):
                         "role": "user",
                         "content": [{"type": "text", "text": "Please provide a concise synthesis of the search results in your response."}]
                     })
-                    
+
                     # Calculate remaining tokens to respect the global limit
                     current_usage = response.usage.output_tokens if response.usage else 0
                     remaining_tokens = max(1, max_tokens - current_usage)
-                    
-                    # Continue the conversation
+
+                    # Continue the conversation (system prompt cached from initial request)
                     continuation_response = self.client.messages.create(
                         model=model,
-                        system=system,
+                        system=cached_system,
                         messages=conversation_messages,
                         max_tokens=remaining_tokens,
                     )
-                    
+
                     # Track usage from continuation
                     if continuation_response.usage:
                         total_input_tokens += continuation_response.usage.input_tokens
                         total_output_tokens += continuation_response.usage.output_tokens
-                    
+                        cr, cw = self._extract_cache_metrics(continuation_response.usage)
+                        total_cache_read += cr
+                        total_cache_write += cw
+
                     # Add continuation text to our collection
                     if continuation_response.content:
                         for block in continuation_response.content:
                             if hasattr(block, 'text') and block.text:
                                 text_so_far.append(block.text)
-                    
-                    # Update response to continuation response for final processing, 
+
+                    # Update response to continuation response for final processing,
                     # but keep accumulated text_so_far separate
                     response = continuation_response
-        
+
         # Track total cost
         if total_input_tokens > 0 or total_output_tokens > 0:
             self.track_cost(
                 model,
                 total_input_tokens,
                 total_output_tokens,
-                search_queries=1 if search else 0
+                search_queries=1 if search else 0,
+                cache_read_tokens=total_cache_read,
+                cache_write_tokens=total_cache_write,
             )
-        
+
         # Return accumulated text if we have any, otherwise parse the last response
         if 'text_so_far' in locals() and text_so_far:
             full_text = "\n\n".join(text_so_far)
@@ -193,14 +307,14 @@ class ClaudeClient(BaseClient):
                 # Logic: Look for a newline followed by a character that IS NOT (uppercase, *, -, or #)
                 # We use a negative lookahead to identify lines that should be joined
                 full_text = re.sub(r'\n(?![A-Z*#\-])', ' ', full_text)
-            
+
             typer.echo(f"[DEBUG] Anthropic response length (accumulated): {len(full_text)} characters, {len(full_text.split())} words")
             return full_text
-            
+
         # Handle different response content types if we didn't accumulate text
         if not response.content:
             return ""
-            
+
         # Collect all text from all content blocks
         text_parts = []
         for content_block in response.content:
@@ -223,7 +337,7 @@ class ClaudeClient(BaseClient):
                     content_preview = str(content)[:100] + "..." if len(str(content)) > 100 else str(content)
                     typer.echo(f"[DEBUG] Tool Result - ID: {tool_id}, Error: {is_error}, Content: {content_preview}")
 
-        
+
         if text_parts:
             # Concatenate all text blocks
             full_text = "\n\n".join(text_parts)

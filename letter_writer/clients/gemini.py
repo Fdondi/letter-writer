@@ -134,7 +134,10 @@ class GeminiClient(BaseClient):
         user_messages: List[str],
         search: bool = False,
         response_format: Optional[Dict[str, Any]] = None,
+        cache_prefix: Optional[str] = None,
+        system_cache_prefix: Optional[str] = None,
     ) -> str:
+        _ = cache_prefix, system_cache_prefix  # Gemini uses explicit Context Caching API, not supported here
         if types is None:
             raise ImportError(
                 "Gemini client requires the 'google-genai' package. Install it to use Gemini models."

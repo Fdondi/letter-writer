@@ -167,44 +167,72 @@ def _build_justification_context(
     return "========== Cover Letter:\n" + letter + "\n==========\n"
 
 
-@traceable(run_type="chain", name="feedback_review_stage1_meaningful")
-def _stage1_meaningful(client: BaseClient, observation: str) -> bool:
-    """No surrounding letter context: drop incoherent / empty noise."""
-    system = (
-        "You filter critique bullets about cover letters. You only see ONE observation in isolation.\n"
-        "Decide if it expresses a coherent, substantive claim (something a reviewer could act on).\n"
-        "Reply with JSON only: {\"keep\": true} or {\"keep\": false}.\n"
-        "Use keep=false for: empty noise; tautologies; 'corrections' that change nothing; self-contradiction; "
-        "nonsense dates or logic stated as fact (e.g. impossible timelines); text that does not say anything actionable."
-    )
-    prompt = "Observation:\n" + (observation or "").strip() + "\n\nJSON only."
-    raw = client.call(ModelSize.TINY, system, [prompt])
-    data = _extract_json_object(raw)
-    return bool(data.get("keep"))
-
-
-@traceable(run_type="chain", name="feedback_review_stage2_justified")
-def _stage2_justified(
+@traceable(run_type="chain", name="feedback_review_stage12_batch")
+def _stage12_batch(
     client: BaseClient,
     category: str,
-    observation: str,
+    items: List[Tuple[str, str]],
     context_block: str,
-) -> bool:
-    """Same materials the checker had plus the letter: is the critique fair?"""
-    system = (
-        "You judge whether ONE critique of a cover letter is fair given the SAME background text the checker had.\n"
-        "Reply JSON only: {\"justified\": true} or {\"justified\": false}.\n"
-        "justified=false if the critique misreads the letter (e.g. attacks wording that is reasonable in context), "
-        "or claims a mismatch that the letter/context does not support, or demands something already satisfied."
-    )
-    prompt = (
+) -> Dict[str, bool]:
+    """Combined stages 1+2 in a single call: filter incoherent AND unjustified items.
+
+    Sending all observations for a category at once (instead of one call per item)
+    is the primary cost reduction: the large context block is paid once per category
+    rather than once per observation.  ``system_cache_prefix`` places that context in a
+    cached system block so retries get a read hit; precision and company_fit also share
+    the same prefix (company_report + job_text + letter) and get a cross-call cache hit.
+
+    Returns ``{id: keep_bool}`` for every provided item; unknown ids default to True
+    (fail-open so a partial JSON parse never silently drops valid observations).
+    """
+    if not items:
+        return {}
+    system_cache_prefix = (
         f"Category: {category}\n\n"
-        f"========== Context the checker saw ==========\n{context_block}\n\n"
-        f"========== Critique to judge ==========\n{observation.strip()}\n"
+        f"========== Context the checker saw ==========\n{context_block}"
     )
-    raw = client.call(ModelSize.TINY, system, [prompt])
-    data = _extract_json_object(raw)
-    return bool(data.get("justified"))
+    system = (
+        "You filter cover-letter critique bullets in bulk.\n"
+        "For each item set keep=false if it is:\n"
+        "  • incoherent, empty, tautological, or not actionable, OR\n"
+        "  • unjustified: misreads the letter, claims a mismatch not supported by the context, "
+        "or demands something already present.\n"
+        "Otherwise keep=true.\n"
+        "Reply JSON only: {\"results\": [{\"id\": \"<id>\", \"keep\": true}, ...]}\n"
+        "Return exactly one object per id — no omissions."
+    )
+    lines = [f"id={oid}: {obs.strip()[:1200]}" for oid, obs in items]
+    prompt = "Critiques:\n" + "\n".join(lines)
+    raw = client.call(
+        ModelSize.TINY, system, [prompt], system_cache_prefix=system_cache_prefix
+    )
+    def _parse_results(raw_response: str) -> Dict[str, bool]:
+        data = _extract_json_object(raw_response)
+        parsed: Dict[str, bool] = {}
+        for r in (data.get("results") or []):
+            if isinstance(r, dict):
+                parsed[str(r.get("id", ""))] = bool(r.get("keep", True))
+        return parsed
+
+    out = _parse_results(raw)
+
+    # Retry once for any ids the model omitted
+    all_ids = {oid for oid, _ in items}
+    missing_ids = all_ids - out.keys()
+    if missing_ids:
+        missing_items = [(oid, obs) for oid, obs in items if oid in missing_ids]
+        logger.debug(
+            "stage12_batch category=%s: %d/%d ids missing, retrying",
+            category, len(missing_ids), len(items),
+        )
+        retry_lines = [f"id={oid}: {obs.strip()[:1200]}" for oid, obs in missing_items]
+        retry_prompt = "Critiques:\n" + "\n".join(retry_lines)
+        retry_raw = client.call(
+            ModelSize.TINY, system, [retry_prompt], system_cache_prefix=system_cache_prefix
+        )
+        out.update(_parse_results(retry_raw))
+
+    return out
 
 
 def _input_cluster_duplicate_group_id(cluster_key: str) -> str:
@@ -331,54 +359,37 @@ def _stage4_input_clusters(
     return out
 
 
-def _parallel_stage1(
+def _parallel_stage12(
     client: BaseClient,
-    id_to_observation: Dict[str, str],
+    cat_to_items: Dict[str, List[Tuple[str, str]]],
+    ctx_cache: Dict[str, str],
 ) -> Dict[str, bool]:
-    """Parallel meaningful checks; same client as phased_service parallel checks."""
-    if not id_to_observation:
+    """Run _stage12_batch once per category in parallel; merge keep maps.
+
+    cat_to_items: {category: [(id, observation), ...]}
+    ctx_cache:    {category: context_block_string}
+    Returns:      {id: keep_bool}
+    """
+    if not cat_to_items:
         return {}
     out: Dict[str, bool] = {}
-    max_workers = min(16, len(id_to_observation))
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futs = {
-            ex.submit(_stage1_meaningful, client, obs): oid
-            for oid, obs in id_to_observation.items()
-        }
-        for fut in as_completed(futs):
-            oid = futs[fut]
-            try:
-                out[oid] = fut.result()
-            except Exception as e:
-                logger.warning("feedback review stage1 failed id=%s: %s", oid, e)
-                out[oid] = True
-    return out
+    max_workers = min(6, len(cat_to_items))
 
-
-def _parallel_stage2(
-    client: BaseClient,
-    id_to_triple: Dict[str, Tuple[str, str, str]],
-) -> Dict[str, bool]:
-    """id -> (category, observation, context_block)."""
-    if not id_to_triple:
-        return {}
-    out: Dict[str, bool] = {}
-    max_workers = min(16, len(id_to_triple))
-
-    def _run_one(oid: str, triple: Tuple[str, str, str]) -> Tuple[str, bool]:
-        cat, obs, ctx = triple
-        return oid, _stage2_justified(client, cat, obs, ctx)
+    def _run_cat(cat: str) -> Tuple[str, Dict[str, bool]]:
+        return cat, _stage12_batch(client, cat, cat_to_items[cat], ctx_cache[cat])
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futs = {ex.submit(_run_one, oid, tpl): oid for oid, tpl in id_to_triple.items()}
+        futs = {ex.submit(_run_cat, cat): cat for cat in cat_to_items}
         for fut in as_completed(futs):
-            oid = futs[fut]
+            cat = futs[fut]
             try:
-                o, ok = fut.result()
-                out[o] = ok
+                _, keep_map = fut.result()
+                out.update(keep_map)
             except Exception as e:
-                logger.warning("feedback review stage2 failed id=%s: %s", oid, e)
-                out[oid] = True
+                logger.warning("feedback review stage12 failed category=%s: %s", cat, e)
+                # fail-open: keep all items in this category
+                for oid, _ in cat_to_items[cat]:
+                    out[oid] = True
     return out
 
 
@@ -396,37 +407,22 @@ def review_feedback_for_vendor(
     vendor: str,
 ) -> Dict[str, Any]:
     """
-    Sequential stages; parallelize independent LLM calls within stages 1 and 2.
-    Mutates no inputs; returns new feedback dict.
+    Stages 1+2 combined (one batch call per category, run in parallel), then
+    stages 3 and 4 sequentially.  Mutates no inputs; returns new feedback dict.
     """
     fb = normalize_feedback_map(feedback, top_docs=top_docs)
     flat = _flatten_feedback(fb)
     if not flat:
         return fb
 
-    # --- Stage 1 (parallel per observation) ---
-    id_to_obs: Dict[str, str] = {}
-    for _cat, it in flat:
-        oid = str(it["id"])
-        obs = str(it.get("observation", "")).strip()
-        if obs:
-            id_to_obs[oid] = obs
-    s1 = _parallel_stage1(client, id_to_obs) if id_to_obs else {}
-    flat_s1: List[Tuple[str, Dict[str, Any]]] = []
+    # --- Stages 1+2 combined: one batched call per category (parallel) ---
+    # Build context cache and group items by category in a single pass.
+    ctx_cache: Dict[str, str] = {}
+    cat_to_items: Dict[str, List[Tuple[str, str]]] = {}
     for cat, it in flat:
-        oid = str(it["id"])
         obs = str(it.get("observation", "")).strip()
         if not obs:
             continue
-        if id_to_obs and not s1.get(oid, True):
-            continue
-        flat_s1.append((cat, it))
-
-    # --- Stage 2 (parallel; depends on stage 1 survivors) ---
-    ctx_cache: Dict[str, str] = {}
-    id_to_triple: Dict[str, Tuple[str, str, str]] = {}
-    for cat, it in flat_s1:
-        oid = str(it["id"])
         if cat not in ctx_cache:
             ctx_cache[cat] = _build_justification_context(
                 cat,
@@ -438,16 +434,14 @@ def review_feedback_for_vendor(
                 job_text=job_text,
                 top_docs=top_docs,
             )
-        obs = str(it.get("observation", "")).strip()
-        ctx = ctx_cache[cat]
-        id_to_triple[oid] = (cat, obs, ctx)
-    s2 = _parallel_stage2(client, id_to_triple) if id_to_triple else {}
-    flat_s2: List[Tuple[str, Dict[str, Any]]] = []
-    for cat, it in flat_s1:
-        oid = str(it["id"])
-        if id_to_triple and not s2.get(oid, True):
-            continue
-        flat_s2.append((cat, it))
+        cat_to_items.setdefault(cat, []).append((str(it["id"]), obs))
+
+    keep_map = _parallel_stage12(client, cat_to_items, ctx_cache) if cat_to_items else {}
+    flat_s2: List[Tuple[str, Dict[str, Any]]] = [
+        (cat, it)
+        for cat, it in flat
+        if str(it.get("observation", "")).strip() and keep_map.get(str(it["id"]), True)
+    ]
 
     rebuilt = _rebuild_feedback(flat_s2)
 

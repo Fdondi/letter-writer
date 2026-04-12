@@ -29,6 +29,8 @@ class MissingCVError(Exception):
     """Catastrophic error: CV text is missing or empty when it should be present."""
     pass
 
+
+
 # Material sources: model may emit these only (snippets tied to prompt sections).
 FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN = frozenset(
     {"CV", "EXAMPLE", "BACKGROUND_RESEARCH", "LETTER"}
@@ -285,6 +287,7 @@ def _call_vendor_feedback_items(
     legacy_string_source: str = "CV",
     search: bool = False,
     max_retries: int = 2,
+    system_cache_prefix: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Call an LLM; response must be JSON with an items array of {observation, type}."""
     allowed = allowed_context_sources & FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN
@@ -343,6 +346,7 @@ def _call_vendor_feedback_items(
                 [prompt],
                 search=search,
                 response_format=response_schema,
+                system_cache_prefix=system_cache_prefix,
             )
             data = _extract_json_value(last_raw)
             items = normalize_parsed_feedback_items(
@@ -442,12 +446,17 @@ def _phased_feedback_checker_instruction_prompts(
         "You are an expert in style and tone. Check the letter for consistency with the style instructions. "
         "Keep each observation brief. Report only concrete mismatches or omissions, not praise.\n"
     )
-    prompt = (
-        "========== Style Instructions:\n" + si + "\n==========\n\n" +
-        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "List any strong inconsistencies with the instructions, or use empty items if none."
-    )
+    prompt = "List any strong inconsistencies with the instructions, or use empty items if none."
     return system, prompt
+
+
+def _instruction_check_context(*, style_instructions: str, letter: str) -> str:
+    """Cached context block for instruction_check (style instructions + letter)."""
+    si = style_instructions or get_style_instructions()
+    return (
+        "========== Style Instructions:\n" + si + "\n==========\n\n"
+        "========== Cover Letter to Check:\n" + letter + "\n=========="
+    )
 
 
 def _phased_feedback_checker_accuracy_prompts(
@@ -477,12 +486,39 @@ def _phased_feedback_checker_accuracy_prompts(
         "Keep each observation brief; no praise or reassurance. If there is no meaningful issue, return an empty items list.\n"
         + additional_context
     )
-    prompt = (
-        "========== User CV:\n" + cv_text + "\n==========\n" +
-        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Review factual accuracy against the CV. Point out claims that cannot be verified or are inconsistent."
-    )
+    prompt = "Review factual accuracy against the CV. Point out claims that cannot be verified or are inconsistent."
     return system, prompt
+
+
+def _cv_letter_context(*, cv_text: str, letter: str) -> str:
+    """Cached context block for accuracy_check and user_fit_check (Group 2).
+
+    Both checks pass this as ``system_cache_prefix`` so they share the same
+    Anthropic cache entry when called with the same CV and letter.
+    """
+    cv_block = (cv_text or "").strip() or "(No CV text was provided in this session.)"
+    return (
+        "========== User CV:\n" + cv_block + "\n==========\n"
+        "========== Cover Letter to Check:\n" + letter + "\n=========="
+    )
+
+
+def _company_job_letter_context(
+    *,
+    company_report: str,
+    job_text: str,
+    letter: str,
+) -> str:
+    """Cached context block for precision_check and company_fit_check (Group 1).
+
+    Both checks pass this as ``system_cache_prefix`` so they share the same
+    Anthropic cache entry when called with the same company report, job, and letter.
+    """
+    return (
+        "========== Company Report:\n" + company_report + "\n==========\n"
+        "========== Job Offer:\n" + job_text + "\n==========\n"
+        "========== Cover Letter to Check:\n" + letter + "\n=========="
+    )
 
 
 def _phased_feedback_checker_precision_prompts(
@@ -503,12 +539,7 @@ def _phased_feedback_checker_precision_prompts(
         "Example: the company originated in the F1 racing world, but has pivoted to banking and not worked in racing in a while -> 'excited to enter the world of racing [user is either not up to date on the company, or making up misinterpreting partial information]\n"
         "Keep each observation brief; do not praise coverage or fit. If there is no meaningful issue, return an empty items list.\n"
     )
-    prompt = (
-        "========== Company Report:\n" + company_report + "\n==========\n" +
-        "========== Job Offer:\n" + job_text + "\n==========\n" +
-        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Review consistency with the company report and job description; note misalignment or superfluous claims."
-    )
+    prompt = "Review consistency with the company report and job description; note misalignment or superfluous claims."
     return system, prompt
 
 
@@ -525,12 +556,7 @@ def _phased_feedback_checker_company_fit_prompts(
         "Focus on generic, shallow, or mismatched signals—not on affirming that the letter is personalized. "
         "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
     )
-    prompt = (
-        "========== Company Report:\n" + company_report + "\n==========\n" +
-        "========== Job Offer:\n" + job_text + "\n==========\n" +
-        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Review alignment with the company's values, tone, and culture; note generic or mismatched content."
-    )
+    prompt = "Review alignment with the company's values, tone, and culture; note generic or mismatched content."
     return system, prompt
 
 
@@ -549,9 +575,6 @@ def _phased_feedback_checker_user_fit_prompts(
     )
     if not examples_formatted.strip():
         examples_formatted = "(No reference letters available.)"
-    cv_block = (cv_text or "").strip()
-    if not cv_block:
-        cv_block = "(No CV text was provided in this session.)"
     additional_block = ""
     if additional_user_info and additional_user_info.strip():
         additional_block = (
@@ -572,20 +595,21 @@ def _phased_feedback_checker_user_fit_prompts(
         "\"Cover Letter to Check\"; CV for the User CV block and for the User's additional info block (both are authoritative facts about the applicant).\n"
     )
     prompt = (
-        "========== Reference Examples:\n" + examples_formatted + "\n==========\n\n"
-        "========== User CV:\n" + cv_block + "\n==========\n"
+        "========== Reference Examples:\n" + examples_formatted + "\n==========\n"
         + additional_block
-        + "\n========== Cover Letter to Check:\n" + letter + "\n==========\n\n"
-        "Compare to the reference letters and CV; note where the draft diverges in style, emphasis, handling of weaknesses, or omits relevant facts from the CV."
+        + "\nCompare to the reference letters and CV; note where the draft diverges in style, emphasis, handling of weaknesses, or omits relevant facts from the CV."
     )
     return system, prompt
 
 
-def _phased_feedback_checker_human_prompts(
-    *,
-    letter: str,
+def _format_human_check_examples(
     top_docs: Optional[Sequence[TopDocument]],
-) -> Optional[Tuple[str, str]]:
+) -> Optional[str]:
+    """Format rewritten examples for human_check; returns None if none exist.
+
+    Extracted so both the prompt builder and the context builder can use the
+    same formatted string without duplicating the filtering and formatting logic.
+    """
     examples = top_docs or ()
     rewritten_examples = [
         ex
@@ -594,7 +618,7 @@ def _phased_feedback_checker_human_prompts(
     ]
     if not rewritten_examples:
         return None
-    examples_formatted = "\n\n".join(
+    return "\n\n".join(
         f"---- Example #{i+1} - {ex['company_name']} ----\n"
         "Initial cover letters:\n"
         + "\n\n".join(
@@ -621,6 +645,16 @@ def _phased_feedback_checker_human_prompts(
         f"Revised cover Letter:\n{ex['letter_text']}\n\n"
         for i, ex in enumerate(rewritten_examples)
     )
+
+
+def _phased_feedback_checker_human_prompts(
+    *,
+    letter: str,
+    top_docs: Optional[Sequence[TopDocument]],
+) -> Optional[Tuple[str, str]]:
+    """Returns (system, prompt), or None if there are no rewritten examples."""
+    if _format_human_check_examples(top_docs) is None:
+        return None
     system = (
         "You are an expert in noticing the patterns behind edits. You will receive a list of examples of job descriptions and corresponding cover letters; "
         "first the cover letter how it was initially written, then the cover letter how a reviewer rewrote it. "
@@ -635,12 +669,17 @@ def _phased_feedback_checker_human_prompts(
         "Or: all letters are highly formal, but the new company is proud of their informal culture -> not relevant. "
         "Keep each observation brief. If nothing in the draft matches a pattern the reviewer would change, return empty items.\n"
     )
-    prompt = (
-        "========== Reference Examples:\n" + examples_formatted + "\n==========\n" +
-        "========== Cover Letter to Check:\n" + letter + "\n==========\n\n" +
-        "Flag anything in the draft that resembles content the reviewer typically removes or rewrites in the examples."
-    )
+    prompt = "Flag anything in the draft that resembles content the reviewer typically removes or rewrites in the examples."
     return system, prompt
+
+
+def _human_check_context(*, top_docs: Optional[Sequence[TopDocument]], letter: str) -> str:
+    """Cached context block for human_check (rich examples + letter)."""
+    examples_formatted = _format_human_check_examples(top_docs) or "(No reference examples.)"
+    return (
+        "========== Reference Examples:\n" + examples_formatted + "\n==========\n"
+        "========== Cover Letter to Check:\n" + letter + "\n=========="
+    )
 
 
 def _normalize_missing_context_items_payload(
@@ -1512,10 +1551,7 @@ def generate_letter(
 def instruction_check(letter: str, client: BaseClient, style_instructions: str = "") -> List[Dict[str, Any]]:
     """Check the letter for consistency with the instructions."""
     si = style_instructions or get_style_instructions()
-    system, prompt = _phased_feedback_checker_instruction_prompts(
-        letter=letter,
-        style_instructions=si,
-    )
+    system, prompt = _phased_feedback_checker_instruction_prompts(letter=letter, style_instructions=si)
     allowed = allowed_feedback_context_sources_for_category("instruction")
     legacy = legacy_context_string_default_source_for_category("instruction")
     return _call_vendor_feedback_items(
@@ -1525,13 +1561,14 @@ def instruction_check(letter: str, client: BaseClient, style_instructions: str =
         prompt,
         allowed_context_sources=allowed,
         legacy_string_source=legacy,
+        system_cache_prefix=_instruction_check_context(style_instructions=si, letter=letter),
     )
 
 
 @traceable(run_type="chain", name="accuracy_check")
 def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_user_info: str = "") -> List[Dict[str, Any]]:
     """Check the accuracy of the cover letter against the user's CV.
-    
+
     Args:
         additional_user_info: User-provided information about themselves that may explain apparent discrepancies.
     """
@@ -1549,6 +1586,7 @@ def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_use
         prompt,
         allowed_context_sources=allowed,
         legacy_string_source=legacy,
+        system_cache_prefix=_cv_letter_context(cv_text=cv_text, letter=letter),
     )
 
 @traceable(run_type="chain", name="precision_check")
@@ -1568,6 +1606,9 @@ def precision_check(letter: str, company_report: str, job_text: str, client: Bas
         prompt,
         allowed_context_sources=allowed,
         legacy_string_source=legacy,
+        system_cache_prefix=_company_job_letter_context(
+            company_report=company_report, job_text=job_text, letter=letter
+        ),
     )
 
 @traceable(run_type="chain", name="company_fit_check")
@@ -1587,6 +1628,9 @@ def company_fit_check(letter: str, company_report: str, job_offer: str, client: 
         prompt,
         allowed_context_sources=allowed,
         legacy_string_source=legacy,
+        system_cache_prefix=_company_job_letter_context(
+            company_report=company_report, job_text=job_offer, letter=letter
+        ),
     )
 
 @traceable(run_type="chain", name="user_fit_check")
@@ -1613,6 +1657,7 @@ def user_fit_check(
         prompt,
         allowed_context_sources=allowed,
         legacy_string_source=legacy,
+        system_cache_prefix=_cv_letter_context(cv_text=cv_text, letter=letter),
     )
 
 def _format_correction(corr: dict) -> str:
@@ -1635,7 +1680,7 @@ def _format_correction(corr: dict) -> str:
 
 @traceable(run_type="chain", name="human_check")
 def human_check(letter: str, examples: Sequence[TopDocument], client: BaseClient) -> List[Dict[str, Any]]:
-    """Check the letter for consistency with the instructions."""
+    """Check the letter against human-rewritten example patterns."""
     prompts = _phased_feedback_checker_human_prompts(letter=letter, top_docs=examples)
     if prompts is None:
         logger.info(
@@ -1653,6 +1698,7 @@ def human_check(letter: str, examples: Sequence[TopDocument], client: BaseClient
         prompt,
         allowed_context_sources=allowed,
         legacy_string_source=legacy,
+        system_cache_prefix=_human_check_context(top_docs=examples, letter=letter),
     )
 
 
