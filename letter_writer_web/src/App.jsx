@@ -1138,21 +1138,38 @@ export default function App({ flow = "vendor" }) {
     });
 
     let feedbackExtraInfo = null;
-    if (flow === "vendor" && draftFeedbackRegistryRef.current) {
-      const reg = draftFeedbackRegistryRef.current;
+    if (flow === "vendor") {
+      const draftPhase = phaseRegistryRef.current?.find((p) => p.phase === "draft");
+      const reg = draftFeedbackRegistryRef.current || {};
       let acc = [];
       for (const v of Array.from(selectedVendors)) {
-        const snap = typeof reg[v] === "function" ? reg[v]() : null;
-        if (!snap?.feedbackKeys?.length) continue;
-        acc = mergeExtraInfoFromFeedback(
-          acc,
-          snap.feedback,
-          snap.feedback_overrides || {},
-          snap.feedbackKeys,
-        );
+        let merged = false;
+        if (typeof reg[v] === "function") {
+          const snap = reg[v]();
+          if (snap?.feedbackKeys?.length) {
+            acc = mergeExtraInfoFromFeedback(
+              acc,
+              snap.feedback,
+              snap.feedback_overrides || {},
+              snap.feedbackKeys,
+            );
+            merged = true;
+          }
+        }
+        if (!merged) {
+          const shelfData = draftPhase?.cardData?.[v];
+          const fromShelf = shelfData
+            ? phaseModules.draft.initializeFeedbackFromData(shelfData)
+            : null;
+          if (fromShelf?.feedbackKeys?.length) {
+            acc = mergeExtraInfoFromFeedback(acc, fromShelf.feedback, {}, fromShelf.feedbackKeys);
+          }
+        }
       }
       if (acc.length > 0) {
         feedbackExtraInfo = acc;
+      } else {
+        feedbackExtraInfo = [];
       }
     }
 
@@ -1166,7 +1183,7 @@ export default function App({ flow = "vendor" }) {
       job_text: jobText,
       letter_text: finalText,
       ai_letters: aiLetters,
-      ...(feedbackExtraInfo ? { feedback_extra_info: feedbackExtraInfo } : {}),
+      ...(feedbackExtraInfo !== null ? { feedback_extra_info: feedbackExtraInfo } : {}),
     };
     const url = documentId ? `/api/documents/${documentId}/` : "/api/documents/";
     const method = documentId ? "PUT" : "POST";

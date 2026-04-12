@@ -72,7 +72,7 @@ export function normalizeCategoryItems(raw, categoryKey = "") {
         const observation = String(it.observation ?? "").trim();
         const typ = String(it.type ?? "").toUpperCase();
         if (typ !== FEEDBACK_TYPES.ALREADY_GOOD && typ !== FEEDBACK_TYPES.PLEASE_FIX) return null;
-        if (typ === FEEDBACK_TYPES.PLEASE_FIX && !observation) return null;
+        // PLEASE_FIX may be temporarily empty while the user adds a critique ("Add critique") or edits inline.
         if (typ === FEEDBACK_TYPES.ALREADY_GOOD && !observation) return null;
         const existing = String(it.id ?? "").trim();
         const id = existing || (categoryKey ? `${categoryKey}-${idx}` : newId());
@@ -270,11 +270,9 @@ export function extractFeedbackEntryToExtraInfo(categoryKey, it) {
  */
 export function mergeExtraInfoFromFeedback(existing, feedback, overrides, feedbackKeys) {
   const map = new Map((Array.isArray(existing) ? existing : []).map((e) => [String(e.id), { ...e }]));
-  const seenFeedbackIds = new Set();
   for (const key of feedbackKeys) {
     const items = mergeCategoryItems(feedback, overrides, key);
     for (const it of items) {
-      seenFeedbackIds.add(String(it.id));
       const extracted = extractFeedbackEntryToExtraInfo(key, it);
       if (extracted) {
         map.set(String(it.id), extracted);
@@ -284,11 +282,6 @@ export function mergeExtraInfoFromFeedback(existing, feedback, overrides, feedba
           map.delete(String(it.id));
         }
       }
-    }
-  }
-  for (const [id, entry] of [...map.entries()]) {
-    if (entry.source === "feedback" && !seenFeedbackIds.has(id)) {
-      map.delete(id);
     }
   }
   return Array.from(map.values());
