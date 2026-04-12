@@ -6,6 +6,7 @@ letters/
 jobs/
 __pycache__/
 letter_writer/__pycache__/*
+letter_writer_web/dist/
 **/node_modules/
 cv-external/
 qdrant_test.py

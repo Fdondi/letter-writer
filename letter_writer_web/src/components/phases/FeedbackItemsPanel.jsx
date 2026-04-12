@@ -8,6 +8,7 @@ import {
   CONTEXT_USER_SOURCE,
   FEEDBACK_TYPES,
   mergeCategoryItems,
+  filteredFeedbackDetailsFromRaw,
   newId,
   selectNextTabIfCategoryDone,
 } from "./feedbackItemUtils";
@@ -93,6 +94,11 @@ export function FeedbackItemsPanel({
     () => items.filter((it) => it.type === FEEDBACK_TYPES.ALREADY_GOOD),
     [items],
   );
+
+  const filteredFeedbackDetails = useMemo(() => {
+    const raw = feedbackOverrides[categoryKey] !== undefined ? feedbackOverrides[categoryKey] : feedback[categoryKey];
+    return filteredFeedbackDetailsFromRaw(raw);
+  }, [feedback, feedbackOverrides, categoryKey]);
 
   const persistItems = (nextItems) => {
     handleSaveFeedbackOverride(categoryKey, nextItems);
@@ -1267,6 +1273,49 @@ export function FeedbackItemsPanel({
           {fixItems.map((it) => renderFixRow(it))}
         </ul>
       )}
+
+      {filteredFeedbackDetails.length > 0 ? (
+        <details
+          style={{
+            marginTop: 16,
+            borderTop: "1px solid #e5e7eb",
+            paddingTop: 12,
+          }}
+        >
+          <summary
+            style={{
+              cursor: "pointer",
+              fontSize: 13,
+              color: "#6b7280",
+              fontWeight: 500,
+            }}
+          >
+            Filtered feedback ({filteredFeedbackDetails.length}) — not shown as critiques
+          </summary>
+          <p style={{ fontSize: 12, color: "#9ca3af", margin: "8px 0 10px" }}>
+            The model (or legacy format) sent text that is intentionally not imported as open issues — for example NO
+            COMMENT, SKIP, or an empty PLEASE FIX line.
+          </p>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+            {filteredFeedbackDetails.map((entry, idx) => (
+              <li
+                key={`filtered-${idx}`}
+                style={{
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 6,
+                  padding: 8,
+                  background: "#fafafa",
+                  fontSize: 13,
+                  color: "#4b5563",
+                }}
+              >
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#9ca3af", marginBottom: 6 }}>{entry.label}</div>
+                <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{entry.text}</div>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
 
       {goodItems.length > 0 ? (
         <details

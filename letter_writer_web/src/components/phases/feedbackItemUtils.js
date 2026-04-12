@@ -163,6 +163,33 @@ export function normalizeCategoryItems(raw, categoryKey = "") {
 }
 
 /**
+ * Text the UI does not turn into feedback rows (same rules as {@link normalizeCategoryItems} for strings).
+ * Use to show why a category looks empty despite model output.
+ * @param {unknown} raw - same value passed to normalizeCategoryItems for one category
+ * @returns {{ label: string, text: string }[]}
+ */
+export function filteredFeedbackDetailsFromRaw(raw) {
+  if (raw == null) return [];
+  if (typeof raw !== "string") return [];
+  const t = raw.trim();
+  if (!t) return [];
+  const u = t.toUpperCase();
+  if (u.endsWith("NO COMMENT")) {
+    return [{ label: "Not shown (ends with NO COMMENT)", text: raw }];
+  }
+  if (u.endsWith("SKIP")) {
+    return [{ label: "Not shown (ends with SKIP)", text: raw }];
+  }
+  if (u.endsWith("PLEASE FIX")) {
+    const obs = t.slice(0, -"PLEASE FIX".length).trim();
+    if (!obs) {
+      return [{ label: "Not shown (empty observation before PLEASE FIX)", text: raw }];
+    }
+  }
+  return [];
+}
+
+/**
  * @param {Record<string, unknown>} feedback
  * @param {Record<string, unknown>} overrides
  * @param {string} key
