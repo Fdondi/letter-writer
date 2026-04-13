@@ -612,8 +612,9 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
         from google.cloud import bigquery
         
         # Query for phase breakdown
+        # letter_count = number of extract rows = one per document
         phase_query = f"""
-        SELECT 
+        SELECT
             phase,
             SUM(cost) as total_cost,
             SUM(request_count) as total_requests,
@@ -624,39 +625,66 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
           AND timestamp >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL @months_back MONTH))
         GROUP BY phase
         """
-        
+
+        letter_count_query = f"""
+        SELECT COUNT(*) as letter_count
+        FROM `{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}`
+        WHERE user_id = @user_id
+          AND phase = 'extract'
+          AND timestamp >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL @months_back MONTH))
+        """
+
         # Query for vendor breakdown
+        # letter_count = number of refine rows for that vendor = proxy for documents processed by it
         vendor_query = f"""
-        SELECT 
+        SELECT
             vendor,
             SUM(cost) as total_cost,
             SUM(request_count) as total_requests,
             SUM(COALESCE(input_tokens, 0)) as input_tokens,
-            SUM(COALESCE(output_tokens, 0)) as output_tokens
+            SUM(COALESCE(output_tokens, 0)) as output_tokens,
+            COUNTIF(phase = 'refine') as letter_count
         FROM `{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}`
         WHERE user_id = @user_id
           AND timestamp >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL @months_back MONTH))
         GROUP BY vendor
         """
-        
+
+        # Query for vendor × phase matrix
+        vendor_phase_query = f"""
+        SELECT
+            vendor,
+            phase,
+            SUM(cost) as total_cost
+        FROM `{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}`
+        WHERE user_id = @user_id
+          AND timestamp >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL @months_back MONTH))
+        GROUP BY vendor, phase
+        """
+
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("user_id", "STRING", user_id),
                 bigquery.ScalarQueryParameter("months_back", "INT64", months_back),
             ]
         )
-        
-        # Run both queries
+
+        # Run all queries
         phase_results = client.query(phase_query, job_config=job_config).result()
+        letter_count_results = client.query(letter_count_query, job_config=job_config).result()
         vendor_results = client.query(vendor_query, job_config=job_config).result()
-        
+        vendor_phase_results = client.query(vendor_phase_query, job_config=job_config).result()
+
+        letter_count = int(next(iter(letter_count_results)).letter_count or 0)
+
         total_cost = 0.0
         total_requests = 0
         total_input_tokens = 0
         total_output_tokens = 0
         by_phase = {}
         by_vendor = {}
-        
+        by_vendor_phase: Dict[str, Dict[str, float]] = {}  # {vendor: {phase: cost}}
+
         for row in phase_results:
             phase_cost = float(row.total_cost or 0)
             total_cost += phase_cost
@@ -667,17 +695,26 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
                 "total_cost": phase_cost,
                 "request_count": int(row.total_requests or 0),
                 "input_tokens": int(row.input_tokens or 0),
-                "output_tokens": int(row.output_tokens or 0)
+                "output_tokens": int(row.output_tokens or 0),
+                "letter_count": letter_count,
+                "cost_per_letter": (phase_cost / letter_count) if letter_count else None,
             }
-        
+
         for row in vendor_results:
+            vendor_cost = float(row.total_cost or 0)
+            vendor_letters = int(row.letter_count or 0)
             by_vendor[row.vendor] = {
-                "total_cost": float(row.total_cost or 0),
+                "total_cost": vendor_cost,
                 "request_count": int(row.total_requests or 0),
                 "input_tokens": int(row.input_tokens or 0),
-                "output_tokens": int(row.output_tokens or 0)
+                "output_tokens": int(row.output_tokens or 0),
+                "letter_count": vendor_letters,
+                "cost_per_letter": (vendor_cost / vendor_letters) if vendor_letters else None,
             }
-        
+
+        for row in vendor_phase_results:
+            by_vendor_phase.setdefault(row.vendor, {})[row.phase] = float(row.total_cost or 0)
+
         logger.debug("get_user_monthly_cost: user_id=%s months_back=%s total_cost=%.4f from BigQuery", user_id, months_back, total_cost)
         return {
             "user_id": user_id,
@@ -686,8 +723,10 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
             "total_requests": total_requests,
             "total_input_tokens": total_input_tokens,
             "total_output_tokens": total_output_tokens,
+            "letter_count": letter_count,
             "by_phase": by_phase,
-            "by_vendor": by_vendor
+            "by_vendor": by_vendor,
+            "by_vendor_phase": by_vendor_phase,
         }
         
     except Exception as e:
@@ -785,32 +824,37 @@ def get_user_daily_costs(user_id: str, months_back: int = 1) -> Dict[str, Any]:
         from google.cloud import bigquery
         
         query = f"""
-        SELECT 
+        SELECT
             DATE(timestamp) as date,
             SUM(cost) as total_cost,
-            SUM(request_count) as request_count
+            SUM(request_count) as request_count,
+            COUNTIF(phase = 'extract') as letter_count
         FROM `{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}`
         WHERE user_id = @user_id
           AND timestamp >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL @months_back MONTH))
         GROUP BY DATE(timestamp)
         ORDER BY date DESC
         """
-        
+
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("user_id", "STRING", user_id),
                 bigquery.ScalarQueryParameter("months_back", "INT64", months_back),
             ]
         )
-        
+
         results = client.query(query, job_config=job_config).result()
-        
+
         days = []
         for row in results:
+            letter_count = int(row.letter_count or 0)
+            day_cost = float(row.total_cost or 0)
             days.append({
                 "date": row.date.isoformat() if row.date else None,
-                "total_cost": float(row.total_cost or 0),
+                "total_cost": day_cost,
                 "request_count": int(row.request_count or 0),
+                "letter_count": letter_count,
+                "cost_per_letter": (day_cost / letter_count) if letter_count else None,
             })
         
         return {

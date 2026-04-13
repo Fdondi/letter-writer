@@ -27,7 +27,7 @@ class ModelSize(Enum):
 
 
 class BaseClient:
-    def __init__(self):
+    def __init__(self) -> None:
         self.total_cost = 0.0
         self.total_input_tokens = 0
         self.total_output_tokens = 0

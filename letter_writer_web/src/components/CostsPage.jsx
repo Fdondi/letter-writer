@@ -79,6 +79,13 @@ export default function CostsPage() {
     return `$${cost.toFixed(2)}`;
   };
 
+  const formatCostPerLetter = (cpl) => {
+    if (cpl == null) return null;
+    if (cpl === 0) return "$0.000";
+    if (cpl < 0.001) return "< $0.001";
+    return `$${cpl.toFixed(3)}/letter`;
+  };
+
   const formatTokens = (tokens) => {
     if (!tokens) return "0";
     if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
@@ -117,12 +124,13 @@ export default function CostsPage() {
   // Phase name formatting
   const formatPhaseName = (phase) => {
     const names = {
+      extract: "Extraction",
       background: "Research",
       draft: "Draft",
-      feedback: "Feedback",
       refine: "Refine",
-      translate: "Translation",
-      extract: "Extraction"
+      feedback: "Feedback",
+      feedback_review: "FB Review",
+      vote: "Vote",
     };
     return names[phase] || phase;
   };
@@ -168,6 +176,18 @@ export default function CostsPage() {
   // Use new structure: by_phase and by_vendor directly from API
   const byPhase = userCosts?.by_phase || {};
   const byVendor = userCosts?.by_vendor || {};
+  const byVendorPhase = userCosts?.by_vendor_phase || {};
+
+  // Ordered phase columns (only those present in the data), translation is separate
+  const PHASE_ORDER = ["background", "draft", "refine", "feedback", "feedback_review", "vote"];
+  const activePhases = PHASE_ORDER.filter((p) =>
+    Object.entries(byVendorPhase).some(([v, vp]) => v !== "google_translate" && p in vp)
+  );
+  const activeVendors = Object.keys(byVendorPhase)
+    .filter((v) => v !== "google_translate")
+    .sort((a, b) => (byVendor[b]?.total_cost || 0) - (byVendor[a]?.total_cost || 0));
+
+  const translationData = byVendor["google_translate"] || null;
 
   return (
     <div style={{ padding: 20, maxWidth: 900, margin: "0 auto" }}>
@@ -375,6 +395,11 @@ export default function CostsPage() {
                           {formatTokens(data.input_tokens)} in / {formatTokens(data.output_tokens)} out
                         </div>
                       )}
+                      {formatCostPerLetter(data.cost_per_letter) && (
+                        <div style={{ fontSize: 11, color: "var(--secondary-text-color)" }}>
+                          {formatCostPerLetter(data.cost_per_letter)}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -396,6 +421,7 @@ export default function CostsPage() {
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {Object.entries(byVendor)
+                .filter(([vendor]) => vendor !== "google_translate")
                 .sort((a, b) => b[1].total_cost - a[1].total_cost)
                 .map(([vendor, data]) => (
                   <div 
@@ -422,6 +448,12 @@ export default function CostsPage() {
                           {formatTokens(data.input_tokens)} in / {formatTokens(data.output_tokens)} out
                         </div>
                       )}
+                      {formatCostPerLetter(data.cost_per_letter) && (
+                        <div style={{ fontSize: 11, color: "var(--secondary-text-color)" }}>
+                          {formatCostPerLetter(data.cost_per_letter)}
+                          {data.letter_count > 0 && ` (${data.letter_count} letters)`}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -429,6 +461,101 @@ export default function CostsPage() {
           )}
         </div>
       </div>
+
+      {/* Vendor × Phase matrix */}
+      {activeVendors.length > 0 && activePhases.length > 0 && (
+        <div style={{
+          marginTop: 20,
+          padding: 16,
+          backgroundColor: "var(--card-bg)",
+          border: "1px solid var(--border-color)",
+          borderRadius: 8,
+          overflowX: "auto",
+        }}>
+          <h3 style={{ margin: "0 0 16px 0", fontSize: 16 }}>Cost by Vendor × Phase</h3>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", padding: "6px 10px", borderBottom: "1px solid var(--border-color)", color: "var(--secondary-text-color)", fontWeight: 500 }}>
+                  Vendor
+                </th>
+                {activePhases.map((phase) => (
+                  <th key={phase} style={{ textAlign: "right", padding: "6px 10px", borderBottom: "1px solid var(--border-color)", color: "var(--secondary-text-color)", fontWeight: 500 }}>
+                    {formatPhaseName(phase)}
+                  </th>
+                ))}
+                <th style={{ textAlign: "right", padding: "6px 10px", borderBottom: "1px solid var(--border-color)", color: "var(--secondary-text-color)", fontWeight: 500 }}>
+                  Total
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {activeVendors.map((vendor) => {
+                const phases = byVendorPhase[vendor] || {};
+                const vendorTotal = byVendor[vendor]?.total_cost || 0;
+                return (
+                  <tr key={vendor} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                    <td style={{ padding: "6px 10px", fontWeight: 500 }}>
+                      {formatVendorName(vendor)}
+                    </td>
+                    {activePhases.map((phase) => {
+                      const cost = phases[phase];
+                      const pct = vendorTotal > 0 && cost ? (cost / vendorTotal) * 100 : 0;
+                      return (
+                        <td key={phase} style={{ textAlign: "right", padding: "6px 10px", color: cost ? "var(--text-color)" : "var(--secondary-text-color)" }}>
+                          {cost ? (
+                            <>
+                              {formatCost(cost)}
+                              <span style={{ fontSize: 11, color: "var(--secondary-text-color)", marginLeft: 4 }}>
+                                {pct.toFixed(0)}%
+                              </span>
+                            </>
+                          ) : "—"}
+                        </td>
+                      );
+                    })}
+                    <td style={{ textAlign: "right", padding: "6px 10px", fontWeight: 600 }}>
+                      {formatCost(vendorTotal)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Translation (separate vendor) */}
+      {translationData && (
+        <div style={{
+          marginTop: 20,
+          padding: 16,
+          backgroundColor: "var(--card-bg)",
+          border: "1px solid var(--border-color)",
+          borderRadius: 8,
+        }}>
+          <h3 style={{ margin: "0 0 12px 0", fontSize: 16 }}>🌐 Translation (Google Translate)</h3>
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", fontSize: 14 }}>
+            <div>
+              <span style={{ color: "var(--secondary-text-color)" }}>Total cost </span>
+              <strong>{formatCost(translationData.total_cost)}</strong>
+            </div>
+            <div>
+              <span style={{ color: "var(--secondary-text-color)" }}>Requests </span>
+              <strong>{translationData.request_count.toLocaleString()}</strong>
+            </div>
+            {translationData.cost_per_letter != null && (
+              <div>
+                <span style={{ color: "var(--secondary-text-color)" }}>Per letter </span>
+                <strong>{formatCostPerLetter(translationData.cost_per_letter)}</strong>
+                <span style={{ color: "var(--secondary-text-color)", marginLeft: 4 }}>
+                  ({translationData.letter_count} letters)
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* By Day */}
       <div style={{
@@ -469,6 +596,12 @@ export default function CostsPage() {
                   <div style={{ fontSize: 11, color: "var(--secondary-text-color)" }}>
                     {day.request_count} requests
                   </div>
+                  {day.letter_count > 0 && (
+                    <div style={{ fontSize: 11, color: "var(--secondary-text-color)" }}>
+                      {day.letter_count} letter{day.letter_count !== 1 ? "s" : ""}
+                      {day.cost_per_letter != null && ` · ${formatCostPerLetter(day.cost_per_letter)}`}
+                    </div>
+                  )}
                 </div>
               ))}
           </div>

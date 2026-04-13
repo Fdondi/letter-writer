@@ -24,7 +24,7 @@ class MistralClient(BaseClient):
     SDK via threading.local(). Agent ids and cost totals remain on this wrapper.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         api_key = os.getenv("MISTRAL_API_KEY")
         if not api_key:
