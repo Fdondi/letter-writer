@@ -34,6 +34,16 @@ class DeepSeekClient(BaseClient):
             model = model_size
         else:
             model = self.get_model_for_size(model_size)
+        def _return_with_audit(text: str) -> str:
+            self._record_llm_io(
+                model=model,
+                system=system,
+                user_messages=user_messages,
+                search=search,
+                response_format=response_format,
+                output_text=text,
+            )
+            return text
         if search:
             typer.echo(f"[WARNING] Search functionality not supported for DeepSeek models, proceeding without search")
         typer.echo(f"[INFO] using DeepSeek model {model}")
@@ -45,7 +55,18 @@ class DeepSeekClient(BaseClient):
         if response_format:
             # DeepSeek rejects OpenAI-style json_schema; JSON mode is json_object only.
             request_kwargs["response_format"] = {"type": "json_object"}
-        response = self.client.chat.completions.create(**request_kwargs)
+        try:
+            response = self.client.chat.completions.create(**request_kwargs)
+        except Exception as e:
+            self._record_llm_io(
+                model=model,
+                system=system,
+                user_messages=user_messages,
+                search=search,
+                response_format=response_format,
+                error=str(e),
+            )
+            raise
         
         if response.usage:
             self.track_cost(
@@ -55,4 +76,4 @@ class DeepSeekClient(BaseClient):
                 search_queries=0 # No search support
             )
 
-        return response.choices[0].message.content.strip()
+        return _return_with_audit(response.choices[0].message.content.strip())

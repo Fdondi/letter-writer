@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -172,6 +173,42 @@ class BaseClient:
         self.total_output_tokens += output_tokens
         self.total_cached_tokens += cached_tokens
         self.total_search_queries += search_queries
+
+    def _record_llm_io(
+        self,
+        *,
+        model: str,
+        system: str,
+        user_messages: List[str],
+        search: bool,
+        response_format: Optional[Dict[str, Any]],
+        output_text: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """Best-effort request-scoped audit logging for all LLM calls."""
+        try:
+            from ..session_store import append_application_event
+
+            event: Dict[str, Any] = {
+                "type": "llm_io",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "vendor": self.__class__.__name__.replace("Client", "").lower(),
+                "model": model,
+                "search": bool(search),
+                "input": {
+                    "system": system,
+                    "user_messages": list(user_messages or []),
+                    "response_format": response_format,
+                },
+            }
+            if error is not None:
+                event["output"] = {"error": str(error)}
+            else:
+                event["output"] = {"text": output_text or ""}
+            append_application_event(event)
+        except Exception:
+            # Audit logging must never break generation paths.
+            logger.debug("failed to append llm_io audit event", exc_info=True)
 
     def call(
         self,

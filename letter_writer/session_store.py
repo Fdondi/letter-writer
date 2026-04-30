@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Dict, Optional, TYPE_CHECKING, Any, List
 from threading import local, Lock
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Thread-local storage for Request (FastAPI)
 _thread_local = local()
@@ -9,6 +9,8 @@ _thread_local = local()
 # In-memory cache (kept for compatibility with existing code structure, though session middleware handles caching)
 SESSION_CACHE: Dict[str, Any] = {}
 CACHE_LOCK = Lock()
+APPLICATION_EVENT_LOG_KEY = "application_event_log"
+PENDING_APPLICATION_EVENT_LOG_KEY = "pending_application_event_log"
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -29,6 +31,62 @@ def _get_session() -> Optional[Session]:
     if request and hasattr(request.state, 'session'):
         return request.state.session
     return None
+
+
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc).isoformat()
+        return value.astimezone(timezone.utc).isoformat()
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    return str(value)
+
+
+def append_application_event(event: Dict[str, Any]) -> None:
+    """Append event to request session cache and pending-save queue."""
+    session = _get_session()
+    if not session:
+        return
+    safe_event = _json_safe(event)
+    if isinstance(safe_event, dict) and "timestamp" not in safe_event:
+        safe_event["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+    current_full = session.get(APPLICATION_EVENT_LOG_KEY, [])
+    full_list = list(current_full) if isinstance(current_full, list) else []
+    full_list.append(safe_event)
+    session[APPLICATION_EVENT_LOG_KEY] = full_list
+
+    current_pending = session.get(PENDING_APPLICATION_EVENT_LOG_KEY, [])
+    pending_list = list(current_pending) if isinstance(current_pending, list) else []
+    pending_list.append(safe_event)
+    session[PENDING_APPLICATION_EVENT_LOG_KEY] = pending_list
+
+
+def consume_pending_application_events() -> List[Dict[str, Any]]:
+    """Return and clear events waiting to be flushed to Firestore on save."""
+    session = _get_session()
+    if not session:
+        return []
+    pending = session.get(PENDING_APPLICATION_EVENT_LOG_KEY, [])
+    pending_list: List[Dict[str, Any]] = list(pending) if isinstance(pending, list) else []
+    session[PENDING_APPLICATION_EVENT_LOG_KEY] = []
+    return pending_list
+
+
+def log_user_input_event(source: str, payload: Any) -> None:
+    append_application_event(
+        {
+            "type": "user_input",
+            "source": source,
+            "payload": _json_safe(payload),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    )
 
 def check_session_exists(session_id: str) -> bool:
     """Check if a session exists."""

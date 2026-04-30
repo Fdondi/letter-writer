@@ -49,9 +49,20 @@ class OpenAIClient(BaseClient):
             request_kwargs["response_format"] = response_format
         if reasoning_effort and reasoning_effort != "none":
             request_kwargs["reasoning_effort"] = reasoning_effort
-        response = self.client.chat.completions.create(
-            **request_kwargs,
-        )
+        try:
+            response = self.client.chat.completions.create(
+                **request_kwargs,
+            )
+        except Exception as e:
+            self._record_llm_io(
+                model=model,
+                system=system,
+                user_messages=user_messages,
+                search=search,
+                response_format=response_format,
+                error=str(e),
+            )
+            raise
         
         if response.usage:
             details = getattr(response.usage, "prompt_tokens_details", None)
@@ -66,4 +77,13 @@ class OpenAIClient(BaseClient):
             if cached:
                 typer.echo(f"[INFO] prompt cache hit: {cached} tokens")
 
-        return response.choices[0].message.content.strip()
+        output = response.choices[0].message.content.strip()
+        self._record_llm_io(
+            model=model,
+            system=system,
+            user_messages=user_messages,
+            search=search,
+            response_format=response_format,
+            output_text=output,
+        )
+        return output

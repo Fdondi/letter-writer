@@ -75,6 +75,16 @@ class LocalClient(BaseClient):
         messages = self._format_messages(system, user_messages)
         # LM Studio uses whatever model is loaded; the model param is ignored.
         model = "local-model"
+        def _return_with_audit(text: str) -> str:
+            self._record_llm_io(
+                model=model,
+                system=system,
+                user_messages=user_messages,
+                search=search,
+                response_format=response_format,
+                output_text=text,
+            )
+            return text
         if search:
             typer.echo("[WARNING] search not supported for local models, ignoring")
         typer.echo(f"[INFO] using local model (LM Studio) at {self._base_url}")
@@ -85,7 +95,18 @@ class LocalClient(BaseClient):
         if response_format:
             request_kwargs["response_format"] = response_format
         t0 = time.perf_counter()
-        response = self.client.chat.completions.create(**request_kwargs)
+        try:
+            response = self.client.chat.completions.create(**request_kwargs)
+        except Exception as e:
+            self._record_llm_io(
+                model=model,
+                system=system,
+                user_messages=user_messages,
+                search=search,
+                response_format=response_format,
+                error=str(e),
+            )
+            raise
         elapsed = time.perf_counter() - t0
 
         energy_cost = compute_local_inference_cost_usd(elapsed)
@@ -108,4 +129,4 @@ class LocalClient(BaseClient):
                 elapsed,
             )
 
-        return response.choices[0].message.content.strip()
+        return _return_with_audit(response.choices[0].message.content.strip())

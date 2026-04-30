@@ -33,6 +33,16 @@ class GrokClient(BaseClient):
             model = model_size
         else:
             model = self.get_model_for_size(model_size)
+        def _return_with_audit(text: str) -> str:
+            self._record_llm_io(
+                model=model,
+                system=system,
+                user_messages=user_messages,
+                search=search,
+                response_format=response_format,
+                output_text=text,
+            )
+            return text
         typer.echo(f"[INFO] using Grok model {model}")
         
         # Use Agent Tools API for search (replaces deprecated SearchParameters)
@@ -46,7 +56,18 @@ class GrokClient(BaseClient):
         for message in user_messages:
             chat.append(xai_sdk.chat.user(message))
 
-        response = chat.sample()
+        try:
+            response = chat.sample()
+        except Exception as e:
+            self._record_llm_io(
+                model=model,
+                system=system,
+                user_messages=user_messages,
+                search=search,
+                response_format=response_format,
+                error=str(e),
+            )
+            raise
         
         # Track cost using usage info from the response
         if hasattr(response, 'usage') and response.usage:
@@ -58,4 +79,4 @@ class GrokClient(BaseClient):
                 search_queries = response.server_side_tool_usage.get('SERVER_SIDE_TOOL_WEB_SEARCH', 0)
             self.track_cost(model, input_tokens, output_tokens, search_queries=search_queries)
             
-        return response.content.strip()
+        return _return_with_audit(response.content.strip())

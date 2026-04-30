@@ -103,6 +103,16 @@ class ClaudeClient(BaseClient):
             model = self.get_model_for_size(model_size)
             thinking_cfg = self.get_thinking_config(model_size)
         thinking_enabled = bool(thinking_cfg.get("thinking", False))
+        def _return_with_audit(text: str) -> str:
+            self._record_llm_io(
+                model=model,
+                system=system,
+                user_messages=user_messages,
+                search=search,
+                response_format=response_format,
+                output_text=text,
+            )
+            return text
         typer.echo(
             f"[INFO] using Anthropic model {model}"
             + (" with thinking" if thinking_enabled else "")
@@ -136,18 +146,29 @@ class ClaudeClient(BaseClient):
         if response_format and isinstance(response_format, dict):
             schema = ((response_format.get("json_schema") or {}).get("schema") or {})
             tool_name = ((response_format.get("json_schema") or {}).get("name") or "phase_output")
-            response = self.client.messages.create(
-                model=model,
-                system=cached_system,
-                messages=messages,
-                tools=[{
-                    "name": tool_name,
-                    "description": "Return structured JSON response for the current phase.",
-                    "input_schema": schema,
-                }],
-                tool_choice={"type": "tool", "name": tool_name},
-                max_tokens=4000,
-            )
+            try:
+                response = self.client.messages.create(
+                    model=model,
+                    system=cached_system,
+                    messages=messages,
+                    tools=[{
+                        "name": tool_name,
+                        "description": "Return structured JSON response for the current phase.",
+                        "input_schema": schema,
+                    }],
+                    tool_choice={"type": "tool", "name": tool_name},
+                    max_tokens=4000,
+                )
+            except Exception as e:
+                self._record_llm_io(
+                    model=model,
+                    system=system,
+                    user_messages=user_messages,
+                    search=search,
+                    response_format=response_format,
+                    error=str(e),
+                )
+                raise
             if response.usage:
                 cr, cw = self._extract_cache_metrics(response.usage)
                 self.track_cost(
@@ -165,8 +186,8 @@ class ClaudeClient(BaseClient):
                     if getattr(block, "type", None) == "tool_use":
                         payload = getattr(block, "input", None)
                         if isinstance(payload, dict):
-                            return json.dumps(payload)
-            return "{}"
+                            return _return_with_audit(json.dumps(payload))
+            return _return_with_audit("{}")
         tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}] if search else []
         # Use 2048 for search, 8000 for everything else (letters, comments, etc.)
         max_tokens = 2048 if search else 8000
@@ -191,7 +212,18 @@ class ClaudeClient(BaseClient):
         if thinking_enabled and not search:
             # budget_tokens must be strictly less than max_tokens; use half as a safe ceiling
             create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": max_tokens // 2}
-        response = self.client.messages.create(**create_kwargs)
+        try:
+            response = self.client.messages.create(**create_kwargs)
+        except Exception as e:
+            self._record_llm_io(
+                model=model,
+                system=system,
+                user_messages=user_messages,
+                search=search,
+                response_format=response_format,
+                error=str(e),
+            )
+            raise
 
         # Track usage from first response
         if response.usage:
@@ -259,12 +291,23 @@ class ClaudeClient(BaseClient):
                     remaining_tokens = max(1, max_tokens - current_usage)
 
                     # Continue the conversation (system prompt cached from initial request)
-                    continuation_response = self.client.messages.create(
-                        model=model,
-                        system=cached_system,
-                        messages=conversation_messages,
-                        max_tokens=remaining_tokens,
-                    )
+                    try:
+                        continuation_response = self.client.messages.create(
+                            model=model,
+                            system=cached_system,
+                            messages=conversation_messages,
+                            max_tokens=remaining_tokens,
+                        )
+                    except Exception as e:
+                        self._record_llm_io(
+                            model=model,
+                            system=system,
+                            user_messages=user_messages,
+                            search=search,
+                            response_format=response_format,
+                            error=str(e),
+                        )
+                        raise
 
                     # Track usage from continuation
                     if continuation_response.usage:
@@ -309,11 +352,11 @@ class ClaudeClient(BaseClient):
                 full_text = re.sub(r'\n(?![A-Z*#\-])', ' ', full_text)
 
             typer.echo(f"[DEBUG] Anthropic response length (accumulated): {len(full_text)} characters, {len(full_text.split())} words")
-            return full_text
+            return _return_with_audit(full_text)
 
         # Handle different response content types if we didn't accumulate text
         if not response.content:
-            return ""
+            return _return_with_audit("")
 
         # Collect all text from all content blocks
         text_parts = []
@@ -350,8 +393,8 @@ class ClaudeClient(BaseClient):
                 full_text = re.sub(r'\n(?![A-Z*#\-])', ' ', full_text)
 
             typer.echo(f"[DEBUG] Anthropic response length: {len(full_text)} characters, {len(full_text.split())} words")
-            return full_text
+            return _return_with_audit(full_text)
         else:
             # No text found - might be tool use only
             typer.echo("[WARNING] No text content found in Anthropic response")
-            return "Response contains tool usage but no text content found."
+            return _return_with_audit("Response contains tool usage but no text content found.")

@@ -50,7 +50,7 @@ from letter_writer.phased_service import (
     _update_cost,
 )
 from letter_writer.client import get_client
-from letter_writer.session_store import set_current_request, save_vendor_data, load_vendor_data
+from letter_writer.session_store import set_current_request, save_vendor_data, load_vendor_data, log_user_input_event
 from letter_writer.clients.base import ModelVendor
 from letter_writer.generation import MissingCVError
 from letter_writer.session_store import load_session_common_data, check_session_exists
@@ -185,6 +185,8 @@ class AgenticVoteRequest(BaseModel):
 
 @router.post("/init/")
 def init_session(request: Request, data: InitSessionRequest, session: Session = Depends(get_session)):
+    set_current_request(request)
+    log_user_input_event("phases.init", data.dict(exclude_none=True))
     # Check if recovery
     is_recovery = bool(data.job_text or data.metadata or data.vendors)
     session_exists = session.session_key is not None and bool(session)
@@ -239,6 +241,8 @@ def init_session(request: Request, data: InitSessionRequest, session: Session = 
 
 @router.post("/restore/")
 def restore_session(request: Request, data: InitSessionRequest, session: Session = Depends(get_session)):
+    set_current_request(request)
+    log_user_input_event("phases.restore", data.dict(exclude_none=True))
     if data.job_text:
         session['job_text'] = data.job_text
     if data.metadata:
@@ -291,6 +295,8 @@ def clear_session(session: Session = Depends(get_session)):
 
 @router.post("/session/")
 def update_session_common_data(request: Request, data: Dict[str, Any], session: Session = Depends(get_session)):
+    set_current_request(request)
+    log_user_input_event("phases.session_update", data)
     # Update common data like job_text, metadata fields
     if "job_text" in data:
         session['job_text'] = data['job_text']
@@ -316,6 +322,7 @@ def update_session_common_data(request: Request, data: Dict[str, Any], session: 
 def background_phase(vendor: str, data: BackgroundPhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     # Set current request for session_store compatibility (if it uses thread locals)
     set_current_request(request)
+    log_user_input_event("phases.background", {"vendor": vendor, "payload": data.dict(exclude_none=True)})
     
     user = session.get('user')
     if not user:
@@ -377,6 +384,7 @@ def background_phase(vendor: str, data: BackgroundPhaseRequest, request: Request
 @router.post("/draft/{vendor}/")
 def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
+    log_user_input_event("phases.draft", {"vendor": vendor, "payload": data.dict(exclude_none=True)})
     user = session.get('user')
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -406,6 +414,7 @@ def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, session:
 @router.post("/refine/{vendor}/")
 def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
+    log_user_input_event("phases.refine", {"vendor": vendor, "payload": data.dict(exclude_none=True)})
     user = session.get('user')
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -442,6 +451,10 @@ def feedback_request_context(
 ):
     """LLM pass: same checker context as draft feedback, to suggest context_field lines the first pass missed."""
     set_current_request(request)
+    log_user_input_event(
+        "phases.feedback_request_context",
+        {"vendor": vendor, "payload": data.dict(exclude_none=True)},
+    )
     user = session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -610,6 +623,7 @@ def feedback_request_context(
 @router.post("/agentic/draft/")
 def agentic_draft(data: AgenticDraftRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
+    log_user_input_event("phases.agentic_draft", data.dict(exclude_none=True))
     user = session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -688,6 +702,7 @@ def agentic_state(session: Session = Depends(get_session)):
 @router.post("/agentic/feedback/start/")
 def agentic_feedback_start(data: AgenticRunRoundRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
+    log_user_input_event("phases.agentic_feedback_start", data.dict(exclude_none=True))
     user = session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1386,6 +1401,7 @@ def agentic_feedback_poll(
 @router.post("/agentic/run-round/")
 def agentic_run_round(data: AgenticRunRoundRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
+    log_user_input_event("phases.agentic_run_round", data.dict(exclude_none=True))
     user = session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1426,6 +1442,7 @@ def agentic_feedback_suspend(
     session: Session = Depends(get_session),
 ):
     set_current_request(request)
+    log_user_input_event("phases.agentic_feedback_suspend", data.dict(exclude_none=True))
     user = session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1463,6 +1480,7 @@ def agentic_feedback_resume(
     session: Session = Depends(get_session),
 ):
     set_current_request(request)
+    log_user_input_event("phases.agentic_feedback_resume", data.dict(exclude_none=True))
     user = session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1523,6 +1541,7 @@ def agentic_rounds_add(
     session: Session = Depends(get_session),
 ):
     set_current_request(request)
+    log_user_input_event("phases.agentic_rounds_add", data.dict(exclude_none=True))
     user = session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1558,6 +1577,7 @@ def agentic_rounds_add(
 @router.post("/agentic/vote/")
 def agentic_vote(data: AgenticVoteRequest, request: Request, session: Session = Depends(get_session)):
     set_current_request(request)
+    log_user_input_event("phases.agentic_vote", data.dict(exclude_none=True))
     user = session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1585,6 +1605,7 @@ def agentic_vote(data: AgenticVoteRequest, request: Request, session: Session = 
 @router.post("/agentic/refine/")
 def agentic_refine(request: Request, session: Session = Depends(get_session), body: Optional[AgenticRefineRequest] = Body(None), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
+    log_user_input_event("phases.agentic_refine", body.dict(exclude_none=True) if body else {})
     user = session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")

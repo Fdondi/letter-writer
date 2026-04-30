@@ -339,6 +339,16 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
         "updated_at": updated_at_dt,
         "created_at": created_at_dt,
     }
+
+    if "application_event_log" in data:
+        incoming_log = data.get("application_event_log")
+        if isinstance(incoming_log, list):
+            if existing_data and isinstance(existing_data.get("application_event_log"), list):
+                base["application_event_log"] = list(existing_data.get("application_event_log") or []) + list(incoming_log)
+            else:
+                base["application_event_log"] = list(incoming_log)
+        elif incoming_log is not None:
+            raise ValueError("application_event_log must be a list when provided")
     
     # Store vector if provided (for vector search)
     if "vector" in data:

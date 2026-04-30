@@ -10,6 +10,11 @@ from letter_writer.personal_data_sections import (
     merge_manual_agent_feedback_context_with_feedback_rows,
     merge_manual_extra_with_feedback_rows,
 )
+from letter_writer.session_store import (
+    set_current_request,
+    consume_pending_application_events,
+    log_user_input_event,
+)
 from letter_writer.firestore_store import (
     get_collection,
     list_documents,
@@ -116,6 +121,7 @@ async def list_docs(request: Request, session: Session = Depends(get_session)):
 
 @router.post("/")
 async def create_doc(request: Request, data: DocumentRequest, session: Session = Depends(get_session)):
+    set_current_request(request)
     user = session.get('user')
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -128,6 +134,10 @@ async def create_doc(request: Request, data: DocumentRequest, session: Session =
     vector = embed(data.job_text, openai_client)
     
     doc_data = data.dict()
+    log_user_input_event("documents.create", doc_data)
+    pending_events = consume_pending_application_events()
+    if pending_events:
+        doc_data["application_event_log"] = pending_events
     doc_data["vector"] = vector
     
     try:
@@ -184,13 +194,18 @@ async def get_doc(document_id: str, session: Session = Depends(get_session)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/{document_id}/")
-async def update_doc(document_id: str, data: DocumentRequest, session: Session = Depends(get_session)):
+async def update_doc(document_id: str, data: DocumentRequest, request: Request, session: Session = Depends(get_session)):
+    set_current_request(request)
     user = session.get('user')
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
     
     collection = get_collection()
     doc_data = data.dict(exclude_unset=True)
+    log_user_input_event("documents.update", {"document_id": document_id, "payload": doc_data})
+    pending_events = consume_pending_application_events()
+    if pending_events:
+        doc_data["application_event_log"] = pending_events
     doc_data["id"] = document_id
     
     # Keep vector server-owned:

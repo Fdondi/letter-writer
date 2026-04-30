@@ -179,6 +179,16 @@ class MistralClient(BaseClient):
             model = model_size
         else:
             model = self.get_model_for_size(model_size)
+        def _return_with_audit(text: str) -> str:
+            self._record_llm_io(
+                model=model,
+                system=system,
+                user_messages=user_messages,
+                search=search,
+                response_format=response_format,
+                output_text=text,
+            )
+            return text
 
         typer.echo(
             f"[INFO] using Mistral model {model}" + (" with search" if search else "")
@@ -187,7 +197,19 @@ class MistralClient(BaseClient):
         # JSON / structured output: use chat.complete (Agents API ignores response_format).
         if response_format and not search:
             typer.echo("[INFO] Mistral: using chat.complete with JSON object mode (not Agents API)")
-            return self._chat_complete(model, system, user_messages, response_format=response_format, search=False)
+            try:
+                out = self._chat_complete(model, system, user_messages, response_format=response_format, search=False)
+            except Exception as e:
+                self._record_llm_io(
+                    model=model,
+                    system=system,
+                    user_messages=user_messages,
+                    search=search,
+                    response_format=response_format,
+                    error=str(e),
+                )
+                raise
+            return _return_with_audit(out)
         if response_format and search:
             typer.echo(
                 "[WARNING] Mistral: response_format ignored when search=True (Agents API path)"
@@ -202,10 +224,21 @@ class MistralClient(BaseClient):
         user_input = "\n\n".join(user_messages)
 
         # Start conversation with agent
-        response = self._mistral().beta.conversations.start(
-            agent_id=agent_id,
-            inputs=user_input
-        )
+        try:
+            response = self._mistral().beta.conversations.start(
+                agent_id=agent_id,
+                inputs=user_input
+            )
+        except Exception as e:
+            self._record_llm_io(
+                model=model,
+                system=system,
+                user_messages=user_messages,
+                search=search,
+                response_format=response_format,
+                error=str(e),
+            )
+            raise
 
         # Extract the assistant's reply from the response
         # Response has 'outputs' array with entries of different types
@@ -223,7 +256,7 @@ class MistralClient(BaseClient):
 
         if assistant_reply is None:
             typer.echo("[WARNING] No message.output entry found in agent response")
-            return "No response from agent."
+            return _return_with_audit("No response from agent.")
 
         # Track cost if usage info is available
         # Note: agents API may not provide detailed usage in the same format
@@ -248,4 +281,4 @@ class MistralClient(BaseClient):
 
         # Extract text from chunks (handles both string and list of chunk objects)
         extracted_text = self._extract_text_from_chunks(assistant_reply)
-        return extracted_text.strip()
+        return _return_with_audit(extracted_text.strip())

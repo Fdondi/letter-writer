@@ -155,6 +155,16 @@ class GeminiClient(BaseClient):
         else:
             model_name = self.get_model_for_size(model_size)
             thinking_cfg = self.get_thinking_config(model_size)
+        def _return_with_audit(text: str) -> str:
+            self._record_llm_io(
+                model=model_name,
+                system=system,
+                user_messages=user_messages,
+                search=search,
+                response_format=response_format,
+                output_text=text,
+            )
+            return text
         thinking_level = thinking_cfg.get("thinking_level")  # None | "Low" | "Medium" | "High"
         typer.echo(
             f"[INFO] using Gemini model {model_name}"
@@ -197,6 +207,14 @@ class GeminiClient(BaseClient):
                 contents=validated_messages,
             )
         except Exception as exc:
+            self._record_llm_io(
+                model=model_name,
+                system=system,
+                user_messages=user_messages,
+                search=search,
+                response_format=response_format,
+                error=str(exc),
+            )
             raise RuntimeError(f"Gemini generate_content failed: {exc}") from exc
 
         # Track cost from usage metadata
@@ -267,4 +285,4 @@ class GeminiClient(BaseClient):
                         error_msg += f" (safety_ratings: {candidate.safety_ratings})"
                 raise RuntimeError(error_msg)
         
-        return response_text
+        return _return_with_audit(response_text)
