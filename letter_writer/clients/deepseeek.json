@@ -3,20 +3,28 @@
     "search": 0.0
   },
   "sizes": {
-    "tiny": "deepseek-chat",
-    "base": "deepseek-chat",
-    "medium": "deepseek-reasoner",
-    "large": "deepseek-reasoner",
-    "xlarge": "deepseek-reasoner"
+    "tiny": "deepseek-v4-flash",
+    "base": "deepseek-v4-pro",
+    "medium": "deepseek-v4-pro",
+    "large": "deepseek-v4-pro",
+    "xlarge": "deepseek-v4-pro"
   },
   "models": {
     "deepseek-chat": {
-      "input": 0.28,
-      "output": 0.42
+      "input": 0.14,
+      "output": 0.28
     },
     "deepseek-reasoner": {
-      "input": 0.28,
-      "output": 0.42
+      "input": 0.14,
+      "output": 0.28
+    },
+    "deepseek-v4-flash": {
+      "input": 0.14,
+      "output": 0.28
+    },
+    "deepseek-v4-pro": {
+      "input": 0.435,
+      "output": 0.87
     }
   }
 }
