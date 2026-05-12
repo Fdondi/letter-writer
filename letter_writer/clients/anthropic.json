@@ -3,18 +3,14 @@
     "search": 10.00
   },
   "sizes": {
-    "tiny":   { "model": "claude-3-haiku-20240307",  "thinking": false },
-    "base":   { "model": "claude-3-haiku-20240307",  "thinking": false },
-    "medium": { "model": "claude-haiku-4-5", "thinking": false },
+    "tiny":   { "model": "claude-haiku-4-5",  "thinking": false },
+    "base":   { "model": "claude-haiku-4-5",  "thinking": true },
+    "medium": { "model": "claude-haiku-4-5", "thinking": true },
     "large":  { "model": "claude-sonnet-4-6", "thinking": true },
-    "xlarge": { "model": "claude-opus-4-6",   "thinking": true }
+    "xlarge": { "model": "claude-opus-4-7",   "thinking": true }
   },
   "models":
   {
-    "claude-3-haiku-20240307": {
-      "input": 0.25,
-      "output": 1.25
-    },
     "claude-haiku-3-5-20241022": {
       "input": 0.8,
       "output": 4.00
@@ -36,6 +32,10 @@
       "output": 25.00
     },
     "claude-opus-4-6": {
+      "input": 5.00,
+      "output": 25.00
+    },
+    "claude-opus-4-7": {
       "input": 5.00,
       "output": 25.00
     }
