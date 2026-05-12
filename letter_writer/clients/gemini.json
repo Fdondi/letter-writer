@@ -5,7 +5,7 @@
   },
   "sizes": {
     "tiny":   { "model": "gemini-2.5-flash-lite", "thinking_level": null },
-    "base":   { "model": "gemini-2.5-flash",      "thinking_level": "Low" },
+    "base":   { "model": "gemini-3.1-flash-lite",  "thinking_level": "Low" },
     "medium": { "model": "gemini-3-flash-preview", "thinking_level": "Low" },
     "large":  { "model": "gemini-2.5-pro",         "thinking_level": "Medium" },
     "xlarge": { "model": "gemini-3-pro-preview",   "thinking_level": "High" }
@@ -31,6 +31,11 @@
         "high": 15.00
       },
       "search": 35.00
+    },
+    "gemini-3.1-flash-lite": {
+      "input": 0.25,
+      "output": 1.50,
+      "search": 14.00
     },
     "gemini-3-flash-preview": {
       "input": 0.50,
