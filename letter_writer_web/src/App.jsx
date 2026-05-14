@@ -41,7 +41,7 @@ function generateColors(vendors) {
   }, {});
 }
 
-const AGENTIC_TOPICS = ["instruction", "company_fit", "precision", "user_fit", "human", "accuracy"];
+const AGENTIC_TOPICS = ["instruction", "company_fit", "goal_fit", "precision", "user_fit", "human", "accuracy"];
 
 export default function App({ flow = "vendor" }) {
   const navigate = useNavigate();
@@ -64,6 +64,7 @@ export default function App({ flow = "vendor" }) {
   const [salary, setSalary] = useState("");
   const [requirements, setRequirements] = useState([]);
   const [competences, setCompetences] = useState({}); // { skill: { need, level } } or legacy
+  const [hireProblem, setHireProblem] = useState("");
   const [competenceOverrides, setCompetenceOverrides] = useState({}); // { skill: { presence?, importance? } } user-edited ratings
   const [competenceScaleConfig, setCompetenceScaleConfig] = useState(getScaleConfig);
   const competencesScrollRef = useRef(null);
@@ -91,6 +92,7 @@ export default function App({ flow = "vendor" }) {
   const [failedVendors, setFailedVendors] = useState({}); // vendor -> error message
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [documentSaveNotice, setDocumentSaveNotice] = useState(null);
   const [showStyleBlade, setShowStyleBlade] = useState(false);
   const [vendorStage, setVendorStage] = useState("input"); // vendor flow: input | phases | assembly
   const [agenticStage, setAgenticStage] = useState("input"); // agentic flow: input | agentic | assembly
@@ -664,6 +666,10 @@ export default function App({ flow = "vendor" }) {
           setAdditionalCompanyInfo(safeString(common.additional_company_info));
           restoredSomething = true;
         }
+        if (common.hire_problem != null) {
+          setHireProblem(safeString(common.hire_problem));
+          restoredSomething = true;
+        }
         if (common.requirements != null) {
           setRequirements(normalizeRequirements(common.requirements));
           restoredSomething = true;
@@ -1146,10 +1152,14 @@ export default function App({ flow = "vendor" }) {
         ...(prev || {}),
         requirements: extracted.requirements || requirements,
         competences: extracted.competences ?? {},
+        hire_problem: extracted.hire_problem ?? prev?.hire_problem ?? "",
         job_text: jobText,
         additional_user_info: additionalUserInfo,
         additional_company_info: additionalCompanyInfo,
       }));
+      if (extracted.hire_problem != null && String(extracted.hire_problem).trim()) {
+        setHireProblem(String(extracted.hire_problem).trim());
+      }
 
       // Similar docs and top docs come from the single extract call.
       const similarDocs = data.similar_documents || [];
@@ -1168,6 +1178,7 @@ export default function App({ flow = "vendor" }) {
       setExtractionError(e?.message || String(e));
       setCompetences({});
       setCompetenceOverrides({});
+      setHireProblem("");
     } finally {
       setExtracting(false);
     }
@@ -1334,11 +1345,15 @@ export default function App({ flow = "vendor" }) {
     const method = documentId ? "PUT" : "POST";
     try {
       setSavingFinal(true);
+      setDocumentSaveNotice(null);
       const result = await fetchWithHeartbeat(url, {
         method,
         body: JSON.stringify(payload),
       });
       const data = result.data;
+      if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+        setDocumentSaveNotice(data.warnings.join(" "));
+      }
       if (!documentId && data.document?.id) {
         setDocumentId(data.document.id);
       }
@@ -1425,11 +1440,15 @@ export default function App({ flow = "vendor" }) {
     try {
       setAgenticSaveError(null);
       setAgenticSavingFinal(true);
+      setDocumentSaveNotice(null);
       const result = await fetchWithHeartbeat(url, {
         method,
         body: JSON.stringify(payload),
       });
       const data = result.data;
+      if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+        setDocumentSaveNotice(data.warnings.join(" "));
+      }
       if (!documentId && data?.document?.id) {
         setDocumentId(data.document.id);
       }
@@ -1641,6 +1660,7 @@ export default function App({ flow = "vendor" }) {
         point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
         additional_user_info: additionalUserInfo || "",
         additional_company_info: additionalCompanyInfo || "",
+        hire_problem: hireProblem || "",
       };
       if (Object.keys(competences).length > 0) sessionPayload.competences = competences;
       sessionPayload.structure_instructions = structureInstructions || "";
@@ -1762,6 +1782,7 @@ export default function App({ flow = "vendor" }) {
         point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
         additional_user_info: additionalUserInfo || "",
         additional_company_info: additionalCompanyInfo || "",
+        hire_problem: hireProblem || "",
       };
       if (Object.keys(competences).length > 0) sessionPayload.competences = competences;
       sessionPayload.structure_instructions = structureInstructions || "";
@@ -2717,6 +2738,32 @@ export default function App({ flow = "vendor" }) {
                 </div>
               </div>
               <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: 600, marginBottom: 4 }}>
+                    What problem is this hire meant to solve?
+                  </label>
+                  <div style={{ fontSize: 11, color: "var(--secondary-text-color)", marginBottom: 6 }}>
+                    Extracted in the same pass as key competences; edit if the model missed nuance.
+                  </div>
+                  <textarea
+                    value={hireProblem}
+                    onChange={(e) => setHireProblem(e.target.value)}
+                    placeholder="e.g. scale the data platform, lead a regulatory migration, own the first sales motion in a new region…"
+                    rows={4}
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: 8,
+                      fontSize: 13,
+                      resize: "vertical",
+                      backgroundColor: "var(--bg-color)",
+                      color: "var(--text-color)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: 4,
+                      fontFamily: "inherit",
+                    }}
+                  />
+                </div>
                 <CompetencesList
                   requirements={requirements}
                   competences={competences}
@@ -2890,6 +2937,20 @@ export default function App({ flow = "vendor" }) {
         </div>
       )}
       {error && <p style={{ color: "var(--error-text)" }}>{error}</p>}
+      {documentSaveNotice && (
+        <p
+          role="status"
+          style={{
+            color: "var(--secondary-text-color)",
+            background: "var(--warning-bg)",
+            border: "1px solid var(--warning-border)",
+            padding: "10px 12px",
+            borderRadius: 4,
+          }}
+        >
+          {documentSaveNotice}
+        </p>
+      )}
 
       {!showInput && (
         <>

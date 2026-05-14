@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
+import logging
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Request, HTTPException, Depends
-from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 
 from letter_writer_server.core.session import Session, get_session
@@ -33,6 +34,40 @@ from letter_writer.retrieval import delete_documents, embed, retrieve_similar_jo
 from openai import OpenAI
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+_SAVE_WITHOUT_LOG_USER_MESSAGE = (
+    "Saved without the activity log after the first save attempt failed. "
+    "Your letter and job details were kept."
+)
+
+
+def _upsert_document_with_event_log_fallback(
+    collection,
+    doc_data: Dict[str, Any],
+    *,
+    allow_update: bool,
+    user_id: str,
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Persist via :func:`upsert_document`, retrying once without ``application_event_log`` on failure."""
+    had_log = bool(doc_data.get("application_event_log"))
+    try:
+        return upsert_document(collection, doc_data, allow_update=allow_update, user_id=user_id), []
+    except (ValueError, PermissionError):
+        raise
+    except Exception as first_exc:
+        if not had_log:
+            raise
+        logger.warning(
+            "Document upsert failed; retrying without application_event_log",
+            exc_info=first_exc,
+        )
+        stripped = {k: v for k, v in doc_data.items() if k != "application_event_log"}
+        try:
+            doc = upsert_document(collection, stripped, allow_update=allow_update, user_id=user_id)
+            return doc, [_SAVE_WITHOUT_LOG_USER_MESSAGE]
+        except Exception:
+            raise first_exc from first_exc
 
 
 def _apply_feedback_extra_info_merge(user_id: str, raw: Any) -> None:
@@ -149,7 +184,9 @@ async def create_doc(request: Request, data: DocumentRequest, session: Session =
     doc_data["vector"] = vector
     
     try:
-        document = upsert_document(collection, doc_data, allow_update=False, user_id=user['id'])
+        document, save_warnings = _upsert_document_with_event_log_fallback(
+            collection, doc_data, allow_update=False, user_id=user["id"]
+        )
         set_event_log_firestore_document_id(document["id"])
         if data.ai_letters:
             save_feedback(
@@ -162,7 +199,10 @@ async def create_doc(request: Request, data: DocumentRequest, session: Session =
             _apply_feedback_extra_info_merge(user["id"], data.feedback_extra_info)
         if data.feedback_agent_context is not None:
             _apply_feedback_agent_context_merge(user["id"], data.feedback_agent_context)
-        return {"document": document}
+        out: Dict[str, Any] = {"document": document}
+        if save_warnings:
+            out["warnings"] = save_warnings
+        return out
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -242,7 +282,9 @@ async def update_doc(document_id: str, data: DocumentRequest, request: Request, 
             doc_data["vector"] = embed(new_job_text, openai_client)
     
     try:
-        updated = upsert_document(collection, doc_data, allow_update=True, user_id=user['id'])
+        updated, save_warnings = _upsert_document_with_event_log_fallback(
+            collection, doc_data, allow_update=True, user_id=user["id"]
+        )
         if data.ai_letters:
             save_feedback(
                 user_id=user['id'],
@@ -254,7 +296,10 @@ async def update_doc(document_id: str, data: DocumentRequest, request: Request, 
             _apply_feedback_extra_info_merge(user["id"], data.feedback_extra_info)
         if data.feedback_agent_context is not None:
             _apply_feedback_agent_context_merge(user["id"], data.feedback_agent_context)
-        return {"document": updated}
+        out: Dict[str, Any] = {"document": updated}
+        if save_warnings:
+            out["warnings"] = save_warnings
+        return out
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -22,6 +22,7 @@ export default function DocumentsPage() {
   const [deleting, setDeleting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [saveNotice, setSaveNotice] = useState(null);
   const [companySearch, setCompanySearch] = useState("");
   const [roleSearch, setRoleSearch] = useState("");
 
@@ -99,6 +100,7 @@ export default function DocumentsPage() {
     try {
       setSaving(true);
       setError(null);
+      setSaveNotice(null);
       const csrfToken = await getCsrfToken();
       const res = await fetch(`/api/documents/${selectedId}/`, {
         method: "PUT",
@@ -110,6 +112,9 @@ export default function DocumentsPage() {
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
+      if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+        setSaveNotice(data.warnings.join(" "));
+      }
       setSelected(data.document);
       setIsEditing(false);
       await fetchList();
@@ -237,6 +242,21 @@ export default function DocumentsPage() {
             }}
           >
             {error}
+          </div>
+        )}
+        {saveNotice && (
+          <div
+            role="status"
+            style={{
+              marginBottom: 10,
+              padding: 10,
+              background: "var(--warning-bg)",
+              border: "1px solid var(--warning-border)",
+              color: "var(--text-color)",
+              borderRadius: 4,
+            }}
+          >
+            {saveNotice}
           </div>
         )}
 
