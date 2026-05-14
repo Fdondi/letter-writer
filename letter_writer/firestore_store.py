@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import json
 import logging
 from typing import Any, Dict, Iterable, List, Optional, Union, cast
 from uuid import uuid4
@@ -20,6 +21,53 @@ logger = logging.getLogger(__name__)
 
 # Internal-only fields that should never be exposed via /api/documents responses.
 _DOCUMENT_RESPONSE_STRIP_FIELDS = {"vector"}
+
+
+def _json_leaf_for_firestore(value: Any) -> Any:
+    """Recursively convert values to JSON-serializable shapes (datetimes → ISO)."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc).isoformat()
+        return value.astimezone(timezone.utc).isoformat()
+    if isinstance(value, dict):
+        return {str(k): _json_leaf_for_firestore(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_leaf_for_firestore(v) for v in value]
+    return str(value)
+
+
+def firestore_safe_for_write(value: Any) -> Any:
+    """Return a Firestore-writable value.
+
+    Native mode does not allow an array field to contain another array as an
+    element (nested arrays). LLM audit payloads (for example JSON Schema under
+    ``response_format``) can contain ``[[...], ...]`` and trigger
+    ``INVALID_ARGUMENT: Property array contains an invalid nested entity.``
+    We JSON-encode any list/tuple element that would still be a list or tuple
+    after recursive sanitization so top-level array elements are never arrays.
+    """
+    if value is None or isinstance(value, (bool, int, float, str, bytes)):
+        return value
+    if isinstance(value, Vector):
+        return value
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, dict):
+        return {str(k): firestore_safe_for_write(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        items = [firestore_safe_for_write(v) for v in value]
+        if any(isinstance(v, (list, tuple)) for v in items):
+            fixed: List[Any] = []
+            for v in items:
+                if isinstance(v, (list, tuple)):
+                    fixed.append(json.dumps(_json_leaf_for_firestore(v), default=str))
+                else:
+                    fixed.append(v)
+            return fixed
+        return items
+    return value
 
 
 def get_firestore_client() -> firestore.Client:
@@ -353,7 +401,9 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
     # Store vector if provided (for vector search)
     if "vector" in data:
         base["vector"] = data["vector"]
-    
+
+    base = firestore_safe_for_write(base)
+
     # Upsert document
     doc_ref.set(base, merge=effective_allow_update)
     
