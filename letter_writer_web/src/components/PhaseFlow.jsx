@@ -9,10 +9,10 @@
  * 3. Observer (VendorCardWrapper): Detects data on the shelf and renders.
  * 
  * PHASES IN THIS PIPELINE:
- * - DRAFT: Displays the generated draft letter + feedback (from /api/phases/draft/).
- *          Background search (company research, document selection) is done during the
- *          initial phase before the phased flow starts. Approving this calls
- *          /api/phases/refine/ to generate the final letter.
+ * - PLAN: Strategic outline (strengths, weaknesses to frame, layout) from /api/phases/plan/.
+ *         Approving calls /api/phases/draft/ with the approved plan text.
+ * - DRAFT: Draft letter + feedback (from /api/phases/draft/). Approving calls /api/phases/refine/
+ *          for the final letter.
  * - ASSEMBLY: A separate UI rendered by App.jsx that holds the result of the refine call.
  * 
  * KEY RULES:
@@ -29,6 +29,13 @@ import { fetchWithHeartbeat } from "../utils/apiHelpers";
 import { useTranslation } from "../utils/useTranslation";
 import LanguageSelector from "./LanguageSelector";
 import { FEEDBACK_TYPES, firstFeedbackKeyWithItems, mergeCategoryItems } from "./phases/feedbackItemUtils";
+
+/**
+ * Bump when the vendor phase pipeline (order, phase names, or phase modules) changes.
+ * PhaseFlow only rebuilt `phasesRef` when the vendor *count* changed, so HMR / same-count
+ * navigations kept a stale single-phase tree (wrong section titles and shelf keys).
+ */
+const PHASE_FLOW_SCHEMA_VERSION = 2;
 
 function deepCloneJson(obj) {
   if (obj === undefined || obj === null) return obj;
@@ -88,8 +95,8 @@ const FEEDBACK_DESCRIPTIONS = {
   'precision_feedback': 'Evaluates how well the letter addresses job requirements. Checks if all required competencies are addressed (or substituted), flags superfluous claims, and verifies company-related claims match the company report.',
   'company_fit': 'Assesses alignment with the company\'s values, mission, tone, and culture. Checks if the letter feels personalized for the company rather than generic.',
   'company_fit_feedback': 'Assesses alignment with the company\'s values, mission, tone, and culture. Checks if the letter feels personalized for the company rather than generic.',
-  'user_fit': 'Compares the letter to your previous cover letters. Checks if it matches the same writing style, pays attention to the same aspects, and highlights strengths/negotiates weaknesses in the same way.',
-  'user_fit_feedback': 'Compares the letter to your previous cover letters. Checks if it matches the same writing style, pays attention to the same aspects, and highlights strengths/negotiates weaknesses in the same way.',
+  'user_fit': 'Compares the letter to your previous cover letters for voice and habits (same-hand cues): tone, structure, how strengths and caveats are framed—not the same topics or facts as older letters.',
+  'user_fit_feedback': 'Compares the letter to your previous cover letters for voice and habits (same-hand cues): tone, structure, how strengths and caveats are framed—not the same topics or facts as older letters.',
   'human': 'Analyzes patterns from your previous letter revisions. Flags elements that were typically changed or removed in your past edits, based on your review history.',
   'human_feedback': 'Analyzes patterns from your previous letter revisions. Flags elements that were typically changed or removed in your past edits, based on your review history.',
 };
@@ -1192,8 +1199,10 @@ function VendorCard({
       feedbackItemApprovals,
       feedbackOverrides,
       feedback,
+      cardPhaseEdits,
+      cardPhaseData,
     });
-  }, [isLoading, approved, thisPhaseDirty, cardPhase, previousPhaseApproved, feedbackKeys, feedbackItemApprovals, feedbackOverrides, feedback, phaseModule]);
+  }, [isLoading, approved, thisPhaseDirty, cardPhase, previousPhaseApproved, feedbackKeys, feedbackItemApprovals, feedbackOverrides, feedback, phaseModule, cardPhaseEdits, cardPhaseData]);
 
   // Helper to check if any field has translation for a language
   const hasAnyTranslation = useCallback((code) => {
@@ -1449,7 +1458,8 @@ function VendorCard({
                   : "Approved"
                 : readyForApproval
                   ? "Approve"
-                  : cardPhase === "draft" ||
+                  : cardPhase === "plan" ||
+                      cardPhase === "draft" ||
                       (cardPhase === "refine" && previousPhaseApproved)
                     ? "Check feedback"
                     : "Approve"}
@@ -1470,10 +1480,9 @@ function VendorCard({
 }
 
 // Transform to phase-indexed structure - cards now own their state, so we just create phase objects
-// Output: phases = [{ phase: "draft", previous: null, next: <phaseObj>, readyCount, pendingCount }, ...]
+// Output: phases = [{ phase: "plan", ... }, { phase: "draft", ... }, ...]
 function transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCounters, setPhaseCounters) {
-  // Background search is done during the initial phase; the phased flow starts with draft
-  const phaseOrder = ["draft"];
+  const phaseOrder = ["plan", "draft"];
   
   // First pass: create all phase objects - cards will own their own state
   const phaseObjects = phaseOrder.map((phaseName, index) => {
@@ -1579,7 +1588,8 @@ export default function PhaseFlow({
   onRegisterPhases, // (phases) => void
 }) {
   const [collapsedPhases, setCollapsedPhases] = useState({
-    draft: false, // first (and only) phase starts open
+    plan: false,
+    draft: false,
   });
 
   const [expandedCard, setExpandedCard] = useState(null); // { phase, vendor } | null
@@ -1607,14 +1617,20 @@ export default function PhaseFlow({
   // pendingCount: number of cards pending (starts at vendor count, decremented on error/approval)
   const [phaseCounters, setPhaseCounters] = useState({}); // { phaseName: { readyCount: 0, pendingCount: vendorCount } }
   
-  // Use ref to store stable phase objects - only recreate when vendorsList length changes
+  // Use ref to store stable phase objects - recreate when vendor count or phase pipeline schema changes
   const phasesRef = useRef(null);
   const vendorsListLengthRef = useRef(vendorsList.length);
+  const phasesSchemaVersionRef = useRef(0);
   const expandedDialogRef = useRef(null);
   
-  if (!phasesRef.current || vendorsListLengthRef.current !== vendorsList.length) {
+  if (
+    !phasesRef.current ||
+    vendorsListLengthRef.current !== vendorsList.length ||
+    phasesSchemaVersionRef.current !== PHASE_FLOW_SCHEMA_VERSION
+  ) {
     phasesRef.current = transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCounters, setPhaseCounters);
     vendorsListLengthRef.current = vendorsList.length;
+    phasesSchemaVersionRef.current = PHASE_FLOW_SCHEMA_VERSION;
     
     // Notify parent of the new phase structure
     if (onRegisterPhases) {
@@ -1754,13 +1770,12 @@ export default function PhaseFlow({
     const phaseModule = phaseModules[phaseName];
     const title = phaseModule?.getPhaseTitle() || phaseName;
     
-    // Visibility: phase is visible if no previous phase
-    // Cards will manage their own visibility based on their state
+    // Visibility: first phase always shown. Downstream sections (e.g. Draft) only after
+    // the previous phase has at least one approved vendor — matches per-card gating
+    // (VendorCardWrapper previousPhaseApproved) so the Draft block is not empty noise.
     let visible = true;
     if (phaseObj.previous) {
-      // Phase becomes visible when previous phase has at least one approved card
-      // Since cards own their state, we'll show it and let cards handle their own logic
-      visible = true;
+      visible = (phaseObj.previous.approvedVendors?.size ?? 0) > 0;
     }
     
     phaseObj.title = title;

@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from letter_writer_server.core.session import Session, get_session
 from letter_writer.firestore_store import get_user_data, get_personal_data_document, update_user_data_cache
-from letter_writer.generation import get_style_instructions, get_search_instructions
+from letter_writer.generation import get_style_instructions, get_search_instructions, get_structure_instructions as get_default_structure_instructions
 from letter_writer.personal_data_sections import (
     get_cv_revisions,
     get_extra_info,
@@ -18,6 +18,7 @@ from letter_writer.personal_data_sections import (
 )
 from letter_writer.personal_data_sections import get_style_instructions as get_user_style_instructions
 from letter_writer.personal_data_sections import get_search_instructions as get_user_search_instructions
+from letter_writer.personal_data_sections import get_structure_instructions as get_user_structure_instructions
 from letter_writer.cost_tracker import get_all_model_pricing
 from datetime import datetime, timezone
 
@@ -257,7 +258,8 @@ async def get_personal_data(session: Session = Depends(get_session)):
         "default_models": default_models,
         "default_background_models": default_background_models,
         "agentic_draft_model": agentic_draft_model,
-        "min_column_width": min_column_width
+        "min_column_width": min_column_width,
+        "structure_instructions": get_user_structure_instructions(user_data),
     }
 
 @router.post("/personal-data/")
@@ -337,6 +339,10 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
         if "style_instructions" in data:
             updates["style"] = wrap_new_field("style", data["style_instructions"], now)
             session["style_instructions"] = data["style_instructions"]
+
+        if "structure_instructions" in data and isinstance(data.get("structure_instructions"), str):
+            updates["structure"] = wrap_new_field("structure", data["structure_instructions"], now)
+            session["structure_instructions"] = data["structure_instructions"]
         
         if "search_instructions" in data:
             updates["search_instructions"] = wrap_new_field("search_instructions", data["search_instructions"], now)
@@ -427,6 +433,39 @@ async def update_style_instructions(request: Request, session: Session = Depends
     update_user_data_cache(user["id"], updates)
 
     return {"status": "ok", "instructions": instructions}
+
+@router.get("/structure-instructions/")
+async def get_structure_instructions_endpoint(session: Session = Depends(get_session)):
+    instructions = session.get("structure_instructions", "")
+    if not instructions:
+        user = session.get("user")
+        if user:
+            user_data = get_user_data(user["id"], use_cache=False)
+            instructions = get_user_structure_instructions(user_data or {})
+    if not instructions:
+        instructions = get_default_structure_instructions()
+    return {"instructions": instructions}
+
+
+@router.post("/structure-instructions/")
+async def update_structure_instructions(request: Request, session: Session = Depends(get_session)):
+    user = session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    data = await request.json()
+    instructions = data.get("instructions", "")
+    if not isinstance(instructions, str):
+        raise HTTPException(status_code=400, detail="Instructions must be a string")
+    session["structure_instructions"] = instructions
+    user_doc_ref = get_personal_data_document(user["id"])
+    updates = {
+        "structure": wrap_new_field("structure", instructions, datetime.utcnow()),
+        "updated_at": datetime.utcnow(),
+    }
+    user_doc_ref.set(updates, merge=True)
+    update_user_data_cache(user["id"], updates)
+    return {"status": "ok", "instructions": instructions}
+
 
 @router.get("/search-instructions/")
 async def get_search_instructions_endpoint(session: Session = Depends(get_session)):

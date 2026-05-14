@@ -27,6 +27,7 @@ from letter_writer_server.api.cost_utils import check_spending_limits
 from letter_writer.generation import (
     AGENTIC_TOPIC_KEYS,
     get_agentic_topic_context,
+    get_structure_instructions as get_default_structure_instructions,
     get_style_instructions,
     PHASED_FEEDBACK_CATEGORY_KEYS,
     _phased_feedback_checker_accuracy_prompts,
@@ -41,6 +42,7 @@ from letter_writer.clients.base import ModelVendor
 from letter_writer_server.api.cost_utils import with_user_monthly_cost
 from letter_writer.phased_service import (
     _run_background_phase,
+    advance_to_plan,
     advance_to_draft,
     advance_to_refinement,
     get_effective_additional_user_info,
@@ -55,7 +57,12 @@ from letter_writer.clients.base import ModelVendor
 from letter_writer.generation import MissingCVError
 from letter_writer.session_store import load_session_common_data, check_session_exists
 from letter_writer.firestore_store import get_user_data
-from letter_writer.personal_data_sections import cv_text_with_extra_info, get_models, get_agentic_draft_model
+from letter_writer.personal_data_sections import (
+    cv_text_with_extra_info,
+    get_models,
+    get_agentic_draft_model,
+    get_structure_instructions as get_user_structure_instructions,
+)
 from letter_writer.typed_shapes import TopDocument
 from letter_writer.agentic_service import (
     get_agentic_state,
@@ -101,6 +108,8 @@ from letter_writer.agentic_service import (
 )
 
 router = APIRouter(dependencies=[Depends(require_auth)])
+logger = logging.getLogger(__name__)
+
 
 class InitSessionRequest(BaseModel):
     job_text: Optional[str] = None
@@ -110,18 +119,22 @@ class InitSessionRequest(BaseModel):
 
 class BackgroundPhaseRequest(BaseModel):
     company_report: Optional[str] = None
-    top_docs: Optional[List[Dict[str, Any]]] = None
+
 
 class DraftPhaseRequest(BaseModel):
     company_report: Optional[str] = None
-    top_docs: Optional[List[Dict[str, Any]]] = None
+    letter_plan: Optional[str] = None
+
+
+class PlanPhaseRequest(BaseModel):
+    company_report: Optional[str] = None
+
 
 class RefinePhaseRequest(BaseModel):
     fancy: Optional[bool] = False
     draft_letter: Optional[str] = None
     feedback_override: Optional[Dict[str, Any]] = None
     company_report: Optional[str] = None
-    top_docs: Optional[List[Dict[str, Any]]] = None
 
 
 class FeedbackRequestContextBody(BaseModel):
@@ -136,8 +149,6 @@ class AgenticDraftRequest(BaseModel):
     draft_vendor: Optional[str] = None
     draft_vendors: Optional[List[str]] = None
     company_report: Optional[str] = None
-    # JSON bodies stay Dict[str, Any] at the boundary; cast to TopDocument in handlers (see typed_shapes).
-    top_docs: Optional[List[Dict[str, Any]]] = None
     style_instructions: Optional[str] = None
     max_rounds: Optional[int] = None
     sub_comment_rounds: Optional[int] = Field(
@@ -261,6 +272,18 @@ def get_session_state(session: Session = Depends(get_session)):
     state = dict(session)
     if 'cv_text' in state:
         del state['cv_text'] # Never send CV back in this endpoint
+    # Strategic letter plan is returned only from POST /plan/ and sent once in POST /draft/; omit from this snapshot.
+    vendors = state.get("vendors")
+    if isinstance(vendors, dict):
+        redacted_vendors = {}
+        for k, v in vendors.items():
+            if isinstance(v, dict):
+                vc = dict(v)
+                vc.pop("letter_plan", None)
+                redacted_vendors[k] = vc
+            else:
+                redacted_vendors[k] = v
+        state["vendors"] = redacted_vendors
     return {
         "status": "ok",
         "session_id": session.session_key,
@@ -314,6 +337,13 @@ def update_session_common_data(request: Request, data: Dict[str, Any], session: 
     for field in fields:
         if field in data:
             common[field] = data[field]
+
+    if "structure_instructions" in data and isinstance(data.get("structure_instructions"), str):
+        session["structure_instructions"] = data["structure_instructions"]
+
+    if "top_docs" in data:
+        td = data.get("top_docs")
+        session["selected_top_docs"] = td if isinstance(td, list) else []
             
     session['metadata']['common'] = common
     return {"status": "ok", "session_id": session.session_key}
@@ -335,10 +365,11 @@ def background_phase(vendor: str, data: BackgroundPhaseRequest, request: Request
     if not session_key:
         raise HTTPException(status_code=400, detail="No session")
     
-    # Support overrides
+    # Support overrides: inject precomputed company report; example letters come from session selected_top_docs.
     if data.company_report:
+        sel = session.get("selected_top_docs") or []
         vendor_state = VendorPhaseState(
-            top_docs=cast(List[TopDocument], data.top_docs or []),
+            top_docs=cast(List[TopDocument], list(sel)),
             company_report=data.company_report
         )
         save_vendor_data(session_key, vendor, vendor_state)
@@ -381,6 +412,46 @@ def background_phase(vendor: str, data: BackgroundPhaseRequest, request: Request
         "cost": vendor_state.cost
     }, session)
 
+
+@router.post("/plan/{vendor}/")
+def plan_phase(vendor: str, data: PlanPhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
+    set_current_request(request)
+    log_user_input_event("phases.plan", {"vendor": vendor, "payload": data.dict(exclude_none=True)})
+    user = session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        vendor_enum = ModelVendor(vendor)
+        structure = (session.get("structure_instructions") or "").strip()
+        if not structure:
+            uid = (user or {}).get("id")
+            if uid:
+                user_data = get_user_data(uid, use_cache=True) or {}
+                structure = get_user_structure_instructions(user_data)
+        if not structure:
+            structure = get_default_structure_instructions()
+        user_id = (user or {}).get("id") or "anonymous"
+        state = advance_to_plan(
+            session_id=session.session_key,
+            vendor=vendor_enum,
+            company_report_override=data.company_report,
+            structure_instructions=structure,
+            user_id=user_id,
+        )
+        return with_user_monthly_cost(
+            {
+                "status": "ok",
+                "letter_plan": state.letter_plan,
+                "cost": state.cost,
+            },
+            session,
+        )
+    except Exception as e:
+        logger.exception("phases.plan failed (vendor=%s)", vendor)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.post("/draft/{vendor}/")
 def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     set_current_request(request)
@@ -398,8 +469,8 @@ def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, session:
             session_id=session.session_key,
             vendor=vendor_enum,
             company_report_override=data.company_report,
-            top_docs_override=data.top_docs,
             style_instructions=instructions,
+            letter_plan_override=data.letter_plan,
             user_id=user_id,
         )
         return with_user_monthly_cost({
@@ -408,8 +479,13 @@ def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, session:
             "feedback": state.feedback,
             "cost": state.cost
         }, session)
+    except ValueError as e:
+        msg = str(e)
+        if "letter plan" in msg.lower():
+            raise HTTPException(status_code=400, detail=msg) from e
+        raise HTTPException(status_code=500, detail=msg) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.post("/refine/{vendor}/")
 def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
@@ -428,8 +504,8 @@ def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, sessio
             draft_override=data.draft_letter,
             feedback_override=data.feedback_override,
             company_report_override=data.company_report,
-            top_docs_override=data.top_docs,
             fancy=data.fancy,
+            style_instructions=session.get("style_instructions") or "",
             user_id=user_id,
         )
         return with_user_monthly_cost({
@@ -636,7 +712,6 @@ def agentic_draft(data: AgenticDraftRequest, request: Request, session: Session 
                 session,
                 draft_vendors=draft_vendors,
                 company_report_override=data.company_report,
-                top_docs_override=cast(Optional[List[TopDocument]], data.top_docs),
                 style_instructions=data.style_instructions or "",
                 max_rounds=data.max_rounds,
                 sub_comment_rounds=data.sub_comment_rounds,
@@ -660,7 +735,6 @@ def agentic_draft(data: AgenticDraftRequest, request: Request, session: Session 
             session,
             draft_vendor=draft_vendor,
             company_report_override=data.company_report,
-            top_docs_override=cast(Optional[List[TopDocument]], data.top_docs),
             style_instructions=data.style_instructions or "",
             max_rounds=data.max_rounds,
             sub_comment_rounds=data.sub_comment_rounds,
@@ -750,8 +824,6 @@ def agentic_feedback_start(data: AgenticRunRoundRequest, request: Request, sessi
         logger.exception("AGENTIC feedback/start failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-
-logger = logging.getLogger(__name__)
 
 # Thread pool for background feedback workers.
 _feedback_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="agentic_feedback")

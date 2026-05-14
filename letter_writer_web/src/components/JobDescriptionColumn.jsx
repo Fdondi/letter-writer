@@ -5,7 +5,25 @@ import CompetencesList from "./CompetencesList";
 import { getEffectiveRating, getEffectiveImportance } from "../utils/competenceScales";
 
 // Job Description Column with resizable/collapsible requirements section
-const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, scaleConfig, overrides, width, minWidth, languages = [], onHeaderClick, isExpanded, onClose, selectedKeyTerm, onTermClick, competenceCounts = {}, finalAssemblyText = "" }) => {
+const JobDescriptionColumn = ({
+  jobText,
+  companyReport = null,
+  requirements = [],
+  competences = {},
+  scaleConfig,
+  overrides,
+  width,
+  minWidth,
+  languages = [],
+  onHeaderClick,
+  isExpanded,
+  onClose,
+  selectedKeyTerm,
+  onTermClick,
+  competenceCounts = {},
+  finalAssemblyText = "",
+}) => {
+  const [referenceTab, setReferenceTab] = useState("job"); // "job" | "report"
   const [requirementsHeight, setRequirementsHeight] = useState(25); // Percentage of column height
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -114,6 +132,42 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
     }
     return jobText;
   };
+
+  const reportPlain =
+    companyReport == null
+      ? ""
+      : typeof companyReport === "string"
+        ? companyReport
+        : null;
+  const reportFormatError =
+    companyReport != null && typeof companyReport !== "string" ? typeof companyReport : null;
+  const hasReport = Boolean((reportPlain || "").trim());
+
+  const tabBtn = (id, label) => (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={referenceTab === id}
+      onClick={() => setReferenceTab(id)}
+      style={{
+        padding: "4px 10px",
+        fontSize: "12px",
+        fontWeight: referenceTab === id ? 600 : 500,
+        background: referenceTab === id ? "var(--panel-bg)" : "transparent",
+        color: "var(--text-color)",
+        border: "1px solid var(--border-color)",
+        borderRadius: 4,
+        cursor: "pointer",
+        borderBottomLeftRadius: referenceTab === id ? 0 : 4,
+        borderBottomRightRadius: referenceTab === id ? 0 : 4,
+        borderBottom: referenceTab === id ? "1px solid var(--panel-bg)" : undefined,
+        marginBottom: referenceTab === id ? -1 : 0,
+        zIndex: referenceTab === id ? 1 : 0,
+      }}
+    >
+      {label}
+    </button>
+  );
   
   const comp = typeof competences === "object" && competences !== null ? competences : {};
   const hasRatings = Object.keys(comp).length > 0;
@@ -191,16 +245,20 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
         }}
       >
         <div style={{ background: "var(--header-bg)", borderBottom: "1px solid var(--border-color)", flexShrink: 0 }}>
-          {/* Line 1: Title + Expand */}
+          {/* Line 1: Tabs + Expand */}
           <div
             style={{
               padding: "8px 12px",
               display: "flex",
               justifyContent: "space-between",
-              alignItems: "center",
+              alignItems: "flex-end",
+              gap: 8,
             }}
           >
-            <strong style={{ color: 'var(--text-color)' }}>Job Description</strong>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 0, flexWrap: "wrap" }} role="tablist" aria-label="Job reference">
+              {tabBtn("job", "Job offer")}
+              {tabBtn("report", "Company report")}
+            </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               {onHeaderClick && !isExpanded && (
                 <button
@@ -240,7 +298,7 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
               )}
             </div>
           </div>
-          {/* Line 2: Translate + Copy */}
+          {/* Line 2: Translate (job only) + Copy */}
           <div
             style={{
               padding: "6px 12px 8px",
@@ -252,8 +310,8 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
               borderTop: "1px solid var(--border-color)",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              {languages.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minHeight: 24 }}>
+              {referenceTab === "job" && languages.length > 0 && (
                 <>
                   {jobTranslating && <span style={{ fontSize: "9px", color: "var(--secondary-text-color)" }}>Translating…</span>}
                   <LanguageSelector
@@ -266,10 +324,25 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
                   />
                 </>
               )}
+              {referenceTab === "report" && (
+                <span style={{ fontSize: "11px", color: "var(--secondary-text-color)" }}>
+                  From company research (intake)
+                </span>
+              )}
             </div>
             <button
               type="button"
-              onClick={() => navigator.clipboard.writeText(getJobDisplayText() || "").catch(() => {})}
+              onClick={() => {
+                const text =
+                  referenceTab === "job"
+                    ? getJobDisplayText() || ""
+                    : reportFormatError
+                      ? JSON.stringify(companyReport, null, 2)
+                      : hasReport
+                        ? reportPlain
+                        : "";
+                navigator.clipboard.writeText(text).catch(() => {});
+              }}
               style={{
                 padding: "4px 8px",
                 fontSize: "12px",
@@ -284,7 +357,7 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
             </button>
           </div>
         </div>
-        {jobTranslationError && (
+        {referenceTab === "job" && jobTranslationError && (
           <div style={{ 
             padding: "4px 12px", 
             background: "var(--error-bg)", 
@@ -303,21 +376,83 @@ const JobDescriptionColumn = ({ jobText, requirements = [], competences = {}, sc
             minHeight: 0,
           }}
         >
-          <pre
-            style={{
-              whiteSpace: "pre-wrap",
-              margin: 0,
-              fontFamily: "monospace",
-              fontSize: "12px",
-              color: 'var(--text-color)',
-              background: "var(--pre-bg)",
-              border: "1px solid var(--border-color)",
-              borderRadius: 2,
-              padding: 8,
-            }}
-          >
-            {getJobDisplayText() || "No job description available"}
-          </pre>
+          {referenceTab === "job" ? (
+            <pre
+              style={{
+                whiteSpace: "pre-wrap",
+                margin: 0,
+                fontFamily: "monospace",
+                fontSize: "12px",
+                color: 'var(--text-color)',
+                background: "var(--pre-bg)",
+                border: "1px solid var(--border-color)",
+                borderRadius: 2,
+                padding: 8,
+              }}
+            >
+              {getJobDisplayText() || "No job description available"}
+            </pre>
+          ) : reportFormatError ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div
+                style={{
+                  padding: 10,
+                  fontSize: "12px",
+                  color: "var(--error-text)",
+                  background: "var(--error-bg)",
+                  border: "1px solid var(--error-border)",
+                  borderRadius: 4,
+                }}
+              >
+                Company report is not plain text (type: {reportFormatError}). Raw value:
+              </div>
+              <pre
+                style={{
+                  whiteSpace: "pre-wrap",
+                  margin: 0,
+                  fontFamily: "monospace",
+                  fontSize: "12px",
+                  color: 'var(--text-color)',
+                  background: "var(--pre-bg)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 2,
+                  padding: 8,
+                }}
+              >
+                {JSON.stringify(companyReport, null, 2)}
+              </pre>
+            </div>
+          ) : hasReport ? (
+            <pre
+              style={{
+                whiteSpace: "pre-wrap",
+                margin: 0,
+                fontFamily: "monospace",
+                fontSize: "12px",
+                color: 'var(--text-color)',
+                background: "var(--pre-bg)",
+                border: "1px solid var(--border-color)",
+                borderRadius: 2,
+                padding: 8,
+              }}
+            >
+              {reportPlain}
+            </pre>
+          ) : (
+            <div
+              style={{
+                padding: 16,
+                textAlign: "center",
+                color: "var(--secondary-text-color)",
+                fontSize: "12px",
+                background: "var(--panel-bg)",
+                border: "1px dashed var(--border-color)",
+                borderRadius: 4,
+              }}
+            >
+              No company report loaded. Run Company Research in the intake form and select a result, then return to assembly.
+            </div>
+          )}
         </div>
       </div>
 

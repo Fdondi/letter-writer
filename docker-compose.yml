@@ -28,7 +28,7 @@ services:
       - PYSPY_INTERVAL=${PYSPY_INTERVAL:-60}
       - PYSPY_DURATION=${PYSPY_DURATION:-30}
       # APP_SECRET_KEY must be set in .env file
-      - APP_SECRET_KEY=${APP_SECRET_KEY}
+      - ADMIN_EVENT_LOG_API_KEY=${ADMIN_EVENT_LOG_API_KEY:-}
       # Firestore connection (uses Application Default Credentials)
       # The credentials file is mounted at /app/gcloud-credentials.json
       - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
@@ -84,6 +84,17 @@ services:
     volumes:
       - ./certs:/etc/nginx/certs:ro
       - ./letter_writer_web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+
+  event-log-admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.event-log-admin
+    container_name: letter-writer-event-log-admin
+    restart: unless-stopped
+    ports:
+      - "8081:80"
     depends_on:
       - backend
 

@@ -9,6 +9,38 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def merge_system_cache_prefix_into_system(
+    system: str,
+    system_cache_prefix: Optional[str],
+) -> str:
+    """Combine optional cached context with the task system prompt.
+
+    ``accuracy_check`` and related paths pass CV/letter (or company/job/letter)
+    via ``system_cache_prefix`` so Anthropic can cache that block separately.
+    Vendors that do not implement split system blocks must merge this prefix
+    into ``system`` or the model never sees the documents and may invent
+    critiques.
+    """
+    prefix = (system_cache_prefix or "").strip()
+    if not prefix:
+        return system
+    body = system or ""
+    return f"{prefix}\n\n{body}" if body else prefix
+
+
+def _parse_price_per_million_usd(val: Any) -> float:
+    """Normalize per-1M-token USD price from client JSON (number or ``{low, high}`` range).
+
+    Matches ``cost_tracker._parse_price_field`` so tiered entries in ``*.json`` do not
+    break ``track_cost`` (e.g. OpenAI ``gpt-5.5`` input/output objects).
+    """
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, dict):
+        return float(val.get("low", val.get("high", 0.0)) or 0.0)
+    return 0.0
+
+
 class ModelVendor(Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
@@ -109,9 +141,13 @@ class BaseClient:
               "defaults": { "search": 10.0 },
               "models": {
                 "model-a": {"input": 1.0, "output": 5.0},
-                "model-b": {"input": 3.0, "output": 15.0, "search": 15.0}
+                "model-b": {"input": 3.0, "output": 15.0, "search": 15.0},
+                "model-c": {"input": {"low": 1.0, "high": 2.0}, "output": {"low": 5.0, "high": 8.0}}
               }
             }
+
+        ``input`` / ``output`` may be tiered objects ``{"low", "high"}``; the **low**
+        tier is used for internal cost estimates (same rule as ``cost_tracker``).
 
         Search pricing resolution:
         - model override: models[model_name].search (if present)
@@ -137,10 +173,13 @@ class BaseClient:
             defaults = {}
         cached_mult = float(model_cfg.get("input_cached_mult", defaults.get("input_cached_mult", 0.5)) or 0.5)
 
+        search_raw = model_cfg.get("search", default_search)
+        search_price = _parse_price_per_million_usd(search_raw) if search_raw is not None else default_search
+
         return {
-            "input": float(model_cfg.get("input", 0.0) or 0.0),
-            "output": float(model_cfg.get("output", 0.0) or 0.0),
-            "search": float(model_cfg.get("search", default_search) or 0.0),
+            "input": _parse_price_per_million_usd(model_cfg.get("input", 0.0)),
+            "output": _parse_price_per_million_usd(model_cfg.get("output", 0.0)),
+            "search": float(search_price or 0.0),
             "input_cached_mult": cached_mult,
         }
 
@@ -230,6 +269,8 @@ class BaseClient:
         *system* block with cache_control.  Enables cross-call caching when
         two calls share the same document set but differ in their instructions
         (e.g. precision_check vs company_fit_check).  Only Anthropic implements
-        both; other vendors silently ignore them.
+        split cached system blocks.  Other clients must merge this into
+        ``system`` via ``merge_system_cache_prefix_into_system`` (see OpenAI,
+        Gemini, etc.).
         """
         raise NotImplementedError("Subclasses must implement this method")

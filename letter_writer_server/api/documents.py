@@ -12,8 +12,11 @@ from letter_writer.personal_data_sections import (
 )
 from letter_writer.session_store import (
     set_current_request,
+    set_event_log_firestore_document_id,
     consume_pending_application_events,
+    finalize_application_event_log_for_document,
     log_user_input_event,
+    merged_document_snapshot_for_log,
 )
 from letter_writer.firestore_store import (
     get_collection,
@@ -122,6 +125,8 @@ async def list_docs(request: Request, session: Session = Depends(get_session)):
 @router.post("/")
 async def create_doc(request: Request, data: DocumentRequest, session: Session = Depends(get_session)):
     set_current_request(request)
+    # New row: only unscoped audit events belong here until we have an id.
+    set_event_log_firestore_document_id(None)
     user = session.get('user')
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -135,13 +140,17 @@ async def create_doc(request: Request, data: DocumentRequest, session: Session =
     
     doc_data = data.dict()
     log_user_input_event("documents.create", doc_data)
-    pending_events = consume_pending_application_events()
+    pending_events, blob_store = consume_pending_application_events(None)
     if pending_events:
-        doc_data["application_event_log"] = pending_events
+        snap = merged_document_snapshot_for_log(None, doc_data)
+        doc_data["application_event_log"] = finalize_application_event_log_for_document(
+            pending_events, blob_store, snap
+        )
     doc_data["vector"] = vector
     
     try:
         document = upsert_document(collection, doc_data, allow_update=False, user_id=user['id'])
+        set_event_log_firestore_document_id(document["id"])
         if data.ai_letters:
             save_feedback(
                 user_id=user['id'],
@@ -179,7 +188,8 @@ async def get_similar_docs(data: SimilarRequest, session: Session = Depends(get_
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{document_id}/")
-async def get_doc(document_id: str, session: Session = Depends(get_session)):
+async def get_doc(document_id: str, request: Request, session: Session = Depends(get_session)):
+    set_current_request(request)
     user = session.get('user')
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -189,6 +199,7 @@ async def get_doc(document_id: str, session: Session = Depends(get_session)):
         doc = get_document(collection, document_id, user_id=user['id'])
         if not doc:
             raise HTTPException(status_code=404, detail="Not found")
+        set_event_log_firestore_document_id(document_id)
         return {"document": doc}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -201,20 +212,25 @@ async def update_doc(document_id: str, data: DocumentRequest, request: Request, 
         raise HTTPException(status_code=401, detail="Authentication required")
     
     collection = get_collection()
+    existing = get_document(collection, document_id, user_id=user['id'])
+    if not existing:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    set_event_log_firestore_document_id(document_id)
     doc_data = data.dict(exclude_unset=True)
     log_user_input_event("documents.update", {"document_id": document_id, "payload": doc_data})
-    pending_events = consume_pending_application_events()
+    pending_events, blob_store = consume_pending_application_events(document_id)
     if pending_events:
-        doc_data["application_event_log"] = pending_events
+        snap = merged_document_snapshot_for_log(existing, doc_data)
+        doc_data["application_event_log"] = finalize_application_event_log_for_document(
+            pending_events, blob_store, snap
+        )
     doc_data["id"] = document_id
     
     # Keep vector server-owned:
     # - never trust/store client-provided vectors
     # - recompute when job_text changes
     # - backfill if vector is missing
-    existing = get_document(collection, document_id, user_id=user['id'])
-    if not existing:
-        raise HTTPException(status_code=404, detail="Not found")
     existing_raw_snapshot = collection.document(document_id).get()
     existing_raw = existing_raw_snapshot.to_dict() if existing_raw_snapshot.exists else {}
     if data.job_text:

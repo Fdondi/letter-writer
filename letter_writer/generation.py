@@ -583,10 +583,17 @@ def _phased_feedback_checker_user_fit_prompts(
             + "\n==========\n"
         )
     system = (
-        "You are an expert in style and tone. Evaluate how well the cover letter follows the pattern of the previous examples. \n"
-        "You also have the applicant's CV (and optional additional info): use it to judge whether factual content "
-        "(languages, degrees, dates, tools, etc.) is missing from the draft when it exists in the CV, or only appeared in older letters.\n"
-        "Flag divergences: tone, structure, emphasis, or how weaknesses are handled compared with the references. \n"
+        "You are an expert in style and tone. The goal is continuity of voice: the draft should feel like the same author "
+        "as the reference letters (register, rhythm, how strengths and caveats are framed, paragraph logic, level of directness).\n"
+        "Reference letters are different applications: they will mention different companies, projects, and emphases. "
+        "That is expected. Do NOT treat \"the examples bring up topic X but this draft does not\" as a problem by itself, "
+        "even if X is a strength in the CV—omission is fine when this role does not call for it.\n"
+        "Use the CV and optional additional info only to flag factual gaps: claims or implications in the draft that conflict with, "
+        "or undersell without reason, facts that are clearly stated there (languages, degrees, dates, tools, etc.). "
+        "Do not ask the draft to repeat biographical detail from the examples that is absent from the CV/additional info unless "
+        "the issue is stylistic (e.g. the draft suddenly reads unlike those examples).\n"
+        "Flag divergences in tone, structure, emphasis, or how weaknesses are handled compared with the references—not missing topics "
+        "that simply differ between applications.\n"
         "Do not praise imitation or \"good fit\" with the examples; only output items where the draft should change.\n"
         "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
         "NOTE: The reference examples are prior cover letters written by/about the SAME applicant. "
@@ -597,7 +604,9 @@ def _phased_feedback_checker_user_fit_prompts(
     prompt = (
         "========== Reference Examples:\n" + examples_formatted + "\n==========\n"
         + additional_block
-        + "\nCompare to the reference letters and CV; note where the draft diverges in style, emphasis, handling of weaknesses, or omits relevant facts from the CV."
+        + "\nCompare to the reference letters and CV. Note where the draft diverges in voice (same-hand cues), structure, emphasis, "
+        "or handling of weaknesses versus the examples, or where it misuses or omits facts that clearly matter given the CV/additional info. "
+        "Do not demand topic overlap with the examples."
     )
     return system, prompt
 
@@ -1348,6 +1357,19 @@ def extract_job_metadata(
         "point_of_contact": point_of_contact,
     }
 
+def get_structure_instructions() -> str:
+    """Load default instructions for the pre-draft *plan* phase (argument structure, not prose style)."""
+    path = Path(__file__).parent / "structure_instructions.txt"
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return (
+            "Produce a concise strategic plan: strengths with supporting facts, weaknesses or gaps to frame "
+            "with honest arguments, and how the cover letter should lay out its argument. Use markdown headings "
+            "and bullets. Do not write the letter itself."
+        )
+
+
 def get_style_instructions() -> str:
     """Load style instructions from file."""
     style_file = Path(__file__).parent / "style_instructions.txt"
@@ -1467,6 +1489,64 @@ def company_research(
     # #endregion
     return result
 
+
+@traceable(run_type="chain", name="generate_letter_plan")
+def generate_letter_plan(
+    cv_text: str,
+    examples: Sequence[TopDocument],
+    company_report: str,
+    job_text: str,
+    client: BaseClient,
+    trace_dir: Path,
+    structure_instructions: str = "",
+    additional_user_info: str = "",
+) -> str:
+    """High-level cover letter plan: strengths, weaknesses to frame, and layout (no draft prose)."""
+    company_report = company_report if company_report is not None else ""
+    job_text = job_text if job_text is not None else ""
+    if cv_text is None or not cv_text or not str(cv_text).strip():
+        error_msg = "CV text is missing or empty - cannot generate letter plan"
+        logger.error(error_msg, extra={"cv_text": cv_text, "cv_text_type": type(cv_text).__name__})
+        raise MissingCVError(error_msg)
+
+    si = (structure_instructions or "").strip() or get_structure_instructions()
+
+    examples_formatted = "\n\n".join(
+        f"---- Example #{i+1} [estimated relevance: {ex.get('score', 0)}/10] - {ex.get('company_name', '')} ----\n"
+        f"Job Description:\n{ex.get('job_text', '')}\n\n"
+        f"Cover Letter:\n{ex.get('letter_text', '')}\n\n"
+        for i, ex in enumerate(examples) if (ex.get("letter_text") or "").strip()
+    )
+
+    additional_context = ""
+    if additional_user_info and additional_user_info.strip():
+        additional_context = (
+            "\n\n--- ADDITIONAL INFORMATION ABOUT THE APPLICANT ---\n"
+            f"{additional_user_info}\n"
+            "--- END ADDITIONAL INFORMATION ---\n"
+        )
+
+    system = (
+        "You are an expert career strategist. Given the applicant's CV, reference cover letters, "
+        "company research, and the target job, produce a **strategic plan** for a cover letter.\n"
+        "Do NOT write the cover letter. Output only the plan.\n"
+        "Use the language of the target job description where it matters for clarity.\n\n"
+        "--- Structure / planning instructions (from the user or defaults) ---\n"
+        + si
+        + additional_context
+        + "\n"
+    )
+
+    prompt = (
+        "========== User CV:\n" + cv_text + "\n==========\n" +
+        "========== Examples:\n" + examples_formatted + "\n==========\n" +
+        "========== Company Report:\n" + company_report + "\n==========\n" +
+        "========== Target Job Description:\n" + job_text + "\n=========="
+    )
+    (trace_dir / "plan_prompt.txt").write_text(prompt, encoding="utf-8")
+    return client.call(ModelSize.XLARGE, system, [prompt])
+
+
 @traceable(run_type="chain", name="generate_letter")
 def generate_letter(
     cv_text: str,
@@ -1477,6 +1557,7 @@ def generate_letter(
     trace_dir: Path,
     style_instructions: str = "",
     additional_user_info: str = "",
+    letter_plan: str = "",
 ) -> str:
     """Generate a personalized cover letter based on CV, examples, company report, and job description.
     
@@ -1520,6 +1601,15 @@ def generate_letter(
             "--- END ADDITIONAL INFORMATION ---\n"
         )
     
+    plan_block = ""
+    lp = (letter_plan or "").strip()
+    if lp:
+        plan_block = (
+            "\n\n--- APPROVED STRATEGIC PLAN (follow this argument structure; do not contradict it) ---\n"
+            + lp
+            + "\n--- END STRATEGIC PLAN ---\n"
+        )
+
     system = (
         "You are an expert cover letter writer. Using the user's CV, relevant examples of job descriptions "
         "and their corresponding cover letters, the company report, and the target job description, "
@@ -1527,6 +1617,7 @@ def generate_letter(
         "Remember to use the language of THE TARGET JOB DESCRIPTION, even if some or all of the examples might be in a different language. "
         "Use the examples at a higher level: look at style, structure, what is paid attention to, etc.\n"
         + style_instructions
+        + plan_block
         + additional_context +
         "\n\n"
     )
@@ -1917,13 +2008,28 @@ def rewrite_letter(
     user_fit_feedback: Any,
     human_feedback: Any,
     client: BaseClient,
-    trace_dir: Path
+    trace_dir: Path,
+    letter_plan: str = "",
+    style_instructions: str = "",
 ) -> str:
     """Rewrite the cover letter incorporating all feedback."""
+    si = (style_instructions or "").strip() or get_style_instructions()
+    plan_block = ""
+    lp = (letter_plan or "").strip()
+    if lp:
+        plan_block = (
+            "\n\n--- APPROVED STRATEGIC PLAN (preserve alignment with this plan unless feedback explicitly overrides) ---\n"
+            + lp
+            + "\n--- END STRATEGIC PLAN ---\n"
+        )
     system = (
         "You are an expert cover letter editor. Given an original cover letter and multiple "
         "pieces of feedback, rewrite the letter to address all concerns while maintaining "
         "its core message and keeping it concise (max 1 page).\n"
+        "Writing style and tone expectations:\n"
+        + si
+        + plan_block
+        + "\n"
     )
     had_feedback = False
     prompt = "========== Original Cover Letter:\n" + original_letter + "\n==========\n"

@@ -1,4 +1,4 @@
-from .base import BaseClient, ModelSize
+from .base import BaseClient, ModelSize, merge_system_cache_prefix_into_system
 from typing import List, Dict, Any, Optional
 import os
 import typer
@@ -28,7 +28,8 @@ class GrokClient(BaseClient):
         cache_prefix: Optional[str] = None,
         system_cache_prefix: Optional[str] = None,
     ) -> str:
-        _ = response_format, cache_prefix, system_cache_prefix
+        _ = response_format, cache_prefix
+        system_prompt = merge_system_cache_prefix_into_system(system, system_cache_prefix)
         if isinstance(model_size, str):
             model = model_size
         else:
@@ -36,7 +37,7 @@ class GrokClient(BaseClient):
         def _return_with_audit(text: str) -> str:
             self._record_llm_io(
                 model=model,
-                system=system,
+                system=system_prompt,
                 user_messages=user_messages,
                 search=search,
                 response_format=response_format,
@@ -52,7 +53,7 @@ class GrokClient(BaseClient):
             tools=tools,
         )
 
-        chat.append(xai_sdk.chat.system(system))
+        chat.append(xai_sdk.chat.system(system_prompt))
         for message in user_messages:
             chat.append(xai_sdk.chat.user(message))
 
@@ -61,7 +62,7 @@ class GrokClient(BaseClient):
         except Exception as e:
             self._record_llm_io(
                 model=model,
-                system=system,
+                system=system_prompt,
                 user_messages=user_messages,
                 search=search,
                 response_format=response_format,

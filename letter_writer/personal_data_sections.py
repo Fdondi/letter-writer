@@ -249,6 +249,19 @@ def get_style_instructions(user_data: Dict[str, Any]) -> str:
             return out
     return ""
 
+
+def get_structure_instructions(user_data: Dict[str, Any]) -> str:
+    """User-saved instructions for the pre-draft plan phase (argument layout), not prose style."""
+    for key in ("structure", "structure_instructions"):
+        raw = user_data.get(key)
+        if raw is None:
+            continue
+        out = unwrap_for_response(key, raw)
+        if out and isinstance(out, str) and out.strip():
+            return out
+    return ""
+
+
 def get_search_instructions(user_data: Dict[str, Any]) -> str:
     # Check "search_instructions" field (wrapped or plain)
     search_data = user_data.get("search_instructions")

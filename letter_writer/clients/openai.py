@@ -1,4 +1,4 @@
-from .base import BaseClient, ModelSize
+from .base import BaseClient, ModelSize, merge_system_cache_prefix_into_system
 from openai import OpenAI
 from typing import List, Dict, Any, Optional
 import typer
@@ -23,8 +23,9 @@ class OpenAIClient(BaseClient):
         cache_prefix: Optional[str] = None,
         system_cache_prefix: Optional[str] = None,
     ) -> str:
-        _ = cache_prefix, system_cache_prefix  # OpenAI handles prompt caching automatically
-        messages = self._format_messages(system, user_messages)
+        _ = cache_prefix  # user-message cache block is Anthropic-only today
+        system_prompt = merge_system_cache_prefix_into_system(system, system_cache_prefix)
+        messages = self._format_messages(system_prompt, user_messages)
         if isinstance(model_size, str):
             model = model_size
             thinking_cfg: dict = {}
@@ -56,7 +57,7 @@ class OpenAIClient(BaseClient):
         except Exception as e:
             self._record_llm_io(
                 model=model,
-                system=system,
+                system=system_prompt,
                 user_messages=user_messages,
                 search=search,
                 response_format=response_format,
@@ -80,7 +81,7 @@ class OpenAIClient(BaseClient):
         output = response.choices[0].message.content.strip()
         self._record_llm_io(
             model=model,
-            system=system,
+            system=system_prompt,
             user_messages=user_messages,
             search=search,
             response_format=response_format,

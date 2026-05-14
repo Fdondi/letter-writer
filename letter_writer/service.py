@@ -241,6 +241,8 @@ def _process_single_vendor(
             human_future.result(),
             ai_client,
             trace_dir,
+            letter_plan="",
+            style_instructions=style_instructions,
         )
 
     # write output

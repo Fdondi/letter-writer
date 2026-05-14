@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { fetchWithHeartbeat } from '../utils/apiHelpers';
 
 const TABS = [
-  { key: 'style', label: 'Draft Style', endpoint: '/api/style-instructions/', description: 'These instructions guide the writing style and tone when generating cover letters.' },
+  { key: 'style', label: 'Draft Style', endpoint: '/api/style-instructions/', description: 'Tone, wording, and formatting for the generated cover letter (not the strategic plan).' },
+  { key: 'structure', label: 'Letter plan', endpoint: '/api/structure-instructions/', description: 'How the AI should outline strengths, weaknesses to frame, and argument layout before writing the letter.' },
   { key: 'search', label: 'Background Search', endpoint: '/api/search-instructions/', description: 'These instructions guide how the AI researches companies during the background phase.' },
 ];
 
@@ -11,6 +12,7 @@ const StyleInstructionsBlade = ({ isOpen, onClose }) => {
   // Per-tab state
   const [tabState, setTabState] = useState({
     style: { instructions: '', original: '', loading: false, saving: false, error: null, saveSuccess: false },
+    structure: { instructions: '', original: '', loading: false, saving: false, error: null, saveSuccess: false },
     search: { instructions: '', original: '', loading: false, saving: false, error: null, saveSuccess: false },
   });
 

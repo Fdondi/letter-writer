@@ -395,6 +395,22 @@ def get_document(collection, doc_id: str, user_id: Optional[str] = None) -> dict
     return serialize_document(doc_data, doc_id)
 
 
+def get_document_by_id_admin(collection, doc_id: str) -> dict | None:
+    """Load a document by Firestore id without ``user_id`` ownership checks.
+
+    Use only from trusted server-side admin routes (for example API-key–gated
+    tooling). Normal product code should keep using :func:`get_document`.
+    """
+    doc_ref = collection.document(doc_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        return None
+    doc_data = doc.to_dict()
+    if not doc_data:
+        return serialize_document({}, doc_id)
+    return serialize_document(doc_data, doc_id)
+
+
 def list_documents(
     collection,
     *,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
@@ -19,7 +19,9 @@ from .generation import (
     company_research,
     fancy_letter,
     generate_letter,
+    generate_letter_plan,
     get_search_instructions,
+    get_structure_instructions,
     human_check,
     instruction_check,
     precision_check,
@@ -59,6 +61,7 @@ class PhaseCost:
 class VendorPhaseState:
     top_docs: List[TopDocument] = field(default_factory=list)
     company_report: Optional[str] = None
+    letter_plan: Optional[str] = None
     draft_letter: Optional[str] = None
     final_letter: Optional[str] = None
     feedback: Dict[str, Any] = field(default_factory=dict)
@@ -89,7 +92,10 @@ class SessionState:
     job_text: str
     cv_text: str
     search_result: List[dict]  # Changed from List[ScoredPoint] to List[dict] for Firestore
+    # Example letters chosen on job intake (persisted via POST /phases/session/ only).
+    selected_top_docs: List[TopDocument] = field(default_factory=list)
     style_instructions: str = ""
+    structure_instructions: str = ""
     vendors: Dict[str, VendorPhaseState] = field(default_factory=dict)
     metadata: Dict[str, Dict[str, str]] = field(default_factory=dict)  # vendor -> extraction
     # vendors_list is deprecated - derive from vendors.keys() or metadata.keys() instead
@@ -103,6 +109,21 @@ class SessionState:
 
 # Keep SESSION_LOCK for thread safety, but sessions are now stored in Firestore
 SESSION_LOCK = Lock()
+
+
+def _session_selected_top_docs(session: SessionState) -> List[TopDocument]:
+    """User-chosen RAG examples from job intake; empty means use vendor state / rerank."""
+    raw = getattr(session, "selected_top_docs", None) or []
+    if not isinstance(raw, list) or len(raw) == 0:
+        return []
+    return cast(List[TopDocument], list(raw))
+
+
+def _resolve_top_docs_for_phases(session: SessionState, state: VendorPhaseState) -> List[TopDocument]:
+    picked = _session_selected_top_docs(session)
+    if picked:
+        return picked
+    return list(state.top_docs or [])
 
 
 def get_metadata_field(metadata: dict, vendor: ModelVendor, field: str, default: str = ""):
@@ -345,14 +366,113 @@ def _run_background_phase(
     return state
 
 
+@traceable(run_type="chain", name="advance_to_plan")
+def advance_to_plan(
+    *,
+    session_id: str,
+    vendor: ModelVendor,
+    company_report_override: Optional[str] = None,
+    structure_instructions: str = "",
+    user_id: Optional[str] = None,
+) -> VendorPhaseState:
+    """Generate an approved-waiting strategic letter plan (CV, job, research, structure instructions)."""
+    from .session_store import load_session
+
+    try:
+        session = load_session(session_id, force_reload=True)
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError(f"Failed to load session {session_id}: {e}") from e
+
+    if session is None:
+        raise ValueError(f"Session {session_id} not found in database")
+
+    state = session.vendors.get(vendor.value)
+    if state is None:
+        has_metadata = (vendor.value in session.metadata and session.metadata[vendor.value]) or "common" in session.metadata
+        if has_metadata:
+            company_name = get_metadata_field(session.metadata, vendor, "company_name", "Unknown Company")
+            state = VendorPhaseState()
+            state.company_report = company_report_override or ""
+            session_pick = _session_selected_top_docs(session)
+            if session_pick:
+                state.top_docs = session_pick
+            elif hasattr(session, "search_result") and session.search_result:
+                trace_dir_bg = Path("trace", f"{company_name}.{vendor.value}.background")
+                trace_dir_bg.mkdir(parents=True, exist_ok=True)
+                ai_client_bg = get_client(vendor)
+                try:
+                    state.top_docs = select_top_documents(session.search_result, session.job_text, ai_client_bg, trace_dir_bg)["top_docs"]
+                    _update_cost(state, ai_client_bg, phase="background", user_id=user_id, vendor_str=vendor.value)
+                except Exception:
+                    state.top_docs = []
+            else:
+                state.top_docs = []
+            session.vendors[vendor.value] = state
+            if vendor not in session.vendors_list:
+                session.vendors_list.append(vendor)
+            from .session_store import save_vendor_data, save_session
+
+            save_vendor_data(session.session_id, vendor.value, state)
+            save_session(session)
+        else:
+            raise ValueError(f"Vendor {vendor.value} not in session")
+
+    company_name = get_metadata_field(session.metadata, vendor, "company_name", "Unknown Company")
+    trace_dir = Path("trace", f"{company_name}.{vendor.value}.plan")
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    ai_client = get_client(vendor)
+
+    top_docs = _resolve_top_docs_for_phases(session, state)
+    company_report = company_report_override or state.company_report or ""
+    job_text = session.job_text
+    cv_text = session.cv_text
+
+    si = (structure_instructions or "").strip() or (session.structure_instructions or "").strip()
+    if not si:
+        si = get_structure_instructions()
+
+    additional_user_info = get_effective_additional_user_info(session.metadata, vendor, user_id)
+
+    state.company_report = company_report
+    state.top_docs = top_docs
+
+    try:
+        _reset_client_counters(ai_client)
+        logger.info("[PHASE] plan -> %s :: generate_letter_plan (XLARGE)", vendor.value)
+        letter_plan = generate_letter_plan(
+            cv_text,
+            top_docs,
+            company_report,
+            job_text,
+            ai_client,
+            trace_dir,
+            structure_instructions=si,
+            additional_user_info=additional_user_info,
+        )
+        _update_cost(state, ai_client, phase="plan", user_id=user_id, vendor_str=vendor.value)
+        _reset_client_counters(ai_client)
+    except Exception:
+        logger.exception("advance_to_plan failed for vendor=%s session_id=%s", vendor.value, session.session_id)
+        raise
+
+    state.letter_plan = letter_plan
+    session.vendors[vendor.value] = state
+    from .session_store import save_vendor_data
+
+    save_vendor_data(session.session_id, vendor.value, state)
+    return state
+
+
 @traceable(run_type="chain", name="advance_to_draft")
 def advance_to_draft(
     *,
     session_id: str,
     vendor: ModelVendor,
     company_report_override: Optional[str] = None,
-    top_docs_override: Optional[List[TopDocument]] = None,
     style_instructions: str = "",
+    letter_plan_override: Optional[str] = None,
     user_id: Optional[str] = None,
 ) -> VendorPhaseState:
     # Force reload from MongoDB to ensure we have the latest session state
@@ -384,17 +504,17 @@ def advance_to_draft(
         has_metadata = (vendor.value in session.metadata and session.metadata[vendor.value]) or "common" in session.metadata
         if has_metadata:
             # Recreate state exactly as if API had succeeded but returned user's manual input
-            # We still need to run retrieval to get top_docs (unless override provided)
+            # Example letters: session selected_top_docs (job intake), else rerank from search_result.
             company_name = get_metadata_field(session.metadata, vendor, "company_name", "Unknown Company")
             
             state = VendorPhaseState()
             state.company_report = company_report_override or ""
-            
-            # If top_docs_override provided, use it; otherwise try to get from session.search_result
-            if top_docs_override is not None:
-                state.top_docs = top_docs_override
+
+            session_pick = _session_selected_top_docs(session)
+            if session_pick:
+                state.top_docs = session_pick
             elif hasattr(session, 'search_result') and session.search_result:
-                # Run retrieval to get top_docs (as API would have done)
+                # Run retrieval to get top_docs (same as background when no intake selection)
                 trace_dir = Path("trace", f"{company_name}.{vendor.value}.background")
                 trace_dir.mkdir(parents=True, exist_ok=True)
                 ai_client = get_client(vendor)
@@ -428,7 +548,7 @@ def advance_to_draft(
     trace_dir.mkdir(parents=True, exist_ok=True)
     ai_client = get_client(vendor)
 
-    top_docs = top_docs_override or state.top_docs
+    top_docs = _resolve_top_docs_for_phases(session, state)
     company_report = company_report_override or state.company_report or ""
     job_text = session.job_text
     cv_text = session.cv_text
@@ -436,7 +556,19 @@ def advance_to_draft(
     # Use provided instructions or fall back to session
     if not style_instructions:
         style_instructions = session.style_instructions
-    
+
+    letter_plan = (
+        letter_plan_override
+        if letter_plan_override is not None
+        else (state.letter_plan or "")
+    )
+    letter_plan = (letter_plan or "").strip()
+    if not letter_plan:
+        raise ValueError(
+            "No letter plan is available for this vendor. Approve the Plan phase (or pass letter_plan) before generating a draft."
+        )
+    state.letter_plan = letter_plan
+
     # User notes for this job plus persisted feedback Q&A (agent_feedback_context in profile)
     additional_user_info = get_effective_additional_user_info(session.metadata, vendor, user_id)
 
@@ -449,7 +581,15 @@ def advance_to_draft(
         
         logger.info("[PHASE] draft -> %s :: generate_letter (XLARGE)", vendor.value)
         draft_letter = generate_letter(
-            cv_text, top_docs, company_report, job_text, ai_client, trace_dir, style_instructions, additional_user_info
+            cv_text,
+            top_docs,
+            company_report,
+            job_text,
+            ai_client,
+            trace_dir,
+            style_instructions,
+            additional_user_info,
+            letter_plan=letter_plan,
         )
         
         # Capture draft cost before feedback generation
@@ -528,8 +668,9 @@ def advance_to_refinement(
     draft_override: Optional[str] = None,
     feedback_override: Optional[Dict[str, Any]] = None,
     company_report_override: Optional[str] = None,
-    top_docs_override: Optional[List[TopDocument]] = None,
     fancy: bool = False,
+    letter_plan_override: Optional[str] = None,
+    style_instructions: str = "",
     user_id: Optional[str] = None,
 ) -> VendorPhaseState:
     # Force reload from MongoDB to ensure we have the latest session state
@@ -556,7 +697,7 @@ def advance_to_refinement(
     trace_dir.mkdir(parents=True, exist_ok=True)
     ai_client = get_client(vendor)
 
-    top_docs = top_docs_override or state.top_docs
+    top_docs = _resolve_top_docs_for_phases(session, state)
     company_report = company_report_override or state.company_report or ""
     draft_letter = draft_override or state.draft_letter or ""
     if not draft_letter:
@@ -570,9 +711,17 @@ def advance_to_refinement(
         merged.update(feedback_override)
         state.feedback = merged
 
+    letter_plan_raw = letter_plan_override if letter_plan_override is not None else (state.letter_plan or "")
+    letter_plan = (letter_plan_raw or "").strip()
+    if letter_plan_override is not None:
+        state.letter_plan = letter_plan
+
     try:
         feedback = normalize_feedback_map(state.feedback, top_docs=top_docs)
         logger.info("[PHASE] refine -> %s :: rewrite_letter (XLARGE)", vendor.value)
+        si = (style_instructions or "").strip()
+        if not si:
+            si = session.style_instructions or ""
         refined = rewrite_letter(
             draft_letter,
             feedback.get("instruction", []),
@@ -583,6 +732,8 @@ def advance_to_refinement(
             feedback.get("human", []),
             ai_client,
             trace_dir,
+            letter_plan=letter_plan,
+            style_instructions=si,
         )
 
         if fancy:

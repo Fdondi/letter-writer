@@ -2158,20 +2158,21 @@ def run_agentic_draft(
     session,
     draft_vendor: str,
     company_report_override: Optional[str] = None,
-    top_docs_override: Optional[List[TopDocument]] = None,
     style_instructions: str = "",
     max_rounds: Optional[int] = None,
     sub_comment_rounds: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Generate the draft letter with the given vendor and store agentic state.
-    Uses session common data; if company_report/top_docs not provided, runs background for draft_vendor.
+    Uses session common data; reads example letters from ``session["selected_top_docs"]`` (job intake).
+    If company_report or those examples are missing, runs background-style retrieval for draft_vendor.
     """
     _require_session(session)
     job_text = session.get("job_text", "")
     cv_text = session.get("cv_text", "")
     metadata = session.get("metadata", {})
-    top_docs: List[TopDocument] = list(top_docs_override) if top_docs_override else []
+    raw_sel = session.get("selected_top_docs") or []
+    top_docs: List[TopDocument] = cast(List[TopDocument], list(raw_sel)) if raw_sel else []
     company_report = company_report_override or ""
 
     if not company_report or not top_docs:
@@ -2246,14 +2247,14 @@ def run_agentic_draft_multi(
     session,
     draft_vendors: List[str],
     company_report_override: Optional[str] = None,
-    top_docs_override: Optional[List[TopDocument]] = None,
     style_instructions: str = "",
     max_rounds: Optional[int] = None,
     sub_comment_rounds: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Generate one draft letter per selected vendor and store in state as draft_letters.
-    Uses session common data; runs background once (first vendor) if company_report/top_docs not provided.
+    Uses session common data; reads example letters from ``session["selected_top_docs"]``.
+    Runs background-style retrieval once (first vendor) if company_report or examples are missing.
     """
     _require_session(session)
     if not draft_vendors:
@@ -2261,7 +2262,8 @@ def run_agentic_draft_multi(
     job_text = session.get("job_text", "")
     cv_text = session.get("cv_text", "")
     metadata = session.get("metadata", {})
-    top_docs: List[TopDocument] = list(top_docs_override) if top_docs_override else []
+    raw_sel = session.get("selected_top_docs") or []
+    top_docs: List[TopDocument] = cast(List[TopDocument], list(raw_sel)) if raw_sel else []
     company_report = company_report_override or ""
     first_vendor = draft_vendors[0]
 
@@ -2975,6 +2977,8 @@ def run_agentic_refine(
             instruction_fb, "NO COMMENT", "NO COMMENT",
             "NO COMMENT", "NO COMMENT", "NO COMMENT",
             ai_client, trace_dir,
+            letter_plan="",
+            style_instructions="",
         )
         cost_inc = getattr(ai_client, "total_cost", 0.0) or 0.0
         return vendor, letter, cost_inc

@@ -1,4 +1,4 @@
-from .base import BaseClient, ModelSize
+from .base import BaseClient, ModelSize, merge_system_cache_prefix_into_system
 from openai import OpenAI
 from typing import List, Dict, Any, Optional
 import logging
@@ -71,14 +71,15 @@ class LocalClient(BaseClient):
         cache_prefix: Optional[str] = None,
         system_cache_prefix: Optional[str] = None,
     ) -> str:
-        _ = cache_prefix, system_cache_prefix
-        messages = self._format_messages(system, user_messages)
+        _ = cache_prefix
+        system_prompt = merge_system_cache_prefix_into_system(system, system_cache_prefix)
+        messages = self._format_messages(system_prompt, user_messages)
         # LM Studio uses whatever model is loaded; the model param is ignored.
         model = "local-model"
         def _return_with_audit(text: str) -> str:
             self._record_llm_io(
                 model=model,
-                system=system,
+                system=system_prompt,
                 user_messages=user_messages,
                 search=search,
                 response_format=response_format,
@@ -100,7 +101,7 @@ class LocalClient(BaseClient):
         except Exception as e:
             self._record_llm_io(
                 model=model,
-                system=system,
+                system=system_prompt,
                 user_messages=user_messages,
                 search=search,
                 response_format=response_format,

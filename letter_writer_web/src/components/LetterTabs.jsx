@@ -111,7 +111,8 @@ export default function LetterTabs({
   vendorRefineCosts = {}, // Cost of producing the final letter (refine phase cost)
   finalParagraphs, 
   setFinalParagraphs, 
-  originalText, 
+  originalText,
+  companyReport = null,
   requirements = [], // Extracted key requirements
   competences = {}, // { skill: { need, level } } or legacy
   competenceScaleConfig,
@@ -629,21 +630,6 @@ export default function LetterTabs({
     })
   });
 
-  const paragraphReorderBtnStyle = (disabled) => ({
-    width: 22,
-    height: 22,
-    padding: 0,
-    fontSize: 11,
-    lineHeight: "20px",
-    cursor: disabled ? "not-allowed" : "pointer",
-    opacity: disabled ? 0.35 : 1,
-    background: "var(--panel-bg)",
-    color: "var(--text-color)",
-    border: "1px solid var(--border-color)",
-    borderRadius: 3,
-    flexShrink: 0,
-  });
-
   const PlusButton = ({ onClick, style = {} }) => (
     <div
       onClick={onClick}
@@ -844,100 +830,57 @@ export default function LetterTabs({
 
             return (
               <div key={p.id || `paragraph-${idx}`}>
-                <div
-                  data-paragraph-index={idx}
-                  style={{
-                    display: "flex",
-                    gap: 8,
-                    alignItems: "flex-start",
-                  }}
-                >
-                  <div
-                    style={{
-                      flexShrink: 0,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 4,
-                      paddingTop: 6,
+                <div data-paragraph-index={idx}>
+                  <Paragraph
+                    paragraph={p}
+                    index={idx}
+                    moveParagraph={moveFinalParagraph}
+                    color={paragraphColor}
+                    editable
+                    keyTerms={requirements}
+                    selectedKeyTerm={selectedKeyTerm}
+                    translations={tState.translations}
+                    viewLanguage={tState.viewLanguage}
+                    onTranslationLoaded={(lang, text) => {
+                      setTranslationStates((prev) => ({
+                        ...prev,
+                        [p.id]: {
+                          ...(prev[p.id] || {}),
+                          viewLanguage: lang,
+                          translations: {
+                            ...(prev[p.id]?.translations || {}),
+                            [lang]: text,
+                          },
+                        },
+                      }));
                     }}
-                  >
-                    <button
-                      type="button"
-                      aria-label="Move paragraph up"
-                      title="Move up"
-                      disabled={idx <= 0}
-                      style={paragraphReorderBtnStyle(idx <= 0)}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (idx <= 0) return;
-                        moveFinalParagraph(idx, idx - 1);
-                      }}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="Move paragraph down"
-                      title="Move down"
-                      disabled={idx >= finalParagraphs.length - 1}
-                      style={paragraphReorderBtnStyle(idx >= finalParagraphs.length - 1)}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (idx >= finalParagraphs.length - 1) return;
-                        moveFinalParagraph(idx, idx + 1);
-                      }}
-                    >
-                      ↓
-                    </button>
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <Paragraph
-                      paragraph={p}
-                      index={idx}
-                      moveParagraph={moveFinalParagraph}
-                      color={paragraphColor}
-                      editable
-                      keyTerms={requirements}
-                      selectedKeyTerm={selectedKeyTerm}
-                      translations={tState.translations}
-                      viewLanguage={tState.viewLanguage}
-                      onTranslationLoaded={(lang, text) => {
-                        setTranslationStates((prev) => ({
-                          ...prev,
-                          [p.id]: {
-                            ...(prev[p.id] || {}),
-                            viewLanguage: lang,
-                            translations: {
-                              ...(prev[p.id]?.translations || {}),
-                              [lang]: text,
-                            },
-                          },
-                        }));
-                      }}
-                      onViewLanguageChange={(lang) => {
-                        setTranslationStates((prev) => ({
-                          ...prev,
-                          [p.id]: {
-                            ...(prev[p.id] || { translations: {} }),
-                            viewLanguage: lang,
-                          },
-                        }));
-                      }}
-                      onTextChange={(txt) => updateParagraphText(idx, txt)}
-                      onFragmentSplit={(index, fragments) => {
-                        try {
-                          const fragmentText = Array.isArray(fragments)
-                            ? fragments.filter((f) => f && f.text).map((f) => f.text).join("\n\n")
-                            : "";
-                          handleFragmentSplit(index, fragments, p.text, fragmentText);
-                        } catch (error) {
-                          console.error("Error in fragment split callback:", error);
-                        }
-                      }}
-                      onDelete={() => deleteParagraph(idx)}
-                      languages={languageOptions}
-                    />
-                  </div>
+                    onViewLanguageChange={(lang) => {
+                      setTranslationStates((prev) => ({
+                        ...prev,
+                        [p.id]: {
+                          ...(prev[p.id] || { translations: {} }),
+                          viewLanguage: lang,
+                        },
+                      }));
+                    }}
+                    onTextChange={(txt) => updateParagraphText(idx, txt)}
+                    onFragmentSplit={(index, fragments) => {
+                      try {
+                        const fragmentText = Array.isArray(fragments)
+                          ? fragments.filter((f) => f && f.text).map((f) => f.text).join("\n\n")
+                          : "";
+                        handleFragmentSplit(index, fragments, p.text, fragmentText);
+                      } catch (error) {
+                        console.error("Error in fragment split callback:", error);
+                      }
+                    }}
+                    onDelete={() => deleteParagraph(idx)}
+                    onReorderUp={() => moveFinalParagraph(idx, idx - 1)}
+                    onReorderDown={() => moveFinalParagraph(idx, idx + 1)}
+                    reorderUpDisabled={idx <= 0}
+                    reorderDownDisabled={idx >= finalParagraphs.length - 1}
+                    languages={languageOptions}
+                  />
                 </div>
                 <PlusButton onClick={() => addNewParagraph(idx + 1)} />
               </div>
@@ -1193,6 +1136,7 @@ export default function LetterTabs({
             {expandedColumn === "job-description" && (
               <JobDescriptionColumn
                 jobText={originalLetter}
+                companyReport={companyReport}
                 requirements={requirements}
                 competences={competences}
                 scaleConfig={competenceScaleConfig}
@@ -1504,6 +1448,7 @@ export default function LetterTabs({
           {expandedColumn !== "job-description" && (
             <JobDescriptionColumn
               jobText={originalLetter}
+              companyReport={companyReport}
               requirements={requirements}
               competences={competences}
               scaleConfig={competenceScaleConfig}

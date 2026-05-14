@@ -8,9 +8,8 @@ import {
 } from "./feedbackItemUtils";
 
 /**
- * Draft phase module - the first phase in the phased flow.
- * Shows the generated draft letter and feedback for review.
- * Approving this phase triggers the refine API to generate the final letter.
+ * Draft phase — full letter plus machine feedback, after the Plan phase is approved.
+ * Approving triggers the refine API to produce the final letter.
  *
  * Background search data (company_report, top_docs) is gathered during the
  * initial phase (extraction or standalone), before the phased flow starts.
@@ -41,13 +40,15 @@ export function initializeEditsFromData(data) {
     return {};
   }
 
-  // Handle draft_letter - might be null, undefined, or empty string
+  const out = { feedback_overrides: {} };
   const draft_letter = data.draft_letter;
   if (draft_letter && typeof draft_letter === "string" && draft_letter.trim()) {
-    return { draft_letter: draft_letter, feedback_overrides: {} };
+    out.draft_letter = draft_letter;
   }
-
-  return {};
+  if (!out.draft_letter) {
+    return {};
+  }
+  return out;
 }
 
 /**
@@ -91,7 +92,11 @@ export function computeReadyForApproval({
   feedbackItemApprovals,
   feedbackOverrides,
   feedback,
+  cardPhaseEdits,
+  cardPhaseData,
 }) {
+  void cardPhaseEdits;
+  void cardPhaseData;
   if (isLoading) return false;
   if (approved && !thisPhaseDirty) return false;
 

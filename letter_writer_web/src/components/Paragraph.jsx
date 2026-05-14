@@ -71,6 +71,121 @@ function splitTextIntoFragments(text, originalParagraph) {
   }));
 }
 
+/** Delete + compact reorder arrows, absolutely positioned top-right (no extra layout column). */
+function ParagraphActionStack({
+  onDelete,
+  onReorderUp,
+  onReorderDown,
+  reorderUpDisabled,
+  reorderDownDisabled,
+}) {
+  const showReorder =
+    typeof onReorderUp === "function" && typeof onReorderDown === "function";
+  if (!onDelete && !showReorder) return null;
+
+  const reorderBtnStyle = (disabled) => ({
+    width: 16,
+    height: 12,
+    padding: 0,
+    fontSize: 9,
+    lineHeight: "10px",
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.14 : 0.28,
+    background: "transparent",
+    color: "var(--secondary-text-color)",
+    border: "none",
+    borderRadius: 1,
+    flexShrink: 0,
+  });
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: -6,
+        right: -6,
+        zIndex: 2,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 0,
+      }}
+    >
+      {onDelete && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          style={{
+            background: "#ef4444",
+            color: "white",
+            border: "none",
+            borderRadius: 2,
+            width: 16,
+            height: 16,
+            fontSize: "10px",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            padding: 0,
+          }}
+          title="Delete paragraph"
+        >
+          ×
+        </button>
+      )}
+      {showReorder && (
+        <>
+          <button
+            type="button"
+            aria-label="Move paragraph up"
+            title="Move up"
+            disabled={reorderUpDisabled}
+            style={reorderBtnStyle(reorderUpDisabled)}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (reorderUpDisabled) return;
+              onReorderUp();
+            }}
+            onMouseEnter={(e) => {
+              if (!reorderUpDisabled) e.currentTarget.style.opacity = "0.55";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.opacity = String(reorderUpDisabled ? 0.14 : 0.28);
+            }}
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            aria-label="Move paragraph down"
+            title="Move down"
+            disabled={reorderDownDisabled}
+            style={reorderBtnStyle(reorderDownDisabled)}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (reorderDownDisabled) return;
+              onReorderDown();
+            }}
+            onMouseEnter={(e) => {
+              if (!reorderDownDisabled) e.currentTarget.style.opacity = "0.55";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.opacity = String(reorderDownDisabled ? 0.14 : 0.28);
+            }}
+          >
+            ↓
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function Paragraph({
   paragraph,
   index,
@@ -80,6 +195,10 @@ export default function Paragraph({
   onTextChange,
   onFragmentSplit,
   onDelete,
+  onReorderUp,
+  onReorderDown,
+  reorderUpDisabled = false,
+  reorderDownDisabled = false,
   dropZoneRef = null,
   languages = [],
   keyTerms = [],
@@ -545,33 +664,13 @@ export default function Paragraph({
           </div>
         )}
 
-        {onDelete && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-            style={{
-              position: "absolute",
-              top: -6,
-              right: -6,
-              background: "#ef4444",
-              color: "white",
-              border: "none",
-              borderRadius: 2,
-              width: 16,
-              height: 16,
-              fontSize: "10px",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center"
-            }}
-            title="Delete paragraph"
-          >
-            ×
-          </button>
-        )}
+        <ParagraphActionStack
+          onDelete={onDelete}
+          onReorderUp={onReorderUp}
+          onReorderDown={onReorderDown}
+          reorderUpDisabled={reorderUpDisabled}
+          reorderDownDisabled={reorderDownDisabled}
+        />
         
         {editable ? (
           isEditing ? (
@@ -740,33 +839,13 @@ export default function Paragraph({
         </div>
       )}
 
-      {onDelete && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          style={{
-            position: "absolute",
-              top: -6,
-              right: -6,
-            background: "#ef4444",
-            color: "white",
-            border: "none",
-            borderRadius: 2,
-            width: 16,
-            height: 16,
-            fontSize: "10px",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center"
-          }}
-          title="Delete paragraph"
-        >
-          ×
-        </button>
-      )}
+      <ParagraphActionStack
+        onDelete={onDelete}
+        onReorderUp={onReorderUp}
+        onReorderDown={onReorderDown}
+        reorderUpDisabled={reorderUpDisabled}
+        reorderDownDisabled={reorderDownDisabled}
+      />
       
       {editable ? (
         isEditing ? (

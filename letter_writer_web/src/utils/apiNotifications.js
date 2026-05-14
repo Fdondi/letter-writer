@@ -69,7 +69,7 @@ const formatNotificationMessage = (url, status) => {
   }
   
   // Phase cards - extract phase name and vendor name
-  const phaseMatch = url.match(/\/api\/phases\/(draft|refine)\/([^/]+)\//);
+  const phaseMatch = url.match(/\/api\/phases\/(draft|refine|plan)\/([^/]+)\//);
   if (phaseMatch) {
     const phaseName = phaseMatch[1];
     const vendor = phaseMatch[2];

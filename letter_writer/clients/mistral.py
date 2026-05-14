@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, cast
 import typer
 from mistralai.client import Mistral
 
-from .base import BaseClient, ModelSize
+from .base import BaseClient, ModelSize, merge_system_cache_prefix_into_system
 from langsmith import traceable
 
 class MistralClient(BaseClient):
@@ -174,7 +174,8 @@ class MistralClient(BaseClient):
         cache_prefix: Optional[str] = None,
         system_cache_prefix: Optional[str] = None,
     ) -> str:
-        _ = cache_prefix, system_cache_prefix  # Mistral does not support prompt caching
+        _ = cache_prefix
+        system_prompt = merge_system_cache_prefix_into_system(system, system_cache_prefix)
         if isinstance(model_size, str):
             model = model_size
         else:
@@ -182,7 +183,7 @@ class MistralClient(BaseClient):
         def _return_with_audit(text: str) -> str:
             self._record_llm_io(
                 model=model,
-                system=system,
+                system=system_prompt,
                 user_messages=user_messages,
                 search=search,
                 response_format=response_format,
@@ -198,11 +199,11 @@ class MistralClient(BaseClient):
         if response_format and not search:
             typer.echo("[INFO] Mistral: using chat.complete with JSON object mode (not Agents API)")
             try:
-                out = self._chat_complete(model, system, user_messages, response_format=response_format, search=False)
+                out = self._chat_complete(model, system_prompt, user_messages, response_format=response_format, search=False)
             except Exception as e:
                 self._record_llm_io(
                     model=model,
-                    system=system,
+                    system=system_prompt,
                     user_messages=user_messages,
                     search=search,
                     response_format=response_format,
@@ -218,7 +219,7 @@ class MistralClient(BaseClient):
         # Agents API when search OR when no structured output is requested
         # When search=False, agent is created without tools (no extra cost)
         # When search=True, agent includes web_search tool ($30 per 1k calls)
-        agent_id = self._get_or_create_agent(model, system, search=search)
+        agent_id = self._get_or_create_agent(model, system_prompt, search=search)
 
         # Combine user messages into a single input
         user_input = "\n\n".join(user_messages)
@@ -232,7 +233,7 @@ class MistralClient(BaseClient):
         except Exception as e:
             self._record_llm_io(
                 model=model,
-                system=system,
+                system=system_prompt,
                 user_messages=user_messages,
                 search=search,
                 response_format=response_format,

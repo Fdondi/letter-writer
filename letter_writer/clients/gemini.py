@@ -5,7 +5,7 @@ from typing import Any, List, Tuple, cast, Dict, Optional
 import typer
 from langsmith import traceable
 
-from .base import BaseClient, ModelSize
+from .base import BaseClient, ModelSize, merge_system_cache_prefix_into_system
 
 genai: Any = None
 types: Any = None
@@ -137,7 +137,8 @@ class GeminiClient(BaseClient):
         cache_prefix: Optional[str] = None,
         system_cache_prefix: Optional[str] = None,
     ) -> str:
-        _ = cache_prefix, system_cache_prefix  # Gemini uses explicit Context Caching API, not supported here
+        _ = cache_prefix  # user-message cache block is Anthropic-only today
+        system_prompt = merge_system_cache_prefix_into_system(system, system_cache_prefix)
         if types is None:
             raise ImportError(
                 "Gemini client requires the 'google-genai' package. Install it to use Gemini models."
@@ -158,7 +159,7 @@ class GeminiClient(BaseClient):
         def _return_with_audit(text: str) -> str:
             self._record_llm_io(
                 model=model_name,
-                system=system,
+                system=system_prompt,
                 user_messages=user_messages,
                 search=search,
                 response_format=response_format,
@@ -191,7 +192,7 @@ class GeminiClient(BaseClient):
         try:
             schema = ((response_format or {}).get("json_schema") or {}).get("schema")
             cfg: Dict[str, Any] = {
-                "system_instruction": system,
+                "system_instruction": system_prompt,
                 "tools": cast(Any, tools),
             }
             if thinking_level and thinking_level in _THINKING_BUDGETS:
@@ -209,7 +210,7 @@ class GeminiClient(BaseClient):
         except Exception as exc:
             self._record_llm_io(
                 model=model_name,
-                system=system,
+                system=system_prompt,
                 user_messages=user_messages,
                 search=search,
                 response_format=response_format,

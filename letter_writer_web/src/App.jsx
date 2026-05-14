@@ -79,6 +79,7 @@ export default function App({ flow = "vendor" }) {
   const [showPointOfContact, setShowPointOfContact] = useState(false);
   const [additionalUserInfo, setAdditionalUserInfo] = useState("");
   const [additionalCompanyInfo, setAdditionalCompanyInfo] = useState("");
+  const [structureInstructions, setStructureInstructions] = useState("");
   const [showAdditionalInfo, setShowAdditionalInfo] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractionError, setExtractionError] = useState(null);
@@ -444,6 +445,26 @@ export default function App({ flow = "vendor" }) {
     return selectedTopDocs;
   }, [selectedDocIds, allSearchResults, selectedTopDocs]);
 
+  /** Only job intake (similar offers) sends top_docs — via POST /api/phases/session/. */
+  const jobIntakeTopDocsForSession = useMemo(() => {
+    if (!allSearchResults.length) return {};
+    return { top_docs: effectiveTopDocs || [] };
+  }, [allSearchResults, effectiveTopDocs]);
+
+  useEffect(() => {
+    if (!phaseSessionId || !allSearchResults.length) return undefined;
+    const t = setTimeout(() => {
+      fetchWithHeartbeat("/api/phases/session/", {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: phaseSessionId,
+          top_docs: effectiveTopDocs || [],
+        }),
+      }).catch((e) => console.warn("Failed to persist top_docs to session:", e));
+    }, 400);
+    return () => clearTimeout(t);
+  }, [phaseSessionId, allSearchResults.length, effectiveTopDocs]);
+
   // Handle job text language change
   const handleJobTextLanguageChange = async (code) => {
     if (code === "source") {
@@ -524,6 +545,9 @@ export default function App({ flow = "vendor" }) {
         // Load default background models
         if (settings.default_background_models && Array.isArray(settings.default_background_models) && settings.default_background_models.length > 0) {
           setBackgroundModels(new Set(settings.default_background_models));
+        }
+        if (typeof settings.structure_instructions === "string") {
+          setStructureInstructions(settings.structure_instructions);
         }
       })
       .catch((e) => {
@@ -775,6 +799,51 @@ export default function App({ flow = "vendor" }) {
       Object.values(finalLetters).some((text) => typeof text === "string" && text.trim().length > 0);
     return hasVendorOutput || hasAgenticOutput;
   }, [documentId, letters, agenticState]);
+
+  const hasUnsavedComposeInput = useMemo(
+    () =>
+      !isFormSnapshotPristine({
+        jobText,
+        companyName,
+        jobTitle,
+        location,
+        language,
+        salary,
+        requirements,
+        competences,
+        pointOfContact,
+        additionalUserInfo,
+        additionalCompanyInfo,
+        extractedData,
+      }),
+    [
+      isFormSnapshotPristine,
+      jobText,
+      companyName,
+      jobTitle,
+      location,
+      language,
+      salary,
+      requirements,
+      competences,
+      pointOfContact,
+      additionalUserInfo,
+      additionalCompanyInfo,
+      extractedData,
+    ]
+  );
+
+  const shouldWarnOnLeave = hasUnsavedGeneratedWork || hasUnsavedComposeInput;
+
+  useEffect(() => {
+    if (isAuthenticated !== true || !shouldWarnOnLeave) return undefined;
+    const onBeforeUnload = (e) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [isAuthenticated, shouldWarnOnLeave]);
 
   const guardBeforeEnablingLocal = useCallback(
     (fn) => {
@@ -1465,24 +1534,34 @@ export default function App({ flow = "vendor" }) {
             requirements: currentExtraction.requirements.filter(Boolean),
             competences: Object.keys(competences).length > 0 ? competences : undefined,
             point_of_contact: currentExtraction.point_of_contact,
+            structure_instructions: structureInstructions || "",
+            ...jobIntakeTopDocsForSession,
+          }),
+        });
+      } else {
+        await fetchWithHeartbeat("/api/phases/session/", {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: phaseSessionId,
+            structure_instructions: structureInstructions || "",
+            ...jobIntakeTopDocsForSession,
           }),
         });
       }
       
-      // Draft phase - include selected research results if available
-      const draftBody = {
+      // Plan phase - include selected research results if available
+      const planBody = {
         session_id: phaseSessionId,
       };
       if (selectedCompanyReport) {
-        draftBody.company_report = selectedCompanyReport;
-        draftBody.top_docs = effectiveTopDocs;
+        planBody.company_report = selectedCompanyReport;
       }
       const result = await fetchWithHeartbeat(
-        `/api/phases/draft/${vendor}/`,
+        `/api/phases/plan/${vendor}/`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(draftBody),
+          body: JSON.stringify(planBody),
         },
         { getState: getStateForRestore }
       );
@@ -1496,8 +1575,8 @@ export default function App({ flow = "vendor" }) {
       
       const data = result.data;
 
-      // Populate the draft phase shelf in PhaseFlow
-      populatePhaseShelf("draft", vendor, data);
+      // Populate the plan phase shelf in PhaseFlow
+      populatePhaseShelf("plan", vendor, data);
 
       setPhaseSessions((prev) => ({ ...prev, [vendor]: phaseSessionId }));
       // phaseState, phaseEdits removed - cards own their state
@@ -1564,6 +1643,8 @@ export default function App({ flow = "vendor" }) {
         additional_company_info: additionalCompanyInfo || "",
       };
       if (Object.keys(competences).length > 0) sessionPayload.competences = competences;
+      sessionPayload.structure_instructions = structureInstructions || "";
+      Object.assign(sessionPayload, jobIntakeTopDocsForSession);
 
       await fetchWithHeartbeat("/api/phases/session/", {
         method: "POST",
@@ -1590,8 +1671,7 @@ export default function App({ flow = "vendor" }) {
       }).catch((e) => console.warn("Failed to save competence ratings to profile:", e));
     }
 
-    // Start draft phase for all vendors in parallel
-    // Background search is already done during the initial phase; draft API reads from session
+    // Start plan phase for all vendors in parallel (draft runs after plan is approved)
     vendorList.forEach((vendor) => {
       (async () => {
         try {
@@ -1601,11 +1681,10 @@ export default function App({ flow = "vendor" }) {
           // Pass overrides if available (from consolidated research)
           if (selectedCompanyReport) {
             body.company_report = selectedCompanyReport;
-            body.top_docs = effectiveTopDocs;
           }
 
           const result = await fetchWithHeartbeat(
-            `/api/phases/draft/${vendor}/`,
+            `/api/phases/plan/${vendor}/`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -1622,8 +1701,8 @@ export default function App({ flow = "vendor" }) {
           
           const data = result.data;
           
-          // Populate the draft phase shelf in PhaseFlow
-          populatePhaseShelf("draft", vendor, data);
+          // Populate the plan phase shelf in PhaseFlow
+          populatePhaseShelf("plan", vendor, data);
 
           // Update session for this vendor
           setPhaseSessions((prev) => ({ ...prev, [vendor]: initialSessionId }));
@@ -1631,7 +1710,7 @@ export default function App({ flow = "vendor" }) {
           // Set session ID from first successful response
           setPhaseSessionId((prev) => prev || initialSessionId);
         } catch (e) {
-          console.error(`Draft phase error for ${vendor}:`, e);
+          console.error(`Plan phase error for ${vendor}:`, e);
         }
       })();
     });
@@ -1685,6 +1764,8 @@ export default function App({ flow = "vendor" }) {
         additional_company_info: additionalCompanyInfo || "",
       };
       if (Object.keys(competences).length > 0) sessionPayload.competences = competences;
+      sessionPayload.structure_instructions = structureInstructions || "";
+      Object.assign(sessionPayload, jobIntakeTopDocsForSession);
       await fetchWithHeartbeat("/api/phases/session/", {
         method: "POST",
         body: JSON.stringify(sessionPayload),
@@ -1712,7 +1793,6 @@ export default function App({ flow = "vendor" }) {
     try {
       const body = {};
       if (selectedCompanyReport) body.company_report = selectedCompanyReport;
-      if (effectiveTopDocs) body.top_docs = effectiveTopDocs;
       // Honor vendor selection: one draft per selected vendor
       if (vendorsList.length > 0) body.draft_vendors = vendorsList;
       body.max_rounds = agenticMaxRounds;
@@ -1987,6 +2067,38 @@ export default function App({ flow = "vendor" }) {
     // However, the best guard is the UI button being disabled.
     // We can also check if we already have the result data in the shelf to avoid re-fetching
     // unless explicitly asked (which would likely be a different function or cleared state).
+
+    if (phase === "plan") {
+      const sessionId = phaseSessions[vendor] || phaseSessionId;
+      const payload = {
+        session_id: sessionId,
+        letter_plan: edits.letter_plan,
+      };
+      if (selectedCompanyReport) {
+        payload.company_report = selectedCompanyReport;
+      }
+      try {
+        const result = await fetchWithHeartbeat(
+          `/api/phases/draft/${vendor}/`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          },
+          { getState: getStateForRestore }
+        );
+        if (result.isHeartbeat) {
+          return null;
+        }
+        const data = result.data;
+        populatePhaseShelf("draft", vendor, data);
+        return data;
+      } catch (e) {
+        console.error("Draft phase error after plan approval", e);
+        const errorMessage = extractErrorMessage(e);
+        throw new Error(errorMessage);
+      }
+    }
 
     if (phase === "draft") {
       // Approving the draft phase triggers refinement and sends the final letter to assembly
@@ -2863,6 +2975,7 @@ export default function App({ flow = "vendor" }) {
                 finalParagraphs={flow === "agentic" ? agenticFinalParagraphs : finalParagraphs}
                 setFinalParagraphs={flow === "agentic" ? setAgenticFinalParagraphs : setFinalParagraphs}
                 originalText={jobText}
+                companyReport={selectedCompanyReport}
                 requirements={requirements}
                 competences={competences}
                 competenceScaleConfig={competenceScaleConfig}
