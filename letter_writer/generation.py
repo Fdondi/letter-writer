@@ -74,7 +74,7 @@ def allowed_feedback_context_sources_for_category(
         return frozenset({"LETTER", "BACKGROUND_RESEARCH"})
     if cat == "accuracy":
         return frozenset({"CV", "LETTER"})
-    if cat in ("precision", "company_fit"):
+    if cat in ("precision", "company_fit", "goal_fit"):
         return frozenset({"BACKGROUND_RESEARCH", "LETTER"})
     if cat == "user_fit":
         allowed = frozenset({"CV", "LETTER"})
@@ -99,7 +99,7 @@ def legacy_context_string_default_source_for_category(
         return "BACKGROUND_RESEARCH"
     if cat == "accuracy":
         return "CV"
-    if cat in ("precision", "company_fit"):
+    if cat in ("precision", "company_fit", "goal_fit"):
         return "BACKGROUND_RESEARCH"
     if cat == "user_fit":
         return "EXAMPLE" if _user_fit_has_example_letters(top_docs) else "CV"
@@ -174,7 +174,7 @@ VENDOR_FEEDBACK_JSON_SCHEMA: Dict[str, Any] = {
 
 # Topic keys for per-topic agentic feedback.
 # Order matters: downstream topics can review and challenge prior topics' top comments.
-AGENTIC_TOPIC_KEYS = ("instruction", "company_fit", "precision", "user_fit", "human", "accuracy")
+AGENTIC_TOPIC_KEYS = ("instruction", "company_fit", "goal_fit", "precision", "user_fit", "human", "accuracy")
 
 
 def _extract_json_value(raw: str) -> Any:
@@ -431,6 +431,7 @@ PHASED_FEEDBACK_CATEGORY_KEYS = (
     "accuracy",
     "precision",
     "company_fit",
+    "goal_fit",
     "user_fit",
     "human",
 )
@@ -521,6 +522,27 @@ def _company_job_letter_context(
     )
 
 
+def _company_job_hire_goal_letter_context(
+    *,
+    company_report: str,
+    job_text: str,
+    letter: str,
+    hire_problem: str = "",
+) -> str:
+    """Like ``_company_job_letter_context`` plus optional extracted hire-goal line for goal_fit_check."""
+    hp = (hire_problem or "").strip()
+    prefix = ""
+    if hp:
+        prefix = (
+            "========== Hire goal / problem this role solves (structured extraction from the posting):\n"
+            + hp
+            + "\n==========\n"
+        )
+    return prefix + _company_job_letter_context(
+        company_report=company_report, job_text=job_text, letter=letter
+    )
+
+
 def _phased_feedback_checker_precision_prompts(
     *,
     letter: str,
@@ -557,6 +579,38 @@ def _phased_feedback_checker_company_fit_prompts(
         "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
     )
     prompt = "Review alignment with the company's values, tone, and culture; note generic or mismatched content."
+    return system, prompt
+
+
+def _phased_feedback_checker_goal_fit_prompts(
+    *,
+    letter: str,
+    company_report: str,
+    job_text: str,
+    hire_problem: str = "",
+) -> Tuple[str, str]:
+    hp = (hire_problem or "").strip()
+    framing = (
+        "A separate field (shown in context as 'Hire goal / problem this role solves') states what problem or outcome "
+        "the company is trying to address with this hire. Treat that as the primary reading of the hiring intent when it is non-empty; "
+        "otherwise infer the hiring goal only from the job offer and company report.\n"
+        if hp
+        else "Infer what problem or outcome the company is trying to address with this hire from the job offer and company report.\n"
+    )
+    system = (
+        "You are a senior hiring manager. Evaluate whether the cover letter reads like someone who understands "
+        "what the company is trying to solve or achieve with this hire, and sounds ready to contribute toward that—"
+        "whether through relevant experience, credible ability and willingness to learn in the right areas, and/or "
+        "the right mindset (ownership, clarity, collaboration, pragmatism) where the posting calls for it.\n"
+        + framing
+        + "Do not nitpick wording if the substance shows engagement with the hiring goal. "
+        "Flag only meaningful gaps: the letter ignores the central problem, focuses on unrelated bragging, "
+        "misreads what the role is for, or sounds like a generic template with no line of sight to the company's need.\n"
+        "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
+    )
+    prompt = (
+        "Review whether the letter demonstrates understanding of the hiring goal and readiness to help solve it."
+    )
     return system, prompt
 
 
@@ -907,8 +961,8 @@ def normalize_feedback_map(
     fb: Optional[Dict[str, Any]],
     top_docs: Optional[Sequence[Any]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Normalize a full six-key (or partial) feedback dict after load or override."""
-    keys = ("instruction", "accuracy", "precision", "company_fit", "user_fit", "human")
+    """Normalize a full feedback dict (all phased dimensions) after load or override."""
+    keys = ("instruction", "accuracy", "precision", "company_fit", "goal_fit", "user_fit", "human")
     src = fb or {}
     return {
         k: normalize_feedback_value(src.get(k), category_key=k, top_docs=top_docs)
@@ -957,6 +1011,9 @@ EXTRACTION_SYSTEM = (
 )
 
 _JOB_PREFIX = "Job description:\n"
+
+# Structured extraction: single JSON object with competence category arrays plus this string key.
+HIRE_PROBLEM_JSON_KEY = "hire_problem"
 
 
 def _get_extraction_model_name() -> str:
@@ -1029,16 +1086,20 @@ def extract_key_competences(
     trace_dir: Path | None = None,
     need_categories: tuple[str, ...] | None = None,
     need_semantics: Optional[Dict[str, str]] = None,
-) -> Dict[str, List[str]]:
-    """Extract key competences from the job description, grouped by need category.
-    Returns e.g. {"critical": ["C++", "German"], "nice to have": ["English"], "expected": ["git"]}.
-    ``need_categories``: JSON keys to use; order preserved. Default DEFAULT_NEED_SEMANTICS.keys().
-    ``need_semantics``: {category: "short description"} for prompt; merged over DEFAULT_NEED_SEMANTICS.
+) -> Tuple[Dict[str, List[str]], str]:
+    """Extract hire goal/problem plus key competences from the job description in one JSON response.
+
+    Returns ``(competences_by_category, hire_problem)`` where ``hire_problem`` is a short plain-text
+    summary of what the company is trying to solve or achieve with this hire (business/team outcome,
+    not a skill list). The model must output JSON with key ``hire_problem`` (string) in addition to
+    the competence category keys.
     """
     cats = need_categories or tuple(DEFAULT_NEED_SEMANTICS.keys())
     semantics = {**DEFAULT_NEED_SEMANTICS, **(need_semantics or {})}
     keys_str = ", ".join(cats)
-    example = json.dumps({k: ["C++", "git"] if k == cats[0] else [] for k in cats}, separators=(",", ":"))
+    example_obj: Dict[str, Any] = {HIRE_PROBLEM_JSON_KEY: "Grow the payments platform in EU markets while hardening fraud detection."}
+    example_obj.update({k: ["C++", "git"] if k == cats[0] else [] for k in cats})
+    example = json.dumps(example_obj, separators=(",", ":"))
     parts = [
         f"{c} = {str(semantics[c]).strip()}"
         for c in cats
@@ -1046,8 +1107,11 @@ def extract_key_competences(
     ]
     semantic = (" " + "; ".join(parts) + ". ") if parts else ""
     task = (
-        f"Task: Extract key competences as JSON with keys exactly: {keys_str}. "
-        "Each value is an array of strings (competences). Use empty arrays [] if none in that category. "
+        f"Task: Respond with a single JSON object. First, set key {HIRE_PROBLEM_JSON_KEY!r} to a concise string (2–6 sentences): "
+        "what problem, gap, or outcome the company is hiring this role to address—business or organizational need, not a list of tools. "
+        "Infer from the posting; if unclear, give your best inference and briefly note uncertainty.\n"
+        f"Second, under these keys exactly—{keys_str}—extract key competences. "
+        "Each of those keys maps to an array of strings (competences). Use empty arrays [] if none in that category. "
         f"Assign each competence to the most appropriate category.{semantic}"
         "Output the skill name only, without level or proficiency modifiers: e.g. 'C++', 'German', 'git'. "
         "Do not include words like 'fluent', 'proficient', 'basic', 'language proficiency'—they describe level, not the skill. "
@@ -1064,6 +1128,9 @@ def extract_key_competences(
         logger.warning("extract_key_competences JSON parse failed: %s", e)
         data = {}
 
+    hire_raw = data.get(HIRE_PROBLEM_JSON_KEY)
+    hire_problem = str(hire_raw).strip() if hire_raw is not None else ""
+
     out: Dict[str, List[str]] = {}
     for key in cats:
         val = data.get(key)
@@ -1072,7 +1139,7 @@ def extract_key_competences(
             out[key] = [s for s in core_skills if s]
         else:
             out[key] = []
-    return out
+    return out, hire_problem
 
 
 def _flatten_competences_by_category(
@@ -1218,10 +1285,17 @@ def extract_job_metadata(
         comp_dir = Path(base_dir, "competences") if base_dir else None
 
         cache_key = (job_text, need_labels, frozenset(need_semantics.items()))
+        hire_problem = ""
         with _EXTRACTION_CACHE_LOCK:
             if cache_key in _EXTRACTION_CACHE:
                 _EXTRACTION_CACHE.move_to_end(cache_key)
-                meta, by_category = _EXTRACTION_CACHE[cache_key]
+                cached = _EXTRACTION_CACHE[cache_key]
+                if isinstance(cached, tuple) and len(cached) >= 3:
+                    meta, by_category, hire_problem = cached[0], cached[1], str(cached[2] or "")
+                elif isinstance(cached, tuple) and len(cached) == 2:
+                    meta, by_category = cached[0], cached[1]
+                else:
+                    meta, by_category = None, None
             else:
                 meta, by_category = None, None
         if meta is None or by_category is None:
@@ -1241,9 +1315,9 @@ def extract_job_metadata(
                 f_no = ex.submit(run_no_requirements)
                 f_comp = ex.submit(run_competences)
                 meta = f_no.result()
-                by_category = f_comp.result()
+                by_category, hire_problem = f_comp.result()
             with _EXTRACTION_CACHE_LOCK:
-                _EXTRACTION_CACHE[cache_key] = (meta, by_category)
+                _EXTRACTION_CACHE[cache_key] = (meta, by_category, hire_problem)
                 _EXTRACTION_CACHE.move_to_end(cache_key)
                 while len(_EXTRACTION_CACHE) > _EXTRACTION_CACHE_MAX:
                     _EXTRACTION_CACHE.popitem(last=False)
@@ -1294,6 +1368,7 @@ def extract_job_metadata(
             for skill, need in flat_pairs
         }
         meta["requirements"] = flat_skills
+        meta["hire_problem"] = hire_problem or ""
         return meta
 
     # Legacy single-call path (no CV): extract everything including requirements, no grading.
@@ -1500,6 +1575,7 @@ def generate_letter_plan(
     trace_dir: Path,
     structure_instructions: str = "",
     additional_user_info: str = "",
+    hire_problem: str = "",
 ) -> str:
     """High-level cover letter plan: strengths, weaknesses to frame, and layout (no draft prose)."""
     company_report = company_report if company_report is not None else ""
@@ -1537,11 +1613,21 @@ def generate_letter_plan(
         + "\n"
     )
 
+    hire_block = ""
+    hp = (hire_problem or "").strip()
+    if hp:
+        hire_block = (
+            "\n\n========== Hire goal / problem this role should address (from posting extraction) ==========\n"
+            + hp
+            + "\n==========\n"
+        )
+
     prompt = (
         "========== User CV:\n" + cv_text + "\n==========\n" +
         "========== Examples:\n" + examples_formatted + "\n==========\n" +
         "========== Company Report:\n" + company_report + "\n==========\n" +
         "========== Target Job Description:\n" + job_text + "\n=========="
+        + hire_block
     )
     (trace_dir / "plan_prompt.txt").write_text(prompt, encoding="utf-8")
     return client.call(ModelSize.XLARGE, system, [prompt])
@@ -1558,6 +1644,7 @@ def generate_letter(
     style_instructions: str = "",
     additional_user_info: str = "",
     letter_plan: str = "",
+    hire_problem: str = "",
 ) -> str:
     """Generate a personalized cover letter based on CV, examples, company report, and job description.
     
@@ -1629,11 +1716,20 @@ def generate_letter(
     except Exception as e:
         logger.debug("trace write failed: %s", e)
     # #endregion
+    hire_block = ""
+    hp = (hire_problem or "").strip()
+    if hp:
+        hire_block = (
+            "\n\n========== Hire goal / problem this role should address (from posting extraction) ==========\n"
+            + hp
+            + "\n==========\n"
+        )
     prompt = (
         "========== User CV:\n" + cv_text + "\n==========\n" +
         "========== Examples:\n" + examples_formatted + "\n==========\n" +
         "========== Company Report:\n" + company_report + "\n==========\n" +
         "========== Target Job Description:\n" + job_text + "\n=========="
+        + hire_block
     )
     (trace_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
     return client.call(ModelSize.XLARGE, system, [prompt])
@@ -1721,6 +1817,38 @@ def company_fit_check(letter: str, company_report: str, job_offer: str, client: 
         legacy_string_source=legacy,
         system_cache_prefix=_company_job_letter_context(
             company_report=company_report, job_text=job_offer, letter=letter
+        ),
+    )
+
+@traceable(run_type="chain", name="goal_fit_check")
+def goal_fit_check(
+    letter: str,
+    company_report: str,
+    job_offer: str,
+    client: BaseClient,
+    hire_problem: str = "",
+) -> List[Dict[str, Any]]:
+    """Check whether the letter shows understanding of the hiring goal and readiness to contribute."""
+    system, prompt = _phased_feedback_checker_goal_fit_prompts(
+        letter=letter,
+        company_report=company_report,
+        job_text=job_offer,
+        hire_problem=hire_problem,
+    )
+    allowed = allowed_feedback_context_sources_for_category("goal_fit")
+    legacy = legacy_context_string_default_source_for_category("goal_fit")
+    return _call_vendor_feedback_items(
+        client,
+        ModelSize.BASE,
+        system,
+        prompt,
+        allowed_context_sources=allowed,
+        legacy_string_source=legacy,
+        system_cache_prefix=_company_job_hire_goal_letter_context(
+            company_report=company_report,
+            job_text=job_offer,
+            letter=letter,
+            hire_problem=hire_problem,
         ),
     )
 
@@ -1819,6 +1947,7 @@ def get_agentic_topic_context(
     style_instructions: str = "",
     additional_user_info: str = "",
     draft_letters: Optional[dict] = None,
+    hire_problem: str = "",
 ) -> str:
     """Build the topic-specific context string for agentic feedback prompts.
     Returns the context blocks (excluding the draft letter itself) to include in the prompt.
@@ -1855,6 +1984,20 @@ def get_agentic_topic_context(
     if topic == "company_fit":
         return (
             "========== Company Report:\n" + company_report + "\n==========\n"
+            + "========== Job Offer:\n" + job_text + "\n==========\n\n" + letter_block
+        )
+    if topic == "goal_fit":
+        hp = (hire_problem or "").strip()
+        prefix = ""
+        if hp:
+            prefix = (
+                "========== Hire goal / problem this role solves (structured extraction from the posting):\n"
+                + hp
+                + "\n==========\n"
+            )
+        return (
+            prefix
+            + "========== Company Report:\n" + company_report + "\n==========\n"
             + "========== Job Offer:\n" + job_text + "\n==========\n\n" + letter_block
         )
     if topic == "user_fit":
@@ -2005,6 +2148,7 @@ def rewrite_letter(
     accuracy_feedback: Any,
     precision_feedback: Any,
     company_fit_feedback: Any,
+    goal_fit_feedback: Any,
     user_fit_feedback: Any,
     human_feedback: Any,
     client: BaseClient,
@@ -2038,6 +2182,7 @@ def rewrite_letter(
         ("Accuracy Feedback", accuracy_feedback),
         ("Precision Feedback", precision_feedback),
         ("Company Fit Feedback", company_fit_feedback),
+        ("Goal Fit Feedback", goal_fit_feedback),
         ("User Fit Feedback", user_fit_feedback),
         ("Human Feedback", human_feedback),
     )

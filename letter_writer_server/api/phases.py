@@ -32,6 +32,7 @@ from letter_writer.generation import (
     PHASED_FEEDBACK_CATEGORY_KEYS,
     _phased_feedback_checker_accuracy_prompts,
     _phased_feedback_checker_company_fit_prompts,
+    _phased_feedback_checker_goal_fit_prompts,
     _phased_feedback_checker_human_prompts,
     _phased_feedback_checker_instruction_prompts,
     _phased_feedback_checker_precision_prompts,
@@ -333,7 +334,7 @@ def update_session_common_data(request: Request, data: Dict[str, Any], session: 
     common = session['metadata']['common']
     # Merge fields from request body into common metadata
     # The frontend sends fields like company_name, job_title directly in body
-    fields = ["company_name", "job_title", "location", "language", "salary", "requirements", "competences", "point_of_contact", "additional_user_info", "additional_company_info"]
+    fields = ["company_name", "job_title", "location", "language", "salary", "requirements", "competences", "hire_problem", "point_of_contact", "additional_user_info", "additional_company_info"]
     for field in fields:
         if field in data:
             common[field] = data[field]
@@ -633,6 +634,24 @@ def feedback_request_context(
                 letter=draft,
                 company_report=vstate.company_report or "",
                 job_text=session.get("job_text") or "",
+            )
+            new_items = _run_suggest_additional_feedback_context(
+                ai_client,
+                cat,
+                obs,
+                ctx_items,
+                system,
+                base_prompt,
+                top_docs=None,
+            )
+        elif cat == "goal_fit":
+            metadata = session.get("metadata") or {}
+            hire_problem = str(get_metadata_field(metadata, vendor_enum, "hire_problem", "") or "")
+            system, base_prompt = _phased_feedback_checker_goal_fit_prompts(
+                letter=draft,
+                company_report=vstate.company_report or "",
+                job_text=session.get("job_text") or "",
+                hire_problem=hire_problem,
             )
             new_items = _run_suggest_additional_feedback_context(
                 ai_client,
@@ -1010,6 +1029,7 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
         additional_user_info = get_effective_additional_user_info(
             metadata, ModelVendor(draft_vendor), uid
         )
+        hire_problem = str(get_metadata_field(metadata, ModelVendor(draft_vendor), "hire_problem", "") or "")
         topic_contexts = {
             t: get_agentic_topic_context(
                 t,
@@ -1021,6 +1041,7 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
                 style_instructions,
                 additional_user_info,
                 draft_letters=draft_letters_multi if len(draft_letters_multi) > 0 else None,
+                hire_problem=hire_problem,
             )
             for t in active_topics
         }

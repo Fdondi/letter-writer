@@ -127,6 +127,7 @@ export default function LetterTabs({
   setVendorFeedback = () => {},
   refineSamples = {}, // vendor -> [sampled draft vendors used as reference]
   vendorDraftParagraphs, // optional vendor -> paragraphs for initial draft (e.g. agentic draft_letters)
+  hireProblem = "",
 }) {
   const [collapsed, setCollapsed] = useState([]);
   const [swapDraftForFinal, setSwapDraftForFinal] = useState({}); // vendor -> show initial draft instead of refined
@@ -1151,6 +1152,7 @@ export default function LetterTabs({
                 onTermClick={handleTermClick}
                 competenceCounts={competenceCounts}
                 finalAssemblyText={finalAssemblyTextNormalized}
+                hireProblem={hireProblem}
               />
             )}
             {expandedVendor && (
@@ -1463,6 +1465,7 @@ export default function LetterTabs({
               onTermClick={handleTermClick}
               competenceCounts={competenceCounts}
               finalAssemblyText={finalAssemblyTextNormalized}
+              hireProblem={hireProblem}
             />
           )}
         </div>

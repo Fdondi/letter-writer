@@ -3041,6 +3041,7 @@ export default function App({ flow = "vendor" }) {
                 competences={competences}
                 competenceScaleConfig={competenceScaleConfig}
                 competenceOverrides={competenceOverrides}
+                hireProblem={hireProblem}
                 vendorColors={vendorColors}
                 failedVendors={flow === "agentic" ? {} : failedVendors}
                 onRetry={

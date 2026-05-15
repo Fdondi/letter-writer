@@ -22,6 +22,7 @@ from .generation import (
     generate_letter_plan,
     get_search_instructions,
     get_structure_instructions,
+    goal_fit_check,
     human_check,
     instruction_check,
     precision_check,
@@ -441,6 +442,7 @@ def advance_to_plan(
     try:
         _reset_client_counters(ai_client)
         logger.info("[PHASE] plan -> %s :: generate_letter_plan (XLARGE)", vendor.value)
+        hire_problem = str(get_metadata_field(session.metadata, vendor, "hire_problem", "") or "")
         letter_plan = generate_letter_plan(
             cv_text,
             top_docs,
@@ -450,6 +452,7 @@ def advance_to_plan(
             trace_dir,
             structure_instructions=si,
             additional_user_info=additional_user_info,
+            hire_problem=hire_problem,
         )
         _update_cost(state, ai_client, phase="plan", user_id=user_id, vendor_str=vendor.value)
         _reset_client_counters(ai_client)
@@ -571,6 +574,7 @@ def advance_to_draft(
 
     # User notes for this job plus persisted feedback Q&A (agent_feedback_context in profile)
     additional_user_info = get_effective_additional_user_info(session.metadata, vendor, user_id)
+    hire_problem = str(get_metadata_field(session.metadata, vendor, "hire_problem", "") or "")
 
     state.company_report = company_report
     state.top_docs = top_docs
@@ -590,6 +594,7 @@ def advance_to_draft(
             style_instructions,
             additional_user_info,
             letter_plan=letter_plan,
+            hire_problem=hire_problem,
         )
         
         # Capture draft cost before feedback generation
@@ -598,7 +603,7 @@ def advance_to_draft(
         
         # Run checks on the draft so the user can review/override feedback before refinement
         logger.info("[PHASE] draft -> %s :: running checks (TINY)", vendor.value)
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=7) as executor:
             instruction_future = executor.submit(instruction_check, draft_letter, ai_client, style_instructions)
             accuracy_future = executor.submit(accuracy_check, draft_letter, cv_text, ai_client, additional_user_info)
             precision_future = executor.submit(
@@ -606,6 +611,9 @@ def advance_to_draft(
             )
             company_fit_future = executor.submit(
                 company_fit_check, draft_letter, company_report, job_text, ai_client
+            )
+            goal_fit_future = executor.submit(
+                goal_fit_check, draft_letter, company_report, job_text, ai_client, hire_problem
             )
             user_fit_future = executor.submit(
                 user_fit_check, draft_letter, top_docs, ai_client, cv_text, additional_user_info
@@ -617,6 +625,7 @@ def advance_to_draft(
             "accuracy": accuracy_future.result(),
             "precision": precision_future.result(),
             "company_fit": company_fit_future.result(),
+            "goal_fit": goal_fit_future.result(),
             "user_fit": user_fit_future.result(),
             "human": human_future.result(),
         }
@@ -636,6 +645,7 @@ def advance_to_draft(
             job_text=job_text,
             top_docs=top_docs,
             vendor=vendor.value,
+            hire_problem=hire_problem,
         )
         state.feedback = feedback
         session.vendors[vendor.value] = state
@@ -728,6 +738,7 @@ def advance_to_refinement(
             feedback.get("accuracy", []),
             feedback.get("precision", []),
             feedback.get("company_fit", []),
+            feedback.get("goal_fit", []),
             feedback.get("user_fit", []),
             feedback.get("human", []),
             ai_client,
@@ -745,7 +756,7 @@ def advance_to_refinement(
 
     state.draft_letter = draft_letter
     state.final_letter = refined
-    state.feedback = {k: feedback[k] for k in ("instruction", "accuracy", "precision", "company_fit", "user_fit", "human")}
+    state.feedback = {k: feedback[k] for k in ("instruction", "accuracy", "precision", "company_fit", "goal_fit", "user_fit", "human")}
     _update_cost(state, ai_client, phase="refine", user_id=user_id, vendor_str=vendor.value)
     
     # Save vendor-specific data to session_vendors collection (lock-free)

@@ -244,12 +244,13 @@ async def extract_job(request: Request, data: ExtractRequest, session: Session =
             rerank_future = None
             flat_pairs = []
             matched_levels = {}
+            hire_problem = ""
 
             initial_futures = {competences_future: "competences", rag_future: "rag"}
             for done in as_completed(initial_futures):
                 tag = initial_futures[done]
                 if tag == "competences":
-                    competences_by_cat = done.result()
+                    competences_by_cat, hire_problem = done.result()
                     logger.info("[EXTRACT] Competences extracted, submitting grading")
                     flat_pairs, matched_levels, unmatched = _process_competences(competences_by_cat)
                     grade_future = executor.submit(_phase2_grade, flat_pairs, unmatched)
@@ -286,6 +287,7 @@ async def extract_job(request: Request, data: ExtractRequest, session: Session =
                     for skill, need in flat_pairs
                 },
                 "requirements": [s for s, _ in flat_pairs],
+                "hire_problem": hire_problem or "",
             }
             logger.info("[EXTRACT] Extraction complete")
 

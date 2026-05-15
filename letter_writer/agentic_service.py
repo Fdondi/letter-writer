@@ -579,6 +579,7 @@ def agentic_topic_human_label(topic: str) -> str:
     return {
         "instruction": "Instruction",
         "company_fit": "Company fit",
+        "goal_fit": "Goal fit",
         "precision": "Precision",
         "user_fit": "User fit",
         "human": "Human",
@@ -2205,6 +2206,7 @@ def run_agentic_draft(
     additional_user_info = get_effective_additional_user_info(
         metadata, ModelVendor(draft_vendor), _user_id(session)
     )
+    hire_problem = str(get_metadata_field(metadata, ModelVendor(draft_vendor), "hire_problem", "") or "")
 
     trace_dir = Path("trace", "agentic.draft")
     trace_dir.mkdir(parents=True, exist_ok=True)
@@ -2212,6 +2214,7 @@ def run_agentic_draft(
     draft_letter = generate_letter(
         cv_text, top_docs, company_report, job_text, ai_client, trace_dir,
         style_instructions, additional_user_info,
+        hire_problem=hire_problem,
     )
     cost = getattr(ai_client, "total_cost", 0.0) or 0.0
 
@@ -2313,10 +2316,12 @@ def run_agentic_draft_multi(
         trace_dir = Path("trace", "agentic.draft")
         trace_dir.mkdir(parents=True, exist_ok=True)
         additional_user_info = get_effective_additional_user_info(metadata, ModelVendor(vendor), uid)
+        hire_problem = str(get_metadata_field(metadata, ModelVendor(vendor), "hire_problem", "") or "")
         ai_client = get_client(ModelVendor(vendor))
         letter = generate_letter(
             cv_text, top_docs, company_report, job_text, ai_client, trace_dir,
             style_instructions, additional_user_info,
+            hire_problem=hire_problem,
         )
         cost = getattr(ai_client, "total_cost", 0.0) or 0.0
         return (vendor, letter, cost)
@@ -2399,6 +2404,7 @@ def run_agentic_feedback_round(
     additional_user_info = get_effective_additional_user_info(
         metadata, ModelVendor(draft_vendor), _user_id(session)
     )
+    hire_problem = str(get_metadata_field(metadata, ModelVendor(draft_vendor), "hire_problem", "") or "")
 
     round_num = state.get("round", 0) + 1
     state["round"] = round_num
@@ -2412,6 +2418,7 @@ def run_agentic_feedback_round(
             topic, draft_letter, cv_text, company_report, job_text, top_docs,
             style_instructions, additional_user_info,
             draft_letters=draft_letters_multi if len(draft_letters_multi) > 0 else None,
+            hire_problem=hire_problem,
         )
         thread = list(threads.get(topic, []))
         prior_comments = get_prior_topic_top_comments(threads, topic)
@@ -2693,6 +2700,7 @@ def run_agentic_feedback_step(
     additional_user_info = get_effective_additional_user_info(
         metadata, ModelVendor(draft_vendor), _user_id(session)
     )
+    hire_problem = str(get_metadata_field(metadata, ModelVendor(draft_vendor), "hire_problem", "") or "")
     topic_cursors = _get_topic_cursors(state)
 
     trace_dir = Path("trace", "agentic.feedback")
@@ -2724,6 +2732,7 @@ def run_agentic_feedback_step(
             topic, draft_letter, cv_text, company_report, job_text, top_docs,
             style_instructions, additional_user_info,
             draft_letters=draft_letters_multi if len(draft_letters_multi) > 0 else None,
+            hire_problem=hire_problem,
         )
         # Copy thread so each topic's worker has its own list/dicts (no shared refs across parallel topics)
         thread_copy = []
@@ -2975,7 +2984,7 @@ def run_agentic_refine(
         letter = rewrite_letter(
             d_letter,
             instruction_fb, "NO COMMENT", "NO COMMENT",
-            "NO COMMENT", "NO COMMENT", "NO COMMENT",
+            "NO COMMENT", "NO COMMENT", "NO COMMENT", "NO COMMENT",
             ai_client, trace_dir,
             letter_plan="",
             style_instructions="",

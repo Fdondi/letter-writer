@@ -34,6 +34,7 @@ export function getFullState(state) {
     salary: state.salary || "",
     requirements: state.requirements || [],
     competences: state.competences || {},
+    hireProblem: state.hireProblem || "",
     competenceOverrides: state.competenceOverrides || {},
     pointOfContact: state.pointOfContact || { name: "", role: "", contact_details: "", notes: "" },
     
@@ -152,6 +153,7 @@ export function restoreStateFromLocal(stateSetters) {
   if (savedState.salary !== undefined) stateSetters.setSalary(savedState.salary);
   if (savedState.requirements !== undefined) stateSetters.setRequirements(savedState.requirements);
   if (savedState.competences !== undefined) stateSetters.setCompetences(savedState.competences || {});
+  if (savedState.hireProblem !== undefined && stateSetters.setHireProblem) stateSetters.setHireProblem(savedState.hireProblem || "");
   if (savedState.competenceOverrides !== undefined) stateSetters.setCompetenceOverrides(savedState.competenceOverrides || {});
   if (savedState.pointOfContact !== undefined) stateSetters.setPointOfContact(savedState.pointOfContact);
   if (savedState.extractedData !== undefined) stateSetters.setExtractedData(savedState.extractedData);

@@ -22,6 +22,8 @@ const JobDescriptionColumn = ({
   onTermClick,
   competenceCounts = {},
   finalAssemblyText = "",
+  hireProblem = "",
+  onHireProblemChange,
 }) => {
   const [referenceTab, setReferenceTab] = useState("job"); // "job" | "report"
   const [requirementsHeight, setRequirementsHeight] = useState(25); // Percentage of column height
@@ -584,6 +586,36 @@ const JobDescriptionColumn = ({
             borderRadius: 2,
           }}
         >
+          {(hireProblem || onHireProblemChange) && (
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: "block", fontSize: "12px", fontWeight: 600, marginBottom: 4 }}>
+                Hire goal / problem this role solves
+              </label>
+              <div style={{ fontSize: 11, color: "var(--secondary-text-color)", marginBottom: 6 }}>
+                Same extraction pass as key competences; refine if needed.
+              </div>
+              <textarea
+                value={hireProblem || ""}
+                onChange={onHireProblemChange ? (e) => onHireProblemChange(e.target.value) : undefined}
+                readOnly={!onHireProblemChange}
+                placeholder="What is the company trying to achieve with this hire?"
+                rows={4}
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: 8,
+                  fontSize: 13,
+                  resize: "vertical",
+                  backgroundColor: "var(--bg-color)",
+                  color: "var(--text-color)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 4,
+                  fontFamily: "inherit",
+                  opacity: onHireProblemChange ? 1 : 0.95,
+                }}
+              />
+            </div>
+          )}
           {requirementsList.length > 0 ? (
             <CompetencesList
               requirements={requirementsList}

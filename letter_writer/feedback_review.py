@@ -27,6 +27,7 @@ FEEDBACK_CATEGORY_KEYS = (
     "accuracy",
     "precision",
     "company_fit",
+    "goal_fit",
     "user_fit",
     "human",
 )
@@ -77,6 +78,7 @@ def _build_justification_context(
     company_report: str,
     job_text: str,
     top_docs: Sequence[TopDocument],
+    hire_problem: str = "",
 ) -> str:
     """Mirror the checker inputs so the reviewer can judge whether the critique is fair."""
     from .generation import get_style_instructions
@@ -113,6 +115,25 @@ def _build_justification_context(
     if category in ("precision", "company_fit"):
         return (
             "========== Company Report:\n"
+            + cr
+            + "\n==========\n\n========== Job Offer:\n"
+            + jt
+            + "\n==========\n\n========== Cover Letter:\n"
+            + letter
+            + "\n==========\n"
+        )
+    if category == "goal_fit":
+        hp = (hire_problem or "").strip()
+        prefix = ""
+        if hp:
+            prefix = (
+                "========== Hire goal / problem this role solves (structured extraction):\n"
+                + hp
+                + "\n==========\n\n"
+            )
+        return (
+            prefix
+            + "========== Company Report:\n"
             + cr
             + "\n==========\n\n========== Job Offer:\n"
             + jt
@@ -373,7 +394,7 @@ def _parallel_stage12(
     if not cat_to_items:
         return {}
     out: Dict[str, bool] = {}
-    max_workers = min(6, len(cat_to_items))
+    max_workers = min(7, len(cat_to_items))
 
     def _run_cat(cat: str) -> Tuple[str, Dict[str, bool]]:
         return cat, _stage12_batch(client, cat, cat_to_items[cat], ctx_cache[cat])
@@ -405,6 +426,7 @@ def review_feedback_for_vendor(
     job_text: str,
     top_docs: Sequence[TopDocument],
     vendor: str,
+    hire_problem: str = "",
 ) -> Dict[str, Any]:
     """
     Stages 1+2 combined (one batch call per category, run in parallel), then
@@ -433,6 +455,7 @@ def review_feedback_for_vendor(
                 company_report=company_report,
                 job_text=job_text,
                 top_docs=top_docs,
+                hire_problem=hire_problem,
             )
         cat_to_items.setdefault(cat, []).append((str(it["id"]), obs))
 

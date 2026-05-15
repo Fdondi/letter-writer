@@ -25,6 +25,7 @@ from .generation import (
     instruction_check,
     precision_check,
     company_fit_check,
+    goal_fit_check,
     user_fit_check,
     rewrite_letter,
 )
@@ -215,7 +216,7 @@ def _process_single_vendor(
     (trace_dir / "first_draft.txt").write_text(letter, encoding="utf-8")
 
     if refine:
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=6) as executor:
             instruction_future = executor.submit(instruction_check, letter, ai_client, style_instructions)
             accuracy_future = executor.submit(
                 accuracy_check, letter, cv_text, ai_client
@@ -225,6 +226,9 @@ def _process_single_vendor(
             )
             company_fit_future = executor.submit(
                 company_fit_check, letter, company_report, job_text, ai_client
+            )
+            goal_fit_future = executor.submit(
+                goal_fit_check, letter, company_report, job_text, ai_client, ""
             )
             user_fit_future = executor.submit(
                 user_fit_check, letter, top_docs, ai_client, cv_text, ""
@@ -237,6 +241,7 @@ def _process_single_vendor(
             accuracy_future.result(),
             precision_future.result(),
             company_fit_future.result(),
+            goal_fit_future.result(),
             user_fit_future.result(),
             human_future.result(),
             ai_client,

@@ -10,13 +10,14 @@ import LanguageSelector from "./LanguageSelector";
 const FEEDBACK_DESCRIPTIONS = {
   instruction: "Style and tone vs instructions.",
   company_fit: "Company values and culture.",
+  goal_fit: "Understanding the hiring goal and readiness to solve it.",
   precision: "Job requirements and company report.",
   user_fit: "Match to your previous letters.",
   human: "Patterns from your past revisions.",
   accuracy: "CV accuracy check (last word).",
 };
 
-const TOPIC_KEYS = ["instruction", "company_fit", "precision", "user_fit", "human", "accuracy"];
+const TOPIC_KEYS = ["instruction", "company_fit", "goal_fit", "precision", "user_fit", "human", "accuracy"];
 const VOTE_COUNTDOWN_SECONDS = 15;
 const REFINE_SAMPLE_COUNT_KEY = "agenticRefineSampleCount";
 const REFINE_START_DELAY_SEC = 3;

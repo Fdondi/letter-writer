@@ -51,6 +51,7 @@ const topicLabels = {
   accuracy: "CV accuracy",
   precision: "Precision",
   company_fit: "Company fit",
+  goal_fit: "Goal fit",
   user_fit: "User fit",
   human: "Human",
 };
