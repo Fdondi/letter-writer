@@ -132,6 +132,8 @@ export default function LetterTabs({
   const [collapsed, setCollapsed] = useState([]);
   const [swapDraftForFinal, setSwapDraftForFinal] = useState({}); // vendor -> show initial draft instead of refined
   const [savedState, setSavedState] = useState("save_copy"); // "save_copy" | "copy"
+  const [copyFeedback, setCopyFeedback] = useState(null); // null | "success"
+  const copyFeedbackTimerRef = useRef(null);
   const [selectedKeyTerm, setSelectedKeyTerm] = useState(null);
   const handleTermClick = (term) => setSelectedKeyTerm((prev) => (prev === term ? null : term));
   const [saveError, setSaveError] = useState(null);
@@ -164,7 +166,14 @@ export default function LetterTabs({
   useEffect(() => {
     setSavedState("save_copy");
     setSaveError(null);
+    setCopyFeedback(null);
   }, [finalParagraphs]);
+
+  useEffect(() => {
+    return () => {
+      if (copyFeedbackTimerRef.current) clearTimeout(copyFeedbackTimerRef.current);
+    };
+  }, []);
 
   const [translationStates, setTranslationStates] = useState({}); // { [id]: { translations: {}, viewLanguage: 'source' } }
   const [translateAllViewLanguage, setTranslateAllViewLanguage] = useState("source");
@@ -515,16 +524,24 @@ export default function LetterTabs({
   };
 
   const handleSaveAndCopy = async () => {
-    const fullText = finalParagraphs.map(getDisplayText).join('\n\n');
+    const fullText = finalParagraphs.map(getDisplayText).join("\n\n");
     setSaveError(null);
+    const shouldSave = savedState === "save_copy" && onSaveAndCopy;
     try {
-      if (savedState === "save_copy" && onSaveAndCopy) {
+      await navigator.clipboard.writeText(fullText);
+      setCopyFeedback("success");
+      await new Promise((resolve) => {
+        copyFeedbackTimerRef.current = setTimeout(resolve, 1000);
+      });
+      setCopyFeedback(null);
+      if (shouldSave) {
         await onSaveAndCopy(fullText);
         setSavedState("copy");
       }
-      await navigator.clipboard.writeText(fullText);
     } catch (e) {
-      setSaveError(e.message || "Failed to save letter");
+      if (copyFeedbackTimerRef.current) clearTimeout(copyFeedbackTimerRef.current);
+      setCopyFeedback(null);
+      setSaveError(e.message || "Failed to copy or save letter");
     }
   };
 
@@ -731,7 +748,7 @@ export default function LetterTabs({
             )}
           </div>
         </h4>
-        {/* Line 2: language selector + Save & Copy (under Expand) */}
+        {/* Line 2: language selector + Copy & Save (under Expand) */}
         <div
           style={{
             padding: "6px 12px 8px",
@@ -754,19 +771,34 @@ export default function LetterTabs({
           <button
             id="save-copy-btn"
             onClick={handleSaveAndCopy}
-            disabled={finalParagraphs.length === 0 || savingFinal}
+            disabled={finalParagraphs.length === 0 || savingFinal || copyFeedback === "success"}
             style={{
               padding: "4px 8px",
               fontSize: "12px",
-              background: finalParagraphs.length === 0 || savingFinal ? "var(--border-color)" : savedState === "copy" ? "#10b981" : "#3b82f6",
+              minWidth: "6.5em",
+              background:
+                finalParagraphs.length === 0 || savingFinal
+                  ? "var(--border-color)"
+                  : copyFeedback === "success" || savedState === "copy"
+                    ? "#10b981"
+                    : "#3b82f6",
               color: "white",
               border: "none",
               borderRadius: 4,
-              cursor: finalParagraphs.length === 0 || savingFinal ? "not-allowed" : "pointer",
-              transition: "background 0.2s ease"
+              cursor:
+                finalParagraphs.length === 0 || savingFinal || copyFeedback === "success"
+                  ? "not-allowed"
+                  : "pointer",
+              transition: "background 0.2s ease",
             }}
           >
-            {savingFinal ? "Saving..." : savedState === "save_copy" ? "Save & Copy" : "Copy"}
+            {copyFeedback === "success"
+              ? "✓"
+              : savingFinal
+                ? "Saving..."
+                : savedState === "save_copy"
+                  ? "Copy & Save"
+                  : "Copy"}
           </button>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import JobDescriptionColumn from "./JobDescriptionColumn";
 import { useLanguages } from "../contexts/LanguageContext";
 import LanguageSelector from "./LanguageSelector";
@@ -17,6 +17,8 @@ export default function FinalReview({
 }) {
   const [text, setText] = useState(initialText || "");
   const [buttonState, setButtonState] = useState("save_copy"); // "save_copy" | "copy"
+  const [copyFeedback, setCopyFeedback] = useState(null); // null | "success"
+  const copyFeedbackTimerRef = useRef(null);
   const [saveError, setSaveError] = useState(null);
   const { enabledLanguages } = useLanguages();
   
@@ -30,6 +32,12 @@ export default function FinalReview({
   useEffect(() => {
     setText(initialText || "");
   }, [initialText]);
+
+  useEffect(() => {
+    return () => {
+      if (copyFeedbackTimerRef.current) clearTimeout(copyFeedbackTimerRef.current);
+    };
+  }, []);
   
   // Reset translations when source text changes
   useEffect(() => {
@@ -90,42 +98,26 @@ export default function FinalReview({
     return text;
   };
 
-  const handleButtonClick = async () => {
-    if (buttonState === "save_copy") {
-      await onSaveAndCopy(text);
-      setButtonState("copy");
-    } else {
-      // Just copy
-      try {
-        await navigator.clipboard.writeText(text);
-        // Show temporary success feedback if needed, or just rely on button text
-      } catch (err) {
-        console.error("Failed to copy text:", err);
-      }
-    }
-  };
-
-  // Helper to copy text specifically when in "save_copy" mode (called by handleButtonClick via onSaveAndCopy wrapper in App if needed, 
-  // but simpler to let this component handle the clipboard part for both states if onSaveAndCopy just saves)
-  // Actually, user said: "Save & Copy" button.
-  // So when clicking "Save & Copy", it should Save AND Copy.
-  // When clicking "Copy", it should just Copy.
-  
-  // Let's refine handleButtonClick:
   const handleMainButton = async () => {
     setSaveError(null);
+    const displayText = getLetterDisplayText();
+    const shouldSave = buttonState === "save_copy";
     try {
-      if (buttonState === "save_copy") {
-        // Save first - will throw if it fails
-        await onSaveAndCopy(text);
+      await navigator.clipboard.writeText(displayText);
+      setCopyFeedback("success");
+      await new Promise((resolve) => {
+        copyFeedbackTimerRef.current = setTimeout(resolve, 1000);
+      });
+      setCopyFeedback(null);
+      if (shouldSave) {
+        await onSaveAndCopy(displayText);
+        setButtonState("copy");
       }
-      // Only copy if save succeeded (or we're just copying)
-      await navigator.clipboard.writeText(text);
-      setButtonState("copy");
     } catch (err) {
-      console.error("Error in Save/Copy:", err);
-      setSaveError(err.message || "Failed to save letter");
-      // Don't change buttonState - keep it as "save_copy" so user can retry
+      if (copyFeedbackTimerRef.current) clearTimeout(copyFeedbackTimerRef.current);
+      setCopyFeedback(null);
+      console.error("Error in Copy/Save:", err);
+      setSaveError(err.message || "Failed to copy or save letter");
     }
   };
 
@@ -197,23 +189,30 @@ export default function FinalReview({
             </button>
             <button
               onClick={handleMainButton}
-              disabled={saving}
+              disabled={saving || copyFeedback === "success"}
               style={{
                 padding: "8px 16px",
-                backgroundColor: buttonState === "copy" ? "#10b981" : "#3b82f6", // Green for Copy, Blue for Save & Copy
+                backgroundColor:
+                  saving
+                    ? "var(--border-color)"
+                    : copyFeedback === "success" || buttonState === "copy"
+                      ? "#10b981"
+                      : "#3b82f6",
                 color: "white",
                 border: "none",
                 borderRadius: "4px",
-                cursor: saving ? "not-allowed" : "pointer",
+                cursor: saving || copyFeedback === "success" ? "not-allowed" : "pointer",
                 fontWeight: 600,
                 minWidth: "120px",
               }}
             >
-              {saving
-                ? "Saving..."
-                : buttonState === "save_copy"
-                ? "Save & Copy"
-                : "Copy"}
+              {copyFeedback === "success"
+                ? "✓"
+                : saving
+                  ? "Saving..."
+                  : buttonState === "save_copy"
+                    ? "Copy & Save"
+                    : "Copy"}
             </button>
           </div>
         </div>
