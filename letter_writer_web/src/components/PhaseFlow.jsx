@@ -18,7 +18,9 @@
  * KEY RULES:
  * - NO CARD FETCHES ITS OWN DATA: VendorCardWrapper has no fetch logic.
  * - LOADING STATE: If a phase is 'approved' but its shelf is empty, the 
- *   card automatically shows "Loading...".
+ *   card automatically shows "Loading...". On API failure, App.jsx sets
+ *   phaseErrors and the card shows the error (with Retry); approve failures
+ *   revert optimistic approval so downstream cards do not stay loading.
  * - RE-RENDERING: App.jsx triggers a re-render of PhaseFlow whenever 
  *   the shelf is updated.
  */
@@ -751,6 +753,9 @@ function VendorCardWrapper({
   onApprove,
   onSaveFeedbackOverride,
   onPhaseComplete,
+  phaseErrors,
+  onClearPhaseError,
+  onRetryPhase,
   triggerUpdate,
   onExpand,
   isExpanded,
@@ -766,20 +771,36 @@ function VendorCardWrapper({
   // Get data for THIS phase from the shelf
   const currentPhaseData = phaseObj.cardData?.[vendor] || null;
   
-  // Local state for UI only
+  // Local state for UI only (approve failures); App.jsx sets phaseErrors for background fetches
   const [error, setError] = React.useState(null);
+  const shelfError = phaseErrors?.[`${phaseName}:${vendor}`] ?? null;
+  const displayError = error || shelfError;
 
-  // Sync currentPhaseData to VendorCard
-  // We don't need a complex useEffect with fetch anymore.
-  // The card is purely a consumer of phaseObj.cardData[vendor].
-  
+  const revertPhaseApproval = React.useCallback(() => {
+    if (phaseObj.approvedVendors) {
+      phaseObj.approvedVendors.delete(vendor);
+    }
+    let current = phaseObj.next;
+    while (current) {
+      if (current.approvedVendors) current.approvedVendors.delete(vendor);
+      current = current.next;
+    }
+    if (triggerUpdate) triggerUpdate();
+  }, [phaseObj, vendor, triggerUpdate]);
+
+  React.useEffect(() => {
+    if (currentPhaseData && error) {
+      setError(null);
+    }
+  }, [currentPhaseData, error]);
+
   // Status logic:
   // - "error" if we have an error (takes priority)
   // - "success" if we have data (already processed)
   // - "loading" only if previous phase is approved AND we don't have data (triggers API call)
   // - "idle" otherwise (waiting for previous phase or no data)
   // Note: When navigating back from assembly, data should already be in shelf, so status will be "success"
-  const status = error
+  const status = displayError
     ? "error"
     : currentPhaseData 
       ? "success" 
@@ -795,7 +816,7 @@ function VendorCardWrapper({
       allPhasesDone={false}
       data={currentPhaseData}
       status={status}
-      error={error}
+      error={displayError}
       onEditChange={onEditChange}
       onApprove={onApprove}
       sessionId={sessionId}
@@ -839,6 +860,20 @@ function VendorCardWrapper({
       setStatus={() => {}} // No-op, status is computed
       setData={() => {}}   // No-op, data comes from shelf
       setError={setError}
+      onApproveFailed={revertPhaseApproval}
+      onRetry={
+        shelfError && onRetryPhase
+          ? async () => {
+              if (onClearPhaseError) onClearPhaseError(phaseName, vendor);
+              setError(null);
+              try {
+                await onRetryPhase(phaseName, vendor);
+              } catch (e) {
+                setError(e.message || String(e));
+              }
+            }
+          : undefined
+      }
       onExpand={onExpand}
       isExpanded={isExpanded}
       onCloseExpand={onCloseExpand}
@@ -875,6 +910,8 @@ function VendorCard({
   setStatus,
   setData,
   setError,
+  onApproveFailed,
+  onRetry,
   onExpand,
   isExpanded,
   onCloseExpand,
@@ -1341,7 +1378,7 @@ function VendorCard({
         </div>
       )}
 
-      {error && !isLoadingWithoutData && (
+      {cardError && !isLoadingWithoutData && (
         <div style={{
           color: "var(--error-text)",
           marginBottom: 8,
@@ -1351,7 +1388,26 @@ function VendorCard({
           border: "1px solid var(--error-border)",
           borderRadius: 4
         }}>
-          {error}
+          {cardError}
+          {onRetry && (
+            <button
+              type="button"
+              onClick={() => onRetry()}
+              style={{
+                display: "block",
+                marginTop: 8,
+                padding: "4px 10px",
+                fontSize: 12,
+                background: "var(--button-bg)",
+                color: "var(--button-text)",
+                border: "1px solid var(--border-color)",
+                borderRadius: 4,
+                cursor: "pointer",
+              }}
+            >
+              Retry
+            </button>
+          )}
         </div>
       )}
 
@@ -1441,9 +1497,9 @@ function VendorCard({
                 }
               } catch (e) {
                 setError(e.message || String(e));
-                // Status is computed by wrapper based on error state
-                setApproved(false); // Revert approval on error
+                setApproved(false);
                 setApprovedEditsBaseline(null);
+                if (onApproveFailed) onApproveFailed();
               }
             }}
             disabled={!readyForApproval || (approved && !thisPhaseDirty)}
@@ -1584,6 +1640,9 @@ export default function PhaseFlow({
   sessionId,
   documentId = null,
   draftFeedbackRegistryRef = null,
+  phaseErrors = {},
+  onClearPhaseError,
+  onRetryPhase,
   // Callback for when a phase completes
   onPhaseComplete, // (vendor, phase, data) => void
   // Callback to register the phase objects with the parent
@@ -1753,6 +1812,9 @@ export default function PhaseFlow({
           onApprove={onApprove}
           onSaveFeedbackOverride={saveFeedbackOverride}
           onPhaseComplete={onPhaseComplete}
+          phaseErrors={phaseErrors}
+          onClearPhaseError={onClearPhaseError}
+          onRetryPhase={onRetryPhase}
           triggerUpdate={() => setPhaseUpdateTrigger(prev => prev + 1)}
           onExpand={overlayMode ? undefined : () => toggleExpand(phaseName, vendor)}
           isExpanded={overlayMode}
@@ -1765,7 +1827,7 @@ export default function PhaseFlow({
       ));
     });
     return renderFunctions;
-  }, [phases, sessionId, documentId, draftFeedbackRegistryRef, onEditChange, onApprove, onPhaseComplete, saveFeedbackOverride, toggleExpand, closeExpand, onAfterApproveInExpanded, inputClusterText, broadcastInputCluster]);
+  }, [phases, sessionId, documentId, draftFeedbackRegistryRef, onEditChange, onApprove, onPhaseComplete, phaseErrors, onClearPhaseError, onRetryPhase, saveFeedbackOverride, toggleExpand, closeExpand, onAfterApproveInExpanded, inputClusterText, broadcastInputCluster]);
   
   phases.forEach(phaseObj => {
     const phaseName = phaseObj.phase;

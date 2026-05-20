@@ -124,7 +124,8 @@ class BaseClient:
         extra keys beyond ``model``.  Each vendor client checks for its own key::
 
             OpenAI:    config.get("reasoning_effort")   # "none"|"low"|"medium"|"high"
-            Anthropic: config.get("thinking")           # False | True
+            Anthropic: config.get("thinking")           # False | True;
+                optional ``effort`` ("high"|"medium"|...) for adaptive-thinking models
             Gemini:    config.get("thinking_level")     # None | "Low" | "Medium" | "High"
         """
         sizes = self.config.get("sizes", {})

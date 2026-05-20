@@ -90,6 +90,7 @@ export default function App({ flow = "vendor" }) {
   const [vendorCosts, setVendorCosts] = useState({}); // vendor -> cost (total cumulative)
   const [vendorRefineCosts, setVendorRefineCosts] = useState({}); // vendor -> refine phase cost (final letter cost)
   const [failedVendors, setFailedVendors] = useState({}); // vendor -> error message
+  const [phaseErrors, setPhaseErrors] = useState({}); // `${phase}:${vendor}` -> error message
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [documentSaveNotice, setDocumentSaveNotice] = useState(null);
@@ -499,12 +500,30 @@ export default function App({ flow = "vendor" }) {
     }
   };
 
+  const phaseErrorKey = (phase, vendor) => `${phase}:${vendor}`;
+
+  const setPhaseVendorError = (phase, vendor, message) => {
+    setPhaseErrors((prev) => ({ ...prev, [phaseErrorKey(phase, vendor)]: message }));
+    setPhaseRegistryTrigger((prev) => prev + 1);
+  };
+
+  const clearPhaseVendorError = (phase, vendor) => {
+    setPhaseErrors((prev) => {
+      const key = phaseErrorKey(phase, vendor);
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
   // Helper to populate the "shelf" in PhaseFlow for a specific phase/vendor
   const populatePhaseShelf = (phaseName, vendor, data) => {
     if (phaseRegistryRef.current) {
       const phase = phaseRegistryRef.current.find(p => p.phase === phaseName);
       if (phase) {
         phase.cardData[vendor] = data;
+        clearPhaseVendorError(phaseName, vendor);
         setPhaseRegistryTrigger(prev => prev + 1);
       }
     }
@@ -1603,8 +1622,8 @@ export default function App({ flow = "vendor" }) {
         setDocumentId(data.document.id);
       }
     } catch (e) {
-      console.error("Draft phase error", e);
-      // Cards now own their error state
+      console.error("Plan phase error after extraction approval", e);
+      setPhaseVendorError("plan", vendor, extractErrorMessage(e));
     }
   };
 
@@ -1616,6 +1635,7 @@ export default function App({ flow = "vendor" }) {
     
     setLoading(true);
     setError(null);
+    setPhaseErrors({});
     setLetters({});
     setVendorCosts({});
     setFailedVendors({});
@@ -1731,6 +1751,7 @@ export default function App({ flow = "vendor" }) {
           setPhaseSessionId((prev) => prev || initialSessionId);
         } catch (e) {
           console.error(`Plan phase error for ${vendor}:`, e);
+          setPhaseVendorError("plan", vendor, extractErrorMessage(e));
         }
       })();
     });
@@ -2249,6 +2270,7 @@ export default function App({ flow = "vendor" }) {
     setLetters({});
     setVendorParagraphs({});
     setFailedVendors({});
+    setPhaseErrors({});
     setError(null);
     setFinalParagraphs([]);
     setAgenticFinalParagraphs([]);
@@ -2984,6 +3006,17 @@ export default function App({ flow = "vendor" }) {
                 sessionId={phaseSessionId}
                 documentId={documentId}
                 draftFeedbackRegistryRef={draftFeedbackRegistryRef}
+                phaseErrors={phaseErrors}
+                onClearPhaseError={clearPhaseVendorError}
+                onRetryPhase={async (phaseName, vendor) => {
+                  clearPhaseVendorError(phaseName, vendor);
+                  try {
+                    await createRetryForPhase(phaseName, vendor)();
+                  } catch (e) {
+                    setPhaseVendorError(phaseName, vendor, extractErrorMessage(e));
+                    throw e;
+                  }
+                }}
                 onRegisterPhases={(phases) => {
                   phaseRegistryRef.current = phases;
                 }}

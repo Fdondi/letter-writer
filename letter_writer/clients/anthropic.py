@@ -10,6 +10,47 @@ class ClaudeClient(BaseClient):
         super().__init__()
         self.client = Anthropic()
 
+    @staticmethod
+    def _thinking_request_kwargs(
+        model: str,
+        thinking_enabled: bool,
+        max_tokens: int,
+        thinking_cfg: dict,
+    ) -> Dict[str, Any]:
+        """Build ``thinking`` / ``output_config`` for :meth:`messages.create`.
+
+        Newer models (Opus 4.7, Opus 4.6, Sonnet 4.6, Mythos) require
+        ``thinking.type`` ``adaptive`` and reject ``enabled`` + ``budget_tokens``.
+        Older models still need manual extended thinking with ``budget_tokens``.
+        See https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
+        """
+        if not thinking_enabled:
+            return {}
+        norm = (model or "").lower()
+        # Substrings match dated IDs (e.g. claude-opus-4-7-20250514).
+        adaptive_markers = (
+            "claude-opus-4-7",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-mythos",
+            "mythos-preview",
+        )
+        if any(marker in norm for marker in adaptive_markers):
+            effort = thinking_cfg.get("effort") or "high"
+            if not isinstance(effort, str):
+                effort = "high"
+            return {
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": effort},
+            }
+        # budget_tokens must be strictly less than max_tokens
+        return {
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": max(1, max_tokens // 2),
+            },
+        }
+
     def _format_messages(
         self,
         user_messages: List[str],
@@ -209,9 +250,12 @@ class ClaudeClient(BaseClient):
             "tools": tools,
             "max_tokens": max_tokens,
         }
-        if thinking_enabled and not search:
-            # budget_tokens must be strictly less than max_tokens; use half as a safe ceiling
-            create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": max_tokens // 2}
+        if not search:
+            create_kwargs.update(
+                self._thinking_request_kwargs(
+                    model, thinking_enabled, max_tokens, thinking_cfg
+                )
+            )
         try:
             response = self.client.messages.create(**create_kwargs)
         except Exception as e:

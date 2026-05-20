@@ -6,8 +6,8 @@
     "tiny":   { "model": "claude-haiku-4-5",  "thinking": false },
     "base":   { "model": "claude-haiku-4-5",  "thinking": true },
     "medium": { "model": "claude-haiku-4-5", "thinking": true },
-    "large":  { "model": "claude-sonnet-4-6", "thinking": true },
-    "xlarge": { "model": "claude-opus-4-7",   "thinking": true }
+    "large":  { "model": "claude-sonnet-4-6", "thinking": true, "effort": "medium" },
+    "xlarge": { "model": "claude-opus-4-7",   "thinking": true, "effort": "high" }
   },
   "models":
   {
