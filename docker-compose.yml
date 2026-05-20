@@ -54,14 +54,18 @@ services:
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
       - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-letter-writer}
       - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
-      # LM Studio / OpenAI-compatible local server (backend uses host.docker.internal when in Docker unless overridden)
-      - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
+      # LM Studio on the host (Podman has no /.dockerenv; default URL targets host.docker.internal)
+      - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-http://host.docker.internal:1234/v1}
       - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
       # Local energy-based cost (optional; cost stays 0 if unset)
       - LOCAL_GPU_WATTS_AT_100=${LOCAL_GPU_WATTS_AT_100:-}
       - LOCAL_ENERGY_PRICE_PER_KWH=${LOCAL_ENERGY_PRICE_PER_KWH:-}
     env_file:
       - .env
+    # Linux (Docker Engine / Podman): map host.docker.internal to the host gateway so the
+    # default LOCAL_LLM URL in letter_writer/clients/local.py can reach LM Studio on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - redis
 

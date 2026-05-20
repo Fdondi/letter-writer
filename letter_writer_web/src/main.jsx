@@ -1,11 +1,12 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
-import App from "./App";
+import App from "./App.jsx";
 import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { setupApiNotifications } from "./utils/apiNotifications";
-import { LanguageProvider } from "./contexts/LanguageContext";
+import { LanguageProvider } from "./contexts/LanguageContext.jsx";
+import "./critical-theme.css";
 
 // Vite base URL for runtime-only static assets (e.g. public/app-version.txt). Set before render; not part of the bundle graph.
 if (typeof document !== "undefined") {

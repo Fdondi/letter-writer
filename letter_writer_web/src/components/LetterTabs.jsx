@@ -7,10 +7,10 @@ import { useDrop } from "react-dnd";
 import { HoverProvider } from "../contexts/HoverContext";
 import { v4 as uuidv4 } from "uuid";
 import { useLanguages } from "../contexts/LanguageContext";
-import JobDescriptionColumn from "./JobDescriptionColumn";
 import LanguageSelector from "./LanguageSelector";
 import { translateText } from "../utils/translate";
 import { normalizeForMatch } from "../utils/textMatch";
+import { countCompetenceOccurrences } from "../utils/competenceOccurrences";
 
 const FeedbackForm = ({ rating, comment, onChange }) => {
   return (
@@ -57,53 +57,6 @@ const FeedbackForm = ({ rating, comment, onChange }) => {
   );
 };
 
-// Count occurrences of each competence in all vendor letters (same paragraph source as columns: draft when toggled)
-function countCompetenceOccurrences(
-  vendorParagraphs,
-  requirements,
-  vendorDraftParagraphs,
-  swapDraftForFinal
-) {
-  const counts = {};
-  if (!Array.isArray(requirements)) return counts;
-
-  // Initialize counts for each requirement
-  requirements.forEach(req => {
-    const trimmed = (req ?? "").trim();
-    if (trimmed) counts[trimmed] = 0;
-  });
-
-  const vendors = Object.keys(vendorParagraphs || {});
-  const allText = vendors
-    .flatMap((v) => {
-      const useDraft =
-        swapDraftForFinal?.[v] &&
-        vendorDraftParagraphs &&
-        Array.isArray(vendorDraftParagraphs[v]) &&
-        vendorDraftParagraphs[v].length > 0;
-      const paragraphs = useDraft
-        ? vendorDraftParagraphs[v]
-        : vendorParagraphs[v] || [];
-      return Array.isArray(paragraphs) ? paragraphs : [];
-    })
-    .map((p) => p?.text ?? "")
-    .join(" ");
-
-  // Count matches for each requirement
-  Object.keys(counts).forEach(requirement => {
-    if (!requirement) return;
-    try {
-      const escaped = requirement.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const regex = new RegExp(`(?<![a-zA-Z0-9])(${escaped})(?![a-zA-Z0-9])`, "gi");
-      counts[requirement] = (allText.match(regex) || []).length;
-    } catch {
-      counts[requirement] = 0;
-    }
-  });
-
-  return counts;
-}
-
 export default function LetterTabs({ 
   vendorsList, 
   vendorParagraphs, 
@@ -112,7 +65,6 @@ export default function LetterTabs({
   finalParagraphs, 
   setFinalParagraphs, 
   originalText,
-  companyReport = null,
   requirements = [], // Extracted key requirements
   competences = {}, // { skill: { need, level } } or legacy
   competenceScaleConfig,
@@ -127,19 +79,24 @@ export default function LetterTabs({
   setVendorFeedback = () => {},
   refineSamples = {}, // vendor -> [sampled draft vendors used as reference]
   vendorDraftParagraphs, // optional vendor -> paragraphs for initial draft (e.g. agentic draft_letters)
-  hireProblem = "",
+  selectedKeyTerm: selectedKeyTermProp,
+  onTermClick: onTermClickProp,
+  onHighlightContextChange,
 }) {
   const [collapsed, setCollapsed] = useState([]);
   const [swapDraftForFinal, setSwapDraftForFinal] = useState({}); // vendor -> show initial draft instead of refined
   const [savedState, setSavedState] = useState("save_copy"); // "save_copy" | "copy"
   const [copyFeedback, setCopyFeedback] = useState(null); // null | "success"
   const copyFeedbackTimerRef = useRef(null);
-  const [selectedKeyTerm, setSelectedKeyTerm] = useState(null);
-  const handleTermClick = (term) => setSelectedKeyTerm((prev) => (prev === term ? null : term));
+  const [internalKeyTerm, setInternalKeyTerm] = useState(null);
+  const selectedKeyTerm = selectedKeyTermProp !== undefined ? selectedKeyTermProp : internalKeyTerm;
+  const handleTermClick =
+    onTermClickProp ||
+    ((term) => setInternalKeyTerm((prev) => (prev === term ? null : term)));
   const [saveError, setSaveError] = useState(null);
   const [finalLetter, setFinalLetter] = useState("");
   const [originalLetter, setOriginalLetter] = useState(originalText || "");
-  const [expandedColumn, setExpandedColumn] = useState(null); // 'vendor:Name' | 'final' | 'job-description' | null
+  const [expandedColumn, setExpandedColumn] = useState(null); // 'vendor:Name' | 'final' | null
 
   const toggleExpand = (id) => {
     setExpandedColumn((prev) => (prev === id ? null : id));
@@ -263,11 +220,10 @@ export default function LetterTabs({
   const visibleInRowVendors = expandedColumn?.startsWith("vendor:")
     ? visibleVendors.filter((v) => `vendor:${v}` !== expandedColumn)
     : visibleVendors;
-  const totalVisible = visibleInRowVendors.length + (expandedColumn === "final" ? 0 : 1) + (expandedColumn === "job-description" ? 0 : 1);
-  const columnWidth = totalVisible > 0 ? `${100 / totalVisible}%` : "100%";
-
   // Get minimum column width from localStorage or use default
   const minColumnWidth = parseInt(localStorage.getItem("minColumnWidth") || "200", 10);
+  // Vendor columns use fixed width in a horizontal strip; Final Letter fills remaining space.
+  const vendorColumnWidthPx = `${minColumnWidth}px`;
 
   const moveFinalParagraph = (from, to) => {
     captureFinalColumnScroll();
@@ -557,6 +513,14 @@ export default function LetterTabs({
   // Warm normalization once so downstream checks are cheap.
   const finalAssemblyTextNormalized = React.useMemo(() => normalizeForMatch(finalAssemblyText), [finalAssemblyText]);
 
+  useEffect(() => {
+    if (!onHighlightContextChange) return;
+    onHighlightContextChange({
+      competenceCounts,
+      finalAssemblyTextNormalized,
+    });
+  }, [onHighlightContextChange, competenceCounts, finalAssemblyTextNormalized]);
+
   // Translate all final paragraphs to the same language (column-wide)
   const translateAllParagraphsTo = async (targetLanguage) => {
     if (finalParagraphs.length === 0 || targetLanguage === "source") {
@@ -687,15 +651,17 @@ export default function LetterTabs({
   const FinalColumn = ({ onHeaderClick, isExpanded, onClose, useOverlayWidth }) => (
     <div 
       style={{ 
-        width: useOverlayWidth ? "100%" : columnWidth,
+        width: "100%",
         minWidth: useOverlayWidth ? 0 : `${minColumnWidth}px`,
+        flex: useOverlayWidth ? undefined : "1 1 0",
         borderRadius: 4,
         position: "relative",
         display: "flex",
         flexDirection: "column",
         backgroundColor: 'var(--card-bg)',
         border: '1px solid var(--border-color)',
-        height: "100%"
+        height: "100%",
+        minHeight: 0,
       }}
     >
       <div style={{ background: "var(--header-bg)", borderRadius: "4px 4px 0 0" }}>
@@ -1166,27 +1132,6 @@ export default function LetterTabs({
             {expandedColumn === "final" && (
               <FinalColumn isExpanded onClose={closeExpand} useOverlayWidth />
             )}
-            {expandedColumn === "job-description" && (
-              <JobDescriptionColumn
-                jobText={originalLetter}
-                companyReport={companyReport}
-                requirements={requirements}
-                competences={competences}
-                scaleConfig={competenceScaleConfig}
-                overrides={competenceOverrides}
-                width="100%"
-                minWidth="0"
-                languages={languageOptions}
-                onHeaderClick={undefined}
-                isExpanded
-                onClose={closeExpand}
-                selectedKeyTerm={selectedKeyTerm}
-                onTermClick={handleTermClick}
-                competenceCounts={competenceCounts}
-                finalAssemblyText={finalAssemblyTextNormalized}
-                hireProblem={hireProblem}
-              />
-            )}
             {expandedVendor && (
               <ExpandedVendorColumn
                 vendor={expandedVendor}
@@ -1333,16 +1278,25 @@ export default function LetterTabs({
           </select>
         )}
         
-        <div style={{ 
-          display: "flex", 
+        <div style={{
+          display: "flex",
           gap: 10,
           flex: 1,
           minHeight: 0,
-          overflowX: "auto",
-          paddingBottom: 10 // Space for scrollbar
+          minWidth: 0,
+          alignItems: "stretch",
         }}>
+          {visibleInRowVendors.length > 0 && (
+          <div style={{
+            display: "flex",
+            gap: 10,
+            flexShrink: 0,
+            minHeight: 0,
+            overflowX: "auto",
+            paddingBottom: 10,
+          }}>
           {visibleInRowVendors.map((v) => (
-            <div key={v} style={{ width: columnWidth, minWidth: `${minColumnWidth}px`, display: "flex", flexDirection: "column", position: "relative", background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', height: "100%" }}>
+            <div key={v} style={{ width: vendorColumnWidthPx, minWidth: vendorColumnWidthPx, flexShrink: 0, display: "flex", flexDirection: "column", position: "relative", background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', height: "100%" }}>
               <div>
                 <h4
                   style={{
@@ -1474,31 +1428,11 @@ export default function LetterTabs({
               />
             </div>
           ))}
+          </div>
+          )}
           
           {expandedColumn !== "final" && (
             <FinalColumn onHeaderClick={() => toggleExpand("final")} useOverlayWidth={false} />
-          )}
-
-          {expandedColumn !== "job-description" && (
-            <JobDescriptionColumn
-              jobText={originalLetter}
-              companyReport={companyReport}
-              requirements={requirements}
-              competences={competences}
-              scaleConfig={competenceScaleConfig}
-              overrides={competenceOverrides}
-              width={columnWidth}
-              minWidth={`${minColumnWidth}px`}
-              languages={languageOptions}
-              onHeaderClick={() => toggleExpand("job-description")}
-              isExpanded={expandedColumn === "job-description"}
-              onClose={closeExpand}
-              selectedKeyTerm={selectedKeyTerm}
-              onTermClick={handleTermClick}
-              competenceCounts={competenceCounts}
-              finalAssemblyText={finalAssemblyTextNormalized}
-              hireProblem={hireProblem}
-            />
           )}
         </div>
       </div>

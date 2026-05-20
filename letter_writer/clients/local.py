@@ -16,9 +16,14 @@ from letter_writer.local_pricing import (
 logger = logging.getLogger(__name__)
 
 
+def _running_in_container() -> bool:
+    """Docker creates /.dockerenv; Podman creates /run/.containerenv instead."""
+    return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+
+
 def _default_local_base_url() -> str:
-    """LM Studio on the host: Docker must use host.docker.internal, not localhost."""
-    if Path("/.dockerenv").exists():
+    """LM Studio on the host: containers must use host.docker.internal, not localhost."""
+    if _running_in_container():
         return "http://host.docker.internal:1234/v1"
     return "http://localhost:1234/v1"
 

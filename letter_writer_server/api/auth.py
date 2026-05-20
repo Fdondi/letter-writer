@@ -1,4 +1,5 @@
 import time
+import httpx
 from fastapi import APIRouter, Request, Response, Depends, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse
 
@@ -12,12 +13,19 @@ router = APIRouter()
 def _oauth_is_configured() -> bool:
     return bool(settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET)
 
+# Explicit Google OIDC endpoints (no discovery fetch on /login/). Authlib stores
+# issuer/jwks_uri/userinfo_endpoint as top-level register() kwargs → server_metadata.
 oauth = OAuth()
 oauth.register(
     name='google',
     client_id=settings.GOOGLE_CLIENT_ID,
     client_secret=settings.GOOGLE_CLIENT_SECRET,
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    authorize_url='https://accounts.google.com/o/oauth2/v2/auth',
+    access_token_url='https://oauth2.googleapis.com/token',
+    api_base_url='https://openidconnect.googleapis.com/v1/',
+    issuer='https://accounts.google.com',
+    jwks_uri='https://www.googleapis.com/oauth2/v3/certs',
+    userinfo_endpoint='https://openidconnect.googleapis.com/v1/userinfo',
     client_kwargs={
         'scope': 'openid email',
         'prompt': 'select_account',
@@ -34,7 +42,18 @@ async def login(request: Request):
             detail="Google OAuth is not configured. Missing GOOGLE_OAUTH_CLIENT_ID or GOOGLE_OAUTH_SECRET."
         )
     redirect_uri = settings.GOOGLE_REDIRECT_URI
-    return await oauth.google.authorize_redirect(request, redirect_uri)
+    try:
+        return await oauth.google.authorize_redirect(request, redirect_uri)
+    except httpx.ConnectError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Cannot reach Google OAuth (DNS or network from the backend container). "
+                "Retry login; on Podman/Linux, ensure container DNS works or restart the stack."
+            ),
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 @router.get("/callback/")
 async def auth_callback(request: Request, session: Session = Depends(get_session)):
@@ -42,6 +61,13 @@ async def auth_callback(request: Request, session: Session = Depends(get_session
         token = await oauth.google.authorize_access_token(request)
     except OAuthError as error:
         raise HTTPException(status_code=400, detail=error.error)
+    except httpx.ConnectError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Cannot reach Google OAuth (DNS or network from the backend container).",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
         
     user_info = token.get('userinfo')
     if not user_info:

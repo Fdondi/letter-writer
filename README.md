@@ -34,7 +34,7 @@ Environment variables (optional):
 
 **Local cost model:** Each local LLM call is charged as \((\text{elapsed hours}) \times (\text{watts}/1000) \times \text{price per kWh}\), assuming the GPU runs at full load for the whole request. Token-based rates in `letter_writer/clients/local.json` are not used for billing. If either `LOCAL_GPU_WATTS_AT_100` or `LOCAL_ENERGY_PRICE_PER_KWH` is missing or invalid, recorded cost stays **0** (tokens are still counted).
 
-**Docker:** Inside a container, `localhost` refers to the container, not your machine, so connection errors usually mean the URL must target the host (the default `host.docker.internal` behavior above, or set `LOCAL_LLM_BASE_URL` explicitly, e.g. to another host or port). On Linux Docker without `host.docker.internal`, set `LOCAL_LLM_BASE_URL` to a reachable host IP or add `extra_hosts` in Compose.
+**Docker / Podman:** Inside a container, `localhost` is the container itself. The backend defaults to `http://host.docker.internal:1234/v1` when it detects a container (`/.dockerenv` on Docker, `/run/.containerenv` on Podman) or when `docker-compose.yml` sets that URL. `extra_hosts: host.docker.internal:host-gateway` maps that hostname to the host on Linux. **LM Studio must listen on the host’s non-loopback address** (e.g. **0.0.0.0**, not **127.0.0.1 only**) and be running, or you still get connection refused even with correct DNS.
 
 `docker-compose.yml` passes `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_API_KEY`, `LOCAL_GPU_WATTS_AT_100`, and `LOCAL_ENERGY_PRICE_PER_KWH` through from the host environment / `.env`.
 

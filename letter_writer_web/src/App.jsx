@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import { useNavigate, useLocation } from "react-router-dom";
 import ModelSelector from "./components/ModelSelector";
 import LetterTabs from "./components/LetterTabs";
+import JobDescriptionColumn from "./components/JobDescriptionColumn";
 import StyleInstructionsBlade from "./components/StyleInstructionsBlade";
 import PhaseFlow from "./components/PhaseFlow";
 import AgenticFlow from "./components/AgenticFlow";
@@ -315,6 +316,33 @@ export default function App({ flow = "vendor" }) {
   
   // Translation state for job text
   const { enabledLanguages } = useLanguages();
+  const [referenceSidebarCollapsed, setReferenceSidebarCollapsed] = useState(false);
+  const [competenceHighlightTerm, setCompetenceHighlightTerm] = useState(null);
+  const [assemblyHighlightCtx, setAssemblyHighlightCtx] = useState(() => ({
+    competenceCounts: {},
+    finalAssemblyTextNormalized: "",
+  }));
+
+  const handleAssemblyHighlightCtx = useCallback((ctx) => {
+    if (!ctx || typeof ctx !== "object") return;
+    setAssemblyHighlightCtx({
+      competenceCounts: ctx.competenceCounts || {},
+      finalAssemblyTextNormalized: ctx.finalAssemblyTextNormalized || "",
+    });
+  }, []);
+
+  const handleCompetenceTermClick = useCallback((term) => {
+    setCompetenceHighlightTerm((prev) => (prev === term ? null : term));
+  }, []);
+
+  useEffect(() => {
+    const inAssembly =
+      (flow === "vendor" && vendorStage === "assembly") ||
+      (flow === "agentic" && agenticStage === "assembly");
+    if (!inAssembly) {
+      setAssemblyHighlightCtx({ competenceCounts: {}, finalAssemblyTextNormalized: "" });
+    }
+  }, [flow, vendorStage, agenticStage]);
   const [jobTextViewLanguage, setJobTextViewLanguage] = useState("source");
   const [jobTextTranslations, setJobTextTranslations] = useState({});
   const [isTranslatingJobText, setIsTranslatingJobText] = useState(false);
@@ -2138,6 +2166,7 @@ export default function App({ flow = "vendor" }) {
       } catch (e) {
         console.error("Draft phase error after plan approval", e);
         const errorMessage = extractErrorMessage(e);
+        setPhaseVendorError("plan", vendor, errorMessage);
         throw new Error(errorMessage);
       }
     }
@@ -2218,6 +2247,7 @@ export default function App({ flow = "vendor" }) {
       } catch (e) {
         console.error("Refine generation error", e);
         const errorMessage = extractErrorMessage(e);
+        setPhaseVendorError("draft", vendor, errorMessage);
         throw new Error(errorMessage);
       }
     }
@@ -2800,6 +2830,22 @@ export default function App({ flow = "vendor" }) {
             </div>
           </div>
           
+          {error && <p style={{ color: "var(--error-text)" }}>{error}</p>}
+          {documentSaveNotice && (
+            <p
+              role="status"
+              style={{
+                color: "var(--secondary-text-color)",
+                background: "var(--warning-bg)",
+                border: "1px solid var(--warning-border)",
+                padding: "10px 12px",
+                borderRadius: 4,
+              }}
+            >
+              {documentSaveNotice}
+            </p>
+          )}
+
           <div style={{ marginTop: 20, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <button
               onClick={handleSubmit}
@@ -2865,6 +2911,18 @@ export default function App({ flow = "vendor" }) {
           </div>
         </>
       ) : (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "stretch",
+            gap: 12,
+            width: "100%",
+            minHeight: "calc(100vh - 120px)",
+            boxSizing: "border-box",
+          }}
+        >
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
         <div
           style={{
             display: "flex",
@@ -2957,9 +3015,8 @@ export default function App({ flow = "vendor" }) {
             <LanguageConfig />
           </div>
         </div>
-      )}
-      {error && <p style={{ color: "var(--error-text)" }}>{error}</p>}
-      {documentSaveNotice && (
+        {error && <p style={{ color: "var(--error-text)" }}>{error}</p>}
+        {documentSaveNotice && (
         <p
           role="status"
           style={{
@@ -2973,9 +3030,6 @@ export default function App({ flow = "vendor" }) {
           {documentSaveNotice}
         </p>
       )}
-
-      {!showInput && (
-        <>
           {/* Flow-specific phases: above the final assembly so scroll-up or back shows them. Never show vendor PhaseFlow on agentic route. */}
           {flow === "agentic" && (
             <div ref={agenticPhasesRef}>
@@ -3069,12 +3123,10 @@ export default function App({ flow = "vendor" }) {
                 finalParagraphs={flow === "agentic" ? agenticFinalParagraphs : finalParagraphs}
                 setFinalParagraphs={flow === "agentic" ? setAgenticFinalParagraphs : setFinalParagraphs}
                 originalText={jobText}
-                companyReport={selectedCompanyReport}
                 requirements={requirements}
                 competences={competences}
                 competenceScaleConfig={competenceScaleConfig}
                 competenceOverrides={competenceOverrides}
-                hireProblem={hireProblem}
                 vendorColors={vendorColors}
                 failedVendors={flow === "agentic" ? {} : failedVendors}
                 onRetry={
@@ -3111,10 +3163,104 @@ export default function App({ flow = "vendor" }) {
                       )
                     : undefined
                 }
+                selectedKeyTerm={competenceHighlightTerm}
+                onTermClick={handleCompetenceTermClick}
+                onHighlightContextChange={handleAssemblyHighlightCtx}
               />
             </div>
           )}
-        </>
+          </div>
+          {referenceSidebarCollapsed ? (
+            <button
+              type="button"
+              onClick={() => setReferenceSidebarCollapsed(false)}
+              aria-label="Expand job and fit reference panel"
+              title="Job offer, key competences, company report, extracted goal"
+              style={{
+                flexShrink: 0,
+                width: 44,
+                alignSelf: "stretch",
+                minHeight: 160,
+                marginTop: 0,
+                padding: "10px 6px",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "flex-start",
+                gap: 10,
+                border: "1px solid var(--border-color)",
+                borderRadius: 8,
+                background: "var(--card-bg)",
+                color: "var(--text-color)",
+                cursor: "pointer",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+                boxSizing: "border-box",
+              }}
+            >
+              <span style={{ fontSize: 16, lineHeight: 1, flexShrink: 0 }} aria-hidden>
+                ›
+              </span>
+              {[
+                "Job offer",
+                "Key fit",
+                "Report",
+                ...(selectedPocReport ? ["POC"] : []),
+              ].map((label) => (
+                <span
+                  key={label}
+                  style={{
+                    writingMode: "vertical-rl",
+                    textOrientation: "mixed",
+                    transform: "rotate(180deg)",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    letterSpacing: "0.05em",
+                    color: "var(--secondary-text-color)",
+                    lineHeight: 1.2,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {label}
+                </span>
+              ))}
+            </button>
+          ) : (
+            <div
+              style={{
+                width: 340,
+                flexShrink: 0,
+                alignSelf: "stretch",
+                minHeight: 0,
+                display: "flex",
+                flexDirection: "column",
+                border: "1px solid var(--border-color)",
+                borderRadius: 8,
+                overflow: "hidden",
+                background: "var(--card-bg)",
+              }}
+            >
+              <JobDescriptionColumn
+                jobText={jobText}
+                companyReport={selectedCompanyReport}
+                pocReport={selectedPocReport}
+                requirements={requirements}
+                competences={competences}
+                scaleConfig={competenceScaleConfig}
+                overrides={competenceOverrides}
+                width="100%"
+                minWidth="0"
+                languages={enabledLanguages}
+                selectedKeyTerm={competenceHighlightTerm}
+                onTermClick={handleCompetenceTermClick}
+                competenceCounts={assemblyHighlightCtx.competenceCounts || {}}
+                finalAssemblyText={assemblyHighlightCtx.finalAssemblyTextNormalized || ""}
+                hireProblem={hireProblem}
+                onHireProblemChange={setHireProblem}
+                onCollapsePanel={() => setReferenceSidebarCollapsed(true)}
+              />
+            </div>
+          )}
+        </div>
       )}
 
       {Object.keys(failedVendors).length > 0 && (
