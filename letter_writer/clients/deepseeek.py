@@ -1,4 +1,4 @@
-from .base import BaseClient, ModelSize, merge_system_cache_prefix_into_system
+from .base import BaseClient, ModelRole, merge_system_cache_prefix_into_system
 from openai import OpenAI
 from typing import List, Dict, Any, Optional
 import os
@@ -20,7 +20,7 @@ class DeepSeekClient(BaseClient):
     @traceable(run_type="llm", name="DeepSeek.call")
     def call(
         self,
-        model_size: ModelSize | str,
+        model_role: ModelRole | str,
         system: str,
         user_messages: List[str],
         search: bool = False,
@@ -31,10 +31,10 @@ class DeepSeekClient(BaseClient):
         _ = cache_prefix
         system_prompt = merge_system_cache_prefix_into_system(system, system_cache_prefix)
         messages = self._format_messages(system_prompt, user_messages)
-        if isinstance(model_size, str):
-            model = model_size
+        if isinstance(model_role, str):
+            model = model_role
         else:
-            model = self.get_model_for_size(model_size)
+            model = self.get_model_for_role(model_role)
         def _return_with_audit(text: str) -> str:
             self._record_llm_io(
                 model=model,

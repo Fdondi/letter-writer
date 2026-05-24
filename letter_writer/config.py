@@ -18,11 +18,6 @@ def env_default(key: str, default: Optional[str] = None) -> Optional[str]:
     return os.getenv(key, default)
 
 
-def get_extraction_model() -> str:
-    """Return extraction model name from env, with a safe default."""
-    return env_default("EXTRACTION_MODEL", "gpt-5-nano") or "gpt-5-nano"
-
-
 def get_log_level() -> int:
     """Return logging level from env, defaulting to INFO."""
     level_name = (env_default("LOG_LEVEL", "INFO") or "INFO").strip().upper()

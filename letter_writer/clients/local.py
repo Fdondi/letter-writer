@@ -1,4 +1,4 @@
-from .base import BaseClient, ModelSize, merge_system_cache_prefix_into_system
+from .base import BaseClient, ModelRole, merge_system_cache_prefix_into_system
 from openai import OpenAI
 from typing import List, Dict, Any, Optional
 import logging
@@ -34,7 +34,7 @@ class LocalClient(BaseClient):
     Base URL: ``LOCAL_LLM_BASE_URL`` if set, else ``http://localhost:1234/v1`` on the
     host, or ``http://host.docker.internal:1234/v1`` when running inside a container
     so the host's LM Studio is reachable. API key defaults to ``lm-studio`` or
-    ``LOCAL_LLM_API_KEY``. Model sizes are ignored — whatever model is loaded locally is used.
+    ``LOCAL_LLM_API_KEY``. Model roles are ignored — whatever model is loaded locally is used.
     """
 
     def __init__(self):
@@ -68,7 +68,7 @@ class LocalClient(BaseClient):
     @traceable(run_type="llm", name="Local.call")
     def call(
         self,
-        model_size: ModelSize | str,
+        model_role: ModelRole | str,
         system: str,
         user_messages: List[str],
         search: bool = False,

@@ -2,12 +2,17 @@
   "defaults": {
     "search": 5.0
   },
-  "sizes": {
-    "tiny": "grok-4-1-fast-non-reasoning",
-    "base": "grok-4-1-fast-reasoning",
-    "medium": "grok-4.20-0309-non-reasoning",
-    "large": "grok-4.20-0309-reasoning",
-    "xlarge": "grok-4.20-multi-agent-0309"
+  "roles": {
+    "extraction": "grok-4-1-fast-non-reasoning",
+    "feedback": "grok-4-1-fast-reasoning",
+    "feedback_review": "grok-4-1-fast-non-reasoning",
+    "feedback_context": "grok-4-1-fast-non-reasoning",
+    "rag_ranker": "grok-4.20-0309-reasoning",
+    "company_research": "grok-4.20-0309-reasoning",
+    "letter_plan": "grok-4.20-multi-agent-0309",
+    "letter_draft": "grok-4.20-multi-agent-0309",
+    "letter_refine": "grok-4.20-multi-agent-0309",
+    "agentic": "grok-4-1-fast-non-reasoning"
   },
   "models": {
     "grok-4-1-fast-non-reasoning": {

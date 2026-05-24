@@ -51,12 +51,19 @@ class ModelVendor(Enum):
     LOCAL = "local"
 
 
-class ModelSize(Enum):
-    TINY = "tiny"
-    BASE = "base"
-    MEDIUM = "medium"
-    LARGE = "large"
-    XLARGE = "xlarge"
+class ModelRole(Enum):
+    """Named LLM roles — each vendor maps roles to a concrete model in ``*.json``."""
+
+    EXTRACTION = "extraction"
+    FEEDBACK = "feedback"
+    FEEDBACK_REVIEW = "feedback_review"
+    FEEDBACK_CONTEXT = "feedback_context"
+    RAG_RANKER = "rag_ranker"
+    COMPANY_RESEARCH = "company_research"
+    LETTER_PLAN = "letter_plan"
+    LETTER_DRAFT = "letter_draft"
+    LETTER_REFINE = "letter_refine"
+    AGENTIC = "agentic"
 
 
 class BaseClient:
@@ -98,29 +105,29 @@ class BaseClient:
         """Access the current (hot-reloaded) configuration."""
         return self._load_cost_config()
 
-    def get_model_for_size(self, model_size: ModelSize) -> str:
-        """Resolve model name from size using hot-reloaded config.
+    def get_model_for_role(self, model_role: ModelRole) -> str:
+        """Resolve model name from role using hot-reloaded config.
 
-        Supports both legacy plain-string entries and new dict entries::
+        Supports plain-string entries and dict entries with extra vendor keys::
 
-            "tiny": "gpt-5-nano"                           # legacy
-            "tiny": {"model": "gpt-5-nano", ...}           # new
+            "feedback": "gpt-5-mini"
+            "feedback": {"model": "gpt-5-mini", "reasoning_effort": "low"}
         """
-        sizes = self.config.get("sizes", {})
-        entry = sizes.get(model_size.value)
+        roles = self.config.get("roles", {})
+        entry = roles.get(model_role.value)
         if not entry:
-            raise ValueError(f"Model size '{model_size.value}' not defined in {self.__class__.__name__} config")
+            raise ValueError(f"Model role '{model_role.value}' not defined in {self.__class__.__name__} config")
         if isinstance(entry, dict):
             model_name = entry.get("model")
             if not model_name:
-                raise ValueError(f"Model size '{model_size.value}' missing 'model' key in {self.__class__.__name__} config")
+                raise ValueError(f"Model role '{model_role.value}' missing 'model' key in {self.__class__.__name__} config")
             return model_name
         return entry
 
-    def get_thinking_config(self, model_size: ModelSize) -> dict:
-        """Return per-size thinking/reasoning params (vendor-specific keys).
+    def get_thinking_config(self, model_role: ModelRole) -> dict:
+        """Return per-role thinking/reasoning params (vendor-specific keys).
 
-        Returns an empty dict for plain-string size entries or entries with no
+        Returns an empty dict for plain-string role entries or entries with no
         extra keys beyond ``model``.  Each vendor client checks for its own key::
 
             OpenAI:    config.get("reasoning_effort")   # "none"|"low"|"medium"|"high"
@@ -128,8 +135,8 @@ class BaseClient:
                 optional ``effort`` ("high"|"medium"|...) for adaptive-thinking models
             Gemini:    config.get("thinking_level")     # None | "Low" | "Medium" | "High"
         """
-        sizes = self.config.get("sizes", {})
-        entry = sizes.get(model_size.value)
+        roles = self.config.get("roles", {})
+        entry = roles.get(model_role.value)
         if isinstance(entry, dict):
             return {k: v for k, v in entry.items() if k != "model"}
         return {}
@@ -252,7 +259,7 @@ class BaseClient:
 
     def call(
         self,
-        model_size: ModelSize | str,
+        model_role: ModelRole | str,
         system: str,
         user_messages: List[str],
         search: bool = False,

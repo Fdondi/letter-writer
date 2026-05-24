@@ -2,12 +2,17 @@
   "defaults": {
     "search": 30.0
   },
-  "sizes": {
-    "tiny": "mistral-small-2506",
-    "base": "mistral-small-latest",
-    "medium": "mistral-medium-latest",
-    "large": "mistral-large-latest",
-    "xlarge": "mistral-large-latest"
+  "roles": {
+    "extraction": "mistral-small-2506",
+    "feedback": "mistral-small-latest",
+    "feedback_review": "mistral-small-2506",
+    "feedback_context": "mistral-small-2506",
+    "rag_ranker": "mistral-large-latest",
+    "company_research": "mistral-large-latest",
+    "letter_plan": "mistral-large-latest",
+    "letter_draft": "mistral-large-latest",
+    "letter_refine": "mistral-large-latest",
+    "agentic": "mistral-small-2506"
   },
   "models": {
     "open-mixtral-8x7b": {

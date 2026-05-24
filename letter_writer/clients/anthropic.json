@@ -2,12 +2,17 @@
   "defaults": {
     "search": 10.00
   },
-  "sizes": {
-    "tiny":   { "model": "claude-haiku-4-5",  "thinking": false },
-    "base":   { "model": "claude-haiku-4-5",  "thinking": true },
-    "medium": { "model": "claude-haiku-4-5", "thinking": true },
-    "large":  { "model": "claude-sonnet-4-6", "thinking": true, "effort": "medium" },
-    "xlarge": { "model": "claude-opus-4-7",   "thinking": true, "effort": "high" }
+  "roles": {
+    "extraction":       { "model": "claude-haiku-4-5",  "thinking": false },
+    "feedback":         { "model": "claude-haiku-4-5",  "thinking": true },
+    "feedback_review":  { "model": "claude-haiku-4-5",  "thinking": false },
+    "feedback_context": { "model": "claude-haiku-4-5",  "thinking": false },
+    "rag_ranker":       { "model": "claude-sonnet-4-6", "thinking": true, "effort": "medium" },
+    "company_research": { "model": "claude-sonnet-4-6", "thinking": true, "effort": "medium" },
+    "letter_plan":      { "model": "claude-opus-4-7",   "thinking": true, "effort": "high" },
+    "letter_draft":     { "model": "claude-opus-4-7",   "thinking": true, "effort": "high" },
+    "letter_refine":    { "model": "claude-opus-4-7",   "thinking": true, "effort": "high" },
+    "agentic":          { "model": "claude-haiku-4-5",  "thinking": false }
   },
   "models":
   {

@@ -1,5 +1,5 @@
 from letter_writer.client import get_client
-from letter_writer.clients.base import ModelVendor, ModelSize
+from letter_writer.clients.base import ModelVendor, ModelRole
 import logging
 import os
 import pytest
@@ -16,7 +16,7 @@ def test_openai_client_tiny_no_search():
     """Test OpenAI client with tiny model without search"""
     client = get_client(ModelVendor.OPENAI)
     response = client.call(
-        model_size=ModelSize.TINY,
+        model_role=ModelRole.EXTRACTION,
         system=SYSTEM_PROMPT,
         user_messages=[USER_MESSAGE],
         search=False
@@ -29,7 +29,7 @@ def test_openai_client_tiny_with_search():
     """Test OpenAI client with tiny model with search"""
     client = get_client(ModelVendor.OPENAI)
     response = client.call(
-        model_size=ModelSize.TINY,
+        model_role=ModelRole.EXTRACTION,
         system=SYSTEM_PROMPT,
         user_messages=["What are the latest news about AI?"],
         search=True
@@ -42,7 +42,7 @@ def test_anthropic_client_tiny_no_search():
     """Test Anthropic client with tiny model without search"""
     client = get_client(ModelVendor.ANTHROPIC)
     response = client.call(
-        model_size=ModelSize.TINY,
+        model_role=ModelRole.EXTRACTION,
         system=SYSTEM_PROMPT,
         user_messages=[USER_MESSAGE],
         search=False
@@ -55,7 +55,7 @@ def test_anthropic_client_tiny_with_search():
     """Test Anthropic client with tiny model with search"""
     client = get_client(ModelVendor.ANTHROPIC)
     response = client.call(
-        model_size=ModelSize.TINY,
+        model_role=ModelRole.EXTRACTION,
         system=SYSTEM_PROMPT,
         user_messages=["What are the latest news about AI?"],
         search=True
@@ -68,7 +68,7 @@ def test_gemini_client_tiny_no_search():
     """Test Gemini client with tiny model without search"""
     client = get_client(ModelVendor.GEMINI)
     response = client.call(
-        model_size=ModelSize.TINY,
+        model_role=ModelRole.EXTRACTION,
         system=SYSTEM_PROMPT,
         user_messages=[USER_MESSAGE],
         search=False
@@ -81,7 +81,7 @@ def test_gemini_client_tiny_with_search():
     """Test Gemini client with tiny model with search"""
     client = get_client(ModelVendor.GEMINI)
     response = client.call(
-        model_size=ModelSize.TINY,
+        model_role=ModelRole.EXTRACTION,
         system=SYSTEM_PROMPT,
         user_messages=["What are the latest news about AI?"],
         search=True
@@ -98,7 +98,7 @@ def test_mistral_client_tiny_no_search():
     
     client = get_client(ModelVendor.MISTRAL)
     response = client.call(
-        model_size=ModelSize.TINY,
+        model_role=ModelRole.EXTRACTION,
         system=SYSTEM_PROMPT,
         user_messages=[USER_MESSAGE],
         search=False
@@ -115,7 +115,7 @@ def test_mistral_client_tiny_with_search():
     
     client = get_client(ModelVendor.MISTRAL)
     response = client.call(
-        model_size=ModelSize.TINY,
+        model_role=ModelRole.EXTRACTION,
         system=SYSTEM_PROMPT,
         user_messages=["What are the latest news about AI?"],
         search=True
@@ -132,7 +132,7 @@ def test_grok_client_tiny_no_search():
     
     client = get_client(ModelVendor.GROK)
     response = client.call(
-        model_size=ModelSize.TINY,
+        model_role=ModelRole.EXTRACTION,
         system=SYSTEM_PROMPT,
         user_messages=[USER_MESSAGE],
         search=False
@@ -149,7 +149,7 @@ def test_grok_client_tiny_with_search():
     
     client = get_client(ModelVendor.GROK)
     response = client.call(
-        model_size=ModelSize.TINY,
+        model_role=ModelRole.EXTRACTION,
         system=SYSTEM_PROMPT,
         user_messages=["What are the latest news about AI?"],
         search=True
@@ -162,7 +162,7 @@ def test_deepseek_client_tiny_no_search():
     """Test DeepSeek client with tiny model without search"""
     client = get_client(ModelVendor.DEEPSEEK)
     response = client.call(
-        model_size=ModelSize.TINY,
+        model_role=ModelRole.EXTRACTION,
         system=SYSTEM_PROMPT,
         user_messages=[USER_MESSAGE],
         search=False
@@ -175,7 +175,7 @@ def test_deepseek_client_tiny_with_search():
     
     client = get_client(ModelVendor.DEEPSEEK)
     response = client.call(
-        model_size=ModelSize.TINY,
+        model_role=ModelRole.EXTRACTION,
         system=SYSTEM_PROMPT,
         user_messages=["What are the latest news about AI?"],
         search=True

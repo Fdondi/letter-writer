@@ -2,12 +2,17 @@
   "defaults": {
     "search": 0.0
   },
-  "sizes": {
-    "tiny": "deepseek-v4-flash",
-    "base": "deepseek-v4-pro",
-    "medium": "deepseek-v4-pro",
-    "large": "deepseek-v4-pro",
-    "xlarge": "deepseek-v4-pro"
+  "roles": {
+    "extraction": "deepseek-v4-flash",
+    "feedback": "deepseek-v4-pro",
+    "feedback_review": "deepseek-v4-flash",
+    "feedback_context": "deepseek-v4-flash",
+    "rag_ranker": "deepseek-v4-pro",
+    "company_research": "deepseek-v4-pro",
+    "letter_plan": "deepseek-v4-pro",
+    "letter_draft": "deepseek-v4-pro",
+    "letter_refine": "deepseek-v4-pro",
+    "agentic": "deepseek-v4-flash"
   },
   "models": {
     "deepseek-chat": {

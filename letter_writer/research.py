@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from langsmith import traceable
 
 from .client import get_client
-from .clients.base import ModelVendor, ModelSize, BaseClient
+from .clients.base import ModelVendor, ModelRole, BaseClient
 from .firestore_store import (
     get_company_info,
     save_company_info,
@@ -33,7 +33,7 @@ def _strip_top_docs_from_report_entry(entry: Any) -> Any:
     return entry
 
 
-def _parse_model_str(model_str: str) -> Tuple[ModelVendor, str | ModelSize]:
+def _parse_model_str(model_str: str) -> Tuple[ModelVendor, str | ModelRole]:
     """Parse 'vendor/model' or 'vendor' string."""
     parts = model_str.split("/", 1)
     try:
@@ -46,7 +46,7 @@ def _parse_model_str(model_str: str) -> Tuple[ModelVendor, str | ModelSize]:
         
     if len(parts) > 1:
         return vendor, parts[1]
-    return vendor, ModelSize.LARGE
+    return vendor, ModelRole.COMPANY_RESEARCH
 
 
 def _norm_company(s: str) -> str:
@@ -376,7 +376,7 @@ def perform_poc_research(
             messages = [{"role": "user", "content": prompt}]
             # We assume client.call supports simple generation via BaseClient.call if we implemented it, 
             # but BaseClient.call is the standard way now.
-            # BaseClient.call(model_size, system, messages, search=False)
+            # BaseClient.call(model_role, system, messages, search=False)
             
             report = client.call(model_id, "You are a professional research assistant.", [prompt], search=False)
             

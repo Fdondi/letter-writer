@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, cast
 import typer
 from mistralai.client import Mistral
 
-from .base import BaseClient, ModelSize, merge_system_cache_prefix_into_system
+from .base import BaseClient, ModelRole, merge_system_cache_prefix_into_system
 from langsmith import traceable
 
 class MistralClient(BaseClient):
@@ -166,7 +166,7 @@ class MistralClient(BaseClient):
     @traceable(run_type="llm", name="Mistral.call")
     def call(
         self,
-        model_size: ModelSize | str,
+        model_role: ModelRole | str,
         system: str,
         user_messages: List[str],
         search: bool = False,
@@ -176,10 +176,10 @@ class MistralClient(BaseClient):
     ) -> str:
         _ = cache_prefix
         system_prompt = merge_system_cache_prefix_into_system(system, system_cache_prefix)
-        if isinstance(model_size, str):
-            model = model_size
+        if isinstance(model_role, str):
+            model = model_role
         else:
-            model = self.get_model_for_size(model_size)
+            model = self.get_model_for_role(model_role)
         def _return_with_audit(text: str) -> str:
             self._record_llm_io(
                 model=model,

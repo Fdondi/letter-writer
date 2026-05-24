@@ -7,7 +7,7 @@ import typer
 from langsmith import traceable
 from google.cloud.firestore_v1.base_query import FieldFilter
 
-from .clients.base import BaseClient, ModelSize
+from .clients.base import BaseClient, ModelRole
 
 from .vector_store import embed, query_vector_similarity
 from .firestore_store import get_collection
@@ -240,7 +240,7 @@ def rerank_documents(
         "Return ONLY the JSON object, no wrappers.\n\n"
     )
     prompt = "Original Job Description:\n" + job_text + "\n\nOther Descriptions (JSON):\n" + mapping_json
-    scores_json = ai_client.call(ModelSize.LARGE, system, [prompt])
+    scores_json = ai_client.call(ModelRole.RAG_RANKER, system, [prompt])
 
     # remove wrapping '''json if present
     if scores_json.startswith("```json"):

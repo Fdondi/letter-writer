@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from pathlib import Path
 from langsmith import traceable
 
-from .config import TRACE_DIR, get_extraction_model
-from .clients.base import BaseClient, ModelSize
+from .config import TRACE_DIR
+from .clients.base import BaseClient, ModelRole
 from .skill_utils import core_skill_name as _core_skill_name
 from .typed_shapes import TopDocument
 
@@ -279,7 +279,7 @@ def normalize_parsed_feedback_items(
 @traceable(run_type="chain", name="call_vendor_feedback_items")
 def _call_vendor_feedback_items(
     client: BaseClient,
-    model_size: ModelSize,
+    model_role: ModelRole,
     system: str,
     prompt: str,
     *,
@@ -341,7 +341,7 @@ def _call_vendor_feedback_items(
     for attempt in range(1, max_retries + 1):
         try:
             last_raw = client.call(
-                model_size,
+                model_role,
                 enforced_system,
                 [prompt],
                 search=search,
@@ -817,7 +817,7 @@ def _run_suggest_additional_feedback_context(
     full_prompt = base_prompt + task
     ctx_schema = missing_context_items_schema_for_allowed_sources(allowed)
     raw = client.call(
-        ModelSize.TINY,
+        ModelRole.FEEDBACK_CONTEXT,
         system,
         [full_prompt],
         response_format=ctx_schema,
@@ -1015,12 +1015,6 @@ _JOB_PREFIX = "Job description:\n"
 # Structured extraction: single JSON object with competence category arrays plus this string key.
 HIRE_PROBLEM_JSON_KEY = "hire_problem"
 
-
-def _get_extraction_model_name() -> str:
-    """Resolve model used for extraction-style calls."""
-    return get_extraction_model()
-
-
 @traceable(run_type="chain", name="extract_job_metadata_no_requirements")
 def extract_job_metadata_no_requirements(
     job_text: str,
@@ -1036,7 +1030,7 @@ def extract_job_metadata_no_requirements(
     )
     example = '{"company_name":"Acme","job_title":"Senior Engineer","location":"Remote","language":"English","salary":"€80-100k","point_of_contact":{"name":"John Doe","role":"HR Manager","contact_details":"john.doe@acme.com","notes":"Please contact via email"}}'
     prompt = f"{_JOB_PREFIX}{job_text}\n\n{task}\n\nRespond with JSON only. Example format:\n{example}"
-    raw = client.call(_get_extraction_model_name(), EXTRACTION_SYSTEM, [prompt])
+    raw = client.call(ModelRole.EXTRACTION, EXTRACTION_SYSTEM, [prompt])
     _write_trace(trace_dir, EXTRACTION_SYSTEM, prompt, raw)
 
     try:
@@ -1119,7 +1113,7 @@ def extract_key_competences(
         "Single competence for alternatives: 'like C++ or Java' -> one competence."
     )
     prompt = f"{_JOB_PREFIX}{job_text}\n\n{task}\n\nRespond with JSON only. Example format:\n{example}"
-    raw = client.call(_get_extraction_model_name(), EXTRACTION_SYSTEM, [prompt])
+    raw = client.call(ModelRole.EXTRACTION, EXTRACTION_SYSTEM, [prompt])
     _write_trace(trace_dir, EXTRACTION_SYSTEM, prompt, raw)
 
     try:
@@ -1206,7 +1200,7 @@ def grade_competence_cv_match(
         "Respond with JSON only. Example format:\n"
         f"{example_str}"
     )
-    raw = client.call(_get_extraction_model_name(), system, [prompt])
+    raw = client.call(ModelRole.EXTRACTION, system, [prompt])
     _write_trace(trace_dir, system, prompt, raw)
 
     try:
@@ -1387,7 +1381,7 @@ def extract_job_metadata(
         "Respond with JSON only. Example format:\n"
         '{"company_name":"Acme","job_title":"Senior Engineer","location":"Remote","language":"English","salary":"€80-100k","requirements":["Python","AWS"],"point_of_contact":{"name":"John Doe","role":"HR Manager","contact_details":"john.doe@acme.com","notes":"Please contact via email"}}'
     )
-    raw = client.call(_get_extraction_model_name(), system, [prompt])
+    raw = client.call(ModelRole.EXTRACTION, system, [prompt])
     if trace_dir is not None:
         trace_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -1490,7 +1484,7 @@ def company_research(
     trace_dir: Path,
     additional_company_info: str = "",
     search: bool = True,
-    model: str | ModelSize = ModelSize.LARGE,
+    model: str | ModelRole = ModelRole.COMPANY_RESEARCH,
     search_instructions: str = "",
     point_of_contact: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
@@ -1503,7 +1497,7 @@ def company_research(
         trace_dir: Directory for tracing
         additional_company_info: User-provided additional context about the company or role
         search: Whether to enable web search tools (default: True)
-        model: Model to use (default: ModelSize.LARGE)
+        model: Model to use (default: ModelRole.COMPANY_RESEARCH)
         search_instructions: User-provided instructions for how to conduct the background search
         point_of_contact: Optional dict with name, role, contact_details, notes (for context only)
     """
@@ -1630,7 +1624,7 @@ def generate_letter_plan(
         + hire_block
     )
     (trace_dir / "plan_prompt.txt").write_text(prompt, encoding="utf-8")
-    return client.call(ModelSize.XLARGE, system, [prompt])
+    return client.call(ModelRole.LETTER_PLAN, system, [prompt])
 
 
 @traceable(run_type="chain", name="generate_letter")
@@ -1732,7 +1726,7 @@ def generate_letter(
         + hire_block
     )
     (trace_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
-    return client.call(ModelSize.XLARGE, system, [prompt])
+    return client.call(ModelRole.LETTER_DRAFT, system, [prompt])
 
 @traceable(run_type="chain", name="instruction_check")
 def instruction_check(letter: str, client: BaseClient, style_instructions: str = "") -> List[Dict[str, Any]]:
@@ -1743,7 +1737,7 @@ def instruction_check(letter: str, client: BaseClient, style_instructions: str =
     legacy = legacy_context_string_default_source_for_category("instruction")
     return _call_vendor_feedback_items(
         client,
-        ModelSize.BASE,
+        ModelRole.FEEDBACK,
         system,
         prompt,
         allowed_context_sources=allowed,
@@ -1768,7 +1762,7 @@ def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_use
     legacy = legacy_context_string_default_source_for_category("accuracy")
     return _call_vendor_feedback_items(
         client,
-        ModelSize.BASE,
+        ModelRole.FEEDBACK,
         system,
         prompt,
         allowed_context_sources=allowed,
@@ -1788,7 +1782,7 @@ def precision_check(letter: str, company_report: str, job_text: str, client: Bas
     legacy = legacy_context_string_default_source_for_category("precision")
     return _call_vendor_feedback_items(
         client,
-        ModelSize.BASE,
+        ModelRole.FEEDBACK,
         system,
         prompt,
         allowed_context_sources=allowed,
@@ -1810,7 +1804,7 @@ def company_fit_check(letter: str, company_report: str, job_offer: str, client: 
     legacy = legacy_context_string_default_source_for_category("company_fit")
     return _call_vendor_feedback_items(
         client,
-        ModelSize.BASE,
+        ModelRole.FEEDBACK,
         system,
         prompt,
         allowed_context_sources=allowed,
@@ -1839,7 +1833,7 @@ def goal_fit_check(
     legacy = legacy_context_string_default_source_for_category("goal_fit")
     return _call_vendor_feedback_items(
         client,
-        ModelSize.BASE,
+        ModelRole.FEEDBACK,
         system,
         prompt,
         allowed_context_sources=allowed,
@@ -1871,7 +1865,7 @@ def user_fit_check(
     legacy = legacy_context_string_default_source_for_category("user_fit", top_docs=examples)
     return _call_vendor_feedback_items(
         client,
-        ModelSize.BASE,
+        ModelRole.FEEDBACK,
         system,
         prompt,
         allowed_context_sources=allowed,
@@ -1912,7 +1906,7 @@ def human_check(letter: str, examples: Sequence[TopDocument], client: BaseClient
     legacy = legacy_context_string_default_source_for_category("human", top_docs=examples)
     return _call_vendor_feedback_items(
         client,
-        ModelSize.BASE,
+        ModelRole.FEEDBACK,
         system,
         prompt,
         allowed_context_sources=allowed,
@@ -2203,7 +2197,7 @@ def rewrite_letter(
         "If you see that no feedback meaningfully needs to be addressed, output NO REVISIONS and end the answer.\n"
     )
     (trace_dir / "rewrite_prompt.txt").write_text(prompt, encoding="utf-8")
-    revised_letter = client.call(ModelSize.XLARGE, system, [prompt])
+    revised_letter = client.call(ModelRole.LETTER_REFINE, system, [prompt])
     if "NO REVISIONS" in revised_letter:
         logger.info("No revisions needed, returning original letter.")
         return original_letter
@@ -2222,5 +2216,5 @@ def fancy_letter(letter: str, client: BaseClient) -> str:
         "========== Cover Letter:\n" + letter + "\n==========\n" +
         "Please rewrite the cover letter in a more fancy style. "
     )
-    return client.call(ModelSize.XLARGE, system, [prompt])
+    return client.call(ModelRole.LETTER_REFINE, system, [prompt])
 

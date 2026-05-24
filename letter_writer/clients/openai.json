@@ -3,12 +3,17 @@
     "search": 10.0,
     "threshold": 272000
   },
-  "sizes": {
-    "tiny":   { "model": "gpt-5-nano",   "reasoning_effort": "none" },
-    "base":   { "model": "gpt-5-mini",   "reasoning_effort": "low" },
-    "medium": { "model": "gpt-5.4-mini", "reasoning_effort": "medium" },
-    "large":  { "model": "gpt-5.2",      "reasoning_effort": "medium" },
-    "xlarge": { "model": "gpt-5.5",      "reasoning_effort": "high" }
+  "roles": {
+    "extraction":       { "model": "gpt-5-nano",   "reasoning_effort": "none" },
+    "feedback":         { "model": "gpt-5-mini",   "reasoning_effort": "low" },
+    "feedback_review":  { "model": "gpt-5-nano",   "reasoning_effort": "none" },
+    "feedback_context": { "model": "gpt-5-nano",   "reasoning_effort": "none" },
+    "rag_ranker":       { "model": "gpt-5.2",      "reasoning_effort": "medium" },
+    "company_research": { "model": "gpt-5.2",      "reasoning_effort": "medium" },
+    "letter_plan":      { "model": "gpt-5.5",      "reasoning_effort": "high" },
+    "letter_draft":     { "model": "gpt-5.5",      "reasoning_effort": "high" },
+    "letter_refine":    { "model": "gpt-5.5",      "reasoning_effort": "high" },
+    "agentic":          { "model": "gpt-5-nano",   "reasoning_effort": "none" }
   },
   "models": {
     "gpt-5.5-pro": {

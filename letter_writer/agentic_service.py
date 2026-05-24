@@ -22,7 +22,7 @@ def _log(msg: str) -> None:
     logger.info(msg)
 
 from .client import get_client
-from .clients.base import ModelVendor, ModelSize
+from .clients.base import ModelVendor, ModelRole
 from .generation import (
     AGENTIC_TOPIC_KEYS,
     get_agentic_topic_context,
@@ -1101,7 +1101,7 @@ def _call_agentic_feedback_agent(
     topic_label = _topic_label(topic)
     if not thread:
         system, prompt = _agentic_feedback_prompt_first_agent(topic, context, topic_label)
-        raw = client.call(ModelSize.TINY, system, [prompt])
+        raw = client.call(ModelRole.AGENTIC, system, [prompt])
         raw = (raw or "").strip()
         if is_agentic_skip(raw):
             _log(f"AGENTIC {vendor} on {topic}: declined (NO COMMENT/SKIP)")
@@ -1116,7 +1116,7 @@ def _call_agentic_feedback_agent(
     system, prompt = _agentic_feedback_prompt_subsequent(
         topic, context, thread_str, topic_label, prior_topic_comments_str=(prior_topic_comments or "")
     )
-    raw = client.call(ModelSize.TINY, system, [prompt])
+    raw = client.call(ModelRole.AGENTIC, system, [prompt])
     raw = (raw or "").strip()
     # Strip markdown code block if present
     if raw.startswith("```"):
@@ -1324,7 +1324,7 @@ def call_agentic_phase_action(
     if vendor == "deepseek":
         prompt += f"\n\nYou must return a JSON object matching this schema:\n{json.dumps(schema)}"
     raw = client.call(
-        ModelSize.TINY,
+        ModelRole.AGENTIC,
         system,
         [prompt],
         response_format=_json_response_format(f"feedback_{phase}", schema, vendor),
@@ -2029,7 +2029,7 @@ def _call_voting_agent(
         f"The available draft vendors are: {json.dumps(draft_vendors)}\n\n"
         "Vote for your top 3 favorites (JSON array of vendor names, most preferred first)."
     )
-    raw = client.call(ModelSize.TINY, system, [prompt])
+    raw = client.call(ModelRole.AGENTIC, system, [prompt])
     raw = (raw or "").strip()
     if raw.startswith("```"):
         lines = raw.split("\n")

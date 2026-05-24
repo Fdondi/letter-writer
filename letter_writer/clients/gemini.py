@@ -5,7 +5,7 @@ from typing import Any, List, Tuple, cast, Dict, Optional
 import typer
 from langsmith import traceable
 
-from .base import BaseClient, ModelSize, merge_system_cache_prefix_into_system
+from .base import BaseClient, ModelRole, merge_system_cache_prefix_into_system
 
 genai: Any = None
 types: Any = None
@@ -129,7 +129,7 @@ class GeminiClient(BaseClient):
     @traceable(run_type="llm", name="Gemini.call")
     def call(
         self,
-        model_size: ModelSize | str,
+        model_role: ModelRole | str,
         system: str,
         user_messages: List[str],
         search: bool = False,
@@ -150,12 +150,12 @@ class GeminiClient(BaseClient):
         else:
             tools = []
 
-        if isinstance(model_size, str):
-            model_name = model_size
+        if isinstance(model_role, str):
+            model_name = model_role
             thinking_cfg: dict = {}
         else:
-            model_name = self.get_model_for_size(model_size)
-            thinking_cfg = self.get_thinking_config(model_size)
+            model_name = self.get_model_for_role(model_role)
+            thinking_cfg = self.get_thinking_config(model_role)
         def _return_with_audit(text: str) -> str:
             self._record_llm_io(
                 model=model_name,

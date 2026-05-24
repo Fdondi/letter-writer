@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Sequence, Tuple
 
 from langsmith import traceable
 
-from .clients.base import BaseClient, ModelSize
+from .clients.base import BaseClient, ModelRole
 from .generation import normalize_feedback_map
 from .typed_shapes import TopDocument
 
@@ -225,7 +225,7 @@ def _stage12_batch(
     lines = [f"id={oid}: {obs.strip()[:1200]}" for oid, obs in items]
     prompt = "Critiques:\n" + "\n".join(lines)
     raw = client.call(
-        ModelSize.TINY, system, [prompt], system_cache_prefix=system_cache_prefix
+        ModelRole.FEEDBACK_REVIEW, system, [prompt], system_cache_prefix=system_cache_prefix
     )
     def _parse_results(raw_response: str) -> Dict[str, bool]:
         data = _extract_json_object(raw_response)
@@ -249,7 +249,7 @@ def _stage12_batch(
         retry_lines = [f"id={oid}: {obs.strip()[:1200]}" for oid, obs in missing_items]
         retry_prompt = "Critiques:\n" + "\n".join(retry_lines)
         retry_raw = client.call(
-            ModelSize.TINY, system, [retry_prompt], system_cache_prefix=system_cache_prefix
+            ModelRole.FEEDBACK_REVIEW, system, [retry_prompt], system_cache_prefix=system_cache_prefix
         )
         out.update(_parse_results(retry_raw))
 
@@ -309,7 +309,7 @@ def _stage3_duplicate_groups(
             f"- id={it['id']} category={it.get('category')} :: {it.get('observation', '')[:1200]}"
         )
     prompt = "Items:\n" + "\n".join(lines)
-    raw = client.call(ModelSize.TINY, system, [prompt])
+    raw = client.call(ModelRole.FEEDBACK_REVIEW, system, [prompt])
     data = _extract_json_object(raw)
     groups = data.get("groups")
     id_to_group: Dict[str, str] = {}
@@ -359,7 +359,7 @@ def _stage4_input_clusters(
             f"obs={str(r.get('observation',''))[:400]} :: hint={str(r.get('user_instructions',''))[:200]}"
         )
     prompt = "Rows:\n" + "\n".join(lines)
-    raw = client.call(ModelSize.TINY, system, [prompt])
+    raw = client.call(ModelRole.FEEDBACK_REVIEW, system, [prompt])
     data = _extract_json_object(raw)
     clusters = data.get("clusters")
     out: Dict[str, str] = {}

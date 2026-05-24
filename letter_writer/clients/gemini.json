@@ -3,12 +3,17 @@
     "search": 0.0,
     "threshold": 200000
   },
-  "sizes": {
-    "tiny":   { "model": "gemini-2.5-flash-lite", "thinking_level": null },
-    "base":   { "model": "gemini-3.1-flash-lite",  "thinking_level": "Low" },
-    "medium": { "model": "gemini-3-flash-preview", "thinking_level": "Low" },
-    "large":  { "model": "gemini-3.5-flash",         "thinking_level": "Medium" },
-    "xlarge": { "model": "gemini-3.1-pro-preview",   "thinking_level": "High" }
+  "roles": {
+    "extraction":       { "model": "gemini-2.5-flash-lite", "thinking_level": null },
+    "feedback":         { "model": "gemini-3.1-flash-lite",  "thinking_level": "Low" },
+    "feedback_review":  { "model": "gemini-2.5-flash-lite", "thinking_level": null },
+    "feedback_context": { "model": "gemini-2.5-flash-lite", "thinking_level": null },
+    "rag_ranker":       { "model": "gemini-3.5-flash",         "thinking_level": "Medium" },
+    "company_research": { "model": "gemini-3.5-flash",         "thinking_level": "Medium" },
+    "letter_plan":      { "model": "gemini-3.1-pro-preview",   "thinking_level": "High" },
+    "letter_draft":     { "model": "gemini-3.1-pro-preview",   "thinking_level": "High" },
+    "letter_refine":    { "model": "gemini-3.1-pro-preview",   "thinking_level": "High" },
+    "agentic":          { "model": "gemini-2.5-flash-lite", "thinking_level": null }
   },
   "models":{
     "gemini-3.5-flash": {

@@ -1,5 +1,5 @@
 import json
-from .base import BaseClient, ModelSize
+from .base import BaseClient, ModelRole
 from anthropic import Anthropic
 from typing import List, Dict, Any, Optional
 import typer
@@ -128,7 +128,7 @@ class ClaudeClient(BaseClient):
     @traceable(run_type="llm", name="Anthropic.call")
     def call(
         self,
-        model_size: ModelSize | str,
+        model_role: ModelRole | str,
         system: str,
         user_messages: List[str],
         search: bool = False,
@@ -137,12 +137,12 @@ class ClaudeClient(BaseClient):
         system_cache_prefix: Optional[str] = None,
     ) -> str:
         messages = self._format_messages(user_messages, cache_prefix=cache_prefix)
-        if isinstance(model_size, str):
-            model = model_size
+        if isinstance(model_role, str):
+            model = model_role
             thinking_cfg: dict = {}
         else:
-            model = self.get_model_for_size(model_size)
-            thinking_cfg = self.get_thinking_config(model_size)
+            model = self.get_model_for_role(model_role)
+            thinking_cfg = self.get_thinking_config(model_role)
         thinking_enabled = bool(thinking_cfg.get("thinking", False))
         def _return_with_audit(text: str) -> str:
             self._record_llm_io(

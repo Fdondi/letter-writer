@@ -6,7 +6,7 @@ Extraction is **I/O-bound**: most of the time is waiting for the LLM API (networ
 
 ## What we already do
 
-- **Small model**: Extraction uses `ModelSize.TINY` (e.g. gpt-5-nano, claude-haiku-4-5, gemini-2.5-flash-lite per `letter_writer/clients/*.json`).
+- **Extraction role**: Job metadata extraction uses `ModelRole.EXTRACTION` (e.g. gpt-5-nano, claude-haiku-4-5, gemini-2.5-flash-lite per vendor `roles.extraction` in `letter_writer/clients/*.json`).
 - **Parallel calls**: `extract_job_metadata_no_requirements` and `extract_key_competences` run in parallel (2 threads). Grading runs after, since it depends on extraction output.
 - **In-memory cache**: Repeated extraction for the **same job** (e.g. multiple CVs) reuses the two extraction results; only grading is re-run (see `_EXTRACTION_CACHE` in `generation.py`).
 - **Shared prompt prefix**: Both extraction calls use the same system prompt and the same start of the user message (`Job description:\n{job_text}\n\n`). The **task** (metadata vs competences) is only in the suffix. That allows provider-side prompt caching.
@@ -43,6 +43,6 @@ Right now we don’t stream extraction; adding an optional streaming path and ti
 ## Summary
 
 - **Same text, different question at the end**: Yes, that can hit cache; we structure prompts so the job is the prefix and the task is the suffix.
-- **Faster model**: We already use TINY; you can switch to a smaller/faster variant in `clients/*.json` if your provider offers one.
+- **Faster model**: We already use the `extraction` role; you can switch to a smaller/faster variant in `clients/*.json` if your provider offers one.
 - **Fewer tokens**: Shorter job excerpt or shorter task text reduces cost and can reduce latency.
 - **Measure TTFT**: Requires streaming and timing in the client; not implemented yet.

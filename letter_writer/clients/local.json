@@ -2,12 +2,17 @@
   "defaults": {
     "search": 0.0
   },
-  "sizes": {
-    "tiny": "local-model",
-    "base": "local-model",
-    "medium": "local-model",
-    "large": "local-model",
-    "xlarge": "local-model"
+  "roles": {
+    "extraction": "local-model",
+    "feedback": "local-model",
+    "feedback_review": "local-model",
+    "feedback_context": "local-model",
+    "rag_ranker": "local-model",
+    "company_research": "local-model",
+    "letter_plan": "local-model",
+    "letter_draft": "local-model",
+    "letter_refine": "local-model",
+    "agentic": "local-model"
   },
   "models": {
     "local-model": {

@@ -12,7 +12,7 @@ from langsmith import traceable
 from openai import OpenAI
 
 from .client import get_client
-from .clients.base import ModelVendor, ModelSize
+from .clients.base import ModelVendor
 from .generation import (
     accuracy_check,
     company_fit_check,
@@ -441,7 +441,7 @@ def advance_to_plan(
 
     try:
         _reset_client_counters(ai_client)
-        logger.info("[PHASE] plan -> %s :: generate_letter_plan (XLARGE)", vendor.value)
+        logger.info("[PHASE] plan -> %s :: generate_letter_plan (LETTER_PLAN)", vendor.value)
         hire_problem = str(get_metadata_field(session.metadata, vendor, "hire_problem", "") or "")
         letter_plan = generate_letter_plan(
             cv_text,
@@ -583,7 +583,7 @@ def advance_to_draft(
         # Reset counters to track draft generation separately
         _reset_client_counters(ai_client)
         
-        logger.info("[PHASE] draft -> %s :: generate_letter (XLARGE)", vendor.value)
+        logger.info("[PHASE] draft -> %s :: generate_letter (LETTER_DRAFT)", vendor.value)
         draft_letter = generate_letter(
             cv_text,
             top_docs,
@@ -602,7 +602,7 @@ def advance_to_draft(
         _reset_client_counters(ai_client)
         
         # Run checks on the draft so the user can review/override feedback before refinement
-        logger.info("[PHASE] draft -> %s :: running checks (TINY)", vendor.value)
+        logger.info("[PHASE] draft -> %s :: running checks (FEEDBACK)", vendor.value)
         with ThreadPoolExecutor(max_workers=7) as executor:
             instruction_future = executor.submit(instruction_check, draft_letter, ai_client, style_instructions)
             accuracy_future = executor.submit(accuracy_check, draft_letter, cv_text, ai_client, additional_user_info)
@@ -728,7 +728,7 @@ def advance_to_refinement(
 
     try:
         feedback = normalize_feedback_map(state.feedback, top_docs=top_docs)
-        logger.info("[PHASE] refine -> %s :: rewrite_letter (XLARGE)", vendor.value)
+        logger.info("[PHASE] refine -> %s :: rewrite_letter (LETTER_REFINE)", vendor.value)
         si = (style_instructions or "").strip()
         if not si:
             si = session.style_instructions or ""
