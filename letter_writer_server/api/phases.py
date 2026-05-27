@@ -296,6 +296,7 @@ def get_session_state(session: Session = Depends(get_session)):
 def clear_session(session: Session = Depends(get_session)):
     old_id = session.session_key
     user = session.get("user")
+    auth_time = session.get("auth_time")
     # Stop any running agentic worker for this session before discarding it.
     if old_id:
         entry = _get_agentic_live(old_id)
@@ -308,6 +309,9 @@ def clear_session(session: Session = Depends(get_session)):
     session.clear()
     if user:
         session["user"] = user
+        # require_auth treats missing auth_time as 0 (epoch), which always fails the 24h check.
+        if auth_time is not None:
+            session["auth_time"] = auth_time
     # Rotate to a brand-new session id while keeping authenticated user context.
     session.session_key = secrets.token_urlsafe(32)
     return {
