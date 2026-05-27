@@ -546,16 +546,32 @@ export default function App({ flow = "vendor" }) {
   };
 
   // Helper to populate the "shelf" in PhaseFlow for a specific phase/vendor
-  const populatePhaseShelf = (phaseName, vendor, data) => {
+  const populatePhaseShelf = useCallback((phaseName, vendor, data) => {
     if (phaseRegistryRef.current) {
-      const phase = phaseRegistryRef.current.find(p => p.phase === phaseName);
+      const phase = phaseRegistryRef.current.find((p) => p.phase === phaseName);
       if (phase) {
         phase.cardData[vendor] = data;
-        clearPhaseVendorError(phaseName, vendor);
-        setPhaseRegistryTrigger(prev => prev + 1);
+        if (phase.cardErrors && Object.prototype.hasOwnProperty.call(phase.cardErrors, vendor)) {
+          delete phase.cardErrors[vendor];
+        }
+        setPhaseRegistryTrigger((prev) => prev + 1);
       }
     }
-  };
+  }, []);
+
+  /** Surface background fetch failures on the phase card (never leave the card stuck on "Loading…"). */
+  const setPhaseCardFetchError = useCallback((phaseName, vendor, message) => {
+    if (!phaseRegistryRef.current) return;
+    const phase = phaseRegistryRef.current.find((p) => p.phase === phaseName);
+    if (!phase) return;
+    if (!phase.cardErrors) phase.cardErrors = {};
+    if (message) {
+      phase.cardErrors[vendor] = message;
+    } else {
+      delete phase.cardErrors[vendor];
+    }
+    setPhaseRegistryTrigger((prev) => prev + 1);
+  }, []);
 
   // Initialize CSRF token and session when component mounts
   useEffect(() => {
@@ -1232,7 +1248,7 @@ export default function App({ flow = "vendor" }) {
   };
 
   // Helper function to extract user-friendly error messages
-  const extractErrorMessage = (error) => {
+  const extractErrorMessage = useCallback((error) => {
     if (!error) return "Unknown error";
     
     // If it's already a string, try to parse it
@@ -1280,7 +1296,64 @@ export default function App({ flow = "vendor" }) {
     
     // Return the error string, but clean up common patterns
     return errorStr.replace(/^Error:\s*/, '').trim() || "Unknown error";
-  };
+  }, []);
+
+  const onClearPhaseFetchError = useCallback(
+    (phaseName, vendor) => {
+      setPhaseCardFetchError(phaseName, vendor, null);
+    },
+    [setPhaseCardFetchError]
+  );
+
+  const onRetryPhaseFetch = useCallback(
+    async (phaseName, vendor) => {
+      if (phaseName !== "plan") return;
+      const sessionId = phaseSessions[vendor] || phaseSessionId;
+      if (!sessionId) {
+        setPhaseCardFetchError(
+          "plan",
+          vendor,
+          "No session ID. Return to job intake and start the vendor flow again."
+        );
+        return;
+      }
+      setPhaseCardFetchError("plan", vendor, null);
+      try {
+        const body = { session_id: sessionId };
+        if (selectedCompanyReport) {
+          body.company_report = selectedCompanyReport;
+        }
+        const result = await fetchWithHeartbeat(
+          `/api/phases/plan/${vendor}/`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          },
+          { getState: getStateForRestore }
+        );
+        if (result.isHeartbeat) return;
+        populatePhaseShelf("plan", vendor, result.data);
+        setPhaseSessions((prev) => ({ ...prev, [vendor]: sessionId }));
+        const docId = result.data?.document?.id;
+        if (docId) {
+          setDocumentId((prev) => prev || docId);
+        }
+      } catch (e) {
+        console.error(`Retry plan fetch failed for ${vendor}:`, e);
+        setPhaseCardFetchError("plan", vendor, extractErrorMessage(e));
+      }
+    },
+    [
+      phaseSessions,
+      phaseSessionId,
+      selectedCompanyReport,
+      getStateForRestore,
+      setPhaseCardFetchError,
+      populatePhaseShelf,
+      extractErrorMessage,
+    ]
+  );
 
   const persistFinalLetter = async (finalText) => {
     if (!finalText) {
@@ -1650,8 +1723,8 @@ export default function App({ flow = "vendor" }) {
         setDocumentId(data.document.id);
       }
     } catch (e) {
-      console.error("Plan phase error after extraction approval", e);
-      setPhaseVendorError("plan", vendor, extractErrorMessage(e));
+      console.error("Plan phase error after extraction approval:", e);
+      setPhaseCardFetchError("plan", vendor, extractErrorMessage(e));
     }
   };
 
@@ -1779,7 +1852,7 @@ export default function App({ flow = "vendor" }) {
           setPhaseSessionId((prev) => prev || initialSessionId);
         } catch (e) {
           console.error(`Plan phase error for ${vendor}:`, e);
-          setPhaseVendorError("plan", vendor, extractErrorMessage(e));
+          setPhaseCardFetchError("plan", vendor, extractErrorMessage(e));
         }
       })();
     });
@@ -3060,17 +3133,8 @@ export default function App({ flow = "vendor" }) {
                 sessionId={phaseSessionId}
                 documentId={documentId}
                 draftFeedbackRegistryRef={draftFeedbackRegistryRef}
-                phaseErrors={phaseErrors}
-                onClearPhaseError={clearPhaseVendorError}
-                onRetryPhase={async (phaseName, vendor) => {
-                  clearPhaseVendorError(phaseName, vendor);
-                  try {
-                    await createRetryForPhase(phaseName, vendor)();
-                  } catch (e) {
-                    setPhaseVendorError(phaseName, vendor, extractErrorMessage(e));
-                    throw e;
-                  }
-                }}
+                onClearPhaseFetchError={onClearPhaseFetchError}
+                onRetryPhaseFetch={onRetryPhaseFetch}
                 onRegisterPhases={(phases) => {
                   phaseRegistryRef.current = phases;
                 }}

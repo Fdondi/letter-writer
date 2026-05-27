@@ -1,9 +1,25 @@
 import json
 from .base import BaseClient, ModelRole
 from anthropic import Anthropic
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, FrozenSet
 import typer
 from langsmith import traceable
+
+# Anthropic rejects ``thinking.type == "enabled"`` (budget_tokens) on these
+# families; use adaptive thinking + ``output_config.effort`` instead. See:
+# https://platform.claude.com/docs/en/about-claude/models/migration-guide
+_ADAPTIVE_THINKING_MODEL_MARKERS: FrozenSet[str] = frozenset(
+    ("opus-4-7", "opus-4-6", "sonnet-4-6")
+)
+_VALID_THINKING_EFFORTS: FrozenSet[str] = frozenset(
+    ("low", "medium", "high", "max", "xhigh")
+)
+
+
+def _anthropic_model_requires_adaptive_thinking(model: str) -> bool:
+    m = (model or "").lower()
+    return any(marker in m for marker in _ADAPTIVE_THINKING_MODEL_MARKERS)
+
 
 class ClaudeClient(BaseClient):
     def __init__(self):
@@ -36,8 +52,13 @@ class ClaudeClient(BaseClient):
             "mythos-preview",
         )
         if any(marker in norm for marker in adaptive_markers):
-            effort = thinking_cfg.get("effort") or "high"
-            if not isinstance(effort, str):
+            effort_raw = thinking_cfg.get("effort") or thinking_cfg.get("thinking_effort") or "high"
+            effort = str(effort_raw).lower() if effort_raw is not None else "high"
+            if effort not in _VALID_THINKING_EFFORTS:
+                typer.echo(
+                    f"[WARNING] Invalid thinking effort {effort_raw!r}; using 'high'. "
+                    f"Expected one of {sorted(_VALID_THINKING_EFFORTS)}."
+                )
                 effort = "high"
             return {
                 "thinking": {"type": "adaptive"},

@@ -18,9 +18,7 @@
  * KEY RULES:
  * - NO CARD FETCHES ITS OWN DATA: VendorCardWrapper has no fetch logic.
  * - LOADING STATE: If a phase is 'approved' but its shelf is empty, the 
- *   card automatically shows "Loading...". On API failure, App.jsx sets
- *   phaseErrors and the card shows the error (with Retry); approve failures
- *   revert optimistic approval so downstream cards do not stay loading.
+ *   card automatically shows "Loading...".
  * - RE-RENDERING: App.jsx triggers a re-render of PhaseFlow whenever 
  *   the shelf is updated.
  */
@@ -37,10 +35,7 @@ import { FEEDBACK_TYPES, firstFeedbackKeyWithItems, mergeCategoryItems } from ".
  * PhaseFlow only rebuilt `phasesRef` when the vendor *count* changed, so HMR / same-count
  * navigations kept a stale single-phase tree (wrong section titles and shelf keys).
  */
-const PHASE_FLOW_SCHEMA_VERSION = 3;
-
-/** After all plan models have returned (success or error), auto-run plan approval for ready cards. */
-const PLAN_AUTO_APPROVE_MS = 30000;
+const PHASE_FLOW_SCHEMA_VERSION = 2;
 
 function deepCloneJson(obj) {
   if (obj === undefined || obj === null) return obj;
@@ -100,8 +95,6 @@ const FEEDBACK_DESCRIPTIONS = {
   'precision_feedback': 'Evaluates how well the letter addresses job requirements. Checks if all required competencies are addressed (or substituted), flags superfluous claims, and verifies company-related claims match the company report.',
   'company_fit': 'Assesses alignment with the company\'s values, mission, tone, and culture. Checks if the letter feels personalized for the company rather than generic.',
   'company_fit_feedback': 'Assesses alignment with the company\'s values, mission, tone, and culture. Checks if the letter feels personalized for the company rather than generic.',
-  'goal_fit': 'Checks whether the letter reads like someone who understands what problem or outcome the company is hiring for, and sounds ready to contribute (skills, learning, mindset).',
-  'goal_fit_feedback': 'Checks whether the letter reads like someone who understands what problem or outcome the company is hiring for, and sounds ready to contribute (skills, learning, mindset).',
   'user_fit': 'Compares the letter to your previous cover letters for voice and habits (same-hand cues): tone, structure, how strengths and caveats are framed—not the same topics or facts as older letters.',
   'user_fit_feedback': 'Compares the letter to your previous cover letters for voice and habits (same-hand cues): tone, structure, how strengths and caveats are framed—not the same topics or facts as older letters.',
   'human': 'Analyzes patterns from your previous letter revisions. Flags elements that were typically changed or removed in your past edits, based on your review history.',
@@ -206,104 +199,42 @@ function PhaseSection({
     : "Approve all";
   
   return (
-    <div
-      style={{
-        border: "1px solid #e5e7eb",
-        borderRadius: 8,
-        padding: collapsed ? 0 : 8,
-        display: "flex",
-        flexDirection: collapsed ? "row" : "column",
-        alignItems: collapsed ? "stretch" : "stretch",
-        minHeight: collapsed ? 72 : undefined,
-        overflow: "hidden",
-      }}
-    >
-      {collapsed && (
-        <div
-          style={{
-            writingMode: "vertical-rl",
-            textOrientation: "mixed",
-            transform: "rotate(180deg)",
-            fontSize: 12,
-            fontWeight: 700,
-            letterSpacing: "0.06em",
-            padding: "10px 6px",
-            background: "var(--header-bg, #f3f4f6)",
-            borderRight: "1px solid #e5e7eb",
-            color: "var(--text-color, #111827)",
-            flexShrink: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            userSelect: "none",
-          }}
-          aria-hidden
-        >
-          {title}
-        </div>
-      )}
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", padding: collapsed ? "6px 8px" : 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+    <details open={!collapsed} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
+      <summary
+        style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", listStyle: "none" }}
+        onClick={onToggle}
+      >
+        <h3 style={{ margin: 0 }}>{title}</h3>
+        {showApproveAll && (
           <button
             type="button"
-            onClick={onToggle}
-            aria-expanded={!collapsed}
-            aria-label={collapsed ? `Expand ${title}` : `Collapse ${title}`}
-            title={collapsed ? `Expand ${title}` : `Collapse ${title}`}
-            style={{
-              flexShrink: 0,
-              width: 26,
-              height: 26,
-              padding: 0,
-              fontSize: 11,
-              lineHeight: "24px",
-              border: "1px solid #d1d5db",
-              borderRadius: 4,
-              background: "#fff",
-              cursor: "pointer",
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onApproveAll?.();
             }}
+            disabled={approveAllDisabled || readyCount === 0}
+            style={{ fontSize: 12, padding: "4px 8px", opacity: (approveAllDisabled || readyCount === 0) ? 0.6 : 1 }}
           >
-            {collapsed ? "▶" : "▼"}
+            {approveButtonText}
           </button>
-          {!collapsed && <h3 style={{ margin: 0, flex: 1 }}>{title}</h3>}
-          {collapsed && (
-            <span style={{ fontSize: 12, color: "#6b7280", flex: 1 }}>
-              {title} — click ▶ to expand
-            </span>
-          )}
-          {showApproveAll && !collapsed && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onApproveAll?.();
-              }}
-              disabled={approveAllDisabled || readyCount === 0}
-              style={{ fontSize: 12, padding: "4px 8px", opacity: (approveAllDisabled || readyCount === 0) ? 0.6 : 1 }}
-            >
-              {approveButtonText}
-            </button>
-          )}
-        </div>
-        {!collapsed && (
-          <div
-            style={{
-              display: "grid",
-              gridAutoFlow: "column",
-              gridAutoColumns,
-              gridAutoRows: "1fr",
-              gap: 12,
-              marginTop: 8,
-              overflowX: "auto",
-              alignItems: "stretch",
-            }}
-          >
-            {children}
-          </div>
         )}
+      </summary>
+      <div
+        style={{
+          display: "grid",
+          gridAutoFlow: "column",
+          gridAutoColumns,
+          gridAutoRows: "1fr",
+          gap: 12,
+          marginTop: 8,
+          overflowX: "auto",
+          alignItems: "stretch",
+        }}
+      >
+        {children}
       </div>
-    </div>
+    </details>
   );
 }
 
@@ -818,9 +749,6 @@ function VendorCardWrapper({
   onApprove,
   onSaveFeedbackOverride,
   onPhaseComplete,
-  phaseErrors,
-  onClearPhaseError,
-  onRetryPhase,
   triggerUpdate,
   onExpand,
   isExpanded,
@@ -829,48 +757,31 @@ function VendorCardWrapper({
   onAfterApproveInExpanded,
   inputClusterText,
   broadcastInputCluster,
+  onRetryPhaseFetch,
+  onClearPhaseFetchError,
 }) {
   // Get previous phase data (to check if we SHOULD be loading)
   const previousPhaseApproved = phaseObj.previous ? phaseObj.previous.approvedVendors.has(vendor) : true;
   
   // Get data for THIS phase from the shelf
   const currentPhaseData = phaseObj.cardData?.[vendor] || null;
+  const shelfError = phaseObj.cardErrors?.[vendor] ?? null;
   
-  // Local state for UI only (approve failures); App.jsx sets phaseErrors for background fetches
+  // Local state for UI only
   const [error, setError] = React.useState(null);
-  const shelfError = phaseErrors?.[`${phaseName}:${vendor}`] ?? null;
-  const displayError = error || shelfError;
 
-  const revertPhaseApproval = React.useCallback(() => {
-    if (phaseObj.approvedVendors) {
-      phaseObj.approvedVendors.delete(vendor);
-    }
-    let current = phaseObj.next;
-    while (current) {
-      if (current.approvedVendors) current.approvedVendors.delete(vendor);
-      current = current.next;
-    }
-    if (triggerUpdate) triggerUpdate();
-  }, [phaseObj, vendor, triggerUpdate]);
-
-  /** Clear local approve errors only when App replaces shelf data (new object), not when data was already present (e.g. refine failed while draft shelf unchanged). */
-  const prevShelfDataRef = React.useRef(currentPhaseData);
-  React.useEffect(() => {
-    if (currentPhaseData !== prevShelfDataRef.current) {
-      prevShelfDataRef.current = currentPhaseData;
-      if (currentPhaseData && error && !shelfError) {
-        setError(null);
-      }
-    }
-  }, [currentPhaseData, error, shelfError]);
-
+  // Sync currentPhaseData to VendorCard
+  // We don't need a complex useEffect with fetch anymore.
+  // The card is purely a consumer of phaseObj.cardData[vendor].
+  
   // Status logic:
   // - "error" if we have an error (takes priority)
   // - "success" if we have data (already processed)
   // - "loading" only if previous phase is approved AND we don't have data (triggers API call)
   // - "idle" otherwise (waiting for previous phase or no data)
   // Note: When navigating back from assembly, data should already be in shelf, so status will be "success"
-  const status = displayError
+  const combinedError = error || shelfError;
+  const status = combinedError
     ? "error"
     : currentPhaseData 
       ? "success" 
@@ -886,7 +797,7 @@ function VendorCardWrapper({
       allPhasesDone={false}
       data={currentPhaseData}
       status={status}
-      error={displayError}
+      error={combinedError}
       onEditChange={onEditChange}
       onApprove={onApprove}
       sessionId={sessionId}
@@ -920,6 +831,7 @@ function VendorCardWrapper({
         while (current) {
           // If we just got data for the immediate next phase, don't clear its shelf
           if (current !== phaseObj.next && current.cardData) delete current.cardData[vendor];
+          if (current !== phaseObj.next && current.cardErrors) delete current.cardErrors[vendor];
           if (current.approvedVendors) current.approvedVendors.delete(vendor);
           current = current.next;
         }
@@ -930,20 +842,8 @@ function VendorCardWrapper({
       setStatus={() => {}} // No-op, status is computed
       setData={() => {}}   // No-op, data comes from shelf
       setError={setError}
-      onApproveFailed={revertPhaseApproval}
-      onRetry={
-        shelfError && onRetryPhase
-          ? async () => {
-              if (onClearPhaseError) onClearPhaseError(phaseName, vendor);
-              setError(null);
-              try {
-                await onRetryPhase(phaseName, vendor);
-              } catch (e) {
-                setError(e.message || String(e));
-              }
-            }
-          : undefined
-      }
+      onRetryPhaseFetch={onRetryPhaseFetch}
+      onClearPhaseFetchError={onClearPhaseFetchError}
       onExpand={onExpand}
       isExpanded={isExpanded}
       onCloseExpand={onCloseExpand}
@@ -951,7 +851,6 @@ function VendorCardWrapper({
       onAfterApproveInExpanded={onAfterApproveInExpanded}
       inputClusterText={inputClusterText}
       broadcastInputCluster={broadcastInputCluster}
-      onClearPhaseShelfError={() => onClearPhaseError?.(phaseName, vendor)}
     />
   );
 }
@@ -981,8 +880,8 @@ function VendorCard({
   setStatus,
   setData,
   setError,
-  onApproveFailed,
-  onRetry,
+  onRetryPhaseFetch,
+  onClearPhaseFetchError,
   onExpand,
   isExpanded,
   onCloseExpand,
@@ -990,7 +889,6 @@ function VendorCard({
   onAfterApproveInExpanded,
   inputClusterText,
   broadcastInputCluster,
-  onClearPhaseShelfError,
 }) {
   // This card knows which phase it belongs to
   const cardPhase = phaseObj?.phase || null;
@@ -1315,74 +1213,6 @@ function VendorCard({
     });
   }, [isLoading, approved, thisPhaseDirty, cardPhase, previousPhaseApproved, feedbackKeys, feedbackItemApprovals, feedbackOverrides, feedback, phaseModule, cardPhaseEdits, cardPhaseData]);
 
-  const executePrimaryApprove = useCallback(async () => {
-    if (approved && !thisPhaseDirty) return;
-    if (!readyForApproval) return;
-    onClearPhaseShelfError?.();
-    setError(null);
-    if (hasPhaseData && thisPhaseDirty) {
-      setStatus("loading");
-      setData(null);
-      if (onStatusChange) onStatusChange(CardStatus.PENDING);
-    }
-    try {
-      if (onApprove) {
-        const snapshotAtApprove = deepCloneJson(cardPhaseEdits);
-        setApproved(true);
-        setApprovedEditsBaseline(snapshotAtApprove);
-        if (onPhaseComplete) {
-          onPhaseComplete(vendor, cardPhase, null);
-        }
-        if (onAfterApproveInExpanded) {
-          onAfterApproveInExpanded();
-        }
-        const nextPhaseData = await onApprove(cardPhase, vendor, cardPhaseEdits);
-        if (nextPhaseData === null) {
-          console.log(`Phase ${cardPhase} for ${vendor} still processing (heartbeat)`);
-          return;
-        }
-        if (onPhaseComplete && nextPhaseData) {
-          onPhaseComplete(vendor, cardPhase, nextPhaseData);
-        }
-      }
-    } catch (e) {
-      setError(e.message || String(e));
-      setApproved(false);
-      setApprovedEditsBaseline(null);
-      if (onApproveFailed) onApproveFailed();
-    }
-  }, [
-    approved,
-    thisPhaseDirty,
-    readyForApproval,
-    hasPhaseData,
-    setError,
-    setStatus,
-    setData,
-    onStatusChange,
-    onApprove,
-    cardPhaseEdits,
-    setApproved,
-    setApprovedEditsBaseline,
-    onPhaseComplete,
-    vendor,
-    cardPhase,
-    onAfterApproveInExpanded,
-    onApproveFailed,
-    onClearPhaseShelfError,
-  ]);
-
-  const planApproveRunnerRef = useRef(executePrimaryApprove);
-  planApproveRunnerRef.current = executePrimaryApprove;
-  useEffect(() => {
-    if (cardPhase !== "plan" || !phaseObj?.planApproveRunners) return undefined;
-    const wrapped = () => planApproveRunnerRef.current();
-    phaseObj.planApproveRunners.set(vendor, wrapped);
-    return () => {
-      phaseObj.planApproveRunners.delete(vendor);
-    };
-  }, [cardPhase, vendor, phaseObj, executePrimaryApprove]);
-
   // Helper to check if any field has translation for a language
   const hasAnyTranslation = useCallback((code) => {
     if (cardPhase === "draft") {
@@ -1439,43 +1269,6 @@ function VendorCard({
 
   return (
     <div style={{ ...effectiveCardStyle, opacity: disabled ? 0.6 : 1, pointerEvents: disabled ? "none" : "auto" }}>
-      {cardError && !isLoadingWithoutData && (
-        <div
-          style={{
-            color: "var(--error-text)",
-            marginBottom: 8,
-            fontSize: 13,
-            padding: 8,
-            background: "var(--error-bg)",
-            border: "1px solid var(--error-border)",
-            borderRadius: 4,
-            flexShrink: 0,
-            overflowWrap: "break-word",
-            wordBreak: "break-word",
-          }}
-        >
-          {cardError}
-          {onRetry && (
-            <button
-              type="button"
-              onClick={() => onRetry()}
-              style={{
-                display: "block",
-                marginTop: 8,
-                padding: "4px 10px",
-                fontSize: 12,
-                background: "var(--button-bg)",
-                color: "var(--button-text)",
-                border: "1px solid var(--border-color)",
-                borderRadius: 4,
-                cursor: "pointer",
-              }}
-            >
-              Retry
-            </button>
-          )}
-        </div>
-      )}
       <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
         <h4 style={{ margin: 0, flex: 1, textTransform: "capitalize" }}>{vendor}</h4>
         {onExpand && !isExpanded && (
@@ -1555,6 +1348,42 @@ function VendorCard({
         </div>
       )}
 
+      {error && !isLoadingWithoutData && (
+        <div style={{
+          color: "var(--error-text)",
+          marginBottom: 8,
+          fontSize: 13,
+          padding: 8,
+          background: "var(--error-bg)",
+          border: "1px solid var(--error-border)",
+          borderRadius: 4
+        }}>
+          {error}
+        </div>
+      )}
+
+      {error && !hasPhaseData && onRetryPhaseFetch && (
+        <div style={{ marginBottom: 10 }}>
+          <button
+            type="button"
+            onClick={() => {
+              void onRetryPhaseFetch(cardPhase, vendor);
+            }}
+            style={{
+              fontSize: 13,
+              padding: "6px 12px",
+              background: "var(--button-bg)",
+              color: "var(--text-color)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 4,
+              cursor: "pointer",
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {!isLoadingWithoutData && (
       <div style={contentContainerStyle}>
         {/* Render content for this card's phase using phase module */}
@@ -1591,8 +1420,63 @@ function VendorCard({
       <div style={buttonBarStyle}>
         {cardPhase && phaseModule && (
           <button
-            onClick={() => {
-              void executePrimaryApprove();
+            onClick={async () => {
+              // If already approved (and not dirty/re-running), do nothing.
+              // This is a safety check against double-clicks if the button isn't disabled fast enough.
+              if (approved && !thisPhaseDirty) return;
+
+              // Clear any previous error when retrying
+              if (error) {
+                setError(null);
+              }
+              if (onClearPhaseFetchError && cardPhase) {
+                onClearPhaseFetchError(cardPhase, vendor);
+              }
+              
+              // When re-running (has data but dirty), clear data and set loading
+              if (hasPhaseData && thisPhaseDirty) {
+                setStatus("loading");
+                setData(null);
+                if (onStatusChange) onStatusChange(CardStatus.PENDING);
+              }
+              
+              try {
+                // Call parent's approve handler - this triggers the API and returns data for the next phase
+                if (onApprove) {
+                  const snapshotAtApprove = deepCloneJson(cardPhaseEdits);
+                  // Mark as approved locally IMMEDIATELY
+                  setApproved(true);
+                  setApprovedEditsBaseline(snapshotAtApprove);
+                  // Notify parent IMMEDIATELY that this card is approved
+                  // This will cause the next phase's card to mount in "Loading" state
+                  if (onPhaseComplete) {
+                    onPhaseComplete(vendor, cardPhase, null);
+                  }
+                  // Switch to next card immediately (don't wait for API) so the slow call doesn't block UX
+                  if (onAfterApproveInExpanded) {
+                    onAfterApproveInExpanded();
+                  }
+
+                  const nextPhaseData = await onApprove(cardPhase, vendor, cardPhaseEdits);
+                  // Handle 202 heartbeat response - request is still processing
+                  if (nextPhaseData === null) {
+                    // Request is still in flight (got 202), don't notify of data yet
+                    // The original request will complete and update state via the effect
+                    console.log(`Phase ${cardPhase} for ${vendor} still processing (heartbeat)`);
+                    return; 
+                  }
+                  // Notify parent AGAIN when data actually arrives
+                  // The next phase card will pick this up and stop its own loading state
+                  if (onPhaseComplete && nextPhaseData) {
+                    onPhaseComplete(vendor, cardPhase, nextPhaseData);
+                  }
+                }
+              } catch (e) {
+                setError(e.message || String(e));
+                // Status is computed by wrapper based on error state
+                setApproved(false); // Revert approval on error
+                setApprovedEditsBaseline(null);
+              }
             }}
             disabled={!readyForApproval || (approved && !thisPhaseDirty)}
             style={{
@@ -1664,6 +1548,7 @@ function transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCoun
       pendingCount, // Number of cards pending (not approved)
       // Store completion data per vendor (for next phase to access)
       cardData: {}, // { vendor: completionData }
+      cardErrors: {}, // { vendor: string } — fetch failures from parent (e.g. plan API), surfaced on the card
       approvedVendors: new Set(), // Track which vendors are approved in this phase
       // Status registration function - updates counters
       // Status parameter IS the card's status - no need to look it up
@@ -1710,11 +1595,7 @@ function transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCoun
         return [];
       }
     };
-
-    if (phaseName === "plan") {
-      phaseObj.planApproveRunners = new Map();
-    }
-
+    
     return phaseObj;
   });
   
@@ -1736,13 +1617,14 @@ export default function PhaseFlow({
   sessionId,
   documentId = null,
   draftFeedbackRegistryRef = null,
-  phaseErrors = {},
-  onClearPhaseError,
-  onRetryPhase,
   // Callback for when a phase completes
   onPhaseComplete, // (vendor, phase, data) => void
   // Callback to register the phase objects with the parent
   onRegisterPhases, // (phases) => void
+  /** Clear server-fetch error for a vendor on this phase (parent owns `phase.cardErrors`). */
+  onClearPhaseFetchError,
+  /** Retry background fetch for a phase (e.g. plan after a failed POST). */
+  onRetryPhaseFetch,
 }) {
   const [collapsedPhases, setCollapsedPhases] = useState({
     plan: false,
@@ -1759,117 +1641,6 @@ export default function PhaseFlow({
   
   // Track phase updates to trigger re-renders when status changes
   const [phaseUpdateTrigger, setPhaseUpdateTrigger] = useState(0);
-
-  const planVendorSettledAtRef = useRef({});
-  const prevPlanVendorSettledRef = useRef({});
-  const planAutoApproveTimerRef = useRef(null);
-
-  useEffect(() => {
-    return () => {
-      if (planAutoApproveTimerRef.current) {
-        clearTimeout(planAutoApproveTimerRef.current);
-        planAutoApproveTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  /** Collapse the Plan section once any vendor's plan is approved (draft phase starts for that column). */
-  useEffect(() => {
-    const phases = phasesRef.current;
-    const planPhase = phases?.find((p) => p.phase === "plan");
-    if (!planPhase) return;
-    const anyPlanApproved = vendorsList.some((v) => planPhase.approvedVendors.has(v));
-    if (anyPlanApproved) {
-      setCollapsedPhases((prev) => (prev.plan ? prev : { ...prev, plan: true }));
-    }
-  }, [vendorsList, phaseUpdateTrigger]);
-
-  /**
-   * When every vendor's plan model has returned (plan text or plan error), wait PLAN_AUTO_APPROVE_MS
-   * from the last return, then run the same approve path as the Approve button for each vendor that
-   * still has a non-empty plan and is not approved.
-   */
-  useEffect(() => {
-    const phases = phasesRef.current;
-    const planPhase = phases?.find((p) => p.phase === "plan");
-    if (!planPhase?.planApproveRunners || vendorsList.length === 0) {
-      if (planAutoApproveTimerRef.current) {
-        clearTimeout(planAutoApproveTimerRef.current);
-        planAutoApproveTimerRef.current = null;
-      }
-      return;
-    }
-
-    const planKey = (v) => `plan:${v}`;
-    const now = Date.now();
-
-    for (const v of vendorsList) {
-      const data = planPhase.cardData[v];
-      const err = phaseErrors[planKey(v)];
-      const hasPlanText =
-        data &&
-        typeof data.letter_plan === "string" &&
-        data.letter_plan.trim().length > 0;
-      const settled = Boolean(hasPlanText || err);
-      const prev = prevPlanVendorSettledRef.current[v];
-      if (settled && !prev) {
-        planVendorSettledAtRef.current[v] = now;
-      }
-      if (!settled) {
-        delete planVendorSettledAtRef.current[v];
-        prevPlanVendorSettledRef.current[v] = false;
-      } else {
-        prevPlanVendorSettledRef.current[v] = true;
-      }
-    }
-
-    const allSettled = vendorsList.every((v) => {
-      const data = planPhase.cardData[v];
-      const err = phaseErrors[planKey(v)];
-      const hasPlanText =
-        data &&
-        typeof data.letter_plan === "string" &&
-        data.letter_plan.trim().length > 0;
-      return hasPlanText || err;
-    });
-
-    if (planAutoApproveTimerRef.current) {
-      clearTimeout(planAutoApproveTimerRef.current);
-      planAutoApproveTimerRef.current = null;
-    }
-
-    if (!allSettled) return;
-
-    const times = vendorsList.map((v) => planVendorSettledAtRef.current[v]).filter(Boolean);
-    const lastReturn = times.length ? Math.max(...times) : 0;
-    if (!lastReturn) return;
-
-    const delay = Math.max(0, PLAN_AUTO_APPROVE_MS - (Date.now() - lastReturn));
-
-    planAutoApproveTimerRef.current = setTimeout(() => {
-      planAutoApproveTimerRef.current = null;
-      const phasesNow = phasesRef.current;
-      const planNow = phasesNow?.find((p) => p.phase === "plan");
-      const runners = planNow?.planApproveRunners;
-      if (!planNow || !runners) return;
-
-      const pending = vendorsList.filter((v) => {
-        if (planNow.approvedVendors.has(v)) return false;
-        const d = planNow.cardData[v];
-        const lp = d?.letter_plan;
-        if (!lp || !String(lp).trim()) return false;
-        return true;
-      });
-
-      void Promise.all(
-        pending.map((v) => {
-          const run = runners.get(v);
-          if (!run) return Promise.resolve();
-          return Promise.resolve(run()).catch((e) => console.warn("Plan auto-approve failed for", v, e));
-        })
-      );
-    }, delay);
-  }, [phaseUpdateTrigger, phaseErrors, vendorsList]);
 
   /** Shared INPUT_NEEDED answers across vendor cards (same input_cluster_key). */
   const [inputClusterText, setInputClusterText] = useState({});
@@ -2019,9 +1790,6 @@ export default function PhaseFlow({
           onApprove={onApprove}
           onSaveFeedbackOverride={saveFeedbackOverride}
           onPhaseComplete={onPhaseComplete}
-          phaseErrors={phaseErrors}
-          onClearPhaseError={onClearPhaseError}
-          onRetryPhase={onRetryPhase}
           triggerUpdate={() => setPhaseUpdateTrigger(prev => prev + 1)}
           onExpand={overlayMode ? undefined : () => toggleExpand(phaseName, vendor)}
           isExpanded={overlayMode}
@@ -2030,11 +1798,13 @@ export default function PhaseFlow({
           onAfterApproveInExpanded={overlayMode ? onAfterApproveInExpanded : undefined}
           inputClusterText={inputClusterText}
           broadcastInputCluster={broadcastInputCluster}
+          onRetryPhaseFetch={onRetryPhaseFetch}
+          onClearPhaseFetchError={onClearPhaseFetchError}
         />
       ));
     });
     return renderFunctions;
-  }, [phases, sessionId, documentId, draftFeedbackRegistryRef, onEditChange, onApprove, onPhaseComplete, phaseErrors, onClearPhaseError, onRetryPhase, saveFeedbackOverride, toggleExpand, closeExpand, onAfterApproveInExpanded, inputClusterText, broadcastInputCluster]);
+  }, [phases, sessionId, documentId, draftFeedbackRegistryRef, onEditChange, onApprove, onPhaseComplete, saveFeedbackOverride, toggleExpand, closeExpand, onAfterApproveInExpanded, inputClusterText, broadcastInputCluster, onRetryPhaseFetch, onClearPhaseFetchError]);
   
   phases.forEach(phaseObj => {
     const phaseName = phaseObj.phase;
