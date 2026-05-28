@@ -20,7 +20,7 @@ from .firestore_store import (
     save_company_alias,
     search_similar_companies,
 )
-from .generation import company_research
+from .generation import company_research, resolve_search_instructions
 from .retrieval import retrieve_similar_job_offers, select_top_documents
 
 logger = logging.getLogger(__name__)
@@ -76,12 +76,16 @@ def _looks_like_same_company(query: str, candidate: str) -> bool:
 
 
 @traceable(run_type="chain", name="perform_web_search")
-def perform_web_search(query: str) -> str:
+def perform_web_search(query: str, search_instructions: str = "") -> str:
     """Perform a web search using a capable model (OpenAI for now)."""
     try:
         # Use an explicit search-capable OpenAI model.
         client = get_client(ModelVendor.OPENAI)
-        system = "You are a research assistant. Perform a comprehensive web search for the user's query and return a detailed summary of the findings, including key facts, recent news, and relevant context."
+        system = search_instructions.strip() if search_instructions and search_instructions.strip() else (
+            "You are researching a company to help someone write a cover letter. "
+            "Focus on work culture, likely work tasks, and career prospects — not investor metrics. "
+            "Do NOT include any links, only plain text."
+        )
         return client.call("gpt-5-search-api", system, [query], search=True)
     except Exception as e:
         logger.error(f"Web search failed: {e}")
@@ -94,6 +98,7 @@ def perform_company_research(
     models: List[str],
     job_text: str,
     additional_company_info: str = "",
+    search_instructions: str = "",
 ) -> Dict[str, Any]:
     """
     Perform company research using one or more models.
@@ -230,9 +235,15 @@ def perform_company_research(
             logger.error(f"Retrieval failed: {e}")
 
     # Web Search (once)
-    web_search_query = f"Research company {company_name}"
+    job_snippet = (job_text or "").strip()[:500]
+    web_search_query = (
+        f"From a job applicant's perspective (work culture, daily tasks, career prospects, hiring stability — "
+        f"not investor metrics like AUM or net profit): research {company_name}."
+    )
+    if job_snippet:
+        web_search_query += f" Job context: {job_snippet}"
     
-    web_context = perform_web_search(web_search_query)
+    web_context = perform_web_search(web_search_query, search_instructions=search_instructions)
     
     # Combine context
     combined_context = additional_company_info
@@ -264,7 +275,8 @@ def perform_company_research(
                 trace_dir, 
                 additional_company_info=combined_context,
                 search=False,  # Disable individual model search, rely on context
-                model=model_id
+                model=model_id,
+                search_instructions=search_instructions,
             )
             
             return model_str, {

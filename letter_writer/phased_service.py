@@ -20,7 +20,7 @@ from .generation import (
     fancy_letter,
     generate_letter,
     generate_letter_plan,
-    get_search_instructions,
+    resolve_search_instructions,
     get_structure_instructions,
     goal_fit_check,
     human_check,
@@ -340,10 +340,16 @@ def _run_background_phase(
     # Get additional company info from metadata (user's extra context about the company)
     additional_company_info = get_metadata_field(metadata, vendor, "additional_company_info", "")
     
-    # Get search instructions from session data, falling back to user data or default file
-    search_instructions = common_data.get("search_instructions", "")
-    if not search_instructions:
-        search_instructions = get_search_instructions()  # Default from file
+    # Get search instructions from session, user profile, or default file
+    user_data = None
+    if user_id:
+        from .firestore_store import get_user_data
+
+        user_data = get_user_data(user_id, use_cache=True)
+    search_instructions = resolve_search_instructions(
+        common_data.get("search_instructions", ""),
+        user_data or {},
+    )
 
     trace_dir = Path("trace", f"{company_name}.{vendor.value}.background")
     trace_dir.mkdir(parents=True, exist_ok=True)

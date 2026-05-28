@@ -1466,6 +1466,10 @@ def get_search_instructions() -> str:
         # Fallback to default if file doesn't exist
         return (
             "You are an expert in searching the internet for information about companies.\n\n"
+            "IMPORTANT: You are looking at the company from the point of view of a job applicant, not of an investor "
+            "or policymaker. Focus on work culture, likely work tasks, and career prospects. Product success, financial "
+            "situation, or regulatory difficulties are rarely relevant — only if they threaten to make employment "
+            "less secure or more challenging in some way.\n\n"
             "Focus on what distinguishes the company, in the good and bad. Keep it concise but informative.\n"
             "Do NOT include any links, only plain text.\n"
             "Do NOT just repeat the ads the company puts out. Do report what they say about themselves, "
@@ -1474,6 +1478,22 @@ def get_search_instructions() -> str:
             "to present themselves as trailblazing but is actually quite boring, or vice versa likes to underpromise "
             "but is actually exceptional, we need to consider both aspects.\n"
         )
+
+
+def resolve_search_instructions(
+    session_instructions: str = "",
+    user_data: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Resolve search instructions: session override, then user profile, then repo default file."""
+    if session_instructions and str(session_instructions).strip():
+        return str(session_instructions).strip()
+    if user_data:
+        from .personal_data_sections import get_search_instructions as get_user_search_instructions
+
+        user_instructions = get_user_search_instructions(user_data)
+        if user_instructions and user_instructions.strip():
+            return user_instructions.strip()
+    return get_search_instructions()
 
 
 @traceable(run_type="chain", name="company_research")

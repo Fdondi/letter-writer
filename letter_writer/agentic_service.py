@@ -2189,12 +2189,19 @@ def run_agentic_draft(
         if not company_report:
             point_of_contact = metadata.get("common", {}).get("point_of_contact")
             additional_company_info = get_metadata_field(metadata, vendor_enum, "additional_company_info", "")
-            from .generation import get_search_instructions
+            from .generation import resolve_search_instructions
+            from .firestore_store import get_user_data
+
+            user_data = get_user_data(_user_id(session), use_cache=True) if _user_id(session) else {}
+            search_instructions = resolve_search_instructions(
+                session.get("search_instructions", ""),
+                user_data or {},
+            )
             company_report = company_research(
                 company_name, job_text, ai_client, trace_dir,
                 point_of_contact=point_of_contact,
                 additional_company_info=additional_company_info,
-                search_instructions=get_search_instructions(),
+                search_instructions=search_instructions,
             ) or ""
 
     top_docs = _refresh_top_docs_from_session_search_if_needed(
@@ -2283,12 +2290,19 @@ def run_agentic_draft_multi(
         if not company_report:
             point_of_contact = metadata.get("common", {}).get("point_of_contact")
             additional_company_info = get_metadata_field(metadata, vendor_enum, "additional_company_info", "")
-            from .generation import get_search_instructions
+            from .generation import resolve_search_instructions
+            from .firestore_store import get_user_data
+
+            user_data = get_user_data(_user_id(session), use_cache=True) if _user_id(session) else {}
+            search_instructions = resolve_search_instructions(
+                session.get("search_instructions", ""),
+                user_data or {},
+            )
             company_report = company_research(
                 company_name, job_text, ai_client, trace_dir,
                 point_of_contact=point_of_contact,
                 additional_company_info=additional_company_info,
-                search_instructions=get_search_instructions(),
+                search_instructions=search_instructions,
             ) or ""
         # #region agent log
         try:

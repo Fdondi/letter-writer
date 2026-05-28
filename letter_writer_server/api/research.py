@@ -4,8 +4,9 @@ from pydantic import BaseModel
 
 from pathlib import Path
 from letter_writer.client import get_client, ModelVendor
-from letter_writer.generation import extract_job_metadata_no_requirements
+from letter_writer.generation import extract_job_metadata_no_requirements, resolve_search_instructions
 from letter_writer.research import perform_company_research, perform_poc_research
+from letter_writer.firestore_store import get_user_data
 from letter_writer_server.core.session import Session, get_session
 from letter_writer_server.api.cost_utils import check_spending_limits
 from letter_writer.cost_tracker import track_api_cost
@@ -91,11 +92,20 @@ async def research_company(data: ResearchCompanyRequest, session: Session = Depe
         raise HTTPException(status_code=400, detail="company_name is required")
 
     try:
+        user_data = None
+        user = session.get("user")
+        if user:
+            user_data = get_user_data(user["id"], use_cache=True)
+        search_instructions = resolve_search_instructions(
+            session.get("search_instructions", ""),
+            user_data or {},
+        )
         result = perform_company_research(
             company_name=company_name,
             models=models,
             job_text=data.job_text or "",
             additional_company_info=data.additional_company_info or "",
+            search_instructions=search_instructions,
         )
         return {
             "status": "ok",
