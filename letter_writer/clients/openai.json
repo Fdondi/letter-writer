@@ -14,7 +14,8 @@
     "letter_draft":     { "model": "gpt-5.5",      "reasoning_effort": "high" },
     "letter_refine":    { "model": "gpt-5.5",      "reasoning_effort": "high" },
     "agentic":          { "model": "gpt-5-nano",   "reasoning_effort": "none" },
-    "autocomplete":     { "model": "gpt-realtime-mini", "reasoning_effort": "none" }
+    "autocomplete":     { "model": "gpt-realtime-mini", "reasoning_effort": "none" },
+    "autocomplete_plan": { "model": "gpt-5.5", "reasoning_effort": "high" }
   },
   "models": {
     "gpt-5.5-pro": {

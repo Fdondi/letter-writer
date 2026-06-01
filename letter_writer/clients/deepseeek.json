@@ -13,7 +13,8 @@
     "letter_draft": "deepseek-v4-pro",
     "letter_refine": "deepseek-v4-pro",
     "agentic": "deepseek-v4-flash",
-    "autocomplete": "deepseek-chat"
+    "autocomplete": "deepseek-chat",
+    "autocomplete_plan": "deepseek-v4-pro"
   },
   "models": {
     "deepseek-chat": {

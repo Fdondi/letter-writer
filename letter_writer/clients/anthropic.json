@@ -13,7 +13,8 @@
     "letter_draft":     { "model": "claude-opus-4-7",   "thinking": true, "effort": "high" },
     "letter_refine":    { "model": "claude-opus-4-7",   "thinking": true, "effort": "high" },
     "agentic":          { "model": "claude-haiku-4-5",  "thinking": false },
-    "autocomplete":     { "model": "claude-haiku-4-5",  "thinking": false }
+    "autocomplete":         { "model": "claude-haiku-4-5",  "thinking": false },
+    "autocomplete_plan":    { "model": "claude-opus-4-7",   "thinking": true, "effort": "high" }
   },
   "models":
   {

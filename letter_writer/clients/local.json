@@ -13,7 +13,8 @@
     "letter_draft": "local-model",
     "letter_refine": "local-model",
     "agentic": "local-model",
-    "autocomplete": "local-model"
+    "autocomplete": "local-model",
+    "autocomplete_plan": "local-model"
   },
   "models": {
     "local-model": {

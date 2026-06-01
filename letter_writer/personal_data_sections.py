@@ -240,6 +240,24 @@ def get_autocomplete_last_used_model(user_data: Dict[str, Any]) -> Optional[str]
     out = unwrap_for_response("autocomplete_last_used_model", raw) if raw is not None else None
     return (out or "").strip() or None
 
+
+def get_autocomplete_plan_model(user_data: Dict[str, Any]) -> Optional[str]:
+    from letter_writer.autocomplete_core import (
+        default_autocomplete_plan_model,
+        get_autocomplete_plan_role_defaults,
+        normalize_autocomplete_model_key,
+    )
+
+    raw = user_data.get("autocomplete_plan_model")
+    stored = unwrap_for_response("autocomplete_plan_model", raw) if raw is not None else None
+    if stored and str(stored).strip():
+        normalized = normalize_autocomplete_model_key(
+            str(stored).strip(), get_autocomplete_plan_role_defaults()
+        )
+        if normalized:
+            return normalized
+    return default_autocomplete_plan_model(get_autocomplete_plan_role_defaults())
+
 def _validate_model_ids(model_ids: List[str]) -> List[str]:
     """Filter out model IDs with invalid vendor prefixes (e.g. 'google/...' instead of 'gemini/...')."""
     valid = []

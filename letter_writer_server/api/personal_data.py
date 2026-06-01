@@ -6,7 +6,12 @@ from pydantic import BaseModel
 from letter_writer_server.core.session import Session, get_session
 from letter_writer.firestore_store import get_user_data, get_personal_data_document, update_user_data_cache
 from letter_writer.generation import get_style_instructions, get_search_instructions, get_structure_instructions as get_default_structure_instructions
-from letter_writer.autocomplete_core import get_autocomplete_role_defaults, normalize_autocomplete_model_list
+from letter_writer.autocomplete_core import (
+    get_autocomplete_plan_role_defaults,
+    get_autocomplete_role_defaults,
+    normalize_autocomplete_model_key,
+    normalize_autocomplete_model_list,
+)
 from letter_writer.personal_data_sections import (
     get_cv_revisions,
     get_extra_info,
@@ -20,6 +25,7 @@ from letter_writer.personal_data_sections import (
     get_autocomplete_ctrl_letter_map,
     get_autocomplete_shift_letter_map,
     get_autocomplete_last_used_model,
+    get_autocomplete_plan_model,
     unwrap_for_response,
     wrap_new_field,
 )
@@ -273,6 +279,8 @@ async def get_personal_data(session: Session = Depends(get_session)):
         "autocomplete_ctrl_letter_map": get_autocomplete_ctrl_letter_map(user_data),
         "autocomplete_shift_letter_map": get_autocomplete_ctrl_letter_map(user_data),
         "autocomplete_role_defaults": get_autocomplete_role_defaults(),
+        "autocomplete_plan_role_defaults": get_autocomplete_plan_role_defaults(),
+        "autocomplete_plan_model": get_autocomplete_plan_model(user_data),
         "autocomplete_last_used_model": get_autocomplete_last_used_model(user_data),
     }
 
@@ -401,7 +409,18 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             updates["autocomplete_last_used_model"] = wrap_new_field(
                 "autocomplete_last_used_model", stored or None, now
             )
-            
+
+        if "autocomplete_plan_model" in data:
+            val = data["autocomplete_plan_model"]
+            stored = (val or "").strip() if isinstance(val, str) else (str(val).strip() if val is not None else None)
+            plan_defaults = get_autocomplete_plan_role_defaults()
+            normalized = (
+                normalize_autocomplete_model_key(stored, plan_defaults) if stored else None
+            )
+            updates["autocomplete_plan_model"] = wrap_new_field(
+                "autocomplete_plan_model", normalized, now
+            )
+
         if "style_instructions" in data:
             updates["style"] = wrap_new_field("style", data["style_instructions"], now)
             session["style_instructions"] = data["style_instructions"]
