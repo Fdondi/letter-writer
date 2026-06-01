@@ -186,6 +186,60 @@ def get_agentic_draft_model(user_data: Dict[str, Any]) -> Optional[str]:
     out = unwrap_for_response("agentic_draft_model", raw) if raw is not None else None
     return (out or "").strip() or None
 
+
+def get_autocomplete_max_words(user_data: Dict[str, Any]) -> int:
+    raw = user_data.get("autocomplete_max_words")
+    val = unwrap_for_response("autocomplete_max_words", raw) if raw is not None else raw
+    try:
+        n = int(val if val is not None else 20)
+    except (TypeError, ValueError):
+        n = 20
+    return max(1, min(100, n))
+
+
+def get_autocomplete_stop_on_period(user_data: Dict[str, Any]) -> bool:
+    raw = user_data.get("autocomplete_stop_on_period")
+    val = unwrap_for_response("autocomplete_stop_on_period", raw) if raw is not None else raw
+    if val is None:
+        return True
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.strip().lower() in ("1", "true", "yes", "on")
+    return bool(val)
+
+
+def get_autocomplete_models(user_data: Dict[str, Any]) -> List[str]:
+    from letter_writer.autocomplete_core import (
+        default_autocomplete_models,
+        get_autocomplete_role_defaults,
+        normalize_autocomplete_model_list,
+    )
+
+    raw = user_data.get("autocomplete_models")
+    models = unwrap_for_response("autocomplete_models", raw) if raw is not None else raw
+    if not isinstance(models, list) or not models:
+        return default_autocomplete_models(get_autocomplete_role_defaults())
+    normalized = normalize_autocomplete_model_list([str(m or "") for m in models])
+    return normalized if normalized else default_autocomplete_models(get_autocomplete_role_defaults())
+
+
+def get_autocomplete_ctrl_letter_map(user_data: Dict[str, Any]) -> Dict[str, str]:
+    from letter_writer.autocomplete_core import derive_ctrl_letter_map_from_models
+
+    return derive_ctrl_letter_map_from_models(get_autocomplete_models(user_data))
+
+
+def get_autocomplete_shift_letter_map(user_data: Dict[str, Any]) -> Dict[str, str]:
+    """Legacy alias for autocomplete_ctrl_letter_map."""
+    return get_autocomplete_ctrl_letter_map(user_data)
+
+
+def get_autocomplete_last_used_model(user_data: Dict[str, Any]) -> Optional[str]:
+    raw = user_data.get("autocomplete_last_used_model")
+    out = unwrap_for_response("autocomplete_last_used_model", raw) if raw is not None else None
+    return (out or "").strip() or None
+
 def _validate_model_ids(model_ids: List[str]) -> List[str]:
     """Filter out model IDs with invalid vendor prefixes (e.g. 'google/...' instead of 'gemini/...')."""
     valid = []

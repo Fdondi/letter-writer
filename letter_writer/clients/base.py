@@ -64,6 +64,7 @@ class ModelRole(Enum):
     LETTER_DRAFT = "letter_draft"
     LETTER_REFINE = "letter_refine"
     AGENTIC = "agentic"
+    AUTOCOMPLETE = "autocomplete"
 
 
 class BaseClient:

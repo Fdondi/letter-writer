@@ -2,18 +2,14 @@
  * Common API helper utilities for handling responses, including 202 heartbeat handling and CSRF protection
  */
 
+import { publishCostTrackingSignals } from "./costTracking.js";
+
 // Cache CSRF token to avoid fetching it on every request
 let csrfToken = null;
 export const USER_MONTHLY_COST_EVENT = "user-monthly-cost-updated";
 
 export function publishUserMonthlyCost(payload) {
-  const monthlyCost = payload?.user_monthly_cost;
-  if (typeof monthlyCost !== "number" || Number.isNaN(monthlyCost)) {
-    return;
-  }
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent(USER_MONTHLY_COST_EVENT, { detail: { value: monthlyCost } }));
-  }
+  publishCostTrackingSignals(payload);
 }
 
 /**
@@ -265,7 +261,7 @@ export async function fetchWithHeartbeat(url, options = {}, restoreConfig = null
   }
   
   const data = await res.json();
-  publishUserMonthlyCost(data);
+  publishCostTrackingSignals(data);
   return {
     status: res.status,
     data,

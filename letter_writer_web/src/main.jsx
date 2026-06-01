@@ -18,7 +18,13 @@ setupApiNotifications();
 
 function AppWithFlow() {
   const location = useLocation();
-  const flow = location.pathname.startsWith("/flows/agentic") ? "agentic" : "vendor";
+  const flow = location.pathname.startsWith("/flows/autocomplete")
+    ? "autocomplete"
+    : location.pathname.startsWith("/flows/agentic")
+      ? "agentic"
+      : location.pathname.startsWith("/flows/vendors")
+        ? "vendor"
+        : "intake";
   return <App flow={flow} />;
 }
 
@@ -31,6 +37,7 @@ createRoot(rootEl).render(
     <DndProvider backend={HTML5Backend}>
       <LanguageProvider>
         <Routes>
+          <Route path="/flows/autocomplete" element={<AppWithFlow />} />
           <Route path="/flows/vendors" element={<AppWithFlow />} />
           <Route path="/flows/agentic" element={<AppWithFlow />} />
           <Route path="/" element={<AppWithFlow />} />

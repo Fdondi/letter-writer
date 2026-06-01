@@ -23,6 +23,11 @@ export default function SettingsPage({
   const [savingColumnWidth, setSavingColumnWidth] = useState(false);
   const [agenticDraftModel, setAgenticDraftModel] = useState(""); // vendor key for per-topic agentic draft; empty = use first default model
   const [savingAgenticDraftModel, setSavingAgenticDraftModel] = useState(false);
+  const [autocompleteMaxWords, setAutocompleteMaxWords] = useState(20);
+  const [autocompleteStopOnPeriod, setAutocompleteStopOnPeriod] = useState(true);
+  const [autocompleteModels, setAutocompleteModels] = useState(new Set());
+  const [autocompleteShiftMap, setAutocompleteShiftMap] = useState({});
+  const [savingAutocomplete, setSavingAutocomplete] = useState(false);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -77,6 +82,20 @@ export default function SettingsPage({
             setAgenticDraftModel(data.agentic_draft_model);
           } else {
             setAgenticDraftModel("");
+          }
+          if (data.autocomplete_max_words != null) {
+            setAutocompleteMaxWords(data.autocomplete_max_words);
+          }
+          if (data.autocomplete_stop_on_period != null) {
+            setAutocompleteStopOnPeriod(Boolean(data.autocomplete_stop_on_period));
+          }
+          if (Array.isArray(data.autocomplete_models) && data.autocomplete_models.length > 0) {
+            setAutocompleteModels(new Set(data.autocomplete_models));
+          } else if (data.default_models?.length) {
+            setAutocompleteModels(new Set(data.default_models));
+          }
+          if (data.autocomplete_shift_letter_map && typeof data.autocomplete_shift_letter_map === "object") {
+            setAutocompleteShiftMap(data.autocomplete_shift_letter_map);
           }
         }
       } catch (e) {
@@ -178,6 +197,26 @@ export default function SettingsPage({
       setError("Failed to save minimum column width");
     } finally {
       setSavingColumnWidth(false);
+    }
+  };
+
+  const handleSaveAutocompleteSettings = async () => {
+    try {
+      setSavingAutocomplete(true);
+      setError(null);
+      await fetchWithHeartbeat("/api/personal-data/", {
+        method: "POST",
+        body: JSON.stringify({
+          autocomplete_max_words: autocompleteMaxWords,
+          autocomplete_stop_on_period: autocompleteStopOnPeriod,
+          autocomplete_models: Array.from(autocompleteModels),
+          autocomplete_shift_letter_map: autocompleteShiftMap,
+        }),
+      });
+    } catch (e) {
+      setError("Failed to save autocomplete settings");
+    } finally {
+      setSavingAutocomplete(false);
     }
   };
 
@@ -449,6 +488,128 @@ export default function SettingsPage({
               />
               {v}
             </label>
+          ))}
+        </div>
+      </div>
+
+      {/* Autocomplete flow */}
+      <div
+        style={{
+          marginBottom: 30,
+          padding: 20,
+          backgroundColor: "var(--bg-color)",
+          border: "1px solid var(--border-color)",
+          borderRadius: "4px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 15,
+          }}
+        >
+          <h3 style={{ margin: 0, color: "var(--text-color)" }}>Autocomplete flow</h3>
+          <button
+            onClick={handleSaveAutocompleteSettings}
+            disabled={savingAutocomplete}
+            style={{
+              padding: "6px 12px",
+              backgroundColor: "#3b82f6",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor: savingAutocomplete ? "not-allowed" : "pointer",
+              opacity: savingAutocomplete ? 0.7 : 1,
+              fontSize: "14px",
+            }}
+          >
+            {savingAutocomplete ? "Saving..." : "Save"}
+          </button>
+        </div>
+        <p style={{ marginTop: 0, marginBottom: 15, fontSize: 14, color: "var(--secondary-text-color)" }}>
+          Tab completion uses job + CV context. Shift+Tab cycles models. Map Ctrl+letter to a vendor/model below.
+        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 16, marginBottom: 16, alignItems: "center" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: "var(--text-color)" }}>
+            Max words
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={autocompleteMaxWords}
+              onChange={(e) => setAutocompleteMaxWords(parseInt(e.target.value, 10) || 20)}
+              style={{ width: 56, padding: "4px 6px", borderRadius: 4, border: "1px solid var(--border-color)" }}
+            />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: "var(--text-color)", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={autocompleteStopOnPeriod}
+              onChange={(e) => setAutocompleteStopOnPeriod(e.target.checked)}
+            />
+            Stop at first period
+          </label>
+        </div>
+        <div style={{ marginBottom: 12, fontSize: 13, fontWeight: 600, color: "var(--text-color)" }}>
+          Models for Tab / Shift+Tab cycle
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
+          {vendors.map((v) => (
+            <label key={v} style={{ display: "flex", alignItems: "center", gap: 4, textTransform: "capitalize", fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={autocompleteModels.has(v)}
+                onChange={() => {
+                  setAutocompleteModels((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(v)) next.delete(v);
+                    else next.add(v);
+                    return next;
+                  });
+                }}
+              />
+              {v}
+            </label>
+          ))}
+        </div>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "var(--text-color)" }}>
+          Shift + letter shortcuts
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {["A", "B", "C", "D", "E", "F", "G", "H"].map((letter) => (
+            <div key={letter} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ width: 24, fontWeight: 600, fontSize: 13 }}>Shift+{letter}</span>
+              <select
+                value={autocompleteShiftMap[letter] || ""}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setAutocompleteShiftMap((prev) => {
+                    const next = { ...prev };
+                    if (val) next[letter] = val;
+                    else delete next[letter];
+                    return next;
+                  });
+                }}
+                style={{
+                  padding: "4px 8px",
+                  fontSize: 13,
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 4,
+                  background: "var(--input-bg)",
+                  color: "var(--text-color)",
+                  minWidth: 140,
+                }}
+              >
+                <option value="">—</option>
+                {vendors.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </div>
           ))}
         </div>
       </div>

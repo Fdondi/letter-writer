@@ -12,7 +12,9 @@
     "letter_plan": "mistral-large-latest",
     "letter_draft": "mistral-large-latest",
     "letter_refine": "mistral-large-latest",
-    "agentic": "mistral-small-2506"
+    "agentic": "mistral-small-2506",
+    "autocomplete": "mistral-small-2506",
+    "autocomplete": "mistral-small-2506"
   },
   "models": {
     "open-mixtral-8x7b": {

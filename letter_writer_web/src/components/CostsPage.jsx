@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { parseApiErrorDetail } from "../utils/costTracking";
 
 /**
  * Detailed cost breakdown page showing:
@@ -47,23 +48,31 @@ export default function CostsPage() {
       const userRes = await fetch(`/api/costs/user/?months=${months}`, {
         credentials: "include",
       });
-      
+
+      const userText = await userRes.text();
       if (!userRes.ok) {
-        throw new Error("Failed to fetch cost data");
+        throw new Error(parseApiErrorDetail(userText));
       }
-      
-      const userData = await userRes.json();
+
+      const userData = JSON.parse(userText);
+      if (userData.error || userData.cost_available === false) {
+        throw new Error(userData.error || "Cost analytics unavailable");
+      }
       setUserCosts(userData);
-      
-      // Fetch daily breakdown
+
       const dailyRes = await fetch(`/api/costs/daily/?months=${months}`, {
         credentials: "include",
       });
-      
-      if (dailyRes.ok) {
-        const dailyData = await dailyRes.json();
-        setDailyCosts(dailyData);
+
+      const dailyText = await dailyRes.text();
+      if (!dailyRes.ok) {
+        throw new Error(parseApiErrorDetail(dailyText));
       }
+      const dailyData = JSON.parse(dailyText);
+      if (dailyData.error || dailyData.cost_available === false) {
+        throw new Error(dailyData.error || "Daily cost breakdown unavailable");
+      }
+      setDailyCosts(dailyData);
       
     } catch (err) {
       console.error("Error fetching costs:", err);

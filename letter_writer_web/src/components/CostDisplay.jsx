@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { USER_MONTHLY_COST_EVENT } from "../utils/apiHelpers";
+import { COST_TRACKING_ERROR_EVENT, parseApiErrorDetail } from "../utils/costTracking";
 
 /**
  * Displays the user's total API cost for the current month.
  * Fetches from BigQuery via /api/costs/user/ endpoint.
- * 
+ *
  * @param {function} onNavigate - Called when user clicks to view details
  */
 export default function CostDisplay({ onNavigate }) {
@@ -24,8 +25,20 @@ export default function CostDisplay({ onNavigate }) {
       }
     };
 
+    const handleCostError = (event) => {
+      const message = event?.detail?.message;
+      if (message) {
+        setError(message);
+        setLoading(false);
+      }
+    };
+
     window.addEventListener(USER_MONTHLY_COST_EVENT, handleCostUpdate);
-    return () => window.removeEventListener(USER_MONTHLY_COST_EVENT, handleCostUpdate);
+    window.addEventListener(COST_TRACKING_ERROR_EVENT, handleCostError);
+    return () => {
+      window.removeEventListener(USER_MONTHLY_COST_EVENT, handleCostUpdate);
+      window.removeEventListener(COST_TRACKING_ERROR_EVENT, handleCostError);
+    };
   }, []);
 
   const fetchCost = async () => {
@@ -33,36 +46,69 @@ export default function CostDisplay({ onNavigate }) {
       const res = await fetch("/api/costs/user/?months=1", {
         credentials: "include",
       });
-      
+
       if (res.status === 401) {
-        // Not authenticated - don't show anything
         setCost(null);
+        setError(null);
         setLoading(false);
         return;
       }
-      
+
+      const text = await res.text();
       if (!res.ok) {
-        throw new Error("Failed to fetch cost");
+        throw new Error(parseApiErrorDetail(text));
       }
-      
-      const data = await res.json();
-      setCost(data.total_cost || 0);
+
+      const data = JSON.parse(text);
+      if (data.error || data.cost_available === false) {
+        throw new Error(data.error || "Cost analytics unavailable");
+      }
+
+      setCost(data.total_cost ?? 0);
       setError(null);
     } catch (err) {
       console.warn("Could not fetch cost:", err);
-      setError(err.message);
+      setError(err.message || String(err));
       setCost(null);
     } finally {
       setLoading(false);
     }
   };
 
-  // Don't render if not authenticated or loading
-  if (loading || cost === null) {
+  if (loading) {
     return null;
   }
 
-  // Format cost
+  if (error) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          padding: "4px 10px",
+          backgroundColor: "var(--error-bg, #fef2f2)",
+          border: "1px solid var(--error-border, #fecaca)",
+          borderRadius: "4px",
+          fontSize: "11px",
+          color: "var(--error-text, #b91c1c)",
+          maxWidth: 220,
+          cursor: onNavigate ? "pointer" : "default",
+        }}
+        title={error}
+        onClick={onNavigate}
+        role="alert"
+      >
+        <span>⚠️</span>
+        <span>Costs unavailable</span>
+      </div>
+    );
+  }
+
+  if (cost === null) {
+    return null;
+  }
+
   const formattedCost = cost < 0.01 && cost > 0
     ? "< $0.01"
     : `$${cost.toFixed(2)}`;

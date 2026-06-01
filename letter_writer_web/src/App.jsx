@@ -20,8 +20,10 @@ import LocalPricingWarningModal, { dismissLocalPricingWarningForSession } from "
 import CompetencesList from "./components/CompetencesList";
 import ResearchComponent from "./components/ResearchComponent";
 import SimilarOffersCarousel from "./components/SimilarOffersCarousel";
+import AutocompleteFlow from "./components/AutocompleteFlow";
 import { splitIntoParagraphs } from "./utils/split";
 import { fetchWithHeartbeat, retryApiCall, initializeCsrfToken, getCsrfToken, publishUserMonthlyCost } from "./utils/apiHelpers";
+import { COST_TRACKING_ERROR_EVENT } from "./utils/costTracking";
 import { scheduleGoogleOAuthRedirect, clearOAuthRedirectCooldown } from "./utils/googleOAuthRedirect";
 import { showNotification } from "./utils/apiNotifications";
 import { phases as phaseModules } from "./components/phases";
@@ -44,7 +46,7 @@ function generateColors(vendors) {
 
 const AGENTIC_TOPICS = ["instruction", "company_fit", "goal_fit", "precision", "user_fit", "human", "accuracy"];
 
-export default function App({ flow = "vendor" }) {
+export default function App({ flow = "intake" }) {
   const navigate = useNavigate();
   const navLocation = useLocation();
   // ALL hooks must be declared before any conditional returns (React rules)
@@ -95,6 +97,7 @@ export default function App({ flow = "vendor" }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [documentSaveNotice, setDocumentSaveNotice] = useState(null);
+  const [costTrackingError, setCostTrackingError] = useState(null);
   const [showStyleBlade, setShowStyleBlade] = useState(false);
   const [vendorStage, setVendorStage] = useState("input"); // vendor flow: input | phases | assembly
   const [agenticStage, setAgenticStage] = useState("input"); // agentic flow: input | agentic | assembly
@@ -114,7 +117,13 @@ export default function App({ flow = "vendor" }) {
   const [extractedData, setExtractedData] = useState(null); // Track extracted data to detect modifications
   const [vendorFeedback, setVendorFeedback] = useState({}); // vendor -> { rating, comment }
 
-  const showInput = flow === "vendor" ? vendorStage === "input" : agenticStage === "input";
+  const showInput =
+    flow === "vendor"
+      ? vendorStage === "input"
+      : flow === "agentic"
+        ? agenticStage === "input"
+        : false;
+  const showJobIntake = flow === "intake";
   const hasPointOfContactData = useMemo(() => (
     Boolean(pointOfContact.name?.trim()) ||
     Boolean(pointOfContact.role?.trim()) ||
@@ -443,7 +452,7 @@ export default function App({ flow = "vendor" }) {
       el.removeEventListener("scroll", tick);
       ro.disconnect();
     };
-  }, [updateCompetencesScrollState, requirements.length, showInput]);
+  }, [updateCompetencesScrollState, requirements.length, showJobIntake]);
 
   // Get displayed job text (translated or original)
   const displayedJobText = useMemo(() => {
@@ -481,6 +490,133 @@ export default function App({ flow = "vendor" }) {
     if (!allSearchResults.length) return {};
     return { top_docs: effectiveTopDocs || [] };
   }, [allSearchResults, effectiveTopDocs]);
+
+  const autocompleteContextProps = useMemo(
+    () => ({
+      jobText,
+      additionalUserInfo,
+      additionalCompanyInfo,
+      structureInstructions,
+      companyReport: selectedCompanyReport || "",
+      topDocs: effectiveTopDocs || [],
+      companyName,
+      jobTitle,
+      location,
+      language,
+      salary,
+      requirements: (Array.isArray(requirements) ? requirements : requirements ? [requirements] : []).filter(Boolean),
+      competences,
+      competenceScaleConfig,
+      competenceOverrides,
+      languages: enabledLanguages,
+      pointOfContact: hasPointOfContactData ? pointOfContact : null,
+    }),
+    [
+      jobText,
+      additionalUserInfo,
+      additionalCompanyInfo,
+      structureInstructions,
+      selectedCompanyReport,
+      effectiveTopDocs,
+      companyName,
+      jobTitle,
+      location,
+      language,
+      salary,
+      requirements,
+      competences,
+      competenceScaleConfig,
+      competenceOverrides,
+      enabledLanguages,
+      hasPointOfContactData,
+      pointOfContact,
+    ]
+  );
+
+  const buildJobSessionPayload = useCallback(
+    (sessionId) => {
+      const payload = {
+        session_id: sessionId,
+        job_text: jobText,
+        company_name: companyName,
+        job_title: jobTitle,
+        location: location,
+        language: language,
+        salary: salary,
+        requirements: (Array.isArray(requirements) ? requirements : requirements ? [requirements] : []).filter(Boolean),
+        point_of_contact: hasPointOfContactData ? pointOfContact : null,
+        additional_user_info: additionalUserInfo || "",
+        additional_company_info: additionalCompanyInfo || "",
+        structure_instructions: structureInstructions || "",
+      };
+      if (Object.keys(competences).length > 0) payload.competences = competences;
+      Object.assign(payload, jobIntakeTopDocsForSession);
+      return payload;
+    },
+    [
+      jobText,
+      companyName,
+      jobTitle,
+      location,
+      language,
+      salary,
+      requirements,
+      hasPointOfContactData,
+      pointOfContact,
+      additionalUserInfo,
+      additionalCompanyInfo,
+      structureInstructions,
+      competences,
+      jobIntakeTopDocsForSession,
+    ]
+  );
+
+  const ensurePhaseSessionReady = useCallback(async () => {
+    const sessionId =
+      phaseSessionId ||
+      (typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2));
+    if (!phaseSessionId) {
+      setPhaseSessionId(sessionId);
+      await fetchWithHeartbeat("/api/phases/init/", {
+        method: "POST",
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+    }
+    await fetchWithHeartbeat("/api/phases/session/", {
+      method: "POST",
+      body: JSON.stringify(buildJobSessionPayload(sessionId)),
+    });
+    return sessionId;
+  }, [phaseSessionId, buildJobSessionPayload]);
+
+  const handleStartAutocomplete = async () => {
+    if (!jobTitle.trim()) {
+      setError("Job title is required");
+      return;
+    }
+    if (!jobText?.trim()) {
+      setError("Job description is required");
+      return;
+    }
+    setError(null);
+    try {
+      await ensurePhaseSessionReady();
+      navigate("/flows/autocomplete");
+    } catch (e) {
+      console.error("Failed to prepare autocomplete session:", e);
+      setError("Failed to sync job details to session. Fix the issue or try again.");
+    }
+  };
+
+  useEffect(() => {
+    if (flow === "vendor" && vendorStage === "input") {
+      navigate("/", { replace: true });
+    } else if (flow === "agentic" && agenticStage === "input") {
+      navigate("/", { replace: true });
+    }
+  }, [flow, vendorStage, agenticStage, navigate]);
 
   useEffect(() => {
     if (!phaseSessionId || !allSearchResults.length) return undefined;
@@ -579,7 +715,16 @@ export default function App({ flow = "vendor" }) {
     initializeCsrfToken().catch((e) => {
       console.warn("Failed to initialize CSRF token:", e);
     });
-    
+
+    const onCostTrackingError = (event) => {
+      const message = event?.detail?.message;
+      if (message) setCostTrackingError(message);
+    };
+    window.addEventListener(COST_TRACKING_ERROR_EVENT, onCostTrackingError);
+    return () => window.removeEventListener(COST_TRACKING_ERROR_EVENT, onCostTrackingError);
+  }, []);
+
+  useEffect(() => {
     const sessionId =
       typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
@@ -947,6 +1092,105 @@ export default function App({ flow = "vendor" }) {
     setLocalPricingDismissChecked(false);
   }, []);
 
+  const extractErrorMessage = useCallback((error) => {
+    if (!error) return "Unknown error";
+
+    const errorStr = typeof error === "string" ? error : (error.message || String(error));
+
+    if (error instanceof TypeError && error.message.includes("fetch")) {
+      return "Network error: Unable to connect to server. Please check your connection.";
+    }
+
+    const providerMessageMatch = errorStr.match(/(?:'message'|"message")\s*:\s*'((?:[^'\\]|\\.)*)'/);
+    if (providerMessageMatch) {
+      return providerMessageMatch[1].replace(/\\'/g, "'").trim() || errorStr;
+    }
+    const providerMessageDouble = errorStr.match(/(?:'message'|"message")\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (providerMessageDouble) {
+      return providerMessageDouble[1].replace(/\\"/g, '"').trim() || errorStr;
+    }
+
+    try {
+      if (errorStr.includes("API error occurred:")) {
+        const bodyMatch = errorStr.match(/Body:\s*({[\s\S]*})/);
+        if (bodyMatch) {
+          const body = JSON.parse(bodyMatch[1]);
+          return body.detail || body.message || errorStr;
+        }
+        const detailMatch = errorStr.match(/"detail"\s*:\s*"([^"]+)"/);
+        if (detailMatch) {
+          return detailMatch[1];
+        }
+      }
+
+      const parsed = JSON.parse(errorStr);
+      if (parsed.detail) return parsed.detail;
+      if (parsed.message) return parsed.message;
+      if (parsed.error?.message) return parsed.error.message;
+    } catch (e) {
+      /* not JSON */
+    }
+
+    return errorStr.replace(/^Error:\s*/, "").trim() || "Unknown error";
+  }, []);
+
+  const onClearPhaseFetchError = useCallback(
+    (phaseName, vendor) => {
+      setPhaseCardFetchError(phaseName, vendor, null);
+    },
+    [setPhaseCardFetchError]
+  );
+
+  const onRetryPhaseFetch = useCallback(
+    async (phaseName, vendor) => {
+      if (phaseName !== "plan") return;
+      const sessionId = phaseSessions[vendor] || phaseSessionId;
+      if (!sessionId) {
+        setPhaseCardFetchError(
+          "plan",
+          vendor,
+          "No session ID. Return to job intake and start the vendor flow again."
+        );
+        return;
+      }
+      setPhaseCardFetchError("plan", vendor, null);
+      try {
+        const body = { session_id: sessionId };
+        if (selectedCompanyReport) {
+          body.company_report = selectedCompanyReport;
+        }
+        const result = await fetchWithHeartbeat(
+          `/api/phases/plan/${vendor}/`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          },
+          { getState: getStateForRestore }
+        );
+        if (result.isHeartbeat) return;
+        populatePhaseShelf("plan", vendor, result.data);
+        setPhaseSessions((prev) => ({ ...prev, [vendor]: sessionId }));
+        const docId = result.data?.document?.id;
+        if (docId) {
+          setDocumentId((prev) => prev || docId);
+        }
+      } catch (e) {
+        console.error(`Retry plan fetch failed for ${vendor}:`, e);
+        setPhaseCardFetchError("plan", vendor, extractErrorMessage(e));
+      }
+    },
+    [
+      phaseSessions,
+      phaseSessionId,
+      selectedCompanyReport,
+      getStateForRestore,
+      setPhaseCardFetchError,
+      populatePhaseShelf,
+      extractErrorMessage,
+    ]
+  );
+
   // NOW we can do conditional returns (after all hooks are declared)
   
   // While checking authentication or if not authenticated, show loading/login
@@ -1246,114 +1490,6 @@ export default function App({ flow = "vendor" }) {
       setExtracting(false);
     }
   };
-
-  // Helper function to extract user-friendly error messages
-  const extractErrorMessage = useCallback((error) => {
-    if (!error) return "Unknown error";
-    
-    // If it's already a string, try to parse it
-    const errorStr = typeof error === 'string' ? error : (error.message || String(error));
-    
-    // Handle NetworkError (TypeError)
-    if (error instanceof TypeError && error.message.includes('fetch')) {
-      return "Network error: Unable to connect to server. Please check your connection.";
-    }
-    
-    // Provider/API error format: "Error code: 400 - {'error': {'message': 'Your credit...'}}" (Python repr or JSON)
-    const providerMessageMatch = errorStr.match(/(?:'message'|"message")\s*:\s*'((?:[^'\\]|\\.)*)'/);
-    if (providerMessageMatch) {
-      return providerMessageMatch[1].replace(/\\'/g, "'").trim() || errorStr;
-    }
-    const providerMessageDouble = errorStr.match(/(?:'message'|"message")\s*:\s*"((?:[^"\\]|\\.)*)"/);
-    if (providerMessageDouble) {
-      return providerMessageDouble[1].replace(/\\"/g, '"').trim() || errorStr;
-    }
-
-    // Try to extract JSON detail from error string
-    try {
-      // Handle "API error occurred: Status XXX. Body: {...}" format
-      if (errorStr.includes('API error occurred:')) {
-        const bodyMatch = errorStr.match(/Body:\s*({[\s\S]*})/);
-        if (bodyMatch) {
-          const body = JSON.parse(bodyMatch[1]);
-          return body.detail || body.message || errorStr;
-        }
-        // Try to extract detail directly
-        const detailMatch = errorStr.match(/"detail"\s*:\s*"([^"]+)"/);
-        if (detailMatch) {
-          return detailMatch[1];
-        }
-      }
-      
-      // Try to parse as JSON directly
-      const parsed = JSON.parse(errorStr);
-      if (parsed.detail) return parsed.detail;
-      if (parsed.message) return parsed.message;
-      if (parsed.error?.message) return parsed.error.message;
-    } catch (e) {
-      // Not JSON, continue with original string
-    }
-    
-    // Return the error string, but clean up common patterns
-    return errorStr.replace(/^Error:\s*/, '').trim() || "Unknown error";
-  }, []);
-
-  const onClearPhaseFetchError = useCallback(
-    (phaseName, vendor) => {
-      setPhaseCardFetchError(phaseName, vendor, null);
-    },
-    [setPhaseCardFetchError]
-  );
-
-  const onRetryPhaseFetch = useCallback(
-    async (phaseName, vendor) => {
-      if (phaseName !== "plan") return;
-      const sessionId = phaseSessions[vendor] || phaseSessionId;
-      if (!sessionId) {
-        setPhaseCardFetchError(
-          "plan",
-          vendor,
-          "No session ID. Return to job intake and start the vendor flow again."
-        );
-        return;
-      }
-      setPhaseCardFetchError("plan", vendor, null);
-      try {
-        const body = { session_id: sessionId };
-        if (selectedCompanyReport) {
-          body.company_report = selectedCompanyReport;
-        }
-        const result = await fetchWithHeartbeat(
-          `/api/phases/plan/${vendor}/`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          },
-          { getState: getStateForRestore }
-        );
-        if (result.isHeartbeat) return;
-        populatePhaseShelf("plan", vendor, result.data);
-        setPhaseSessions((prev) => ({ ...prev, [vendor]: sessionId }));
-        const docId = result.data?.document?.id;
-        if (docId) {
-          setDocumentId((prev) => prev || docId);
-        }
-      } catch (e) {
-        console.error(`Retry plan fetch failed for ${vendor}:`, e);
-        setPhaseCardFetchError("plan", vendor, extractErrorMessage(e));
-      }
-    },
-    [
-      phaseSessions,
-      phaseSessionId,
-      selectedCompanyReport,
-      getStateForRestore,
-      setPhaseCardFetchError,
-      populatePhaseShelf,
-      extractErrorMessage,
-    ]
-  );
 
   const persistFinalLetter = async (finalText) => {
     if (!finalText) {
@@ -1769,27 +1905,9 @@ export default function App({ flow = "vendor" }) {
 
     // Always populate session with current state before starting drafts.
     try {
-      const sessionPayload = {
-        session_id: initialSessionId,
-        job_text: jobText,
-        company_name: companyName,
-        job_title: jobTitle,
-        location: location,
-        language: language,
-        salary: salary,
-        requirements: (Array.isArray(requirements) ? requirements : requirements ? [requirements] : []).filter(Boolean),
-        point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
-        additional_user_info: additionalUserInfo || "",
-        additional_company_info: additionalCompanyInfo || "",
-        hire_problem: hireProblem || "",
-      };
-      if (Object.keys(competences).length > 0) sessionPayload.competences = competences;
-      sessionPayload.structure_instructions = structureInstructions || "";
-      Object.assign(sessionPayload, jobIntakeTopDocsForSession);
-
       await fetchWithHeartbeat("/api/phases/session/", {
         method: "POST",
-        body: JSON.stringify(sessionPayload),
+        body: JSON.stringify(buildJobSessionPayload(initialSessionId)),
       });
     } catch (e) {
       console.error("Failed to update session data:", e);
@@ -1892,26 +2010,9 @@ export default function App({ flow = "vendor" }) {
     }
     // Always populate session with current state before starting agentic flow.
     try {
-      const sessionPayload = {
-        session_id: initialSessionId,
-        job_text: jobText,
-        company_name: companyName,
-        job_title: jobTitle,
-        location: location,
-        language: language,
-        salary: salary,
-        requirements: (Array.isArray(requirements) ? requirements : requirements ? [requirements] : []).filter(Boolean),
-        point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
-        additional_user_info: additionalUserInfo || "",
-        additional_company_info: additionalCompanyInfo || "",
-        hire_problem: hireProblem || "",
-      };
-      if (Object.keys(competences).length > 0) sessionPayload.competences = competences;
-      sessionPayload.structure_instructions = structureInstructions || "";
-      Object.assign(sessionPayload, jobIntakeTopDocsForSession);
       await fetchWithHeartbeat("/api/phases/session/", {
         method: "POST",
-        body: JSON.stringify(sessionPayload),
+        body: JSON.stringify(buildJobSessionPayload(initialSessionId)),
       });
     } catch (e) {
       console.error("Failed to update session:", e);
@@ -2414,6 +2515,11 @@ export default function App({ flow = "vendor" }) {
     }
   };
 
+  const goBackToJobIntake = async () => {
+    await resetForm();
+    navigate("/");
+  };
+
   const handleCloseSessionAndRestart = async () => {
     if (
       hasUnsavedGeneratedWork &&
@@ -2455,6 +2561,7 @@ export default function App({ flow = "vendor" }) {
     setJobTextTranslations({});
     setJobTextViewLanguage("source");
     setLastJobTextSnapshot("");
+    navigate("/");
   };
 
   const vendorsList = Array.from(selectedVendors);
@@ -2465,7 +2572,7 @@ export default function App({ flow = "vendor" }) {
 
   const renderCompose = () => (
     <>
-      {showInput ? (
+      {showJobIntake ? (
         <>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
             <ModelSelector
@@ -2902,7 +3009,6 @@ export default function App({ flow = "vendor" }) {
               </div>
             </div>
           </div>
-          
           {error && <p style={{ color: "var(--error-text)" }}>{error}</p>}
           {documentSaveNotice && (
             <p
@@ -2920,6 +3026,21 @@ export default function App({ flow = "vendor" }) {
           )}
 
           <div style={{ marginTop: 20, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <button
+              type="button"
+              onClick={handleStartAutocomplete}
+              disabled={!jobText || !jobTitle.trim()}
+              style={{
+                padding: "10px 20px",
+                backgroundColor: !jobText || !jobTitle.trim() ? "var(--header-bg)" : "#0d9488",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: !jobText || !jobTitle.trim() ? "not-allowed" : "pointer",
+              }}
+            >
+              Start autocomplete
+            </button>
             <button
               onClick={handleSubmit}
               disabled={loading || !jobText || !jobTitle.trim() || selectedVendors.size === 0}
@@ -3008,7 +3129,7 @@ export default function App({ flow = "vendor" }) {
           }}
         >
           <button
-            onClick={resetForm}
+            onClick={goBackToJobIntake}
             style={{
               padding: "8px 16px",
               backgroundColor: "var(--button-bg)",
@@ -3018,7 +3139,7 @@ export default function App({ flow = "vendor" }) {
               cursor: "pointer",
             }}
           >
-            ← Back to Input
+            ← Back to job details
           </button>
           <button
             type="button"
@@ -3382,6 +3503,29 @@ export default function App({ flow = "vendor" }) {
     </>
   );
 
+  const renderAutocompleteView = () => (
+    <>
+      <div style={{ marginBottom: 12 }}>
+        <button
+          type="button"
+          onClick={() => navigate("/")}
+          style={{
+            padding: "8px 16px",
+            backgroundColor: "var(--button-bg)",
+            color: "var(--button-text)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "4px",
+            cursor: "pointer",
+          }}
+        >
+          ← Back to job details
+        </button>
+      </div>
+      {error && <p style={{ color: "var(--error-text)" }}>{error}</p>}
+      <AutocompleteFlow {...autocompleteContextProps} />
+    </>
+  );
+
   return (
     <div
       style={{
@@ -3391,6 +3535,45 @@ export default function App({ flow = "vendor" }) {
         minHeight: "100vh",
       }}
     >
+      {costTrackingError && (
+        <div
+          role="alert"
+          style={{
+            marginBottom: 12,
+            padding: "10px 14px",
+            backgroundColor: "var(--error-bg, #fef2f2)",
+            border: "1px solid var(--error-border, #fecaca)",
+            borderRadius: 6,
+            color: "var(--error-text, #b91c1c)",
+            fontSize: 13,
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 12,
+            alignItems: "flex-start",
+          }}
+        >
+          <span>
+            <strong>Cost tracking unavailable:</strong> {costTrackingError}
+          </span>
+          <button
+            type="button"
+            onClick={() => setCostTrackingError(null)}
+            style={{
+              flexShrink: 0,
+              border: "none",
+              background: "transparent",
+              color: "inherit",
+              cursor: "pointer",
+              fontSize: 16,
+              lineHeight: 1,
+            }}
+            aria-label="Dismiss cost tracking warning"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       <div style={{ position: "relative", marginBottom: 12 }}>
         <div
           style={{
@@ -3414,7 +3597,6 @@ export default function App({ flow = "vendor" }) {
             <AppVersionLabel />
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            {/* NOTE: Flow (vendor vs agentic) is fixed per page load—no switching. Compose/vendor/agentic are not buttons. */}
             <button
               onClick={() => setShowStyleBlade(true)}
               style={{
@@ -3480,7 +3662,7 @@ export default function App({ flow = "vendor" }) {
       </div>
 
       {/* Main content is always the flow (compose). AI Instructions, CV, Previous Examples, Settings, Costs are overlays. */}
-      {renderCompose()}
+      {flow === "autocomplete" ? renderAutocompleteView() : renderCompose()}
 
       <OverlayPanel title="Your CV" isOpen={showCvOverlay} onClose={() => setShowCvOverlay(false)}>
         <PersonalDataPage />

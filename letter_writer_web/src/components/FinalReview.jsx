@@ -130,17 +130,6 @@ export default function FinalReview({
         marginTop: 20,
       }}
     >
-      {/* Sidebar: Job Description */}
-      <JobDescriptionColumn
-        jobText={jobText}
-        requirements={requirements}
-        competences={competences}
-        scaleConfig={competenceScaleConfig}
-        overrides={competenceOverrides}
-        width="350px"
-        languages={enabledLanguages}
-      />
-
       {/* Main Content: Final Letter */}
       <div
         style={{
@@ -280,6 +269,16 @@ export default function FinalReview({
           spellCheck={true}
         />
       </div>
+
+      <JobDescriptionColumn
+        jobText={jobText}
+        requirements={requirements}
+        competences={competences}
+        scaleConfig={competenceScaleConfig}
+        overrides={competenceOverrides}
+        width="350px"
+        languages={enabledLanguages}
+      />
     </div>
   );
 }

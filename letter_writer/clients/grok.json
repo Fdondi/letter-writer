@@ -12,7 +12,8 @@
     "letter_plan": "grok-4.20-multi-agent-0309",
     "letter_draft": "grok-4.20-multi-agent-0309",
     "letter_refine": "grok-4.20-multi-agent-0309",
-    "agentic": "grok-4-1-fast-non-reasoning"
+    "agentic": "grok-4-1-fast-non-reasoning",
+    "autocomplete": "grok-4-1-fast-non-reasoning"
   },
   "models": {
     "grok-4-1-fast-non-reasoning": {

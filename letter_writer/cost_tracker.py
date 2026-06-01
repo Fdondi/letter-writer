@@ -31,6 +31,9 @@ _redis_available = None  # None = not checked yet, True/False = checked
 # BigQuery client (lazy-loaded)
 _bigquery_client = None
 _bigquery_lock = threading.Lock()
+_bigquery_table_verified = False
+_last_bigquery_error: Optional[str] = None
+_last_bigquery_error_lock = threading.Lock()
 
 # In-memory fallback storage (thread-safe)
 _memory_lock = threading.Lock()
@@ -61,6 +64,44 @@ FLUSH_INTERVAL = int(os.environ.get("COST_FLUSH_INTERVAL_SECONDS", 1800))
 BIGQUERY_PROJECT = os.environ.get("BIGQUERY_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
 BIGQUERY_DATASET = os.environ.get("BIGQUERY_DATASET", "letter_writer")
 BIGQUERY_TABLE = os.environ.get("BIGQUERY_TABLE", "api_costs")
+
+
+def _is_network_error(exc: BaseException) -> bool:
+    """True when the failure is likely transient connectivity (not missing config)."""
+    msg = str(exc).lower()
+    if "network is unreachable" in msg or "failed to establish a new connection" in msg:
+        return True
+    if "max retries exceeded" in msg and ("oauth2.googleapis.com" in msg or "bigquery.googleapis.com" in msg):
+        return True
+    name = type(exc).__name__
+    return name in ("ConnectionError", "TransportError", "NewConnectionError", "MaxRetryError")
+
+
+def _record_bigquery_error(exc: BaseException) -> str:
+    """Store the latest BigQuery connectivity error for operators and API consumers."""
+    global _last_bigquery_error
+    message = str(exc).strip() or type(exc).__name__
+    with _last_bigquery_error_lock:
+        _last_bigquery_error = message
+    logger.warning("BigQuery error recorded: %s", message)
+    return message
+
+
+def get_last_bigquery_error() -> Optional[str]:
+    with _last_bigquery_error_lock:
+        return _last_bigquery_error
+
+
+def _clear_bigquery_error() -> None:
+    global _last_bigquery_error
+    with _last_bigquery_error_lock:
+        _last_bigquery_error = None
+
+
+def _cost_unavailable(error: str, **extra: Any) -> Dict[str, Any]:
+    """Structured failure — do not imply total_cost is zero when analytics are down."""
+    return {"error": error, "cost_available": False, **extra}
+
 
 # Mapping from JSON filename (stem) to vendor display name for model pricing API
 _CLIENT_JSON_VENDORS = {
@@ -218,10 +259,12 @@ def _get_bigquery_client():
             logger.info(f"Connected to BigQuery project: {BIGQUERY_PROJECT}")
             return _bigquery_client
             
-        except ImportError:
+        except ImportError as e:
+            _record_bigquery_error(e)
             logger.warning("google-cloud-bigquery not installed. BigQuery flush disabled.")
             return None
         except Exception as e:
+            _record_bigquery_error(e)
             logger.warning(f"BigQuery not available: {e}")
             return None
 
@@ -231,12 +274,18 @@ def _ensure_bigquery_table():
     
     Schema is defined in bigquery_schema.py for version control.
     """
+    global _bigquery_table_verified
+
+    if _bigquery_table_verified:
+        return True
+
     client = _get_bigquery_client()
     if client is None:
         return False
     
     try:
         from google.cloud import bigquery
+        from google.api_core import exceptions as gcp_exceptions
         from .bigquery_schema import get_bigquery_schema, TABLE_CONFIG
         
         table_id = f"{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}"
@@ -244,9 +293,16 @@ def _ensure_bigquery_table():
         # Check if table exists
         try:
             client.get_table(table_id)
+            _bigquery_table_verified = True
+            _clear_bigquery_error()
             return True
-        except Exception:
+        except gcp_exceptions.NotFound:
             pass  # Table doesn't exist, create it
+        except Exception as e:
+            if _is_network_error(e):
+                _record_bigquery_error(e)
+                return False
+            raise
         
         # Create dataset if needed
         dataset_id = f"{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}"
@@ -279,9 +335,12 @@ def _ensure_bigquery_table():
         client.create_table(table)
         logger.info(f"Created BigQuery table: {table_id} (partitioned by month, clustered by {', '.join(TABLE_CONFIG['clustering'])})")
         
+        _bigquery_table_verified = True
+        _clear_bigquery_error()
         return True
         
     except Exception as e:
+        _record_bigquery_error(e)
         logger.error(f"Error ensuring BigQuery table: {e}")
         return False
 
@@ -317,8 +376,11 @@ def _periodic_flush_worker():
         
         try:
             logger.info("Periodic cost flush triggered")
-            flush_costs_to_bigquery()
+            result = flush_costs_to_bigquery()
+            if result.get("status") == "error":
+                logger.error("Periodic cost flush failed: %s", result.get("error"))
         except Exception as e:
+            _record_bigquery_error(e)
             logger.error(f"Error in periodic cost flush: {e}")
 
 
@@ -579,11 +641,15 @@ def get_cost_summary() -> Dict[str, Any]:
     if redis_client is not None:
         summary = _get_summary_from_redis(redis_client)
         logger.debug("Cost summary (Redis): pending_cost=%.4f pending_requests=%s", summary.get("pending_cost", 0), summary.get("pending_requests", 0))
-        return summary
     else:
         summary = _get_summary_from_memory()
         logger.debug("Cost summary (memory): pending_cost=%.4f pending_requests=%s", summary.get("pending_cost", 0), summary.get("pending_requests", 0))
-        return summary
+
+    last_error = get_last_bigquery_error()
+    if last_error:
+        summary = dict(summary)
+        summary["last_bigquery_error"] = last_error
+    return summary
 
 
 def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
@@ -600,13 +666,15 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
     """
     client = _get_bigquery_client()
     if client is None:
-        logger.debug("get_user_monthly_cost: BigQuery not available, returning 0 for user_id=%s", user_id)
-        return {"error": "BigQuery not available", "total_cost": 0.0}
+        err = get_last_bigquery_error() or "BigQuery not configured or client unavailable"
+        logger.warning("get_user_monthly_cost: BigQuery unavailable for user_id=%s: %s", user_id, err)
+        return _cost_unavailable(err)
     
     # Ensure table exists before querying
     if not _ensure_bigquery_table():
-        logger.warning("get_user_monthly_cost: BigQuery table not available for user_id=%s", user_id)
-        return {"error": "BigQuery table not available", "total_cost": 0.0}
+        err = get_last_bigquery_error() or "BigQuery table not available"
+        logger.warning("get_user_monthly_cost: %s (user_id=%s)", err, user_id)
+        return _cost_unavailable(err)
     
     try:
         from google.cloud import bigquery
@@ -715,8 +783,10 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
         for row in vendor_phase_results:
             by_vendor_phase.setdefault(row.vendor, {})[row.phase] = float(row.total_cost or 0)
 
+        _clear_bigquery_error()
         logger.debug("get_user_monthly_cost: user_id=%s months_back=%s total_cost=%.4f from BigQuery", user_id, months_back, total_cost)
         return {
+            "cost_available": True,
             "user_id": user_id,
             "period_months": months_back,
             "total_cost": total_cost,
@@ -730,8 +800,9 @@ def get_user_monthly_cost(user_id: str, months_back: int = 1) -> Dict[str, Any]:
         }
         
     except Exception as e:
-        logger.error("get_user_monthly_cost failed: user_id=%s error=%s", user_id, e)
-        return {"error": str(e), "total_cost": 0.0}
+        msg = _record_bigquery_error(e)
+        logger.error("get_user_monthly_cost failed: user_id=%s error=%s", user_id, msg)
+        return _cost_unavailable(msg)
 
 
 def get_global_monthly_cost(months_back: int = 1) -> Dict[str, Any]:
@@ -745,11 +816,11 @@ def get_global_monthly_cost(months_back: int = 1) -> Dict[str, Any]:
     """
     client = _get_bigquery_client()
     if client is None:
-        return {"error": "BigQuery not available", "total_cost": 0.0}
+        return _cost_unavailable(get_last_bigquery_error() or "BigQuery not available")
     
     # Ensure table exists before querying
     if not _ensure_bigquery_table():
-        return {"error": "BigQuery table not available", "total_cost": 0.0}
+        return _cost_unavailable(get_last_bigquery_error() or "BigQuery table not available")
     
     try:
         from google.cloud import bigquery
@@ -790,7 +861,9 @@ def get_global_monthly_cost(months_back: int = 1) -> Dict[str, Any]:
                 "unique_users": row.unique_users
             }
         
+        _clear_bigquery_error()
         return {
+            "cost_available": True,
             "period_months": months_back,
             "total_cost": total_cost,
             "total_requests": total_requests,
@@ -798,8 +871,9 @@ def get_global_monthly_cost(months_back: int = 1) -> Dict[str, Any]:
         }
         
     except Exception as e:
-        logger.error(f"Error querying BigQuery for global costs: {e}")
-        return {"error": str(e), "total_cost": 0.0}
+        msg = _record_bigquery_error(e)
+        logger.error(f"Error querying BigQuery for global costs: {msg}")
+        return _cost_unavailable(msg)
 
 
 def get_user_daily_costs(user_id: str, months_back: int = 1) -> Dict[str, Any]:
@@ -814,11 +888,11 @@ def get_user_daily_costs(user_id: str, months_back: int = 1) -> Dict[str, Any]:
     """
     client = _get_bigquery_client()
     if client is None:
-        return {"error": "BigQuery not available", "days": []}
+        return _cost_unavailable(get_last_bigquery_error() or "BigQuery not available", days=[])
     
     # Ensure table exists before querying
     if not _ensure_bigquery_table():
-        return {"error": "BigQuery table not available", "days": []}
+        return _cost_unavailable(get_last_bigquery_error() or "BigQuery table not available", days=[])
     
     try:
         from google.cloud import bigquery
@@ -857,15 +931,18 @@ def get_user_daily_costs(user_id: str, months_back: int = 1) -> Dict[str, Any]:
                 "cost_per_letter": (day_cost / letter_count) if letter_count else None,
             })
         
+        _clear_bigquery_error()
         return {
+            "cost_available": True,
             "user_id": user_id,
             "period_months": months_back,
             "days": days,
         }
         
     except Exception as e:
-        logger.error(f"Error querying BigQuery for daily costs: {e}")
-        return {"error": str(e), "days": []}
+        msg = _record_bigquery_error(e)
+        logger.error(f"Error querying BigQuery for daily costs: {msg}")
+        return _cost_unavailable(msg, days=[])
 
 
 def get_user_today_cost(user_id: str) -> float:
@@ -978,13 +1055,15 @@ def flush_costs_to_bigquery(reset_after_flush: bool = True, save_completing_user
     
     client = _get_bigquery_client()
     if client is None:
-        logger.warning("Cost flush failed: BigQuery not available (rows_pending=%s)", len(pending_requests))
-        return {"status": "error", "error": "BigQuery not available", "rows_pending": len(pending_requests)}
+        err = get_last_bigquery_error() or "BigQuery not available"
+        logger.warning("Cost flush failed: %s (rows_pending=%s)", err, len(pending_requests))
+        return {"status": "error", "error": err, "rows_pending": len(pending_requests)}
     
     try:
         # Ensure table exists
         if not _ensure_bigquery_table():
-            return {"status": "error", "error": "Failed to create BigQuery table"}
+            err = get_last_bigquery_error() or "Failed to create or reach BigQuery table"
+            return {"status": "error", "error": err, "rows_pending": len(pending_requests)}
         
         # Prepare rows for insertion
         table_id = f"{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}"
@@ -1024,6 +1103,7 @@ def flush_costs_to_bigquery(reset_after_flush: bool = True, save_completing_user
             }
         
         total_cost = sum(r["cost"] for r in rows_to_insert)
+        _clear_bigquery_error()
         logger.info("Cost flush success: rows_inserted=%s total_cost=%.4f", len(rows_to_insert), total_cost)
         
         # Reset counters after successful flush
@@ -1042,8 +1122,9 @@ def flush_costs_to_bigquery(reset_after_flush: bool = True, save_completing_user
         }
         
     except Exception as e:
-        logger.error("Cost flush failed: %s (rows_pending=%s)", e, len(pending_requests))
-        return {"status": "error", "error": str(e), "rows_pending": len(pending_requests)}
+        err = _record_bigquery_error(e)
+        logger.error("Cost flush failed: %s (rows_pending=%s)", err, len(pending_requests))
+        return {"status": "error", "error": err, "rows_pending": len(pending_requests)}
 
 
 def flush_on_letter_completion(user_id: str) -> Dict[str, Any]:

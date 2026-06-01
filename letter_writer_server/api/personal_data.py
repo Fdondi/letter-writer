@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from letter_writer_server.core.session import Session, get_session
 from letter_writer.firestore_store import get_user_data, get_personal_data_document, update_user_data_cache
 from letter_writer.generation import get_style_instructions, get_search_instructions, get_structure_instructions as get_default_structure_instructions
+from letter_writer.autocomplete_core import get_autocomplete_role_defaults, normalize_autocomplete_model_list
 from letter_writer.personal_data_sections import (
     get_cv_revisions,
     get_extra_info,
@@ -13,6 +14,12 @@ from letter_writer.personal_data_sections import (
     get_models,
     get_background_models,
     get_agentic_draft_model,
+    get_autocomplete_max_words,
+    get_autocomplete_stop_on_period,
+    get_autocomplete_models,
+    get_autocomplete_ctrl_letter_map,
+    get_autocomplete_shift_letter_map,
+    get_autocomplete_last_used_model,
     unwrap_for_response,
     wrap_new_field,
 )
@@ -260,6 +267,13 @@ async def get_personal_data(session: Session = Depends(get_session)):
         "agentic_draft_model": agentic_draft_model,
         "min_column_width": min_column_width,
         "structure_instructions": get_user_structure_instructions(user_data),
+        "autocomplete_max_words": get_autocomplete_max_words(user_data),
+        "autocomplete_stop_on_period": get_autocomplete_stop_on_period(user_data),
+        "autocomplete_models": get_autocomplete_models(user_data),
+        "autocomplete_ctrl_letter_map": get_autocomplete_ctrl_letter_map(user_data),
+        "autocomplete_shift_letter_map": get_autocomplete_ctrl_letter_map(user_data),
+        "autocomplete_role_defaults": get_autocomplete_role_defaults(),
+        "autocomplete_last_used_model": get_autocomplete_last_used_model(user_data),
     }
 
 @router.post("/personal-data/")
@@ -335,6 +349,58 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             val = data["agentic_draft_model"]
             stored = (val or "").strip() if isinstance(val, str) else (str(val).strip() if val is not None else None)
             updates["agentic_draft_model"] = wrap_new_field("agentic_draft_model", stored or None, now)
+
+        if "autocomplete_max_words" in data:
+            try:
+                n = int(data["autocomplete_max_words"])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="autocomplete_max_words must be an integer")
+            updates["autocomplete_max_words"] = wrap_new_field(
+                "autocomplete_max_words", max(1, min(100, n)), now
+            )
+
+        if "autocomplete_stop_on_period" in data:
+            updates["autocomplete_stop_on_period"] = wrap_new_field(
+                "autocomplete_stop_on_period", bool(data["autocomplete_stop_on_period"]), now
+            )
+
+        if "autocomplete_models" in data:
+            raw_models = data["autocomplete_models"]
+            if not isinstance(raw_models, list):
+                raise HTTPException(status_code=400, detail="autocomplete_models must be a list")
+            cleaned = normalize_autocomplete_model_list([str(m or "") for m in raw_models])
+            updates["autocomplete_models"] = wrap_new_field("autocomplete_models", cleaned, now)
+
+        ctrl_map_key = None
+        raw_map = None
+        if "autocomplete_ctrl_letter_map" in data:
+            ctrl_map_key = "autocomplete_ctrl_letter_map"
+            raw_map = data["autocomplete_ctrl_letter_map"]
+        elif "autocomplete_shift_letter_map" in data:
+            ctrl_map_key = "autocomplete_ctrl_letter_map"
+            raw_map = data["autocomplete_shift_letter_map"]
+        if ctrl_map_key and raw_map is not None:
+            if not isinstance(raw_map, dict):
+                raise HTTPException(status_code=400, detail="autocomplete_ctrl_letter_map must be an object")
+            from letter_writer.autocomplete_core import normalize_autocomplete_model_key
+
+            cleaned_map: Dict[str, str] = {}
+            for letter, model in raw_map.items():
+                key = str(letter or "").strip().upper()[:1]
+                val = str(model or "").strip()
+                if not key or not val:
+                    continue
+                normalized = normalize_autocomplete_model_key(val)
+                if normalized:
+                    cleaned_map[key] = normalized
+            updates[ctrl_map_key] = wrap_new_field(ctrl_map_key, cleaned_map, now)
+
+        if "autocomplete_last_used_model" in data:
+            val = data["autocomplete_last_used_model"]
+            stored = (val or "").strip() if isinstance(val, str) else (str(val).strip() if val is not None else None)
+            updates["autocomplete_last_used_model"] = wrap_new_field(
+                "autocomplete_last_used_model", stored or None, now
+            )
             
         if "style_instructions" in data:
             updates["style"] = wrap_new_field("style", data["style_instructions"], now)
