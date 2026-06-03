@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import ModelSelector from "./components/ModelSelector";
+import VendorSelector from "./components/VendorSelector";
 import LetterTabs from "./components/LetterTabs";
 import JobDescriptionColumn from "./components/JobDescriptionColumn";
 import StyleInstructionsBlade from "./components/StyleInstructionsBlade";
@@ -21,6 +21,7 @@ import CompetencesList from "./components/CompetencesList";
 import ResearchComponent from "./components/ResearchComponent";
 import SimilarOffersCarousel from "./components/SimilarOffersCarousel";
 import AutocompleteFlow from "./components/AutocompleteFlow";
+import AutocompletePlanModelSelect from "./components/AutocompletePlanModelSelect";
 import { splitIntoParagraphs } from "./utils/split";
 import { fetchWithHeartbeat, retryApiCall, initializeCsrfToken, getCsrfToken, publishUserMonthlyCost } from "./utils/apiHelpers";
 import { COST_TRACKING_ERROR_EVENT } from "./utils/costTracking";
@@ -32,6 +33,11 @@ import { useLanguages } from "./contexts/LanguageContext";
 import { createTextDiff } from "./utils/diff";
 import { getScaleConfig, getEffectiveRating, getEffectiveImportance, buildCompetenceRatingsForProfile } from "./utils/competenceScales";
 import { mergeAgentContextFromFeedback, mergeExtraInfoFromFeedback } from "./components/phases/feedbackItemUtils";
+import {
+  buildAutocompletePlanAiLetter,
+  clearAutocompleteFlowCache,
+  sectionsToProposalText,
+} from "./utils/autocompleteEditor";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
@@ -1717,6 +1723,103 @@ export default function App({ flow = "intake" }) {
     }
   };
 
+  const persistAutocompleteLetter = async ({
+    letterText,
+    sections,
+    proposalLetterText,
+    autocompleteHistory,
+    completionModel: completionModelUsed,
+    planModel: planModelUsed,
+    planCost,
+    cycleModels: cycleModelsUsed,
+    totalCost,
+  }) => {
+    const trimmed = (letterText || "").trim();
+    if (!trimmed) {
+      const err = new Error("No letter text to save");
+      setError(err.message);
+      throw err;
+    }
+    if (!jobText?.trim()) {
+      const msg = "Job description is required to save";
+      setError(msg);
+      throw new Error(msg);
+    }
+
+    const sectionsPayload = (sections || []).map(
+      ({ id, title, description, body, plan, proposal }) => ({
+        id,
+        title: title ?? "",
+        description: description ?? "",
+        body: body ?? "",
+        plan: plan ?? "",
+        proposal: proposal ?? "",
+      })
+    );
+
+    const proposalText = (
+      proposalLetterText ||
+      sectionsToProposalText(sections) ||
+      ""
+    ).trim();
+    const planAiLetter = buildAutocompletePlanAiLetter(
+      planModelUsed,
+      proposalText,
+      planCost
+    );
+
+    const history = autocompleteHistory || { fixed_context: "", chunks: [] };
+    const payload = {
+      company_name: companyName || "",
+      role: jobTitle || "",
+      location: location || "",
+      language: language || "",
+      salary: salary || "",
+      requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
+      job_text: jobText,
+      letter_text: trimmed,
+      autocomplete_sections: sectionsPayload,
+      autocomplete_history: {
+        fixed_context: history.fixed_context || "",
+        chunks: Array.isArray(history.chunks) ? history.chunks : [],
+        completion_model: completionModelUsed || "",
+        plan_model: planModelUsed || "",
+        cycle_models: cycleModelsUsed || [],
+        total_cost: typeof totalCost === "number" ? totalCost : 0,
+      },
+    };
+    if (planAiLetter) {
+      payload.ai_letters = [planAiLetter];
+    }
+
+    const url = documentId ? `/api/documents/${documentId}/` : "/api/documents/";
+    const method = documentId ? "PUT" : "POST";
+    try {
+      setSavingFinal(true);
+      const result = await fetchWithHeartbeat(url, {
+        method,
+        body: JSON.stringify(payload),
+      });
+      const data = result.data;
+      if (!documentId && data?.document?.id) {
+        setDocumentId(data.document.id);
+      }
+      try {
+        await fetchWithHeartbeat("/api/phases/clear/", { method: "POST" });
+        setPhaseSessionId(null);
+        setPhaseSessions({});
+      } catch (clearErr) {
+        console.warn("Letter saved but failed to clear server session:", clearErr);
+      }
+    } catch (e) {
+      const errorMsg = `Failed to save letter: ${e.message || e}`;
+      setError(errorMsg);
+      throw new Error(errorMsg);
+    } finally {
+      setSavingFinal(false);
+    }
+  };
+
   // Generic retry function - takes URL, body, and result handler
   // No phase knowledge - caller provides everything
   // Returns the result data or throws on error
@@ -2537,6 +2640,7 @@ export default function App({ flow = "intake" }) {
       return;
     }
     await resetForm();
+    clearAutocompleteFlowCache();
     setJobText("");
     setCompanyName("");
     setJobTitle("");
@@ -2575,7 +2679,7 @@ export default function App({ flow = "intake" }) {
       {showJobIntake ? (
         <>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-            <ModelSelector
+            <VendorSelector
               vendors={vendors}
               selected={selectedVendors}
               onToggle={toggleVendor}
@@ -3041,6 +3145,7 @@ export default function App({ flow = "intake" }) {
             >
               Start autocomplete
             </button>
+            <AutocompletePlanModelSelect />
             <button
               onClick={handleSubmit}
               disabled={loading || !jobText || !jobTitle.trim() || selectedVendors.size === 0}
@@ -3522,7 +3627,11 @@ export default function App({ flow = "intake" }) {
         </button>
       </div>
       {error && <p style={{ color: "var(--error-text)" }}>{error}</p>}
-      <AutocompleteFlow {...autocompleteContextProps} />
+      <AutocompleteFlow
+        {...autocompleteContextProps}
+        onSaveAndCopy={persistAutocompleteLetter}
+        savingFinal={savingFinal}
+      />
     </>
   );
 

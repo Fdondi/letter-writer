@@ -117,6 +117,22 @@ export function useTranslation(languages = null) {
   }, [translations, sourceSnapshots, isTranslating]);
 
   /**
+   * Persist user edits to a cached translation (does not change source text).
+   */
+  const setFieldTranslation = useCallback((fieldId, targetLanguage, text) => {
+    if (!fieldId || !targetLanguage || targetLanguage === "source") {
+      return;
+    }
+    setTranslations((prev) => ({
+      ...prev,
+      [fieldId]: {
+        ...(prev[fieldId] || {}),
+        [targetLanguage]: text,
+      },
+    }));
+  }, []);
+
+  /**
    * Get translated text for a field, or return source if not translated
    */
   const getTranslatedText = useCallback((fieldId, sourceText) => {
@@ -147,6 +163,7 @@ export function useTranslation(languages = null) {
     setFieldViewLanguage,
     languages: effectiveLanguages,
     translateField,
+    setFieldTranslation,
     getTranslatedText,
     hasTranslation,
     resetFieldTranslation,

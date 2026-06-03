@@ -2,7 +2,9 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useLanguages } from "../contexts/LanguageContext";
 import LanguageConfig from "./LanguageConfig";
 import CompetenceScaleSettings from "./CompetenceScaleSettings";
+import ModelPickSelector from "./ModelPickSelector";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
+import { buildGroupedModels } from "../utils/modelPicker";
 
 export default function SettingsPage({
   vendors = [],
@@ -21,12 +23,11 @@ export default function SettingsPage({
   const [availableModels, setAvailableModels] = useState({}); // { vendor: { model: { input: ..., output: ... } } }
   const [minColumnWidth, setMinColumnWidth] = useState(200); // pixels
   const [savingColumnWidth, setSavingColumnWidth] = useState(false);
-  const [agenticDraftModel, setAgenticDraftModel] = useState(""); // vendor key for per-topic agentic draft; empty = use first default model
+  const [agenticDraftModel, setAgenticDraftModel] = useState(""); // composite vendor/model[@effort]; empty = first default model
   const [savingAgenticDraftModel, setSavingAgenticDraftModel] = useState(false);
   const [autocompleteMaxWords, setAutocompleteMaxWords] = useState(20);
   const [autocompleteStopOnPeriod, setAutocompleteStopOnPeriod] = useState(true);
   const [autocompleteModels, setAutocompleteModels] = useState(new Set());
-  const [autocompleteShiftMap, setAutocompleteShiftMap] = useState({});
   const [savingAutocomplete, setSavingAutocomplete] = useState(false);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -39,7 +40,7 @@ export default function SettingsPage({
         
         // Fetch available models
         try {
-            const modelsRes = await fetch("/api/costs/models/?supports_search=true");
+            const modelsRes = await fetch("/api/costs/models/");
             if (modelsRes.ok) {
                 const modelsData = await modelsRes.json();
                 setAvailableModels(modelsData || {});
@@ -93,9 +94,6 @@ export default function SettingsPage({
             setAutocompleteModels(new Set(data.autocomplete_models));
           } else if (data.default_models?.length) {
             setAutocompleteModels(new Set(data.default_models));
-          }
-          if (data.autocomplete_shift_letter_map && typeof data.autocomplete_shift_letter_map === "object") {
-            setAutocompleteShiftMap(data.autocomplete_shift_letter_map);
           }
         }
       } catch (e) {
@@ -210,7 +208,6 @@ export default function SettingsPage({
           autocomplete_max_words: autocompleteMaxWords,
           autocomplete_stop_on_period: autocompleteStopOnPeriod,
           autocomplete_models: Array.from(autocompleteModels),
-          autocomplete_shift_letter_map: autocompleteShiftMap,
         }),
       });
     } catch (e) {
@@ -288,23 +285,24 @@ export default function SettingsPage({
     setDefaultModels(new Set(vendors));
   };
 
-  // Group available models for display, building correct composite IDs using vendor_key from API
-  const { groupedModels, validModelIds } = useMemo(() => {
+  const { grouped, groupedModels, validModelIds } = useMemo(() => {
+    const { grouped: allGrouped } = buildGroupedModels(availableModels);
     const grouped = {};
     const valid = new Set();
     if (availableModels) {
       Object.entries(availableModels).forEach(([vendorLabel, models]) => {
-        if (Array.isArray(models) && models.length > 0) {
-          const vendorKey = models[0].vendor_key || vendorLabel.toLowerCase().replace(/\s+/g, '');
-          grouped[vendorLabel] = models.map(m => {
-            const compositeId = `${m.vendor_key || vendorKey}/${m.id}`;
-            valid.add(compositeId);
-            return { id: compositeId, name: m.name, vendorLabel };
-          });
-        }
+        if (!Array.isArray(models) || models.length === 0) return;
+        const searchable = models.filter((m) => m.supports_search);
+        if (searchable.length === 0) return;
+        const vendorKey = searchable[0].vendor_key || vendorLabel.toLowerCase().replace(/\s+/g, "");
+        grouped[vendorLabel] = searchable.map((m) => {
+          const compositeId = `${m.vendor_key || vendorKey}/${m.id}`;
+          valid.add(compositeId);
+          return { id: compositeId, name: m.name, vendorLabel };
+        });
       });
     }
-    return { groupedModels: grouped, validModelIds: valid };
+    return { grouped: allGrouped, groupedModels: grouped, validModelIds: valid };
   }, [availableModels]);
 
   // Clean up stale/broken background model IDs (e.g. "google/..." instead of "gemini/...")
@@ -529,7 +527,7 @@ export default function SettingsPage({
           </button>
         </div>
         <p style={{ marginTop: 0, marginBottom: 15, fontSize: 14, color: "var(--secondary-text-color)" }}>
-          Tab completion uses job + CV context. Shift+Tab cycles models. Map Ctrl+letter to a vendor/model below.
+          Tab completion uses job + CV context. Choose which vendors appear in the autocomplete model list.
         </p>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 16, marginBottom: 16, alignItems: "center" }}>
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: "var(--text-color)" }}>
@@ -553,7 +551,7 @@ export default function SettingsPage({
           </label>
         </div>
         <div style={{ marginBottom: 12, fontSize: 13, fontWeight: 600, color: "var(--text-color)" }}>
-          Models for Tab / Shift+Tab cycle
+          Autocomplete vendors
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
           {vendors.map((v) => (
@@ -572,44 +570,6 @@ export default function SettingsPage({
               />
               {v}
             </label>
-          ))}
-        </div>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "var(--text-color)" }}>
-          Shift + letter shortcuts
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {["A", "B", "C", "D", "E", "F", "G", "H"].map((letter) => (
-            <div key={letter} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ width: 24, fontWeight: 600, fontSize: 13 }}>Shift+{letter}</span>
-              <select
-                value={autocompleteShiftMap[letter] || ""}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setAutocompleteShiftMap((prev) => {
-                    const next = { ...prev };
-                    if (val) next[letter] = val;
-                    else delete next[letter];
-                    return next;
-                  });
-                }}
-                style={{
-                  padding: "4px 8px",
-                  fontSize: 13,
-                  border: "1px solid var(--border-color)",
-                  borderRadius: 4,
-                  background: "var(--input-bg)",
-                  color: "var(--text-color)",
-                  minWidth: 140,
-                }}
-              >
-                <option value="">—</option>
-                {vendors.map((v) => (
-                  <option key={v} value={v}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </div>
           ))}
         </div>
       </div>
@@ -662,27 +622,48 @@ export default function SettingsPage({
         >
           Model used to write the draft in the per-topic (agentic) flow. If unset, the first selected default model is used.
         </p>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <select
-            value={agenticDraftModel}
-            onChange={(e) => setAgenticDraftModel(e.target.value)}
-            style={{
-              padding: "8px 12px",
-              fontSize: "14px",
-              border: "1px solid var(--border-color)",
-              borderRadius: "4px",
-              backgroundColor: "var(--input-bg)",
-              color: "var(--text-color)",
-              minWidth: 160,
-            }}
-          >
-            <option value="">Use first default model</option>
-            {vendors.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+          <label style={{ fontSize: 13, color: "var(--secondary-text-color)" }}>
+            <input
+              type="checkbox"
+              checked={!agenticDraftModel}
+              onChange={(e) => {
+                if (e.target.checked) setAgenticDraftModel("");
+              }}
+              style={{ marginRight: 6 }}
+            />
+            Use first default model
+          </label>
+          {agenticDraftModel ? (
+            <ModelPickSelector
+              value={agenticDraftModel}
+              grouped={grouped}
+              onChange={(_v, _m, _e, composite) => setAgenticDraftModel(composite)}
+              selectStyle={{ fontSize: 14, padding: "8px 12px" }}
+              style={{ width: "100%", maxWidth: 520 }}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                const firstVendor = vendors[0] || Object.keys(grouped)[0];
+                if (firstVendor && grouped[firstVendor]?.[0]) {
+                  setAgenticDraftModel(grouped[firstVendor][0].composite);
+                }
+              }}
+              style={{
+                padding: "6px 12px",
+                fontSize: 13,
+                border: "1px solid var(--border-color)",
+                borderRadius: 4,
+                background: "var(--input-bg)",
+                color: "var(--text-color)",
+                cursor: "pointer",
+              }}
+            >
+              Choose specific model…
+            </button>
+          )}
         </div>
       </div>
 

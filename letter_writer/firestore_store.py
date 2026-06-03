@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import math
 from typing import Any, Dict, Iterable, List, Optional, Union, cast
 from uuid import uuid4
 
@@ -218,6 +219,109 @@ def _to_utc_datetime(dt_or_str_or_timestamp):
     return None
 
 
+def _firestore_safe_value(value: Any) -> Any:
+    """Normalize values so Firestore accepts them (no nested arrays, no NaN/Inf).
+
+    Firestore arrays cannot contain other arrays; map fields inside array elements may
+    still hold arrays. Event logs and autocomplete history often embed nested lists from
+    the client — inner lists are stored as JSON strings.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int,)):
+        return value
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
+    if isinstance(value, datetime):
+        return _to_utc_datetime(value) or value
+    if isinstance(value, Vector):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _firestore_safe_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        out: List[Any] = []
+        for item in value:
+            safe = _firestore_safe_value(item)
+            if isinstance(safe, list):
+                out.append(json.dumps(safe, ensure_ascii=False))
+            else:
+                out.append(safe)
+        return out
+    return str(value)
+
+
+def _prepare_autocomplete_sections(sections: Optional[List[Any]]) -> List[dict]:
+    prepared: List[dict] = []
+    for sec in sections or []:
+        if not isinstance(sec, dict):
+            continue
+        prepared.append(
+            {
+                "id": str(sec.get("id") or ""),
+                "title": str(sec.get("title") or ""),
+                "description": str(sec.get("description") or ""),
+                "body": str(sec.get("body") or ""),
+                "plan": str(sec.get("plan") or ""),
+                "proposal": str(sec.get("proposal") or ""),
+            }
+        )
+    return prepared
+
+
+def _prepare_autocomplete_history(history: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not history or not isinstance(history, dict):
+        return None
+    chunks_in = history.get("chunks")
+    chunks_out: List[dict] = []
+    if isinstance(chunks_in, list):
+        for chunk in chunks_in:
+            if not isinstance(chunk, dict):
+                continue
+            rejected_raw = chunk.get("rejected")
+            rejected: List[str] = []
+            if isinstance(rejected_raw, list):
+                for r in rejected_raw:
+                    if isinstance(r, str):
+                        rejected.append(r)
+                    elif r is not None:
+                        rejected.append(str(r))
+            elif isinstance(rejected_raw, str) and rejected_raw:
+                rejected = [rejected_raw]
+            cost = chunk.get("cost")
+            if isinstance(cost, float) and (math.isnan(cost) or math.isinf(cost)):
+                cost = None
+            chunks_out.append(
+                {
+                    "text": str(chunk.get("text") or ""),
+                    "accepted": str(chunk.get("accepted") or ""),
+                    "rejected": rejected,
+                    "model": chunk.get("model") if chunk.get("model") is not None else None,
+                    "cost": cost if isinstance(cost, (int, float)) else None,
+                }
+            )
+    cycle_models = history.get("cycle_models")
+    cycle_list: List[str] = []
+    if isinstance(cycle_models, list):
+        cycle_list = [str(m) for m in cycle_models if m is not None and str(m).strip()]
+    total_cost = history.get("total_cost")
+    if isinstance(total_cost, float) and (math.isnan(total_cost) or math.isinf(total_cost)):
+        total_cost = 0
+    return {
+        "fixed_context": str(history.get("fixed_context") or ""),
+        "chunks": chunks_out,
+        "completion_model": str(history.get("completion_model") or ""),
+        "plan_model": str(history.get("plan_model") or ""),
+        "cycle_models": cycle_list,
+        "total_cost": float(total_cost) if isinstance(total_cost, (int, float)) else 0,
+    }
+
+
 def _prepare_ai_letters(ai_letters: Optional[List[dict]]) -> List[dict]:
     """Normalize AI/negative letters for storage."""
     now = datetime.now(timezone.utc)
@@ -320,7 +424,12 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
         if not doc_id:
             doc_id = str(uuid4())
     
-    ai_letters = _prepare_ai_letters(data.get("ai_letters"))
+    if "ai_letters" in data:
+        ai_letters = _prepare_ai_letters(data.get("ai_letters"))
+    elif dedupe_existing_data:
+        ai_letters = dedupe_existing_data.get("ai_letters") or []
+    else:
+        ai_letters = _prepare_ai_letters(data.get("ai_letters"))
     requirements = data.get("requirements")
     if isinstance(requirements, list):
         requirements_value = requirements
@@ -381,6 +490,8 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
         "letter_text": (data.get("letter_text") or "").strip(),
         "negative_letter_text": (data.get("negative_letter_text") or "").strip() if data.get("negative_letter_text") else None,
         "blocks": data.get("blocks") or [],
+        "autocomplete_sections": _prepare_autocomplete_sections(data.get("autocomplete_sections")),
+        "autocomplete_history": _prepare_autocomplete_history(data.get("autocomplete_history")),
         "ai_letters": ai_letters,
         "notes": data.get("notes"),
         "version": version,
@@ -401,11 +512,9 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
     # Store vector if provided (for vector search)
     if "vector" in data:
         base["vector"] = data["vector"]
-
-    base = firestore_safe_for_write(base)
-
-    # Upsert document
-    doc_ref.set(base, merge=effective_allow_update)
+    
+    # Upsert document (sanitize nested lists / invalid floats from client + event log payloads)
+    doc_ref.set(_firestore_safe_value(base), merge=effective_allow_update)
     
     # Get the stored document
     stored_doc = doc_ref.get()

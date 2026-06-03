@@ -225,20 +225,28 @@ def get_autocomplete_models(user_data: Dict[str, Any]) -> List[str]:
 
 
 def get_autocomplete_ctrl_letter_map(user_data: Dict[str, Any]) -> Dict[str, str]:
-    from letter_writer.autocomplete_core import derive_ctrl_letter_map_from_models
+    from letter_writer.autocomplete_core import (
+        get_autocomplete_role_defaults,
+        merge_ctrl_letter_map,
+    )
 
-    return derive_ctrl_letter_map_from_models(get_autocomplete_models(user_data))
+    models = get_autocomplete_models(user_data)
+    stored: Any = None
+    raw = user_data.get("autocomplete_ctrl_letter_map")
+    if raw is not None:
+        stored = unwrap_for_response("autocomplete_ctrl_letter_map", raw)
+    if not isinstance(stored, dict):
+        raw_legacy = user_data.get("autocomplete_shift_letter_map")
+        if raw_legacy is not None:
+            stored = unwrap_for_response("autocomplete_shift_letter_map", raw_legacy)
+    if not isinstance(stored, dict):
+        stored = {}
+    return merge_ctrl_letter_map(models, stored, get_autocomplete_role_defaults())
 
 
 def get_autocomplete_shift_letter_map(user_data: Dict[str, Any]) -> Dict[str, str]:
     """Legacy alias for autocomplete_ctrl_letter_map."""
     return get_autocomplete_ctrl_letter_map(user_data)
-
-
-def get_autocomplete_last_used_model(user_data: Dict[str, Any]) -> Optional[str]:
-    raw = user_data.get("autocomplete_last_used_model")
-    out = unwrap_for_response("autocomplete_last_used_model", raw) if raw is not None else None
-    return (out or "").strip() or None
 
 
 def get_autocomplete_plan_model(user_data: Dict[str, Any]) -> Optional[str]:
@@ -258,11 +266,22 @@ def get_autocomplete_plan_model(user_data: Dict[str, Any]) -> Optional[str]:
             return normalized
     return default_autocomplete_plan_model(get_autocomplete_plan_role_defaults())
 
+def _base_composite_model_id(model_id: str) -> str:
+    """Strip optional @thinking suffix from vendor/model composite ids."""
+    mid = str(model_id or "").strip()
+    if "/" not in mid:
+        return mid
+    vendor, rest = mid.split("/", 1)
+    model_part = rest.rsplit("@", 1)[0] if "@" in rest else rest
+    return f"{vendor}/{model_part}"
+
+
 def _validate_model_ids(model_ids: List[str]) -> List[str]:
     """Filter out model IDs with invalid vendor prefixes (e.g. 'google/...' instead of 'gemini/...')."""
     valid = []
     for mid in model_ids:
-        vendor = mid.split("/", 1)[0] if "/" in mid else mid
+        base = _base_composite_model_id(mid)
+        vendor = base.split("/", 1)[0] if "/" in base else base
         if vendor in VALID_VENDOR_KEYS:
             valid.append(mid)
         else:
@@ -285,7 +304,7 @@ def get_background_models(user_data: Dict[str, Any]) -> List[str]:
                 for vendor_models in searchable_models.values()
                 for m in vendor_models
             }
-            models = [mid for mid in models if mid in searchable_ids]
+            models = [mid for mid in models if _base_composite_model_id(mid) in searchable_ids]
         except Exception as e:
             logger.warning("Failed to validate background models against searchable list: %s", e)
     return models if models else list(DEFAULT_BACKGROUND_MODELS)

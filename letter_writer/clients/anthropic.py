@@ -1,5 +1,6 @@
 import json
 from .base import BaseClient, ModelRole
+from .model_override import apply_model_override_thinking
 from anthropic import Anthropic
 from typing import List, Dict, Any, Optional, FrozenSet
 import typer
@@ -159,8 +160,7 @@ class ClaudeClient(BaseClient):
     ) -> str:
         messages = self._format_messages(user_messages, cache_prefix=cache_prefix)
         if isinstance(model_role, str):
-            model = model_role
-            thinking_cfg: dict = {}
+            model, thinking_cfg = apply_model_override_thinking("anthropic", model_role)
         else:
             model = self.get_model_for_role(model_role)
             thinking_cfg = self.get_thinking_config(model_role)

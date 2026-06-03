@@ -1,9 +1,8 @@
 import React from 'react';
 import { render, screen, act } from '@testing-library/react';
-import { DndProvider } from 'react-dnd';
 import { TestBackend } from 'react-dnd-test-backend';
 import LetterTabs from '../LetterTabs';
-import { HoverProvider } from '../../contexts/HoverContext';
+import { AllTestProviders } from '../../utils/__tests__/testUtils';
 
 // DnD test utilities
 const utils = {
@@ -22,19 +21,12 @@ const utils = {
   }
 };
 
-// Test wrapper with all necessary providers
-const TestWrapper = ({ children, ...props }) => {
-  const backend = TestBackend;
-  
-  return (
-    <DndProvider backend={backend}>
-      <HoverProvider>
-        <LetterTabs {...props} />
-        {children}
-      </HoverProvider>
-    </DndProvider>
-  );
-};
+const TestWrapper = ({ children, ...props }) => (
+  <AllTestProviders backend={TestBackend}>
+    <LetterTabs {...props} />
+    {children}
+  </AllTestProviders>
+);
 
 const mockVendorParagraphs = {
   openai: [
@@ -78,11 +70,9 @@ describe('Drag and Drop Integration Tests', () => {
     backend = testBackend;
 
     return render(
-      <DndProvider backend={testBackend}>
-        <HoverProvider>
-          <LetterTabs {...defaultProps} setFinalParagraphs={mockSetFinalParagraphs} {...props} />
-        </HoverProvider>
-      </DndProvider>
+      <AllTestProviders backend={testBackend}>
+        <LetterTabs {...defaultProps} setFinalParagraphs={mockSetFinalParagraphs} {...props} />
+      </AllTestProviders>
     );
   };
 

@@ -10,6 +10,18 @@ global.fetch = jest.fn((input, init) => {
       text: () => Promise.resolve('1.0.0'),
     });
   }
+  if (String(url).includes('/api/personal-data/')) {
+    return Promise.resolve({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          default_languages: [
+            { code: 'en', label: 'English', color: '#3b82f6', enabled: true },
+            { code: 'de', label: 'German', color: '#6366f1', enabled: true },
+          ],
+        }),
+    });
+  }
   if (typeof __origFetch === 'function') {
     return __origFetch(input, init);
   }

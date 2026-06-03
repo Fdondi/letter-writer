@@ -1,6 +1,7 @@
 {
   "defaults": {
-    "search": 10.00
+    "search": 10.00,
+    "thinking_efforts": ["off", "low", "medium", "high", "max"]
   },
   "roles": {
     "extraction":       { "model": "claude-haiku-4-5",  "thinking": false },

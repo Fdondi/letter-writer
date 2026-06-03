@@ -6,6 +6,7 @@ import typer
 from langsmith import traceable
 
 from .base import BaseClient, ModelRole, merge_system_cache_prefix_into_system
+from .model_override import apply_model_override_thinking
 
 genai: Any = None
 types: Any = None
@@ -151,8 +152,7 @@ class GeminiClient(BaseClient):
             tools = []
 
         if isinstance(model_role, str):
-            model_name = model_role
-            thinking_cfg: dict = {}
+            model_name, thinking_cfg = apply_model_override_thinking("gemini", model_role)
         else:
             model_name = self.get_model_for_role(model_role)
             thinking_cfg = self.get_thinking_config(model_role)

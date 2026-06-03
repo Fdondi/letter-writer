@@ -1,9 +1,7 @@
 import React from 'react';
 import { render, screen, act } from '@testing-library/react';
-import { DndProvider } from 'react-dnd';
-import { TestBackend } from 'react-dnd-test-backend';
 import LetterTabs from '../LetterTabs';
-import { HoverProvider } from '../../contexts/HoverContext';
+import { AllTestProviders, getSaveCopyButton } from '../../utils/__tests__/testUtils';
 
 /**
  * FOCUSED LOGIC TESTS WITH PROPER DND CONTEXT
@@ -12,14 +10,11 @@ import { HoverProvider } from '../../contexts/HoverContext';
  * WITH the necessary DnD provider context that the component requires.
  */
 
-// Wrapper WITH DnD provider (required for LetterTabs component)
 const TestWrapper = ({ children, ...props }) => (
-  <DndProvider backend={TestBackend}>
-    <HoverProvider>
-      <LetterTabs {...props} />
-      {children}
-    </HoverProvider>
-  </DndProvider>
+  <AllTestProviders>
+    <LetterTabs {...props} />
+    {children}
+  </AllTestProviders>
 );
 
 describe('LetterTabs Core Logic Tests', () => {
@@ -246,7 +241,7 @@ describe('LetterTabs Core Logic Tests', () => {
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
       // Find and click the copy button
-      const copyButton = screen.getByText('📋 Copy All');
+      const copyButton = getSaveCopyButton();
       expect(copyButton).toBeInTheDocument();
 
       act(() => {
@@ -273,7 +268,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('📋 Copy All');
+      const copyButton = getSaveCopyButton();
       
       act(() => {
         copyButton.click();
@@ -300,7 +295,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('📋 Copy All');
+      const copyButton = getSaveCopyButton();
       
       act(() => {
         copyButton.click();
@@ -334,7 +329,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('📋 Copy All');
+      const copyButton = getSaveCopyButton();
       
       act(() => {
         copyButton.click();
@@ -367,7 +362,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('📋 Copy All');
+      const copyButton = getSaveCopyButton();
       
       act(() => {
         copyButton.click();
@@ -393,7 +388,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('📋 Copy All');
+      const copyButton = getSaveCopyButton();
       
       act(() => {
         copyButton.click();
@@ -419,7 +414,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('📋 Copy All');
+      const copyButton = getSaveCopyButton();
       
       act(() => {
         copyButton.click();
@@ -434,7 +429,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('📋 Copy All');
+      const copyButton = getSaveCopyButton();
       expect(copyButton).toBeDisabled();
     });
 
@@ -450,35 +445,17 @@ describe('LetterTabs Core Logic Tests', () => {
         },
       });
 
-      // Mock alert to avoid actual alert dialog
-      const mockAlert = jest.fn();
-      window.alert = mockAlert;
-
-      // Temporarily suppress the expected console.error for this test
-      const originalConsoleError = console.error;
-      console.error = jest.fn();
-
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('📋 Copy All');
-      
+      const copyButton = getSaveCopyButton();
+
       await act(async () => {
         copyButton.click();
-        // Wait for the promise rejection to be handled
-        await new Promise(resolve => setTimeout(resolve, 0));
+        await new Promise((resolve) => setTimeout(resolve, 0));
       });
 
-      // Should attempt to copy
       expect(mockWriteText).toHaveBeenCalledWith('Test paragraph');
-      
-      // Should show error to user
-      expect(mockAlert).toHaveBeenCalledWith('Failed to copy text to clipboard');
-      
-      // Should log the error
-      expect(console.error).toHaveBeenCalledWith('Failed to copy text:', expect.any(Error));
-      
-      // Restore console.error
-      console.error = originalConsoleError;
+      expect(screen.getByText('Clipboard access denied')).toBeInTheDocument();
     });
 
     test('copyFinalText preserves exact order after drag and drop operations', () => {
@@ -506,7 +483,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={reorderedParagraphs} />);
 
-      const copyButton = screen.getByText('📋 Copy All');
+      const copyButton = getSaveCopyButton();
       
       act(() => {
         copyButton.click();

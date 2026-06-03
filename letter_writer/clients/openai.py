@@ -1,4 +1,5 @@
 from .base import BaseClient, ModelRole, merge_system_cache_prefix_into_system
+from .model_override import apply_model_override_thinking
 from openai import OpenAI
 from typing import List, Dict, Any, Optional
 import typer
@@ -27,8 +28,7 @@ class OpenAIClient(BaseClient):
         system_prompt = merge_system_cache_prefix_into_system(system, system_cache_prefix)
         messages = self._format_messages(system_prompt, user_messages)
         if isinstance(model_role, str):
-            model = model_role
-            thinking_cfg: dict = {}
+            model, thinking_cfg = apply_model_override_thinking("openai", model_role)
         else:
             model = self.get_model_for_role(model_role)
             thinking_cfg = self.get_thinking_config(model_role)

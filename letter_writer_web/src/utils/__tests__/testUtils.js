@@ -1,29 +1,42 @@
 import React from 'react';
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { DndProvider } from 'react-dnd';
 import { TestBackend } from 'react-dnd-test-backend';
 import { HoverProvider } from '../../contexts/HoverContext';
+import { LanguageProvider } from '../../contexts/LanguageContext';
+
+/**
+ * DnD + hover + language context (matches production app shell).
+ */
+/** Save & Copy / Copy button in LetterTabs final column header. */
+export function getSaveCopyButton() {
+  return screen.getByRole('button', { name: /^(Save & Copy|Copy)$/ });
+}
+
+export function AllTestProviders({ children, backend = TestBackend }) {
+  return (
+    <DndProvider backend={backend}>
+      <LanguageProvider>
+        <HoverProvider>{children}</HoverProvider>
+      </LanguageProvider>
+    </DndProvider>
+  );
+}
 
 /**
  * Custom render function that includes all necessary providers for testing
- * components that use drag and drop and hover context
+ * components that use drag and drop, hover, and language context
  */
 export const renderWithProviders = (ui, options = {}) => {
-  const backend = TestBackend;
-  
-  const AllProviders = ({ children }) => {
-    return (
-      <DndProvider backend={backend}>
-        <HoverProvider>
-          {children}
-        </HoverProvider>
-      </DndProvider>
-    );
-  };
+  const backend = options.backend || TestBackend;
+
+  const Wrapper = ({ children }) => (
+    <AllTestProviders backend={backend}>{children}</AllTestProviders>
+  );
 
   return {
     backend,
-    ...render(ui, { wrapper: AllProviders, ...options })
+    ...render(ui, { wrapper: Wrapper, ...options }),
   };
 };
 

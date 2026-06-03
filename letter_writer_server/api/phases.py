@@ -748,7 +748,9 @@ def agentic_draft(data: AgenticDraftRequest, request: Request, session: Session 
         agentic_draft = get_agentic_draft_model(user_data)
         default_models = get_models(user_data)
         if agentic_draft:
-            draft_vendor = agentic_draft
+            from letter_writer.clients.model_override import vendor_key_from_model_selector
+
+            draft_vendor = vendor_key_from_model_selector(agentic_draft) or agentic_draft
         elif isinstance(default_models, list) and len(default_models) > 0:
             draft_vendor = default_models[0]
         else:

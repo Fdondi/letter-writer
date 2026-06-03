@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
+import ModelPickSelector from "./ModelPickSelector";
+import { buildGroupedModels } from "../utils/modelPicker";
 
 export default function ResearchComponent({
   type, // "company" or "poc"
@@ -16,7 +18,8 @@ export default function ResearchComponent({
   const [error, setError] = useState(null);
   const [selectedVendor, setSelectedVendor] = useState(null);
   const [isOpen, setIsOpen] = useState(false);
-  const [allModels, setAllModels] = useState(null); // { vendorLabel: [{ id, name, vendor_key }] }
+  const [allModels, setAllModels] = useState(null);
+  const [retryModel, setRetryModel] = useState("");
 
   // Fetch available models on mount
   useEffect(() => {
@@ -26,33 +29,10 @@ export default function ResearchComponent({
       .catch(() => {});
   }, []);
 
-  // Build flat list of all models with composite IDs
-  const modelOptions = useMemo(() => {
-    if (!allModels) return [];
-    const options = [];
-    Object.entries(allModels).forEach(([vendorLabel, models]) => {
-      if (!Array.isArray(models)) return;
-      models.forEach((m) => {
-        const vendorKey = m.vendor_key || vendorLabel.toLowerCase().replace(/\s+/g, "");
-        options.push({
-          id: `${vendorKey}/${m.id}`,
-          name: m.name,
-          vendorLabel,
-        });
-      });
-    });
-    return options;
-  }, [allModels]);
-
-  // Group model options by vendor for the optgroup dropdown
-  const groupedOptions = useMemo(() => {
-    const groups = {};
-    modelOptions.forEach((m) => {
-      if (!groups[m.vendorLabel]) groups[m.vendorLabel] = [];
-      groups[m.vendorLabel].push(m);
-    });
-    return groups;
-  }, [modelOptions]);
+  const { grouped: groupedModels } = useMemo(
+    () => buildGroupedModels(allModels || {}),
+    [allModels]
+  );
 
   // Trigger effect — only fire when externalTrigger changes (not on every query keystroke)
   useEffect(() => {
@@ -193,32 +173,32 @@ export default function ResearchComponent({
             {loading ? "Researching..." : "Start Research"}
           </button>
         ) : (
-          <select
-            value=""
-            disabled={loading || !(query || "").trim()}
-            onChange={(e) => {
-              const modelId = e.target.value;
-              if (modelId) handleRetryWithModel(modelId);
-            }}
-            style={{
-              fontSize: "12px",
-              padding: "2px 6px",
-              border: "1px solid var(--border-color)",
-              borderRadius: 4,
-              backgroundColor: loading ? "var(--disabled-bg)" : "var(--input-bg)",
-              color: "var(--text-color)",
-              cursor: loading ? "default" : "pointer",
-            }}
-          >
-            <option value="">{loading ? `Running ${loadingModel || "..."}` : "Run with model..."}</option>
-            {Object.entries(groupedOptions).map(([vendorLabel, models]) => (
-              <optgroup key={vendorLabel} label={vendorLabel}>
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <ModelPickSelector
+              value={retryModel}
+              grouped={groupedModels}
+              onChange={(_v, _m, _e, composite) => setRetryModel(composite)}
+              selectStyle={{ fontSize: 12, padding: "2px 6px", flex: "1 1 140px" }}
+              style={{ flex: "1 1 auto", minWidth: 0 }}
+            />
+            <button
+              type="button"
+              disabled={loading || !(query || "").trim() || !retryModel}
+              onClick={() => handleRetryWithModel(retryModel)}
+              style={{
+                padding: "4px 10px",
+                fontSize: 12,
+                backgroundColor: loading ? "var(--disabled-bg)" : "var(--button-bg)",
+                color: "var(--button-text)",
+                border: "1px solid var(--border-color)",
+                borderRadius: 4,
+                cursor: loading || !retryModel ? "default" : "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {loading ? `Running ${loadingModel || "..."}` : "Run"}
+            </button>
+          </div>
         )}
       </div>
 

@@ -125,6 +125,32 @@ def _parse_price_field(val: Any) -> float:
     return 0.0
 
 
+def _model_reasoning_efforts(
+    vendor_key: str,
+    model_cfg: Dict[str, Any],
+    defaults: Dict[str, Any],
+) -> List[str]:
+    """Normalized reasoning/thinking options for the model picker UI."""
+    if vendor_key == "openai":
+        raw = model_cfg.get("reasoning_efforts") or defaults.get("reasoning_efforts") or []
+        return [str(x) for x in raw] if isinstance(raw, list) else []
+    if vendor_key == "gemini":
+        raw = model_cfg.get("thinking_levels") or defaults.get("thinking_levels") or []
+        if not isinstance(raw, list):
+            return []
+        out: List[str] = []
+        for x in raw:
+            if x is None or str(x).strip().lower() in ("", "none", "null"):
+                out.append("none")
+            else:
+                out.append(str(x))
+        return out
+    if vendor_key == "anthropic":
+        raw = model_cfg.get("thinking_efforts") or defaults.get("thinking_efforts") or []
+        return [str(x) for x in raw] if isinstance(raw, list) else []
+    return []
+
+
 def _supports_search(vendor_key: str, model_id: str, model_cfg: Dict[str, Any], default_search: float) -> bool:
     """Best-effort capability flag for model-level web search support."""
     if vendor_key == "deepseeek":
@@ -177,6 +203,7 @@ def get_all_model_pricing(search_only: bool = False) -> Dict[str, List[Dict[str,
                 continue
             # Humanize model id for display: "claude-haiku-4-5" -> "Claude Haiku 4-5"
             name = model_id.replace("-", " ").title()
+            reasoning_efforts = _model_reasoning_efforts(vendor_key, model_cfg, defaults)
             models.append({
                 "id": model_id,
                 "name": name,
@@ -184,6 +211,7 @@ def get_all_model_pricing(search_only: bool = False) -> Dict[str, List[Dict[str,
                 "input": round(input_price, 2),
                 "output": round(output_price, 2),
                 "supports_search": supports_search,
+                "reasoning_efforts": reasoning_efforts,
             })
         if models:
             result[vendor_label] = models

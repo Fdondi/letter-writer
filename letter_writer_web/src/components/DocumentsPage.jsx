@@ -440,7 +440,9 @@ export default function DocumentsPage() {
               ) : (
                 (selected.ai_letters || []).map((l, idx) => (
                   <div key={idx} style={{ marginBottom: 16 }}>
-                    <div style={{ fontWeight: 600 }}>{l.vendor || "unknown"}</div>
+                    <div style={{ fontWeight: 600 }}>
+                      {l.model || l.vendor || "unknown"}
+                    </div>
                     <pre
                       style={{
                         whiteSpace: "pre-wrap",

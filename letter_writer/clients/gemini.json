@@ -1,7 +1,8 @@
 {
   "defaults": {
     "search": 0.0,
-    "threshold": 200000
+    "threshold": 200000,
+    "thinking_levels": ["none", "Low", "Medium", "High"]
   },
   "roles": {
     "extraction":       { "model": "gemini-2.5-flash-lite", "thinking_level": null },

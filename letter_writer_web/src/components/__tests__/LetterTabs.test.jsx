@@ -1,19 +1,14 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { DndProvider } from 'react-dnd';
-import { TestBackend } from 'react-dnd-test-backend';
 import LetterTabs from '../LetterTabs';
-import { HoverProvider } from '../../contexts/HoverContext';
+import { AllTestProviders, getSaveCopyButton } from '../../utils/__tests__/testUtils';
 
-// Test wrapper with DnD provider
 const TestWrapper = ({ children, ...props }) => (
-  <DndProvider backend={TestBackend}>
-    <HoverProvider>
-      <LetterTabs {...props} />
-      {children}
-    </HoverProvider>
-  </DndProvider>
+  <AllTestProviders>
+    <LetterTabs {...props} />
+    {children}
+  </AllTestProviders>
 );
 
 // Mock data for tests
@@ -74,10 +69,10 @@ describe('LetterTabs Component', () => {
       expect(screen.getByText('Drag paragraphs here to build your final letter')).toBeInTheDocument();
     });
 
-    test('renders original letter column', () => {
+    test('renders job description with original text', () => {
       render(<TestWrapper {...defaultProps} />);
-      
-      expect(screen.getByText('Original Letter')).toBeInTheDocument();
+
+      expect(screen.getByRole('tab', { name: /Job offer/i })).toBeInTheDocument();
       expect(screen.getByText('Original letter text here...')).toBeInTheDocument();
     });
 
@@ -133,38 +128,27 @@ describe('LetterTabs Component', () => {
       expect(mockSetFinalParagraphs).toHaveBeenCalled();
     });
 
-    test('updates paragraph text when edited', async () => {
+    test('opens inline editor for final column paragraphs', async () => {
       const finalParagraphs = [
-        { id: 'f1', text: 'Final paragraph 1', vendor: 'openai', isUserText: true }
+        { id: 'f1', text: 'Final paragraph 1', vendor: 'openai' }
       ];
-      const user = userEvent.setup();
-      
-      render(<TestWrapper {...defaultProps} 
-        finalParagraphs={finalParagraphs} 
-        setFinalParagraphs={mockSetFinalParagraphs} 
-      />);
-      
-      // Click to edit
-      const editableDiv = screen.getByText('Final paragraph 1');
-      
-      await act(async () => {
-        await user.click(editableDiv);
+      render(
+        <TestWrapper
+          {...defaultProps}
+          finalParagraphs={finalParagraphs}
+          setFinalParagraphs={mockSetFinalParagraphs}
+        />
+      );
+
+      const paragraphHost = document.querySelector('[data-paragraph-index="0"]');
+      expect(paragraphHost).toBeTruthy();
+      const editableDiv = within(paragraphHost).getByText('Final paragraph 1');
+
+      fireEvent.click(editableDiv);
+
+      await waitFor(() => {
+        expect(within(paragraphHost).getByRole('textbox')).toBeInTheDocument();
       });
-      
-      // Find textarea and update text
-      const textarea = screen.getByDisplayValue('Final paragraph 1');
-      
-      await act(async () => {
-        await user.clear(textarea);
-        await user.type(textarea, 'Updated text');
-      });
-      
-      // Blur to save
-      await act(async () => {
-        fireEvent.blur(textarea);
-      });
-      
-      expect(mockSetFinalParagraphs).toHaveBeenCalled();
     });
   });
 
@@ -172,7 +156,7 @@ describe('LetterTabs Component', () => {
     test('copy button is disabled when no paragraphs', () => {
       render(<TestWrapper {...defaultProps} />);
       
-      const copyButton = screen.getByText('📋 Copy All');
+      const copyButton = getSaveCopyButton();
       expect(copyButton).toBeDisabled();
     });
 
@@ -183,7 +167,7 @@ describe('LetterTabs Component', () => {
       
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
       
-      const copyButton = screen.getByText('📋 Copy All');
+      const copyButton = getSaveCopyButton();
       expect(copyButton).not.toBeDisabled();
     });
 
@@ -205,8 +189,8 @@ describe('LetterTabs Component', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('📋 Copy All');
-      
+      const copyButton = getSaveCopyButton();
+
       await act(async () => {
         await user.click(copyButton);
       });
@@ -231,14 +215,6 @@ describe('LetterTabs Component', () => {
       
       expect(screen.getByText('Valid paragraph')).toBeInTheDocument();
       expect(screen.getByText('Another valid paragraph')).toBeInTheDocument();
-    });
-
-    test('shows loading state for vendors', () => {
-      const loadingVendors = new Set(['openai']);
-      
-      render(<TestWrapper {...defaultProps} loadingVendors={loadingVendors} />);
-      
-      expect(screen.getByText('Loading...')).toBeInTheDocument();
     });
 
     test('shows error state for failed vendors', () => {

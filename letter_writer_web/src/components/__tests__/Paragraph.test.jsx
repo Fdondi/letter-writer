@@ -1,19 +1,14 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { DndProvider } from 'react-dnd';
-import { TestBackend } from 'react-dnd-test-backend';
 import Paragraph from '../Paragraph';
-import { HoverProvider } from '../../contexts/HoverContext';
+import { AllTestProviders } from '../../utils/__tests__/testUtils';
 
-// Test wrapper with DnD provider
 const TestWrapper = ({ children, ...props }) => (
-  <DndProvider backend={TestBackend}>
-    <HoverProvider>
-      <Paragraph {...props} />
-      {children}
-    </HoverProvider>
-  </DndProvider>
+  <AllTestProviders>
+    <Paragraph {...props} />
+    {children}
+  </AllTestProviders>
 );
 
 const mockParagraph = {
@@ -49,10 +44,6 @@ describe('Paragraph Component', () => {
       const textElement = screen.getByText('This is a test paragraph');
       const paragraphElement = textElement.closest('div');
       const outerDiv = paragraphElement.parentElement;
-      
-      console.log('Text element:', textElement.tagName);
-      console.log('Closest div style:', paragraphElement.getAttribute('style'));
-      console.log('Parent element style:', outerDiv?.getAttribute('style'));
       
       // The background should be on the container div
       const containerStyle = outerDiv?.getAttribute('style') || paragraphElement.getAttribute('style');
@@ -235,23 +226,23 @@ describe('Paragraph Component', () => {
       expect(textDiv).toHaveStyle('user-select: text');
     });
 
-    test('exits copy mode on mouse leave', async () => {
+    test('exits copy mode on Escape key', async () => {
       const user = userEvent.setup();
-      
+
       render(<TestWrapper {...defaultProps} />);
-      
+
       const paragraphElement = screen.getByText('This is a test paragraph').closest('div');
-      
+
       await act(async () => {
         await user.dblClick(paragraphElement);
       });
-      
+
       expect(screen.getByText('copy mode')).toBeInTheDocument();
-      
+
       await act(async () => {
-        fireEvent.mouseLeave(paragraphElement);
+        fireEvent.keyDown(document, { key: 'Escape' });
       });
-      
+
       await waitFor(() => {
         expect(screen.queryByText('copy mode')).not.toBeInTheDocument();
       });

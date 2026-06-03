@@ -1,9 +1,8 @@
 import React from 'react';
 import { render, screen, act } from '@testing-library/react';
-import { DndProvider } from 'react-dnd';
 import { TestBackend } from 'react-dnd-test-backend';
 import LetterTabs from '../LetterTabs';
-import { HoverProvider } from '../../contexts/HoverContext';
+import { AllTestProviders } from '../../utils/__tests__/testUtils';
 
 /**
  * FOCUSED DRAG AND DROP INDEX MANAGEMENT TESTS
@@ -30,12 +29,10 @@ const mockVendorParagraphs = {
 };
 
 const TestWrapper = ({ children, backend, ...props }) => (
-  <DndProvider backend={backend}>
-    <HoverProvider>
-      <LetterTabs {...props} />
-      {children}
-    </HoverProvider>
-  </DndProvider>
+  <AllTestProviders backend={backend}>
+    <LetterTabs {...props} />
+    {children}
+  </AllTestProviders>
 );
 
 describe('Drag and Drop Index Management', () => {
