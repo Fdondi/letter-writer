@@ -1,5 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { clearOAuthRedirectCooldown } from "../utils/googleOAuthRedirect";
+import {
+  AUTH_SESSION_RESTORED_EVENT,
+  reportSessionExpired,
+} from "../utils/authSession.js";
 
 /**
  * Simple Google OAuth account button.
@@ -18,15 +22,14 @@ export default function AuthButton() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    // Fetch current user info (we know user is authenticated since this component is rendered)
+  const loadUser = useCallback(() => {
+    setLoading(true);
     fetch("/api/auth/user/", {
       credentials: "include",
     })
       .then((res) => {
         if (res.status === 401) {
-          // Session expired - redirect to login (App.jsx should handle this, but as fallback)
-          window.location.href = "/login";
+          reportSessionExpired();
           return null;
         }
         return res.json();
@@ -35,8 +38,7 @@ export default function AuthButton() {
         if (data && data.user) {
           setUser(data.user);
         } else if (data && data.authenticated === false) {
-          // Session expired - redirect to login
-          window.location.href = "/login";
+          reportSessionExpired();
         }
         setLoading(false);
       })
@@ -45,6 +47,13 @@ export default function AuthButton() {
         setLoading(false);
       });
   }, []);
+
+  useEffect(() => {
+    loadUser();
+    const onRestored = () => loadUser();
+    window.addEventListener(AUTH_SESSION_RESTORED_EVENT, onRestored);
+    return () => window.removeEventListener(AUTH_SESSION_RESTORED_EVENT, onRestored);
+  }, [loadUser]);
 
   const handleLogout = async () => {
     console.log("Logout button clicked - starting logout...");

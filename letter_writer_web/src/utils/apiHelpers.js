@@ -3,6 +3,7 @@
  */
 
 import { publishCostTrackingSignals } from "./costTracking.js";
+import { reportSessionExpired } from "./authSession.js";
 
 // Cache CSRF token to avoid fetching it on every request
 let csrfToken = null;
@@ -130,9 +131,8 @@ export async function fetchWithHeartbeat(url, options = {}, restoreConfig = null
   
   // Handle 401 Unauthorized (authentication required)
   if (res.status === 401) {
-    // Do not navigate here. App's mount effect already sends users to Google when unauthenticated.
-    // Parallel 401s (e.g. phases/init, personal-data via fetchWithHeartbeat) would otherwise double
-    // the OAuth request even in a single tab. Callers may prompt re-login; user can refresh.
+    // Surface expiry once; App shows SessionExpiredModal and keeps in-memory state.
+    reportSessionExpired();
     if (typeof window !== "undefined" && window.location.pathname !== "/login") {
       return Promise.reject(new Error("Unauthorized"));
     }

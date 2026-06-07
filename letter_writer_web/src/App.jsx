@@ -17,6 +17,7 @@ import AppVersionLabel from "./components/AppVersionLabel";
 import CostDisplay from "./components/CostDisplay";
 import CostsPage from "./components/CostsPage";
 import LocalPricingWarningModal, { dismissLocalPricingWarningForSession } from "./components/LocalPricingWarningModal.jsx";
+import SessionExpiredModal from "./components/SessionExpiredModal.jsx";
 import CompetencesList from "./components/CompetencesList";
 import ResearchComponent from "./components/ResearchComponent";
 import SimilarOffersCarousel from "./components/SimilarOffersCarousel";
@@ -26,6 +27,14 @@ import { splitIntoParagraphs } from "./utils/split";
 import { fetchWithHeartbeat, retryApiCall, initializeCsrfToken, getCsrfToken, publishUserMonthlyCost } from "./utils/apiHelpers";
 import { COST_TRACKING_ERROR_EVENT } from "./utils/costTracking";
 import { scheduleGoogleOAuthRedirect, clearOAuthRedirectCooldown } from "./utils/googleOAuthRedirect";
+import {
+  AUTH_SESSION_EXPIRED_EVENT,
+  AUTH_SESSION_RESTORED_EVENT,
+  fetchAuthStatus,
+  markInitialAuthCheckComplete,
+  reportSessionExpired,
+} from "./utils/authSession.js";
+import { syncStateToServer } from "./utils/localState.js";
 import { showNotification } from "./utils/apiNotifications";
 import { phases as phaseModules } from "./components/phases";
 import { translateText } from "./utils/translate";
@@ -59,6 +68,8 @@ export default function App({ flow = "intake" }) {
   // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState(null); // null = checking, true = authenticated, false = not authenticated
   const [checkingAuth, setCheckingAuth] = useState(true); // Start checking on mount
+  const [showSessionExpiredModal, setShowSessionExpiredModal] = useState(false);
+  const [authRefreshGeneration, setAuthRefreshGeneration] = useState(0);
 
   // All other state hooks (must be before conditional returns)
   const [vendors, setVendors] = useState([]);
@@ -381,12 +392,14 @@ export default function App({ flow = "intake" }) {
         if (data.authenticated) {
           clearOAuthRedirectCooldown();
           setIsAuthenticated(true);
+          markInitialAuthCheckComplete(true);
           // Initialize CSRF token after authentication is confirmed
           // This ensures the token is available for subsequent API calls
           initializeCsrfToken().catch((e) => {
             console.warn("Failed to initialize CSRF token after auth:", e);
           });
         } else {
+          markInitialAuthCheckComplete(false);
           scheduleGoogleOAuthRedirect();
           setIsAuthenticated(false);
         }
@@ -394,6 +407,7 @@ export default function App({ flow = "intake" }) {
       })
       .catch((e) => {
         console.error("Failed to check auth status:", e);
+        markInitialAuthCheckComplete(false);
         scheduleGoogleOAuthRedirect();
         setIsAuthenticated(false);
         setCheckingAuth(false);
@@ -417,6 +431,56 @@ export default function App({ flow = "intake" }) {
       phaseRegistry: phaseRegistryRef.current,
     };
   }, [jobText, extractedData]);
+
+  useEffect(() => {
+    const onExpired = () => setShowSessionExpiredModal(true);
+    const onRestored = () => {
+      setShowSessionExpiredModal(false);
+      setAuthRefreshGeneration((g) => g + 1);
+    };
+    window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, onExpired);
+    window.addEventListener(AUTH_SESSION_RESTORED_EVENT, onRestored);
+    return () => {
+      window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, onExpired);
+      window.removeEventListener(AUTH_SESSION_RESTORED_EVENT, onRestored);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated || checkingAuth) return;
+
+    const verifyStillAuthenticated = async () => {
+      if (document.visibilityState && document.visibilityState !== "visible") return;
+      try {
+        const status = await fetchAuthStatus();
+        if (!status.authenticated) {
+          reportSessionExpired();
+        }
+      } catch (e) {
+        console.warn("Auth status check failed:", e);
+      }
+    };
+
+    document.addEventListener("visibilitychange", verifyStillAuthenticated);
+    window.addEventListener("focus", verifyStillAuthenticated);
+    return () => {
+      document.removeEventListener("visibilitychange", verifyStillAuthenticated);
+      window.removeEventListener("focus", verifyStillAuthenticated);
+    };
+  }, [isAuthenticated, checkingAuth]);
+
+  useEffect(() => {
+    if (authRefreshGeneration === 0) return;
+
+    initializeCsrfToken().catch((e) => {
+      console.warn("Failed to refresh CSRF token after re-auth:", e);
+    });
+
+    const state = getStateForRestore();
+    syncStateToServer(state).catch((e) => {
+      console.warn("Failed to sync local state to server after re-auth:", e);
+    });
+  }, [authRefreshGeneration, getStateForRestore]);
 
   // Update colors when system theme changes
   useEffect(() => {
@@ -749,6 +813,7 @@ export default function App({ flow = "intake" }) {
 
   // Load minimum column width from settings (vendors endpoint handles active/inactive)
   useEffect(() => {
+    if (!isAuthenticated) return;
     fetch("/api/personal-data/", {
       credentials: 'include',
     })
@@ -769,10 +834,11 @@ export default function App({ flow = "intake" }) {
       .catch((e) => {
         console.warn("Failed to load settings:", e);
       });
-  }, []);
+  }, [isAuthenticated, authRefreshGeneration]);
 
   // Fetch vendors on mount (GET request, no CSRF header needed)
   useEffect(() => {
+    if (!isAuthenticated) return;
     fetch("/api/vendors/", {
       credentials: 'include', // Include cookies for session
     })
@@ -790,7 +856,7 @@ export default function App({ flow = "intake" }) {
         }
       })
       .catch((e) => setError(String(e)));
-  }, []);
+  }, [isAuthenticated, authRefreshGeneration]);
 
   // Rehydrate only on actual browser reload/back-forward, never on in-app route changes.
   // Also only rehydrate while the local form is still pristine to avoid overwriting new input.
@@ -3800,6 +3866,8 @@ export default function App({ flow = "intake" }) {
         dismissChecked={localPricingDismissChecked}
         onDismissCheckedChange={setLocalPricingDismissChecked}
       />
+
+      <SessionExpiredModal isOpen={showSessionExpiredModal} />
 
       {/* Floating toggle to assembly while still in phases (after first refinement ready) */}
       {!showInput && ((flow === "vendor" && vendorStage !== "assembly" && hasVendorAssembly) || (flow === "agentic" && agenticStage !== "assembly" && hasAgenticAssembly)) && (

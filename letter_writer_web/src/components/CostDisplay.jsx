@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { USER_MONTHLY_COST_EVENT } from "../utils/apiHelpers";
 import { COST_TRACKING_ERROR_EVENT, parseApiErrorDetail } from "../utils/costTracking";
+import { AUTH_SESSION_RESTORED_EVENT, reportSessionExpired } from "../utils/authSession.js";
 
 /**
  * Displays the user's total API cost for the current month.
@@ -33,11 +34,15 @@ export default function CostDisplay({ onNavigate }) {
       }
     };
 
+    const onSessionRestored = () => fetchCost();
+
     window.addEventListener(USER_MONTHLY_COST_EVENT, handleCostUpdate);
     window.addEventListener(COST_TRACKING_ERROR_EVENT, handleCostError);
+    window.addEventListener(AUTH_SESSION_RESTORED_EVENT, onSessionRestored);
     return () => {
       window.removeEventListener(USER_MONTHLY_COST_EVENT, handleCostUpdate);
       window.removeEventListener(COST_TRACKING_ERROR_EVENT, handleCostError);
+      window.removeEventListener(AUTH_SESSION_RESTORED_EVENT, onSessionRestored);
     };
   }, []);
 
@@ -48,6 +53,7 @@ export default function CostDisplay({ onNavigate }) {
       });
 
       if (res.status === 401) {
+        reportSessionExpired();
         setCost(null);
         setError(null);
         setLoading(false);

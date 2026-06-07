@@ -1,3 +1,5 @@
+import { handleUnauthorizedResponse } from "./authSession.js";
+
 // Lightweight global fetch hook that increments a counter only for
 // extraction and phase card completions (not heartbeats or other API calls).
 // It is safe to call multiple times; only the first call installs the hook.
@@ -163,6 +165,7 @@ export function setupApiNotifications() {
     const url = formatUrl(args[0]);
     try {
       const res = await originalFetch(...args);
+      handleUnauthorizedResponse(res);
       bumpCounters(url, res.status);
       return res;
     } catch (err) {
