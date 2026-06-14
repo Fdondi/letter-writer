@@ -24,6 +24,7 @@
  */
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
+import ReactMarkdown from "react-markdown";
 import { phases as phaseModules } from "./phases";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
 import { useTranslation } from "../utils/useTranslation";
@@ -276,7 +277,34 @@ function PhaseSection({
   );
 }
 
-function EditableField({ label, value, minHeight = 120, placeholder, onSave, disabled = false, fieldId, translation }) {
+const planMarkdownComponents = {
+  h1: ({ children }) => (
+    <h1 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 6px", color: "#111827" }}>{children}</h1>
+  ),
+  h2: ({ children }) => (
+    <h2 style={{ fontSize: 14, fontWeight: 600, margin: "14px 0 4px", color: "#111827" }}>{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 style={{ fontSize: 13, fontWeight: 600, margin: "10px 0 4px", color: "#374151" }}>{children}</h3>
+  ),
+  p: ({ children }) => <p style={{ margin: "4px 0" }}>{children}</p>,
+  ul: ({ children }) => <ul style={{ margin: "4px 0 4px 18px", padding: 0 }}>{children}</ul>,
+  ol: ({ children }) => <ol style={{ margin: "4px 0 4px 18px", padding: 0 }}>{children}</ol>,
+  li: ({ children }) => <li style={{ margin: "2px 0" }}>{children}</li>,
+  strong: ({ children }) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
+};
+
+function EditableField({
+  label,
+  value,
+  minHeight = 120,
+  placeholder,
+  onSave,
+  disabled = false,
+  fieldId,
+  translation,
+  renderAsMarkdown = false,
+}) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value || "");
 
@@ -408,11 +436,16 @@ function EditableField({ label, value, minHeight = 120, placeholder, onSave, dis
               border: "1px solid #e5e7eb",
               borderRadius: 4,
               background: "#f9fafb",
-              whiteSpace: "pre-wrap",
+              whiteSpace: renderAsMarkdown ? "normal" : "pre-wrap",
               fontSize: 13,
+              lineHeight: 1.5,
             }}
           >
-            {displayedText}
+            {renderAsMarkdown ? (
+              <ReactMarkdown components={planMarkdownComponents}>{displayedText}</ReactMarkdown>
+            ) : (
+              displayedText
+            )}
           </div>
         </div>
       )}
@@ -1583,8 +1616,8 @@ function VendorCard({
 
 // Transform to phase-indexed structure - cards now own their state, so we just create phase objects
 // Output: phases = [{ phase: "plan", ... }, { phase: "draft", ... }, ...]
-function transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCounters, setPhaseCounters) {
-  const phaseOrder = ["plan", "draft"];
+function transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCounters, setPhaseCounters, includePlanStep = true) {
+  const phaseOrder = includePlanStep ? ["plan", "draft"] : ["draft"];
   
   // First pass: create all phase objects - cards will own their own state
   const phaseObjects = phaseOrder.map((phaseName, index) => {
@@ -1685,6 +1718,8 @@ export default function PhaseFlow({
   onEditChange,
   onApprove,
   onApproveAll,
+  /** When false, only the draft phase is shown (plan is skipped). */
+  includePlanStep = true,
   // Required for cards to make API calls
   sessionId,
   documentId = null,
@@ -1843,14 +1878,17 @@ export default function PhaseFlow({
   const phasesRef = useRef(null);
   const vendorsListLengthRef = useRef(vendorsList.length);
   const phasesSchemaVersionRef = useRef(0);
+  const includePlanStepRef = useRef(includePlanStep);
   const expandedDialogRef = useRef(null);
   
   if (
     !phasesRef.current ||
     vendorsListLengthRef.current !== vendorsList.length ||
-    phasesSchemaVersionRef.current !== PHASE_FLOW_SCHEMA_VERSION
+    phasesSchemaVersionRef.current !== PHASE_FLOW_SCHEMA_VERSION ||
+    includePlanStepRef.current !== includePlanStep
   ) {
-    phasesRef.current = transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCounters, setPhaseCounters);
+    phasesRef.current = transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCounters, setPhaseCounters, includePlanStep);
+    includePlanStepRef.current = includePlanStep;
     vendorsListLengthRef.current = vendorsList.length;
     phasesSchemaVersionRef.current = PHASE_FLOW_SCHEMA_VERSION;
     

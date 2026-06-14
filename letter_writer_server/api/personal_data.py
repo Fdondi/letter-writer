@@ -5,7 +5,8 @@ from pydantic import BaseModel
 
 from letter_writer_server.core.session import Session, get_session
 from letter_writer.firestore_store import get_user_data, get_personal_data_document, update_user_data_cache
-from letter_writer.generation import get_style_instructions, get_search_instructions, get_structure_instructions as get_default_structure_instructions
+from letter_writer.instruction_defaults import get_default_instruction
+from google.cloud.firestore import DELETE_FIELD
 from letter_writer.autocomplete_core import (
     get_autocomplete_plan_role_defaults,
     get_autocomplete_role_defaults,
@@ -27,6 +28,11 @@ from letter_writer.personal_data_sections import (
     get_autocomplete_plan_model,
     unwrap_for_response,
     wrap_new_field,
+    wrap_instruction_field,
+    get_instruction_baseline_hash,
+    get_instruction_baseline_text,
+    get_custom_instruction,
+    instruction_firestore_keys,
 )
 from letter_writer.personal_data_sections import get_style_instructions as get_user_style_instructions
 from letter_writer.personal_data_sections import get_search_instructions as get_user_search_instructions
@@ -35,6 +41,90 @@ from letter_writer.cost_tracker import get_all_model_pricing
 from datetime import datetime, timezone
 
 router = APIRouter()
+
+INSTRUCTION_SESSION_KEYS = {
+    "style": "style_instructions",
+    "structure": "structure_instructions",
+    "search": "search_instructions",
+}
+
+
+def _resolve_instruction_payload(kind: str, session: Session, user_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Effective instructions plus custom/default metadata for merge UI."""
+    user_data = user_data or {}
+    session_key = INSTRUCTION_SESSION_KEYS[kind]
+    default_text, default_hash = get_default_instruction(kind)
+
+    session_custom = (session.get(session_key) or "").strip()
+    profile_custom = get_custom_instruction(user_data, kind).strip()
+    custom = session_custom or profile_custom or None
+
+    baseline_hash = get_instruction_baseline_hash(user_data, kind) if custom else ""
+    baseline_text = get_instruction_baseline_text(user_data, kind) if custom else ""
+
+    effective = custom if custom else default_text
+    if custom and baseline_hash:
+        upstream_updated = baseline_hash != default_hash
+    elif custom:
+        # Legacy custom without a stored baseline — prompt review while it differs from default.
+        upstream_updated = custom.strip() != default_text.strip()
+    else:
+        upstream_updated = False
+
+    return {
+        "instructions": effective,
+        "custom": custom,
+        "default": default_text,
+        "baseline": baseline_text or None,
+        "default_hash": default_hash,
+        "baseline_hash": baseline_hash or None,
+        "upstream_updated": upstream_updated,
+        "is_custom": custom is not None,
+    }
+
+
+def _save_custom_instruction(
+    kind: str,
+    session: Session,
+    user_id: str,
+    instructions: str,
+    *,
+    default_hash: str,
+    default_text: str,
+) -> Dict[str, Any]:
+    session_key = INSTRUCTION_SESSION_KEYS[kind]
+    text = instructions if isinstance(instructions, str) else ""
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Instructions cannot be empty")
+
+    session[session_key] = text
+    now = datetime.utcnow()
+    primary_key = instruction_firestore_keys(kind)[0]
+    updates: Dict[str, Any] = {
+        primary_key: wrap_instruction_field(
+            text,
+            now,
+            default_baseline_hash=default_hash,
+            default_baseline_text=default_text,
+        ),
+        "updated_at": now,
+    }
+    user_doc_ref = get_personal_data_document(user_id)
+    user_doc_ref.set(updates, merge=True)
+    update_user_data_cache(user_id, updates)
+    return _resolve_instruction_payload(kind, session, get_user_data(user_id, use_cache=True) or {})
+
+
+def _clear_custom_instruction(kind: str, session: Session, user_id: str) -> Dict[str, Any]:
+    session_key = INSTRUCTION_SESSION_KEYS[kind]
+    session.pop(session_key, None)
+    now = datetime.utcnow()
+    delete_updates: Dict[str, Any] = {key: DELETE_FIELD for key in instruction_firestore_keys(kind)}
+    delete_updates["updated_at"] = now
+    user_doc_ref = get_personal_data_document(user_id)
+    user_doc_ref.set(delete_updates, merge=True)
+    update_user_data_cache(user_id, delete_updates)
+    return _resolve_instruction_payload(kind, session, get_user_data(user_id, use_cache=True) or {})
 
 
 def _normalize_competence_ratings(raw: Any) -> Dict[str, int]:
@@ -472,55 +562,62 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             response["extra_info"] = get_extra_info(user_data)
         return response
 
+@router.get("/instructions-summary/")
+async def get_instructions_summary(session: Session = Depends(get_session)):
+    """Lightweight upstream-update counts for the AI Instructions entry point."""
+    user = session.get("user")
+    user_data: Dict[str, Any] = {}
+    if user:
+        user_data = get_user_data(user["id"], use_cache=False) or {}
+
+    tabs = []
+    for kind in INSTRUCTION_SESSION_KEYS:
+        payload = _resolve_instruction_payload(kind, session, user_data)
+        if payload.get("upstream_updated"):
+            tabs.append(kind)
+    return {"upstream_updated_tabs": tabs, "has_upstream_update": len(tabs) > 0}
+
+
 @router.get("/style-instructions/")
 async def get_style_instructions_endpoint(session: Session = Depends(get_session)):
-    instructions = session.get("style_instructions", "")
-    if not instructions:
-        user = session.get('user')
-        if user:
-             user_data = get_user_data(user['id'], use_cache=False)
-             instructions = get_user_style_instructions(user_data or {})
-    
-    if not instructions:
-        instructions = get_style_instructions() # Default from file
-        
-    return {"instructions": instructions}
+    user = session.get("user")
+    user_data: Dict[str, Any] = {}
+    if user:
+        user_data = get_user_data(user["id"], use_cache=False) or {}
+    return _resolve_instruction_payload("style", session, user_data)
+
 
 @router.post("/style-instructions/")
 async def update_style_instructions(request: Request, session: Session = Depends(get_session)):
-    user = session.get('user')
+    user = session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    
+
     data = await request.json()
     instructions = data.get("instructions", "")
-    if not instructions:
-        raise HTTPException(status_code=400, detail="Instructions cannot be empty")
-        
-    session["style_instructions"] = instructions
-    
-    # Save to Firestore
-    user_doc_ref = get_personal_data_document(user['id'])
-    updates = {
-        "style": wrap_new_field("style", instructions, datetime.utcnow()),
-        "updated_at": datetime.utcnow()
-    }
-    user_doc_ref.set(updates, merge=True)
-    update_user_data_cache(user["id"], updates)
+    default_text, default_hash = get_default_instruction("style")
+    payload = _save_custom_instruction(
+        "style", session, user["id"], instructions, default_hash=default_hash, default_text=default_text
+    )
+    return {"status": "ok", **payload}
 
-    return {"status": "ok", "instructions": instructions}
+
+@router.delete("/style-instructions/")
+async def clear_style_instructions(session: Session = Depends(get_session)):
+    user = session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    payload = _clear_custom_instruction("style", session, user["id"])
+    return {"status": "ok", **payload}
+
 
 @router.get("/structure-instructions/")
 async def get_structure_instructions_endpoint(session: Session = Depends(get_session)):
-    instructions = session.get("structure_instructions", "")
-    if not instructions:
-        user = session.get("user")
-        if user:
-            user_data = get_user_data(user["id"], use_cache=False)
-            instructions = get_user_structure_instructions(user_data or {})
-    if not instructions:
-        instructions = get_default_structure_instructions()
-    return {"instructions": instructions}
+    user = session.get("user")
+    user_data: Dict[str, Any] = {}
+    if user:
+        user_data = get_user_data(user["id"], use_cache=False) or {}
+    return _resolve_instruction_payload("structure", session, user_data)
 
 
 @router.post("/structure-instructions/")
@@ -532,51 +629,50 @@ async def update_structure_instructions(request: Request, session: Session = Dep
     instructions = data.get("instructions", "")
     if not isinstance(instructions, str):
         raise HTTPException(status_code=400, detail="Instructions must be a string")
-    session["structure_instructions"] = instructions
-    user_doc_ref = get_personal_data_document(user["id"])
-    updates = {
-        "structure": wrap_new_field("structure", instructions, datetime.utcnow()),
-        "updated_at": datetime.utcnow(),
-    }
-    user_doc_ref.set(updates, merge=True)
-    update_user_data_cache(user["id"], updates)
-    return {"status": "ok", "instructions": instructions}
+    default_text, default_hash = get_default_instruction("structure")
+    payload = _save_custom_instruction(
+        "structure", session, user["id"], instructions, default_hash=default_hash, default_text=default_text
+    )
+    return {"status": "ok", **payload}
+
+
+@router.delete("/structure-instructions/")
+async def clear_structure_instructions(session: Session = Depends(get_session)):
+    user = session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    payload = _clear_custom_instruction("structure", session, user["id"])
+    return {"status": "ok", **payload}
 
 
 @router.get("/search-instructions/")
 async def get_search_instructions_endpoint(session: Session = Depends(get_session)):
-    instructions = session.get("search_instructions", "")
-    if not instructions:
-        user = session.get('user')
-        if user:
-             user_data = get_user_data(user['id'], use_cache=False)
-             instructions = get_user_search_instructions(user_data or {})
-    
-    if not instructions:
-        instructions = get_search_instructions() # Default from file
-        
-    return {"instructions": instructions}
+    user = session.get("user")
+    user_data: Dict[str, Any] = {}
+    if user:
+        user_data = get_user_data(user["id"], use_cache=False) or {}
+    return _resolve_instruction_payload("search", session, user_data)
+
 
 @router.post("/search-instructions/")
 async def update_search_instructions(request: Request, session: Session = Depends(get_session)):
-    user = session.get('user')
+    user = session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    
+
     data = await request.json()
     instructions = data.get("instructions", "")
-    if not instructions:
-        raise HTTPException(status_code=400, detail="Instructions cannot be empty")
-        
-    session["search_instructions"] = instructions
-    
-    # Save to Firestore
-    user_doc_ref = get_personal_data_document(user['id'])
-    updates = {
-        "search_instructions": wrap_new_field("search_instructions", instructions, datetime.utcnow()),
-        "updated_at": datetime.utcnow()
-    }
-    user_doc_ref.set(updates, merge=True)
-    update_user_data_cache(user["id"], updates)
+    default_text, default_hash = get_default_instruction("search")
+    payload = _save_custom_instruction(
+        "search", session, user["id"], instructions, default_hash=default_hash, default_text=default_text
+    )
+    return {"status": "ok", **payload}
 
-    return {"status": "ok", "instructions": instructions}
+
+@router.delete("/search-instructions/")
+async def clear_search_instructions(session: Session = Depends(get_session)):
+    user = session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    payload = _clear_custom_instruction("search", session, user["id"])
+    return {"status": "ok", **payload}

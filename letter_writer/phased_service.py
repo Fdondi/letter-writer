@@ -572,11 +572,11 @@ def advance_to_draft(
         else (state.letter_plan or "")
     )
     letter_plan = (letter_plan or "").strip()
-    if not letter_plan:
-        raise ValueError(
-            "No letter plan is available for this vendor. Approve the Plan phase (or pass letter_plan) before generating a draft."
-        )
     state.letter_plan = letter_plan
+    if letter_plan:
+        logger.info("[PHASE] draft -> %s :: using approved letter plan", vendor.value)
+    else:
+        logger.info("[PHASE] draft -> %s :: no letter plan (optional plan step skipped)", vendor.value)
 
     # User notes for this job plus persisted feedback Q&A (agent_feedback_context in profile)
     additional_user_info = get_effective_additional_user_info(session.metadata, vendor, user_id)

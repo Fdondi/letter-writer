@@ -1433,9 +1433,9 @@ def get_structure_instructions() -> str:
         return path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return (
-            "Produce a concise strategic plan: strengths with supporting facts, weaknesses or gaps to frame "
-            "with honest arguments, and how the cover letter should lay out its argument. Use markdown headings "
-            "and bullets. Do not write the letter itself."
+            "Produce a ~10-line telegraphic strategic plan (elevator pitch). Headings: Strengths (2–3 lines), "
+            "Weaknesses (1–2 lines), Structure (3–4 lines: hook, body beats, close). One fact per strength; "
+            "honest gap framing only. No sub-bullets, no letter prose."
         )
 
 
@@ -1619,7 +1619,7 @@ def generate_letter_plan(
     system = (
         "You are an expert career strategist. Given the applicant's CV, reference cover letters, "
         "company research, and the target job, produce a **strategic plan** for a cover letter.\n"
-        "Do NOT write the cover letter. Output only the plan.\n"
+        "Do NOT write the cover letter. Output only the plan (~10 lines max, telegraphic).\n"
         "Use the language of the target job description where it matters for clarity.\n\n"
         "--- Structure / planning instructions (from the user or defaults) ---\n"
         + si

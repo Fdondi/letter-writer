@@ -70,7 +70,7 @@ export function renderContent({
           : "Review the strategic plan, edit if needed, then approve to generate the draft letter."}
       </div>
       <EditableField
-        label="Strategic plan (strengths, weaknesses to frame, letter layout)"
+        label="Strategic plan (~10 lines: strengths, weaknesses, structure)"
         value={planText}
         minHeight={260}
         placeholder="Letter plan"
@@ -78,6 +78,7 @@ export function renderContent({
         disabled={isLoading}
         fieldId={`letter_plan_${vendor}`}
         translation={translation}
+        renderAsMarkdown
       />
     </>
   );

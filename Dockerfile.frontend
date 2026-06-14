@@ -13,6 +13,9 @@ RUN --mount=type=cache,target=/root/.npm \
 # Copy application code
 COPY letter_writer_web/ ./
 
+# Catch React hook-order regressions (e.g. error #310) before shipping the bundle.
+RUN npm test -- --testPathPatterns=App.hooks --ci --forceExit
+
 # Build static assets
 RUN npm run build
 

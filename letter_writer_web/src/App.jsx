@@ -61,6 +61,16 @@ function generateColors(vendors) {
 
 const AGENTIC_TOPICS = ["instruction", "company_fit", "goal_fit", "precision", "user_fit", "human", "accuracy"];
 
+/** Job reference sidebar: viewport height, independent of main column scroll height. */
+const REFERENCE_SIDEBAR_VIEWPORT_STYLE = {
+  alignSelf: "flex-start",
+  position: "sticky",
+  top: 20,
+  height: "calc(100vh - 40px)",
+  maxHeight: "calc(100vh - 40px)",
+  boxSizing: "border-box",
+};
+
 export default function App({ flow = "intake" }) {
   const navigate = useNavigate();
   const navLocation = useLocation();
@@ -112,10 +122,12 @@ export default function App({ flow = "intake" }) {
   const [failedVendors, setFailedVendors] = useState({}); // vendor -> error message
   const [phaseErrors, setPhaseErrors] = useState({}); // `${phase}:${vendor}` -> error message
   const [loading, setLoading] = useState(false);
+  const [includePlanStep, setIncludePlanStep] = useState(true);
   const [error, setError] = useState(null);
   const [documentSaveNotice, setDocumentSaveNotice] = useState(null);
   const [costTrackingError, setCostTrackingError] = useState(null);
   const [showStyleBlade, setShowStyleBlade] = useState(false);
+  const [instructionsUpstreamPending, setInstructionsUpstreamPending] = useState(false);
   const [vendorStage, setVendorStage] = useState("input"); // vendor flow: input | phases | assembly
   const [agenticStage, setAgenticStage] = useState("input"); // agentic flow: input | agentic | assembly
   const [phaseSessionId, setPhaseSessionId] = useState(null);
@@ -1237,24 +1249,28 @@ export default function App({ flow = "intake" }) {
 
   const onRetryPhaseFetch = useCallback(
     async (phaseName, vendor) => {
-      if (phaseName !== "plan") return;
+      const expectedPhase = includePlanStep ? "plan" : "draft";
+      if (phaseName !== expectedPhase) return;
       const sessionId = phaseSessions[vendor] || phaseSessionId;
       if (!sessionId) {
         setPhaseCardFetchError(
-          "plan",
+          expectedPhase,
           vendor,
           "No session ID. Return to job intake and start the vendor flow again."
         );
         return;
       }
-      setPhaseCardFetchError("plan", vendor, null);
+      setPhaseCardFetchError(expectedPhase, vendor, null);
       try {
         const body = { session_id: sessionId };
         if (selectedCompanyReport) {
           body.company_report = selectedCompanyReport;
         }
+        const url = includePlanStep
+          ? `/api/phases/plan/${vendor}/`
+          : `/api/phases/draft/${vendor}/`;
         const result = await fetchWithHeartbeat(
-          `/api/phases/plan/${vendor}/`,
+          url,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1263,18 +1279,19 @@ export default function App({ flow = "intake" }) {
           { getState: getStateForRestore }
         );
         if (result.isHeartbeat) return;
-        populatePhaseShelf("plan", vendor, result.data);
+        populatePhaseShelf(expectedPhase, vendor, result.data);
         setPhaseSessions((prev) => ({ ...prev, [vendor]: sessionId }));
         const docId = result.data?.document?.id;
         if (docId) {
           setDocumentId((prev) => prev || docId);
         }
       } catch (e) {
-        console.error(`Retry plan fetch failed for ${vendor}:`, e);
-        setPhaseCardFetchError("plan", vendor, extractErrorMessage(e));
+        console.error(`Retry ${expectedPhase} fetch failed for ${vendor}:`, e);
+        setPhaseCardFetchError(expectedPhase, vendor, extractErrorMessage(e));
       }
     },
     [
+      includePlanStep,
       phaseSessions,
       phaseSessionId,
       selectedCompanyReport,
@@ -1282,6 +1299,44 @@ export default function App({ flow = "intake" }) {
       setPhaseCardFetchError,
       populatePhaseShelf,
       extractErrorMessage,
+    ]
+  );
+
+  const startInitialVendorPhase = useCallback(
+    async (vendor, sessionId) => {
+      const phaseName = includePlanStep ? "plan" : "draft";
+      const url = includePlanStep
+        ? `/api/phases/plan/${vendor}/`
+        : `/api/phases/draft/${vendor}/`;
+      const body = { session_id: sessionId };
+      if (selectedCompanyReport) {
+        body.company_report = selectedCompanyReport;
+      }
+      const result = await fetchWithHeartbeat(
+        url,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        { getState: getStateForRestore }
+      );
+      if (result.isHeartbeat) {
+        return null;
+      }
+      populatePhaseShelf(phaseName, vendor, result.data);
+      setPhaseSessions((prev) => ({ ...prev, [vendor]: sessionId }));
+      if (!documentId && result.data?.document?.id) {
+        setDocumentId(result.data.document.id);
+      }
+      return result.data;
+    },
+    [
+      includePlanStep,
+      selectedCompanyReport,
+      getStateForRestore,
+      populatePhaseShelf,
+      documentId,
     ]
   );
 
@@ -2015,43 +2070,10 @@ export default function App({ flow = "intake" }) {
         });
       }
       
-      // Plan phase - include selected research results if available
-      const planBody = {
-        session_id: phaseSessionId,
-      };
-      if (selectedCompanyReport) {
-        planBody.company_report = selectedCompanyReport;
-      }
-      const result = await fetchWithHeartbeat(
-        `/api/phases/plan/${vendor}/`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(planBody),
-        },
-        { getState: getStateForRestore }
-      );
-      
-      // Handle 202 Accepted (heartbeat/still processing)
-      if (result.isHeartbeat) {
-        // Don't throw error - request is still in progress
-        // Frontend should continue waiting for the original request to complete
-        return;
-      }
-      
-      const data = result.data;
-
-      // Populate the plan phase shelf in PhaseFlow
-      populatePhaseShelf("plan", vendor, data);
-
-      setPhaseSessions((prev) => ({ ...prev, [vendor]: phaseSessionId }));
-      // phaseState, phaseEdits removed - cards own their state
-      if (!documentId && data.document?.id) {
-        setDocumentId(data.document.id);
-      }
+      await startInitialVendorPhase(vendor, phaseSessionId);
     } catch (e) {
-      console.error("Plan phase error after extraction approval:", e);
-      setPhaseCardFetchError("plan", vendor, extractErrorMessage(e));
+      console.error(`${includePlanStep ? "Plan" : "Draft"} phase error after extraction approval:`, e);
+      setPhaseCardFetchError(includePlanStep ? "plan" : "draft", vendor, extractErrorMessage(e));
     }
   };
 
@@ -2123,47 +2145,15 @@ export default function App({ flow = "intake" }) {
       }).catch((e) => console.warn("Failed to save competence ratings to profile:", e));
     }
 
-    // Start plan phase for all vendors in parallel (draft runs after plan is approved)
+    // Start plan (optional) or draft phase for all vendors in parallel
     vendorList.forEach((vendor) => {
       (async () => {
         try {
-          const body = {
-            session_id: initialSessionId,
-          };
-          // Pass overrides if available (from consolidated research)
-          if (selectedCompanyReport) {
-            body.company_report = selectedCompanyReport;
-          }
-
-          const result = await fetchWithHeartbeat(
-            `/api/phases/plan/${vendor}/`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(body),
-            },
-            { getState: getStateForRestore }
-          );
-          
-          // Handle 202 Accepted (heartbeat/still processing)
-          if (result.isHeartbeat) {
-            // Don't throw error - request is still in progress
-            return;
-          }
-          
-          const data = result.data;
-          
-          // Populate the plan phase shelf in PhaseFlow
-          populatePhaseShelf("plan", vendor, data);
-
-          // Update session for this vendor
-          setPhaseSessions((prev) => ({ ...prev, [vendor]: initialSessionId }));
-          
-          // Set session ID from first successful response
+          await startInitialVendorPhase(vendor, initialSessionId);
           setPhaseSessionId((prev) => prev || initialSessionId);
         } catch (e) {
-          console.error(`Plan phase error for ${vendor}:`, e);
-          setPhaseCardFetchError("plan", vendor, extractErrorMessage(e));
+          console.error(`${includePlanStep ? "Plan" : "Draft"} phase error for ${vendor}:`, e);
+          setPhaseCardFetchError(includePlanStep ? "plan" : "draft", vendor, extractErrorMessage(e));
         }
       })();
     });
@@ -3239,6 +3229,14 @@ export default function App({ flow = "intake" }) {
               Start autocomplete
             </button>
             <AutocompletePlanModelSelect />
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-color)" }}>
+              <input
+                type="checkbox"
+                checked={includePlanStep}
+                onChange={(e) => setIncludePlanStep(e.target.checked)}
+              />
+              Include plan step
+            </label>
             <button
               onClick={handleSubmit}
               disabled={loading || !jobText || !jobTitle.trim() || selectedVendors.size === 0}
@@ -3307,7 +3305,7 @@ export default function App({ flow = "intake" }) {
           style={{
             display: "flex",
             flexDirection: "row",
-            alignItems: "stretch",
+            alignItems: "flex-start",
             gap: 12,
             width: "100%",
             minHeight: "calc(100vh - 120px)",
@@ -3447,6 +3445,7 @@ export default function App({ flow = "intake" }) {
               <PhaseFlow
                 vendorsList={vendorsList}
                 flowResetKey={phaseFlowResetKey}
+                includePlanStep={includePlanStep}
                 onEditChange={updatePhaseEdit}
                 onApprove={approvePhase}
                 onApproveAll={approveAllPhase}
@@ -3563,8 +3562,7 @@ export default function App({ flow = "intake" }) {
               style={{
                 flexShrink: 0,
                 width: 44,
-                alignSelf: "stretch",
-                minHeight: 160,
+                ...REFERENCE_SIDEBAR_VIEWPORT_STYLE,
                 marginTop: 0,
                 padding: "10px 6px",
                 display: "flex",
@@ -3613,8 +3611,7 @@ export default function App({ flow = "intake" }) {
               style={{
                 width: 340,
                 flexShrink: 0,
-                alignSelf: "stretch",
-                minHeight: 0,
+                ...REFERENCE_SIDEBAR_VIEWPORT_STYLE,
                 display: "flex",
                 flexDirection: "column",
                 border: "1px solid var(--border-color)",
@@ -3810,9 +3807,24 @@ export default function App({ flow = "intake" }) {
                 color: "var(--button-text)",
                 cursor: "pointer",
                 fontSize: "14px",
+                position: "relative",
               }}
             >
               AI Instructions
+              {instructionsUpstreamPending && (
+                <span
+                  title="Default instructions updated — review in AI Instructions"
+                  style={{
+                    position: "absolute",
+                    top: 4,
+                    right: 4,
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    backgroundColor: "#6366f1",
+                  }}
+                />
+              )}
             </button>
             <button
               onClick={() => setShowCvOverlay(true)}
@@ -3970,6 +3982,7 @@ export default function App({ flow = "intake" }) {
       <StyleInstructionsBlade
         isOpen={showStyleBlade}
         onClose={() => setShowStyleBlade(false)}
+        onUpstreamStatusChange={setInstructionsUpstreamPending}
       />
     </div>
   );

@@ -1,11 +1,16 @@
-Your task is strategic planning only (no draft letter prose).
+Strategic planning only — no draft letter prose.
 
-For the plan output, use clear markdown headings and bullets. Cover:
+Hard limit: ~10 lines total (headings count). Telegraphic. Elevator-pitch density.
 
-1. **Strengths to highlight** — each strength with concrete supporting facts from the CV or additional applicant notes (cite role, dates, metrics where possible).
+Use exactly these headings:
 
-2. **Weaknesses or gaps to address** — honest gaps vs the job requirements; for each, the argument or framing to use (without inventing experience).
+## Strengths
+2–3 lines — top claims; each with one concrete CV fact (role, metric, date).
 
-3. **Letter argument layout** — the order of ideas in the final cover letter (opening hook, body arcs, closing), tied to strengths/weaknesses above.
+## Weaknesses
+1–2 lines — honest gaps vs the role; one-line framing each (no invented experience).
 
-Stay concise: prefer short bullets over long paragraphs. Do not write the cover letter itself.
+## Structure
+3–4 lines — opening hook → body beats → close. Argument flow only.
+
+No sub-bullets, no paragraphs, no letter wording.

@@ -320,6 +320,65 @@ def wrap_new_field(field_name: str, value: Any, updated_at: datetime) -> Dict[st
         "updated_at": updated_at
     }
 
+
+def wrap_instruction_field(
+    value: str,
+    updated_at: datetime,
+    *,
+    default_baseline_hash: str,
+    default_baseline_text: str = "",
+) -> Dict[str, Any]:
+    """Persist custom instructions plus the repo-default snapshot they were last merged against."""
+    wrapped = wrap_new_field("", value, updated_at)
+    wrapped["default_baseline_hash"] = default_baseline_hash
+    if default_baseline_text:
+        wrapped["default_baseline_text"] = default_baseline_text
+    return wrapped
+
+
+def _instruction_field_keys(kind: str) -> tuple:
+    if kind == "style":
+        return ("style", "style_instructions")
+    if kind == "structure":
+        return ("structure", "structure_instructions")
+    if kind == "search":
+        return ("search_instructions",)
+    raise ValueError(f"Unknown instruction kind: {kind}")
+
+
+def get_instruction_baseline_hash(user_data: Dict[str, Any], kind: str) -> str:
+    for key in _instruction_field_keys(kind):
+        raw = user_data.get(key)
+        if isinstance(raw, dict):
+            baseline = raw.get("default_baseline_hash")
+            if isinstance(baseline, str) and baseline.strip():
+                return baseline.strip()
+    return ""
+
+
+def get_instruction_baseline_text(user_data: Dict[str, Any], kind: str) -> str:
+    for key in _instruction_field_keys(kind):
+        raw = user_data.get(key)
+        if isinstance(raw, dict):
+            baseline = raw.get("default_baseline_text")
+            if isinstance(baseline, str) and baseline.strip():
+                return baseline.strip()
+    return ""
+
+
+def get_custom_instruction(user_data: Dict[str, Any], kind: str) -> str:
+    if kind == "style":
+        return get_style_instructions(user_data)
+    if kind == "structure":
+        return get_structure_instructions(user_data)
+    if kind == "search":
+        return get_search_instructions(user_data)
+    raise ValueError(f"Unknown instruction kind: {kind}")
+
+
+def instruction_firestore_keys(kind: str) -> tuple:
+    return _instruction_field_keys(kind)
+
 def get_competence_ratings(user_data: Dict[str, Any]) -> Dict[str, int]:
     # Check "competences" field
     competences_data = user_data.get("competences")

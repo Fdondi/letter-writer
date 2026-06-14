@@ -7,7 +7,7 @@ global.fetch = jest.fn((input, init) => {
   if (String(url).includes('app-version.txt')) {
     return Promise.resolve({
       ok: true,
-      text: () => Promise.resolve('1.0.0'),
+      text: () => Promise.resolve('1.0.0 - Test stub'),
     });
   }
   if (String(url).includes('/api/personal-data/')) {

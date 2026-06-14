@@ -8,7 +8,8 @@ import {
 } from "./feedbackItemUtils";
 
 /**
- * Draft phase — full letter plus machine feedback, after the Plan phase is approved.
+ * Draft phase — full letter plus machine feedback.
+ * When the plan step is included, this runs after Plan is approved; otherwise it is the first phase.
  * Approving triggers the refine API to produce the final letter.
  *
  * Background search data (company_report, top_docs) is gathered during the

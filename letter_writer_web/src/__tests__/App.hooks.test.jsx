@@ -1,6 +1,7 @@
 /**
  * Guards against React error #310 (hook count changes across renders).
  * Regression: hasUnsavedGeneratedWork useMemo was once declared after auth early returns.
+ * Regression: startInitialVendorPhase useCallback was once declared after auth early returns.
  */
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -67,7 +68,7 @@ function installFetchMock({ authenticated = true } = {}) {
   global.fetch = jest.fn((input) => {
     const url = typeof input === "string" ? input : input?.url ?? "";
     if (String(url).includes("app-version.txt")) {
-      return Promise.resolve({ ok: true, text: () => Promise.resolve("1.0.0") });
+      return Promise.resolve({ ok: true, text: () => Promise.resolve("1.0.0 - Test stub") });
     }
     if (String(url).includes("/api/auth/status/")) {
       return Promise.resolve({

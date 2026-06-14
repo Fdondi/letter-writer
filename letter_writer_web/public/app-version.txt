@@ -1,1 +1,10 @@
-0.44.1
+0.51.0 - Render plan phase markdown in read-only view
+0.50.2 - Fix upstream instruction merge; per-chunk Take default / Keep mine
+0.50.1 - Run App.hooks tests during frontend Docker build
+0.50.0 - Fix React hook order crash after auth check (error #310)
+0.49.1 - Red destructive button for removing custom AI instructions
+0.49.0 - Job reference sidebar fixed to viewport height
+0.48.1 - Custom AI instructions merge UI, revert-to-default, upstream update alerts
+0.48.0 - Make plan step optional in vendor flow
+0.47.0 - Shorten letter plan to ~10-line telegraphic format
+0.46.0 - Parse changelog format in app-version.txt
