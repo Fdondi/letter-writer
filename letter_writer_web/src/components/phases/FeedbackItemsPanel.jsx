@@ -549,10 +549,24 @@ export function FeedbackItemsPanel({
       const us = String(merged.source ?? "").toUpperCase();
       if (us === CONTEXT_USER_SOURCE) {
         merged.source = CONTEXT_USER_SOURCE;
-        merged.persist_to_cv = merged.persist_to_cv === false ? false : true;
+        if (patch && "persist_to_cv" in patch) {
+          merged.persist_to_cv = patch.persist_to_cv !== false;
+        } else if (merged.persist_to_cv === undefined) {
+          merged.persist_to_cv = true;
+        } else {
+          merged.persist_to_cv = merged.persist_to_cv !== false;
+        }
+        if (patch && "persist_for_agents" in patch) {
+          merged.persist_for_agents = patch.persist_for_agents !== false;
+        } else if (merged.persist_for_agents === undefined) {
+          merged.persist_for_agents = merged.persist_to_cv !== false;
+        } else {
+          merged.persist_for_agents = merged.persist_for_agents !== false;
+        }
       } else {
         merged.source = CONTEXT_SOURCES.includes(us) ? us : "CV";
         delete merged.persist_to_cv;
+        delete merged.persist_for_agents;
       }
       next[idx] = merged;
       setContextItems(next);
@@ -560,26 +574,51 @@ export function FeedbackItemsPanel({
 
     const renderPersistUserLineRadios = (idx) => {
       const row = contextItems[idx];
-      const persistLine = row && typeof row === "object" && row.persist_to_cv === false ? false : true;
+      const persistLineToCv = row && typeof row === "object" && row.persist_to_cv !== false;
+      const persistLineForAgents =
+        row && typeof row === "object" && row.persist_for_agents !== undefined
+          ? row.persist_for_agents !== false
+          : persistLineToCv;
+      const persistLineScope =
+        persistLineToCv && persistLineForAgents
+          ? "both"
+          : !persistLineToCv && persistLineForAgents
+            ? "agent"
+            : "none";
+      const setLinePersistScope = (scope) => {
+        const cv = scope === "both";
+        const agent = scope === "both" || scope === "agent";
+        updateContextItem(idx, { persist_to_cv: cv, persist_for_agents: agent });
+      };
       return (
         <div style={{ marginTop: 8, fontSize: 12, color: "#374151" }}>
-          <div style={{ marginBottom: 4, fontWeight: 600 }}>Save this line to profile / CV</div>
+          <div style={{ marginBottom: 4, fontWeight: 600 }}>Save your reply</div>
           <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer", marginBottom: 4 }}>
             <input
               type="radio"
               name={`persist-user-line-${it.id}-${idx}`}
-              checked={persistLine}
-              onChange={() => updateContextItem(idx, { persist_to_cv: true })}
+              checked={persistLineScope === "both"}
+              onChange={() => setLinePersistScope("both")}
               disabled={disabled}
             />
-            Yes — reuse in future letters
+            CV appendix and model context — reuse in future checks
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer", marginBottom: 4 }}>
+            <input
+              type="radio"
+              name={`persist-user-line-${it.id}-${idx}`}
+              checked={persistLineScope === "agent"}
+              onChange={() => setLinePersistScope("agent")}
+              disabled={disabled}
+            />
+            Model context only (not CV appendix) — if this is already in your CV
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer" }}>
             <input
               type="radio"
               name={`persist-user-line-${it.id}-${idx}`}
-              checked={!persistLine}
-              onChange={() => updateContextItem(idx, { persist_to_cv: false })}
+              checked={persistLineScope === "none"}
+              onChange={() => setLinePersistScope("none")}
               disabled={disabled}
             />
             No — only use for this revision
@@ -602,7 +641,10 @@ export function FeedbackItemsPanel({
       if (e && typeof e.stopPropagation === "function") e.stopPropagation();
       setEditingUserContextId(null);
       setDraftUserContext("");
-      const next = [...(contextItems || []), { text: "", source: CONTEXT_USER_SOURCE, persist_to_cv: true }];
+      const next = [
+        ...(contextItems || []),
+        { text: "", source: CONTEXT_USER_SOURCE, persist_to_cv: true, persist_for_agents: true },
+      ];
       setContextItems(next);
       const newIdx = next.length - 1;
       setEditingContextRow({ itemId: it.id, index: newIdx });

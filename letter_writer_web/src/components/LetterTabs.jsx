@@ -9,12 +9,9 @@ import { v4 as uuidv4 } from "uuid";
 import { useLanguages } from "../contexts/LanguageContext";
 import JobDescriptionColumn from "./JobDescriptionColumn";
 import LanguageSelector from "./LanguageSelector";
-import SaveAndCopyButton, {
-  SaveCopyErrorBanner,
-  useSaveAndCopy,
-} from "./SaveAndCopyButton";
 import { translateText } from "../utils/translate";
 import { normalizeForMatch } from "../utils/textMatch";
+import { useLetterSave } from "../hooks/useLetterSave";
 
 const FeedbackForm = ({ rating, comment, onChange }) => {
   return (
@@ -125,7 +122,7 @@ export default function LetterTabs({
   onRetry, 
   vendorColors, 
   onAddParagraph,
-  onSaveAndCopy,
+  onSave,
   savingFinal = false,
   vendorFeedback = {},
   setVendorFeedback = () => {},
@@ -136,7 +133,6 @@ export default function LetterTabs({
   const [swapDraftForFinal, setSwapDraftForFinal] = useState({}); // vendor -> show initial draft instead of refined
   const [selectedKeyTerm, setSelectedKeyTerm] = useState(null);
   const handleTermClick = (term) => setSelectedKeyTerm((prev) => (prev === term ? null : term));
-  const [columnError, setColumnError] = useState(null);
   const [finalLetter, setFinalLetter] = useState("");
   const [originalLetter, setOriginalLetter] = useState(originalText || "");
   const [expandedColumn, setExpandedColumn] = useState(null); // 'vendor:Name' | 'final' | 'job-description' | null
@@ -164,6 +160,7 @@ export default function LetterTabs({
   }, [originalText]);
 
   const [translationStates, setTranslationStates] = useState({}); // { [id]: { translations: {}, viewLanguage: 'source' } }
+  const [translationError, setTranslationError] = useState(null);
   const [translateAllViewLanguage, setTranslateAllViewLanguage] = useState("source");
   const [translateAllInProgress, setTranslateAllInProgress] = useState(false);
   const finalColumnRef = useRef(null);
@@ -196,10 +193,7 @@ export default function LetterTabs({
     applyFinalColumnScrollRestore();
   }, [finalParagraphs, translationStates]);
   
-  // Use shared language context instead of local state
-  const { enabledLanguages: languageOptions, addLanguage, toggleLanguage } = useLanguages();
-  const [languageInput, setLanguageInput] = useState("");
-  const [languageLogic, setLanguageLogic] = useState("OR"); // "OR" or "AND"
+  const { enabledLanguages: languageOptions } = useLanguages();
 
   const toggleCollapse = (vendor) => {
     setCollapsed((prev) =>
@@ -256,6 +250,7 @@ export default function LetterTabs({
 
   // Get minimum column width from localStorage or use default
   const minColumnWidth = parseInt(localStorage.getItem("minColumnWidth") || "200", 10);
+  const vendorColumnWidthPx = `${minColumnWidth}px`;
 
   const moveFinalParagraph = (from, to) => {
     captureFinalColumnScroll();
@@ -520,11 +515,11 @@ export default function LetterTabs({
     }
   }, [finalParagraphs, translationStates]);
 
-  const saveCopy = useSaveAndCopy({
-    letterText: finalAssemblyText,
-    onSave: onSaveAndCopy ? (copyText) => onSaveAndCopy(copyText) : undefined,
+  const { isDirty, handleCopy, handleSave, copyFeedback, saveError } = useLetterSave({
+    getFullText: () => finalAssemblyText,
+    onSave,
     saving: savingFinal,
-    resetKey: finalParagraphs,
+    contentRevision: finalAssemblyText,
   });
 
   // Warm normalization once so downstream checks are cheap.
@@ -544,7 +539,7 @@ export default function LetterTabs({
       return;
     }
     setTranslateAllInProgress(true);
-    setColumnError(null);
+    setTranslationError(null);
     try {
       const updates = {};
       for (let i = 0; i < finalParagraphs.length; i++) {
@@ -565,7 +560,7 @@ export default function LetterTabs({
       });
       setTranslateAllViewLanguage(targetLanguage);
     } catch (e) {
-      setColumnError(e.message || "Translation failed");
+      setTranslationError(e.message || "Translation failed");
     } finally {
       setTranslateAllInProgress(false);
     }
@@ -650,18 +645,12 @@ export default function LetterTabs({
     </div>
   );
 
-  const addLanguageFromSearch = () => {
-    const code = languageInput.trim().toLowerCase();
-    if (!code) return;
-    addLanguage(code);
-    setLanguageInput("");
-  };
-
   const FinalColumn = ({ onHeaderClick, isExpanded, onClose, useOverlayWidth }) => (
     <div 
       style={{ 
-        width: useOverlayWidth ? "100%" : columnWidth,
-        minWidth: useOverlayWidth ? 0 : `${minColumnWidth}px`,
+        width: useOverlayWidth ? "100%" : vendorColumnWidthPx,
+        minWidth: useOverlayWidth ? 0 : vendorColumnWidthPx,
+        flexShrink: useOverlayWidth ? undefined : 0,
         borderRadius: 4,
         position: "relative",
         display: "flex",
@@ -721,7 +710,7 @@ export default function LetterTabs({
             )}
           </div>
         </h4>
-        {/* Line 2: language selector + Save & Copy (under Expand) */}
+        {/* Line 2: language selector + Copy / Save (under Expand) */}
         <div
           style={{
             padding: "6px 12px 8px",
@@ -741,16 +730,74 @@ export default function LetterTabs({
             isTranslating={translateAllInProgress}
             size="tiny"
           />
-          <SaveAndCopyButton
-            id="save-copy-btn"
-            onClick={saveCopy.handleClick}
-            disabled={saveCopy.disabled}
-            savedState={saveCopy.buttonSavedState}
-            label={saveCopy.label}
-          />
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              id="copy-letter-btn"
+              type="button"
+              onClick={handleCopy}
+              disabled={finalParagraphs.length === 0 || copyFeedback === "success"}
+              title="Copy letter to clipboard"
+              style={{
+                padding: "4px 8px",
+                fontSize: "12px",
+                minWidth: "4.5em",
+                background:
+                  finalParagraphs.length === 0
+                    ? "var(--border-color)"
+                    : copyFeedback === "success"
+                      ? "#10b981"
+                      : "var(--panel-bg)",
+                color: copyFeedback === "success" ? "white" : "var(--text-color)",
+                border: "1px solid var(--border-color)",
+                borderRadius: 4,
+                cursor:
+                  finalParagraphs.length === 0 || copyFeedback === "success"
+                    ? "not-allowed"
+                    : "pointer",
+                transition: "background 0.2s ease",
+              }}
+            >
+              {copyFeedback === "success" ? "✓" : "Copy"}
+            </button>
+            <button
+              id="save-letter-btn"
+              type="button"
+              onClick={handleSave}
+              disabled={finalParagraphs.length === 0 || savingFinal || !isDirty || !onSave}
+              title={isDirty ? "Save letter to your documents" : "No unsaved changes"}
+              style={{
+                padding: "4px 8px",
+                fontSize: "12px",
+                minWidth: "4.5em",
+                background:
+                  finalParagraphs.length === 0 || savingFinal || !isDirty
+                    ? "var(--border-color)"
+                    : "#3b82f6",
+                color: "white",
+                border: "none",
+                borderRadius: 4,
+                cursor:
+                  finalParagraphs.length === 0 || savingFinal || !isDirty || !onSave
+                    ? "not-allowed"
+                    : "pointer",
+              }}
+            >
+              {savingFinal ? "Saving…" : "Save"}
+            </button>
+          </div>
         </div>
       </div>
-      <SaveCopyErrorBanner message={saveCopy.saveError || columnError} />
+      {(saveError || translationError) && (
+        <div style={{
+          padding: "4px 12px",
+          fontSize: "12px",
+          background: "var(--error-bg)",
+          color: "var(--error-text)",
+          borderBottom: "1px solid var(--border-color)"
+        }}>
+          {saveError || translationError}
+        </div>
+      )}
       {/* Scrollable content area */}
       <div 
         ref={(node) => {
@@ -1148,103 +1195,6 @@ export default function LetterTabs({
         </div>,
         document.body
       )}
-      <div style={{
-        marginBottom: 10,
-        display: "flex",
-        flexWrap: "wrap",
-        gap: 8,
-        alignItems: "center",
-        position: "absolute",
-        right: 0,
-        top: -46,
-        background: "var(--bg-color)",
-        padding: "6px 8px",
-        borderRadius: 8,
-        boxShadow: "0 2px 6px rgba(0,0,0,0.05)",
-      }}>
-          <span style={{ fontWeight: 600, fontSize: 13 }}>Languages:</span>
-          <button
-            onClick={() => setLanguageLogic((prev) => (prev === "OR" ? "AND" : "OR"))}
-            style={{
-              padding: "4px 8px",
-              fontSize: 12,
-              background: "var(--header-bg)",
-              color: "var(--text-color)",
-              border: "1px solid var(--border-color)",
-              borderRadius: 4,
-              cursor: "pointer",
-              marginRight: 8,
-            }}
-          >
-            {languageLogic}
-          </button>
-          <div style={{ display: "flex", alignItems: "center", border: "1px solid var(--border-color)", borderRadius: 4, padding: "2px 6px", flexWrap: "wrap", gap: 4, background: 'var(--input-bg)' }}>
-            {languageOptions.map((lang) => (
-              <div
-                key={lang.code}
-                style={{
-                  background: "var(--header-bg)",
-                  padding: "2px 6px",
-                  borderRadius: 3,
-                  fontSize: 12,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 4,
-                }}
-              >
-                {lang.label}
-                <button
-                  onClick={() => toggleLanguage(lang.code)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "var(--secondary-text-color)",
-                    cursor: "pointer",
-                    padding: 0,
-                    fontSize: 12,
-                  }}
-                >
-                  X
-                </button>
-              </div>
-            ))}
-            <input
-              type="text"
-              value={languageInput}
-              onChange={(e) => setLanguageInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  addLanguageFromSearch();
-                }
-              }}
-              placeholder="Add language code (e.g., es)"
-              style={{
-                fontSize: 12,
-                padding: "4px 0px",
-                border: "none",
-                outline: "none",
-                minWidth: 120,
-                flexGrow: 1,
-                background: 'transparent',
-                color: 'var(--text-color)'
-              }}
-            />
-            <button
-              onClick={addLanguageFromSearch}
-              style={{
-                padding: "4px 8px",
-                fontSize: 12,
-                background: "#3b82f6",
-                color: "white",
-                border: "none",
-                borderRadius: 4,
-                cursor: "pointer",
-              }}
-            >
-              Add
-            </button>
-          </div>
-        </div>
         {collapsedVendors.length > 0 && (
           <select
             onChange={(e) => {

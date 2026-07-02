@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import JobDescriptionColumn from "./JobDescriptionColumn";
 import { useLanguages } from "../contexts/LanguageContext";
 import LanguageSelector from "./LanguageSelector";
 import { translateText } from "../utils/translate";
+import { useLetterSave } from "../hooks/useLetterSave";
 
 export default function FinalReview({
   initialText,
@@ -11,15 +12,11 @@ export default function FinalReview({
   competences = {},
   competenceScaleConfig,
   competenceOverrides,
-  onSaveAndCopy,
+  onSave,
   onBack,
   saving,
 }) {
   const [text, setText] = useState(initialText || "");
-  const [buttonState, setButtonState] = useState("save_copy"); // "save_copy" | "copy"
-  const [copyFeedback, setCopyFeedback] = useState(null); // null | "success"
-  const copyFeedbackTimerRef = useRef(null);
-  const [saveError, setSaveError] = useState(null);
   const { enabledLanguages } = useLanguages();
   
   // Translation state for the letter
@@ -32,12 +29,6 @@ export default function FinalReview({
   useEffect(() => {
     setText(initialText || "");
   }, [initialText]);
-
-  useEffect(() => {
-    return () => {
-      if (copyFeedbackTimerRef.current) clearTimeout(copyFeedbackTimerRef.current);
-    };
-  }, []);
   
   // Reset translations when source text changes
   useEffect(() => {
@@ -51,11 +42,8 @@ export default function FinalReview({
   const handleTextChange = (e) => {
     const newText = e.target.value;
     setText(newText);
-    setButtonState("save_copy");
-    setSaveError(null); // Clear any previous save error
     
     // If we were viewing a translation, switch back to source
-    // The new text becomes the source, and we clear translations
     if (letterViewLanguage !== "source") {
       setLetterViewLanguage("source");
       setLetterTranslations({});
@@ -90,7 +78,6 @@ export default function FinalReview({
     }
   };
   
-  // Get display text for letter
   const getLetterDisplayText = () => {
     if (letterViewLanguage !== "source" && letterTranslations[letterViewLanguage]) {
       return letterTranslations[letterViewLanguage];
@@ -98,39 +85,32 @@ export default function FinalReview({
     return text;
   };
 
-  const handleMainButton = async () => {
-    setSaveError(null);
-    const displayText = getLetterDisplayText();
-    const shouldSave = buttonState === "save_copy";
-    try {
-      await navigator.clipboard.writeText(displayText);
-      setCopyFeedback("success");
-      await new Promise((resolve) => {
-        copyFeedbackTimerRef.current = setTimeout(resolve, 1000);
-      });
-      setCopyFeedback(null);
-      if (shouldSave) {
-        await onSaveAndCopy(displayText);
-        setButtonState("copy");
-      }
-    } catch (err) {
-      if (copyFeedbackTimerRef.current) clearTimeout(copyFeedbackTimerRef.current);
-      setCopyFeedback(null);
-      console.error("Error in Copy/Save:", err);
-      setSaveError(err.message || "Failed to copy or save letter");
-    }
-  };
+  const displayText = getLetterDisplayText();
+  const { isDirty, handleCopy, handleSave, copyFeedback, saveError } = useLetterSave({
+    getFullText: () => displayText,
+    onSave,
+    saving,
+    contentRevision: displayText,
+  });
 
   return (
     <div
       style={{
         display: "flex",
-        height: "calc(100vh - 80px)", // Adjust based on header/padding
+        height: "calc(100vh - 80px)",
         gap: 20,
         marginTop: 20,
       }}
     >
-      {/* Main Content: Final Letter */}
+      <JobDescriptionColumn
+        jobText={jobText}
+        requirements={requirements}
+        competences={competences}
+        scaleConfig={competenceScaleConfig}
+        overrides={competenceOverrides}
+        width="350px"
+        languages={enabledLanguages}
+      />
       <div
         style={{
           flex: 1,
@@ -164,6 +144,7 @@ export default function FinalReview({
           </div>
           <div style={{ display: "flex", gap: 10 }}>
             <button
+              type="button"
               onClick={onBack}
               style={{
                 padding: "8px 16px",
@@ -177,36 +158,44 @@ export default function FinalReview({
               ← Back to Assembly
             </button>
             <button
-              onClick={handleMainButton}
-              disabled={saving || copyFeedback === "success"}
+              type="button"
+              onClick={handleCopy}
+              disabled={!displayText.trim() || copyFeedback === "success"}
               style={{
                 padding: "8px 16px",
                 backgroundColor:
-                  saving
-                    ? "var(--border-color)"
-                    : copyFeedback === "success" || buttonState === "copy"
-                      ? "#10b981"
-                      : "#3b82f6",
+                  copyFeedback === "success" ? "#10b981" : "var(--panel-bg)",
+                color: copyFeedback === "success" ? "white" : "var(--text-color)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                cursor: !displayText.trim() || copyFeedback === "success" ? "not-allowed" : "pointer",
+                fontWeight: 600,
+                minWidth: "80px",
+              }}
+            >
+              {copyFeedback === "success" ? "✓" : "Copy"}
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving || !isDirty || !onSave || !displayText.trim()}
+              style={{
+                padding: "8px 16px",
+                backgroundColor:
+                  saving || !isDirty ? "var(--border-color)" : "#3b82f6",
                 color: "white",
                 border: "none",
                 borderRadius: "4px",
-                cursor: saving || copyFeedback === "success" ? "not-allowed" : "pointer",
+                cursor: saving || !isDirty || !onSave ? "not-allowed" : "pointer",
                 fontWeight: 600,
-                minWidth: "120px",
+                minWidth: "80px",
               }}
             >
-              {copyFeedback === "success"
-                ? "✓"
-                : saving
-                  ? "Saving..."
-                  : buttonState === "save_copy"
-                    ? "Copy & Save"
-                    : "Copy"}
+              {saving ? "Saving…" : "Save"}
             </button>
           </div>
         </div>
 
-        {/* Save Error */}
         {saveError && (
           <div style={{ 
             padding: "8px 12px", 
@@ -221,7 +210,6 @@ export default function FinalReview({
           </div>
         )}
 
-        {/* Translation Error */}
         {letterTranslationError && (
           <div style={{ 
             padding: "6px 12px", 
@@ -235,7 +223,6 @@ export default function FinalReview({
           </div>
         )}
         
-        {/* Translation Edit Notice */}
         {letterViewLanguage !== "source" && (
           <div style={{ 
             padding: "6px 12px", 
@@ -250,7 +237,7 @@ export default function FinalReview({
         )}
 
         <textarea
-          value={getLetterDisplayText()}
+          value={displayText}
           onChange={handleTextChange}
           style={{
             flex: 1,

@@ -35,7 +35,10 @@ import { FEEDBACK_TYPES, firstFeedbackKeyWithItems, mergeCategoryItems } from ".
  * PhaseFlow only rebuilt `phasesRef` when the vendor *count* changed, so HMR / same-count
  * navigations kept a stale single-phase tree (wrong section titles and shelf keys).
  */
-const PHASE_FLOW_SCHEMA_VERSION = 2;
+const PHASE_FLOW_SCHEMA_VERSION = 3;
+
+/** After all plan models have returned (success or error), auto-run plan approval for ready cards. */
+const PLAN_AUTO_APPROVE_MS = 30000;
 
 function deepCloneJson(obj) {
   if (obj === undefined || obj === null) return obj;
@@ -99,6 +102,41 @@ const FEEDBACK_DESCRIPTIONS = {
   'user_fit_feedback': 'Compares the letter to your previous cover letters for voice and habits (same-hand cues): tone, structure, how strengths and caveats are framed—not the same topics or facts as older letters.',
   'human': 'Analyzes patterns from your previous letter revisions. Flags elements that were typically changed or removed in your past edits, based on your review history.',
   'human_feedback': 'Analyzes patterns from your previous letter revisions. Flags elements that were typically changed or removed in your past edits, based on your review history.',
+};
+
+/** Outward arrows — expand column to overlay (compact icon button). */
+function ExpandOutIcon({ size = 14 }) {
+  const s = size;
+  return (
+    <svg
+      width={s}
+      height={s}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M6 2H2v4M10 2h4v4M10 14h4v-4M6 14H2v-4" />
+    </svg>
+  );
+}
+
+const iconButtonStyle = {
+  flexShrink: 0,
+  width: 26,
+  height: 26,
+  padding: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  border: "1px solid var(--border-color, #d1d5db)",
+  borderRadius: 4,
+  background: "var(--panel-bg, #fff)",
+  color: "var(--text-color, #111827)",
+  cursor: "pointer",
 };
 
 // Tooltip component
@@ -683,7 +721,7 @@ function ExtractionCard({
         </div>
       )}
 
-      <div style={{ ...buttonBarStyle, position: "static", marginTop: 12 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
         <button
           onClick={() => onApprove(vendor)}
           disabled={loading || !(edits?.company_name || data?.company_name)}
@@ -700,23 +738,46 @@ function ExtractionCard({
   );
 }
 
+const VENDOR_COLUMN_WIDTH = 340;
+
 const cardStyle = {
   border: "1px solid #e5e7eb",
   borderRadius: 8,
   padding: 12,
-  paddingBottom: 36, // reserve space for bottom action buttons
   background: "#fafafa",
   display: "flex",
   flexDirection: "column",
-  gap: 8,
-  flex: "0 0 340px",
-  maxWidth: 340,
+  justifyContent: "flex-start",
+  alignItems: "stretch",
+  gap: 0,
+  flex: `0 0 ${VENDOR_COLUMN_WIDTH}px`,
+  width: VENDOR_COLUMN_WIDTH,
+  minWidth: VENDOR_COLUMN_WIDTH,
+  maxWidth: VENDOR_COLUMN_WIDTH,
+  maxHeight: "min(75vh, 900px)",
+  minHeight: 120,
   position: "relative",
   boxSizing: "border-box",
+  overflow: "hidden",
+};
+
+const cardHeaderStyle = {
+  flex: "0 0 auto",
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  paddingBottom: 8,
+  marginBottom: 8,
+  borderBottom: "1px solid #e5e7eb",
+  background: "#fafafa",
+  position: "sticky",
+  top: 0,
+  zIndex: 2,
 };
 
 const contentContainerStyle = {
   flex: 1,
+  minHeight: 0,
   display: "flex",
   flexDirection: "column",
   gap: 8,
@@ -724,16 +785,6 @@ const contentContainerStyle = {
   paddingRight: 2,
   paddingBottom: 8,
   boxSizing: "border-box",
-};
-
-const buttonBarStyle = {
-  display: "flex",
-  gap: 8,
-  flexWrap: "wrap",
-  position: "absolute",
-  bottom: 12,
-  left: 12,
-  right: 12,
 };
 
 // VendorCardWrapper - handles data from the "shelf" (pre-fetched by previous phase)
@@ -1213,6 +1264,78 @@ function VendorCard({
     });
   }, [isLoading, approved, thisPhaseDirty, cardPhase, previousPhaseApproved, feedbackKeys, feedbackItemApprovals, feedbackOverrides, feedback, phaseModule, cardPhaseEdits, cardPhaseData]);
 
+  const executePrimaryApprove = useCallback(async () => {
+    if (approved && !thisPhaseDirty) return;
+    if (!readyForApproval) return;
+    if (onClearPhaseFetchError && cardPhase) {
+      onClearPhaseFetchError(cardPhase, vendor);
+    }
+    setError(null);
+    if (hasPhaseData && thisPhaseDirty) {
+      setStatus("loading");
+      setData(null);
+      if (onStatusChange) onStatusChange(CardStatus.PENDING);
+    }
+    try {
+      if (onApprove) {
+        const snapshotAtApprove = deepCloneJson(cardPhaseEdits);
+        setApproved(true);
+        setApprovedEditsBaseline(snapshotAtApprove);
+        if (onPhaseComplete) {
+          onPhaseComplete(vendor, cardPhase, null);
+        }
+        if (onAfterApproveInExpanded) {
+          onAfterApproveInExpanded();
+        }
+        const nextPhaseData = await onApprove(cardPhase, vendor, cardPhaseEdits);
+        if (nextPhaseData === null) {
+          console.log(`Phase ${cardPhase} for ${vendor} still processing (heartbeat)`);
+          return;
+        }
+        if (onPhaseComplete && nextPhaseData) {
+          onPhaseComplete(vendor, cardPhase, nextPhaseData);
+        }
+      }
+    } catch (e) {
+      setError(e.message || String(e));
+      setApproved(false);
+      setApprovedEditsBaseline(null);
+      if (phaseObj?.approvedVendors) {
+        phaseObj.approvedVendors.delete(vendor);
+      }
+    }
+  }, [
+    approved,
+    thisPhaseDirty,
+    readyForApproval,
+    hasPhaseData,
+    onClearPhaseFetchError,
+    cardPhase,
+    vendor,
+    setError,
+    setStatus,
+    setData,
+    onStatusChange,
+    onApprove,
+    cardPhaseEdits,
+    setApproved,
+    setApprovedEditsBaseline,
+    onPhaseComplete,
+    onAfterApproveInExpanded,
+    phaseObj,
+  ]);
+
+  const planApproveRunnerRef = useRef(executePrimaryApprove);
+  planApproveRunnerRef.current = executePrimaryApprove;
+  useEffect(() => {
+    if (cardPhase !== "plan" || !phaseObj?.planApproveRunners) return undefined;
+    const wrapped = () => planApproveRunnerRef.current();
+    phaseObj.planApproveRunners.set(vendor, wrapped);
+    return () => {
+      phaseObj.planApproveRunners.delete(vendor);
+    };
+  }, [cardPhase, vendor, phaseObj, executePrimaryApprove]);
+
   // Helper to check if any field has translation for a language
   const hasAnyTranslation = useCallback((code) => {
     if (cardPhase === "draft") {
@@ -1264,83 +1387,123 @@ function VendorCard({
   }, [cardPhase, cardPhaseData, cardPhaseEdits, translation, feedbackKeys, feedbackOverrides, feedback]);
 
   const effectiveCardStyle = useOverlayWidth
-    ? { ...cardStyle, width: "100%", minWidth: 0, minHeight: 0, flex: "1 1 auto", maxWidth: "none" }
+    ? {
+        ...cardStyle,
+        width: "100%",
+        minWidth: 0,
+        maxWidth: "none",
+        flex: "1 1 auto",
+        minHeight: 0,
+        maxHeight: "none",
+        height: "100%",
+      }
     : cardStyle;
+
+  const approveButtonLabel = isLoading
+    ? "Processing..."
+    : approved
+      ? thisPhaseDirty
+        ? "Save and restart from here"
+        : "Approved"
+      : readyForApproval
+        ? "Approve"
+        : cardPhase === "plan" ||
+            cardPhase === "draft" ||
+            (cardPhase === "refine" && previousPhaseApproved)
+          ? "Check feedback"
+          : "Approve";
 
   return (
     <div style={{ ...effectiveCardStyle, opacity: disabled ? 0.6 : 1, pointerEvents: disabled ? "none" : "auto" }}>
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
-        <h4 style={{ margin: 0, flex: 1, textTransform: "capitalize" }}>{vendor}</h4>
-        {onExpand && !isExpanded && (
-          <button
-            type="button"
-            onClick={onExpand}
-            title="Expand to 80% width"
-            style={{
-              fontSize: 12,
-              padding: "2px 8px",
-              background: "var(--panel-bg)",
-              color: "var(--text-color)",
-              border: "1px solid var(--border-color)",
-              borderRadius: 4,
-              cursor: "pointer",
-            }}
-          >
-            Expand
-          </button>
-        )}
-        {isExpanded && onCloseExpand && (
-          <button
-            type="button"
-            onClick={onCloseExpand}
-            title="Close expanded view"
-            style={{
-              fontSize: 12,
-              padding: "2px 8px",
-              background: "var(--panel-bg)",
-              color: "var(--text-color)",
-              border: "1px solid var(--border-color)",
-              borderRadius: 4,
-              cursor: "pointer",
-            }}
-          >
-            × Close
-          </button>
-        )}
-        {isDone && (
-          <button onClick={() => setCollapsed(!collapsed)} style={{ fontSize: 12, padding: "4px 8px" }}>
-            {collapsed ? "Expand" : "Collapse"}
-          </button>
-        )}
-      </div>
-      
-      {/* Cost and Translation bar */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
-        {(phaseCost > 0 || runningTotal > 0) && (
-          <div style={{ fontSize: "11px", color: "var(--secondary-text-color)", whiteSpace: "nowrap" }}>
-            ${phaseCost.toFixed(4)} <span style={{ fontSize: "10px", opacity: 0.8 }}>(Total: ${runningTotal.toFixed(4)})</span>
+      <div style={cardHeaderStyle} data-vendor-column-header>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap" }}>
+          <h4 style={{ margin: 0, flex: "1 1 auto", textTransform: "capitalize", fontSize: 14, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {vendor}
+          </h4>
+          {onExpand && !isExpanded && (
+            <button
+              type="button"
+              onClick={onExpand}
+              title="Expand to 80% width"
+              aria-label="Expand column"
+              style={iconButtonStyle}
+            >
+              <ExpandOutIcon />
+            </button>
+          )}
+          {isExpanded && onCloseExpand && (
+            <button
+              type="button"
+              onClick={onCloseExpand}
+              title="Close expanded view"
+              aria-label="Close expanded view"
+              style={{ ...iconButtonStyle, fontSize: 16, lineHeight: 1 }}
+            >
+              ×
+            </button>
+          )}
+          {isDone && (
+            <button
+              type="button"
+              onClick={() => setCollapsed(!collapsed)}
+              style={{ fontSize: 11, padding: "2px 6px" }}
+            >
+              {collapsed ? "Show" : "Hide"}
+            </button>
+          )}
+          {!isLoadingWithoutData && cardPhase && phaseModule && (
+            <button
+              type="button"
+              onClick={() => {
+                void executePrimaryApprove();
+              }}
+              disabled={!readyForApproval || (approved && !thisPhaseDirty)}
+              style={{
+                fontSize: 12,
+                padding: "4px 10px",
+                flexShrink: 0,
+                opacity: readyForApproval ? 1 : 0.6,
+                cursor: readyForApproval ? "pointer" : "not-allowed",
+              }}
+            >
+              {approveButtonLabel}
+            </button>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+          {(phaseCost > 0 || runningTotal > 0) && (
+            <div style={{ fontSize: "11px", color: "var(--secondary-text-color)", whiteSpace: "nowrap" }}>
+              ${phaseCost.toFixed(4)} <span style={{ fontSize: "10px", opacity: 0.8 }}>(Total: ${runningTotal.toFixed(4)})</span>
+            </div>
+          )}
+          {cardPhase !== "draft" && (
+            <LanguageSelector
+              languages={translation.languages}
+              viewLanguage={translation.viewLanguage}
+              onLanguageChange={handleLanguageChange}
+              hasTranslation={hasAnyTranslation}
+              disabled={isLoading}
+              isTranslating={translation.isAnyTranslating}
+              size="small"
+            />
+          )}
+        </div>
+        {Object.keys(translation.translationErrors).length > 0 && (
+          <div style={{ color: "var(--error-text)", fontSize: "12px" }}>
+            {Object.values(translation.translationErrors)[0]}
           </div>
         )}
-        {/* Only show card-level language selector for phases without per-field selectors */}
-        {/* Draft phase has per-field selectors, so hide card-level selector */}
-        {cardPhase !== "draft" && (
-          <LanguageSelector
-            languages={translation.languages}
-            viewLanguage={translation.viewLanguage}
-            onLanguageChange={handleLanguageChange}
-            hasTranslation={hasAnyTranslation}
-            disabled={isLoading}
-            isTranslating={translation.isAnyTranslating}
-            size="small"
-          />
+        {cardPhase && phaseModule?.renderAdditionalButtons && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {phaseModule.renderAdditionalButtons({
+              isDone,
+              cardPhase,
+              collapsed,
+              vendor,
+            })}
+          </div>
         )}
       </div>
-      {/* Translation errors */}
-      {Object.keys(translation.translationErrors).length > 0 && (
-        <div style={{ color: "var(--error-text)", fontSize: "12px", marginBottom: 8 }}>
-          {Object.values(translation.translationErrors)[0]}
-        </div>
-      )}
 
       {isLoadingWithoutData && (
         <div style={{ padding: 6, color: "#6b7280", fontSize: 12 }}>
@@ -1386,7 +1549,6 @@ function VendorCard({
 
       {!isLoadingWithoutData && (
       <div style={contentContainerStyle}>
-        {/* Render content for this card's phase using phase module */}
         {cardPhase && phaseModule?.renderContent && (
           phaseModule.renderContent({
             EditableField,
@@ -1411,100 +1573,6 @@ function VendorCard({
             translation,
             inputClusterText,
             broadcastInputCluster,
-          })
-        )}
-      </div>
-      )}
-
-      {!isLoadingWithoutData && (
-      <div style={buttonBarStyle}>
-        {cardPhase && phaseModule && (
-          <button
-            onClick={async () => {
-              // If already approved (and not dirty/re-running), do nothing.
-              // This is a safety check against double-clicks if the button isn't disabled fast enough.
-              if (approved && !thisPhaseDirty) return;
-
-              // Clear any previous error when retrying
-              if (error) {
-                setError(null);
-              }
-              if (onClearPhaseFetchError && cardPhase) {
-                onClearPhaseFetchError(cardPhase, vendor);
-              }
-              
-              // When re-running (has data but dirty), clear data and set loading
-              if (hasPhaseData && thisPhaseDirty) {
-                setStatus("loading");
-                setData(null);
-                if (onStatusChange) onStatusChange(CardStatus.PENDING);
-              }
-              
-              try {
-                // Call parent's approve handler - this triggers the API and returns data for the next phase
-                if (onApprove) {
-                  const snapshotAtApprove = deepCloneJson(cardPhaseEdits);
-                  // Mark as approved locally IMMEDIATELY
-                  setApproved(true);
-                  setApprovedEditsBaseline(snapshotAtApprove);
-                  // Notify parent IMMEDIATELY that this card is approved
-                  // This will cause the next phase's card to mount in "Loading" state
-                  if (onPhaseComplete) {
-                    onPhaseComplete(vendor, cardPhase, null);
-                  }
-                  // Switch to next card immediately (don't wait for API) so the slow call doesn't block UX
-                  if (onAfterApproveInExpanded) {
-                    onAfterApproveInExpanded();
-                  }
-
-                  const nextPhaseData = await onApprove(cardPhase, vendor, cardPhaseEdits);
-                  // Handle 202 heartbeat response - request is still processing
-                  if (nextPhaseData === null) {
-                    // Request is still in flight (got 202), don't notify of data yet
-                    // The original request will complete and update state via the effect
-                    console.log(`Phase ${cardPhase} for ${vendor} still processing (heartbeat)`);
-                    return; 
-                  }
-                  // Notify parent AGAIN when data actually arrives
-                  // The next phase card will pick this up and stop its own loading state
-                  if (onPhaseComplete && nextPhaseData) {
-                    onPhaseComplete(vendor, cardPhase, nextPhaseData);
-                  }
-                }
-              } catch (e) {
-                setError(e.message || String(e));
-                // Status is computed by wrapper based on error state
-                setApproved(false); // Revert approval on error
-                setApprovedEditsBaseline(null);
-              }
-            }}
-            disabled={!readyForApproval || (approved && !thisPhaseDirty)}
-            style={{
-              opacity: readyForApproval ? 1 : 0.6,
-              cursor: readyForApproval ? "pointer" : "not-allowed",
-            }}
-          >
-            {isLoading
-              ? "Processing..."
-              : approved
-                ? thisPhaseDirty
-                  ? "Save and restart from here"
-                  : "Approved"
-                : readyForApproval
-                  ? "Approve"
-                  : cardPhase === "plan" ||
-                      cardPhase === "draft" ||
-                      (cardPhase === "refine" && previousPhaseApproved)
-                    ? "Check feedback"
-                    : "Approve"}
-          </button>
-        )}
-        {cardPhase && phaseModule?.renderAdditionalButtons && (
-          phaseModule.renderAdditionalButtons({
-            isDone,
-            cardPhase,
-            collapsed,
-            vendor,
           })
         )}
       </div>
@@ -1595,7 +1663,11 @@ function transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCoun
         return [];
       }
     };
-    
+
+    if (phaseName === "plan") {
+      phaseObj.planApproveRunners = new Map();
+    }
+
     return phaseObj;
   });
   
@@ -1617,6 +1689,8 @@ export default function PhaseFlow({
   sessionId,
   documentId = null,
   draftFeedbackRegistryRef = null,
+  /** Bumped when App starts a new vendor flow run — resets section collapse and plan auto-approve timers. */
+  flowResetKey = 0,
   // Callback for when a phase completes
   onPhaseComplete, // (vendor, phase, data) => void
   // Callback to register the phase objects with the parent
@@ -1641,6 +1715,115 @@ export default function PhaseFlow({
   
   // Track phase updates to trigger re-renders when status changes
   const [phaseUpdateTrigger, setPhaseUpdateTrigger] = useState(0);
+
+  const planVendorSettledAtRef = useRef({});
+  const prevPlanVendorSettledRef = useRef({});
+  const planAutoApproveTimerRef = useRef(null);
+
+  useEffect(() => {
+    setCollapsedPhases({ plan: false, draft: false });
+    planVendorSettledAtRef.current = {};
+    prevPlanVendorSettledRef.current = {};
+    if (planAutoApproveTimerRef.current) {
+      clearTimeout(planAutoApproveTimerRef.current);
+      planAutoApproveTimerRef.current = null;
+    }
+  }, [flowResetKey]);
+
+  useEffect(() => {
+    return () => {
+      if (planAutoApproveTimerRef.current) {
+        clearTimeout(planAutoApproveTimerRef.current);
+        planAutoApproveTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  /**
+   * When every vendor's plan model has returned (plan text or plan error), wait PLAN_AUTO_APPROVE_MS
+   * from the last return, then run the same approve path as the Approve button for each vendor that
+   * still has a non-empty plan and is not approved.
+   */
+  useEffect(() => {
+    const phases = phasesRef.current;
+    const planPhase = phases?.find((p) => p.phase === "plan");
+    if (!planPhase?.planApproveRunners || vendorsList.length === 0) {
+      if (planAutoApproveTimerRef.current) {
+        clearTimeout(planAutoApproveTimerRef.current);
+        planAutoApproveTimerRef.current = null;
+      }
+      return;
+    }
+
+    const now = Date.now();
+
+    for (const v of vendorsList) {
+      const data = planPhase.cardData[v];
+      const err = planPhase.cardErrors?.[v];
+      const hasPlanText =
+        data &&
+        typeof data.letter_plan === "string" &&
+        data.letter_plan.trim().length > 0;
+      const settled = Boolean(hasPlanText || err);
+      const prev = prevPlanVendorSettledRef.current[v];
+      if (settled && !prev) {
+        planVendorSettledAtRef.current[v] = now;
+      }
+      if (!settled) {
+        delete planVendorSettledAtRef.current[v];
+        prevPlanVendorSettledRef.current[v] = false;
+      } else {
+        prevPlanVendorSettledRef.current[v] = true;
+      }
+    }
+
+    const allSettled = vendorsList.every((v) => {
+      const data = planPhase.cardData[v];
+      const err = planPhase.cardErrors?.[v];
+      const hasPlanText =
+        data &&
+        typeof data.letter_plan === "string" &&
+        data.letter_plan.trim().length > 0;
+      return hasPlanText || err;
+    });
+
+    if (planAutoApproveTimerRef.current) {
+      clearTimeout(planAutoApproveTimerRef.current);
+      planAutoApproveTimerRef.current = null;
+    }
+
+    if (!allSettled) return;
+
+    const times = vendorsList.map((v) => planVendorSettledAtRef.current[v]).filter(Boolean);
+    const lastReturn = times.length ? Math.max(...times) : 0;
+    if (!lastReturn) return;
+
+    const delay = Math.max(0, PLAN_AUTO_APPROVE_MS - (Date.now() - lastReturn));
+
+    planAutoApproveTimerRef.current = setTimeout(() => {
+      planAutoApproveTimerRef.current = null;
+      const phasesNow = phasesRef.current;
+      const planNow = phasesNow?.find((p) => p.phase === "plan");
+      const runners = planNow?.planApproveRunners;
+      if (!planNow || !runners) return;
+
+      const pending = vendorsList.filter((v) => {
+        if (planNow.approvedVendors.has(v)) return false;
+        const d = planNow.cardData[v];
+        const lp = d?.letter_plan;
+        if (!lp || !String(lp).trim()) return false;
+        return true;
+      });
+
+      void Promise.all(
+        pending.map((v) => {
+          const run = runners.get(v);
+          if (!run) return Promise.resolve();
+          return Promise.resolve(run()).catch((e) => console.warn("Plan auto-approve failed for", v, e));
+        })
+      );
+    }, delay);
+  }, [phaseUpdateTrigger, vendorsList]);
 
   /** Shared INPUT_NEEDED answers across vendor cards (same input_cluster_key). */
   const [inputClusterText, setInputClusterText] = useState({});

@@ -29,6 +29,8 @@ from letter_writer.firestore_store import (
     get_personal_data_document,
     get_user_data,
     update_user_data_cache,
+    find_firestore_array_violations,
+    find_unsupported_firestore_leaves,
 )
 from letter_writer.retrieval import delete_documents, embed, retrieve_similar_job_offers, sanitize_search_results
 from openai import OpenAI
@@ -36,10 +38,15 @@ from openai import OpenAI
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-_SAVE_WITHOUT_LOG_USER_MESSAGE = (
-    "Saved without the activity log after the first save attempt failed. "
-    "Your letter and job details were kept."
-)
+def _save_without_log_warning(first_exc: Exception) -> str:
+    """User-visible warning when letter/job saved but activity log was dropped."""
+    detail = str(first_exc).strip() or first_exc.__class__.__name__
+    if detail.startswith("400 "):
+        detail = detail[4:]
+    return (
+        "Saved without the activity log because the first save attempt failed: "
+        f"{detail}. Your letter and job details were kept."
+    )
 
 
 def _upsert_document_with_event_log_fallback(
@@ -58,14 +65,21 @@ def _upsert_document_with_event_log_fallback(
     except Exception as first_exc:
         if not had_log:
             raise
+        log_blob = doc_data.get("application_event_log")
+        nested = find_firestore_array_violations(log_blob) if log_blob is not None else []
+        unsupported = find_unsupported_firestore_leaves(log_blob) if log_blob is not None else []
         logger.warning(
-            "Document upsert failed; retrying without application_event_log",
+            "Document upsert failed; retrying without application_event_log "
+            "(nested_array_paths=%s unsupported_leaf_paths=%s event_count=%s)",
+            nested[:8],
+            unsupported[:8],
+            len(log_blob) if isinstance(log_blob, list) else None,
             exc_info=first_exc,
         )
         stripped = {k: v for k, v in doc_data.items() if k != "application_event_log"}
         try:
             doc = upsert_document(collection, stripped, allow_update=allow_update, user_id=user_id)
-            return doc, [_SAVE_WITHOUT_LOG_USER_MESSAGE]
+            return doc, [_save_without_log_warning(first_exc)]
         except Exception:
             raise first_exc from first_exc
 

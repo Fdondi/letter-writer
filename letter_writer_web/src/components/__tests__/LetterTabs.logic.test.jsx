@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen, act } from '@testing-library/react';
 import LetterTabs from '../LetterTabs';
-import { AllTestProviders, getSaveCopyButton } from '../../utils/__tests__/testUtils';
+import { AllTestProviders } from '../../utils/__tests__/testUtils';
 
 /**
  * FOCUSED LOGIC TESTS WITH PROPER DND CONTEXT
@@ -241,7 +241,7 @@ describe('LetterTabs Core Logic Tests', () => {
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
       // Find and click the copy button
-      const copyButton = getSaveCopyButton();
+      const copyButton = screen.getByText('Copy');
       expect(copyButton).toBeInTheDocument();
 
       act(() => {
@@ -268,7 +268,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = getSaveCopyButton();
+      const copyButton = screen.getByText('Copy');
       
       act(() => {
         copyButton.click();
@@ -295,7 +295,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = getSaveCopyButton();
+      const copyButton = screen.getByText('Copy');
       
       act(() => {
         copyButton.click();
@@ -329,7 +329,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = getSaveCopyButton();
+      const copyButton = screen.getByText('Copy');
       
       act(() => {
         copyButton.click();
@@ -362,7 +362,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = getSaveCopyButton();
+      const copyButton = screen.getByText('Copy');
       
       act(() => {
         copyButton.click();
@@ -388,7 +388,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = getSaveCopyButton();
+      const copyButton = screen.getByText('Copy');
       
       act(() => {
         copyButton.click();
@@ -414,7 +414,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = getSaveCopyButton();
+      const copyButton = screen.getByText('Copy');
       
       act(() => {
         copyButton.click();
@@ -429,7 +429,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = getSaveCopyButton();
+      const copyButton = screen.getByText('Copy');
       expect(copyButton).toBeDisabled();
     });
 
@@ -447,8 +447,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = getSaveCopyButton();
-
+      const copyButton = screen.getByText('Copy');
       await act(async () => {
         copyButton.click();
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -483,7 +482,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={reorderedParagraphs} />);
 
-      const copyButton = getSaveCopyButton();
+      const copyButton = screen.getByText('Copy');
       
       act(() => {
         copyButton.click();

@@ -39,6 +39,43 @@ def _json_leaf_for_firestore(value: Any) -> Any:
     return str(value)
 
 
+def _is_firestore_scalar(value: Any) -> bool:
+    return value is None or isinstance(value, (bool, int, float, str, bytes, datetime, Vector))
+
+
+def find_firestore_array_violations(value: Any, path: str = "") -> List[str]:
+    """Return dotted paths where an array's direct element is another array (illegal in Firestore)."""
+    violations: List[str] = []
+    if isinstance(value, dict):
+        for k, v in value.items():
+            child = f"{path}.{k}" if path else str(k)
+            violations.extend(find_firestore_array_violations(v, child))
+    elif isinstance(value, (list, tuple)):
+        here = path or "[]"
+        for i, item in enumerate(value):
+            child = f"{path}[{i}]" if path else f"[{i}]"
+            if isinstance(item, (list, tuple)):
+                violations.append(child)
+            violations.extend(find_firestore_array_violations(item, child))
+    return violations
+
+
+def find_unsupported_firestore_leaves(value: Any, path: str = "") -> List[str]:
+    """Return dotted paths of values that are not Firestore scalars, dicts, or lists."""
+    leaves: List[str] = []
+    if isinstance(value, dict):
+        for k, v in value.items():
+            child = f"{path}.{k}" if path else str(k)
+            leaves.extend(find_unsupported_firestore_leaves(v, child))
+    elif isinstance(value, (list, tuple)):
+        for i, item in enumerate(value):
+            child = f"{path}[{i}]" if path else f"[{i}]"
+            leaves.extend(find_unsupported_firestore_leaves(item, child))
+    elif not _is_firestore_scalar(value):
+        leaves.append(path or "<root>")
+    return leaves
+
+
 def firestore_safe_for_write(value: Any) -> Any:
     """Return a Firestore-writable value.
 
@@ -48,6 +85,9 @@ def firestore_safe_for_write(value: Any) -> Any:
     ``INVALID_ARGUMENT: Property array contains an invalid nested entity.``
     We JSON-encode any list/tuple element that would still be a list or tuple
     after recursive sanitization so top-level array elements are never arrays.
+
+    Unknown leaf types are stringified (same as session ``_json_safe``) so values
+    like enums or other objects cannot reach Firestore inside arrays/maps.
     """
     if value is None or isinstance(value, (bool, int, float, str, bytes)):
         return value
@@ -68,7 +108,7 @@ def firestore_safe_for_write(value: Any) -> Any:
                     fixed.append(v)
             return fixed
         return items
-    return value
+    return str(value)
 
 
 def get_firestore_client() -> firestore.Client:
@@ -512,9 +552,22 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
     # Store vector if provided (for vector search)
     if "vector" in data:
         base["vector"] = data["vector"]
-    
+
+    safe_base = _firestore_safe_value(base)
+    if "application_event_log" in safe_base:
+        nested = find_firestore_array_violations(safe_base.get("application_event_log"))
+        unsupported = find_unsupported_firestore_leaves(safe_base.get("application_event_log"))
+        if nested or unsupported:
+            logger.warning(
+                "application_event_log still has Firestore issues after sanitize "
+                "(nested_arrays=%s unsupported_leaves=%s); re-sanitizing",
+                nested[:5],
+                unsupported[:5],
+            )
+            safe_base["application_event_log"] = _firestore_safe_value(safe_base["application_event_log"])
+
     # Upsert document (sanitize nested lists / invalid floats from client + event log payloads)
-    doc_ref.set(_firestore_safe_value(base), merge=effective_allow_update)
+    doc_ref.set(safe_base, merge=effective_allow_update)
     
     # Get the stored document
     stored_doc = doc_ref.get()

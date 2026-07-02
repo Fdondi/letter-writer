@@ -2,8 +2,7 @@ import React, { useState } from "react";
 import { useLanguages } from "../contexts/LanguageContext";
 
 /**
- * Language configuration component - reuses the existing pattern from LetterTabs
- * Shows enabled languages with X to remove, and input to add new ones
+ * Global language list: enabled languages, remove (X), and add by code.
  */
 export default function LanguageConfig() {
   const { enabledLanguages, addLanguage, toggleLanguage } = useLanguages();

@@ -50,7 +50,11 @@ function normalizeContextItems(rawItems) {
       const source = normalizeContextSource(it.source);
       const row = { text, source };
       if (source === CONTEXT_USER_SOURCE) {
-        row.persist_to_cv = it.persist_to_cv === false ? false : true;
+        const persistCv = it.persist_to_cv === false ? false : true;
+        const persistAgents =
+          it.persist_for_agents !== undefined ? it.persist_for_agents !== false : persistCv;
+        row.persist_to_cv = persistCv;
+        row.persist_for_agents = persistAgents;
       }
       out.push(row);
     }
@@ -100,7 +104,11 @@ export function normalizeCategoryItems(raw, categoryKey = "") {
             const source = normalizeContextSource(x.source);
             const base = { text: String(x.text ?? "").trimEnd(), source };
             if (source === CONTEXT_USER_SOURCE) {
-              base.persist_to_cv = x.persist_to_cv === false ? false : true;
+              const persistCv = x.persist_to_cv === false ? false : true;
+              const persistAgents =
+                x.persist_for_agents !== undefined ? x.persist_for_agents !== false : persistCv;
+              base.persist_to_cv = persistCv;
+              base.persist_for_agents = persistAgents;
             }
             return base;
           });

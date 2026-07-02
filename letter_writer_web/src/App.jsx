@@ -120,6 +120,7 @@ export default function App({ flow = "intake" }) {
   const [agenticStage, setAgenticStage] = useState("input"); // agentic flow: input | agentic | assembly
   const [phaseSessionId, setPhaseSessionId] = useState(null);
   const [phaseSessions, setPhaseSessions] = useState({}); // vendor -> session_id
+  const [phaseFlowResetKey, setPhaseFlowResetKey] = useState(0);
   const [savingFinal, setSavingFinal] = useState(false);
   const [activeTab, setActiveTab] = useState("compose"); // legacy, kept for CostDisplay/localState; main content is always compose
   const [showCvOverlay, setShowCvOverlay] = useState(false);
@@ -751,15 +752,36 @@ export default function App({ flow = "intake" }) {
     });
   };
 
+  const clearPhaseRegistryForNewRun = () => {
+    const phases = phaseRegistryRef.current;
+    if (!phases) return;
+    for (const phase of phases) {
+      phase.approvedVendors?.clear?.();
+      if (phase.cardData) {
+        for (const v of Object.keys(phase.cardData)) {
+          delete phase.cardData[v];
+        }
+      }
+      if (phase.phase === "plan" && phase.planApproveRunners) {
+        phase.planApproveRunners.clear();
+      }
+    }
+    setPhaseRegistryTrigger((prev) => prev + 1);
+  };
+
   // Helper to populate the "shelf" in PhaseFlow for a specific phase/vendor
   const populatePhaseShelf = useCallback((phaseName, vendor, data) => {
     if (phaseRegistryRef.current) {
       const phase = phaseRegistryRef.current.find((p) => p.phase === phaseName);
       if (phase) {
         phase.cardData[vendor] = data;
+        if (phaseName === "plan" && phase.approvedVendors) {
+          phase.approvedVendors.delete(vendor);
+        }
         if (phase.cardErrors && Object.prototype.hasOwnProperty.call(phase.cardErrors, vendor)) {
           delete phase.cardErrors[vendor];
         }
+        clearPhaseVendorError(phaseName, vendor);
         setPhaseRegistryTrigger((prev) => prev + 1);
       }
     }
@@ -2052,6 +2074,8 @@ export default function App({ flow = "intake" }) {
     setVendorStage("phases");
     // phaseState, phaseEdits, phaseErrors removed - cards own their state
     setPhaseSessions({});
+    clearPhaseRegistryForNewRun();
+    setPhaseFlowResetKey((k) => k + 1);
     
     const vendorList = Array.from(selectedVendors);
     const initialSessionId = phaseSessionId || (
@@ -2644,6 +2668,9 @@ export default function App({ flow = "intake" }) {
     setVendorParagraphs({});
     setFailedVendors({});
     setPhaseErrors({});
+    setPhaseSessions({});
+    clearPhaseRegistryForNewRun();
+    setPhaseFlowResetKey((k) => k + 1);
     setError(null);
     setFinalParagraphs([]);
     setAgenticFinalParagraphs([]);
@@ -3419,6 +3446,7 @@ export default function App({ flow = "intake" }) {
             <div style={{ display: (vendorStage === "assembly" && assemblyVisible) ? "none" : "block" }}>
               <PhaseFlow
                 vendorsList={vendorsList}
+                flowResetKey={phaseFlowResetKey}
                 onEditChange={updatePhaseEdit}
                 onApprove={approvePhase}
                 onApproveAll={approveAllPhase}
@@ -3504,7 +3532,7 @@ export default function App({ flow = "intake" }) {
                       }
                 }
                 onAddParagraph={onAddParagraph}
-                onSaveAndCopy={flow === "agentic" ? persistAgenticLetter : persistFinalLetter}
+                onSave={flow === "agentic" ? persistAgenticLetter : persistFinalLetter}
                 savingFinal={flow === "agentic" ? agenticSavingFinal : savingFinal}
                 vendorFeedback={vendorFeedback}
                 setVendorFeedback={setVendorFeedback}
@@ -3554,7 +3582,7 @@ export default function App({ flow = "intake" }) {
               }}
             >
               <span style={{ fontSize: 16, lineHeight: 1, flexShrink: 0 }} aria-hidden>
-                ›
+                ‹
               </span>
               {[
                 "Job offer",

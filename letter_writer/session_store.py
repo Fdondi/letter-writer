@@ -336,6 +336,8 @@ def finalize_application_event_log_for_document(
     merged_document: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     """Resolve phase-1 blob placeholders using the document about to be persisted."""
+    from letter_writer.firestore_store import firestore_safe_for_write
+
     sorted_paths = _build_doc_text_paths(merged_document or {})
     store = dict(blob_store or {})
     out: List[Dict[str, Any]] = []
@@ -344,7 +346,7 @@ def finalize_application_event_log_for_document(
         if isinstance(resolved, dict):
             resolved.pop(EVENT_LOG_DOCUMENT_FIELD, None)
         out.append(resolved)
-    return out
+    return firestore_safe_for_write(out)
 
 
 def append_application_event(event: Dict[str, Any]) -> None:
