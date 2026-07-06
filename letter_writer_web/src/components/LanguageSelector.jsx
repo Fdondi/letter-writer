@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 
 /**
  * Reusable language selector component
@@ -50,7 +50,7 @@ export default function LanguageSelector({
         const bg = color || "#3b82f6";
         const lbl = label || code.toUpperCase();
         const cached = hasTranslation(code);
-        
+
         return (
           <button
             key={code}

@@ -1496,6 +1496,59 @@ def resolve_search_instructions(
     return get_search_instructions()
 
 
+@traceable(run_type="chain", name="translate_with_llm")
+def translate_with_llm(
+    text: str,
+    target_language: str,
+    user_data: Dict[str, Any],
+    user_id: str,
+    source_language: Optional[str] = None,
+    *,
+    level_override: Optional[str] = None,
+    instructions_override: Optional[str] = None,
+) -> str:
+    """Translate text using an LLM, honoring per-language level and instructions."""
+    from .client import get_client
+    from .clients.base import ModelVendor
+    from .cost_tracker import track_api_cost
+    from .language_settings import build_translation_system_message
+
+    if not text or not str(text).strip():
+        return ""
+
+    client = get_client(ModelVendor.GEMINI)
+    system = build_translation_system_message(
+        user_data,
+        target_language,
+        source_language,
+        level_override=level_override,
+        instructions_override=instructions_override,
+    )
+    prompt = text
+    translated = client.call(ModelRole.TRANSLATION, system, [prompt])
+    cost = getattr(client, "total_cost", 0.0) or 0.0
+    if cost > 0:
+        track_api_cost(
+            user_id=user_id,
+            phase="translate",
+            vendor=ModelVendor.GEMINI.value,
+            cost=cost,
+            metadata={
+                "provider": "llm",
+                "character_count": len(text),
+                "target_language": target_language,
+            },
+        )
+    return (translated or "").strip()
+
+
+def _prepend_language_prefix(system: str, language_prefix: str) -> str:
+    prefix = (language_prefix or "").strip()
+    if not prefix:
+        return system
+    return prefix + ("\n\n" if system else "") + system
+
+
 @traceable(run_type="chain", name="company_research")
 def company_research(
     company_name: Optional[str],
@@ -1590,6 +1643,7 @@ def generate_letter_plan(
     structure_instructions: str = "",
     additional_user_info: str = "",
     hire_problem: str = "",
+    language_prefix: str = "",
 ) -> str:
     """High-level cover letter plan: strengths, weaknesses to frame, and layout (no draft prose)."""
     company_report = company_report if company_report is not None else ""
@@ -1616,7 +1670,8 @@ def generate_letter_plan(
             "--- END ADDITIONAL INFORMATION ---\n"
         )
 
-    system = (
+    system = _prepend_language_prefix(
+        (
         "You are an expert career strategist. Given the applicant's CV, reference cover letters, "
         "company research, and the target job, produce a **strategic plan** for a cover letter.\n"
         "Do NOT write the cover letter. Output only the plan (~10 lines max, telegraphic).\n"
@@ -1625,6 +1680,8 @@ def generate_letter_plan(
         + si
         + additional_context
         + "\n"
+        ),
+        language_prefix,
     )
 
     hire_block = ""
@@ -1659,6 +1716,7 @@ def generate_letter(
     additional_user_info: str = "",
     letter_plan: str = "",
     hire_problem: str = "",
+    language_prefix: str = "",
 ) -> str:
     """Generate a personalized cover letter based on CV, examples, company report, and job description.
     
@@ -1711,7 +1769,8 @@ def generate_letter(
             + "\n--- END STRATEGIC PLAN ---\n"
         )
 
-    system = (
+    system = _prepend_language_prefix(
+        (
         "You are an expert cover letter writer. Using the user's CV, relevant examples of job descriptions "
         "and their corresponding cover letters, the company report, and the target job description, "
         "produce a personalized cover letter in the same style as the examples. Keep it concise (max 1 page).\n"
@@ -1721,6 +1780,8 @@ def generate_letter(
         + plan_block
         + additional_context +
         "\n\n"
+        ),
+        language_prefix,
     )
     # #region agent log
     try:
@@ -2169,6 +2230,7 @@ def rewrite_letter(
     trace_dir: Path,
     letter_plan: str = "",
     style_instructions: str = "",
+    language_prefix: str = "",
 ) -> str:
     """Rewrite the cover letter incorporating all feedback."""
     si = (style_instructions or "").strip() or get_style_instructions()
@@ -2180,7 +2242,8 @@ def rewrite_letter(
             + lp
             + "\n--- END STRATEGIC PLAN ---\n"
         )
-    system = (
+    system = _prepend_language_prefix(
+        (
         "You are an expert cover letter editor. Given an original cover letter and multiple "
         "pieces of feedback, rewrite the letter to address all concerns while maintaining "
         "its core message and keeping it concise (max 1 page).\n"
@@ -2188,6 +2251,8 @@ def rewrite_letter(
         + si
         + plan_block
         + "\n"
+        ),
+        language_prefix,
     )
     had_feedback = False
     prompt = "========== Original Cover Letter:\n" + original_letter + "\n==========\n"

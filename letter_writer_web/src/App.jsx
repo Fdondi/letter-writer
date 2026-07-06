@@ -38,6 +38,7 @@ import { syncStateToServer } from "./utils/localState.js";
 import { showNotification } from "./utils/apiNotifications";
 import { phases as phaseModules } from "./components/phases";
 import { translateText } from "./utils/translate";
+import { getLanguageTranslateParams } from "./utils/languageLevels";
 import { useLanguages } from "./contexts/LanguageContext";
 import { createTextDiff } from "./utils/diff";
 import { getScaleConfig, getEffectiveRating, getEffectiveImportance, buildCompetenceRatingsForProfile } from "./utils/competenceScales";
@@ -354,7 +355,7 @@ export default function App({ flow = "intake" }) {
   const [companyResearchNotification, setCompanyResearchNotification] = useState(null);
   
   // Translation state for job text
-  const { enabledLanguages } = useLanguages();
+  const { enabledLanguages, languages: profileLanguages, translationProvider } = useLanguages();
   const [referenceSidebarCollapsed, setReferenceSidebarCollapsed] = useState(false);
   const [competenceHighlightTerm, setCompetenceHighlightTerm] = useState(null);
   const [assemblyHighlightCtx, setAssemblyHighlightCtx] = useState(() => ({
@@ -737,8 +738,14 @@ export default function App({ flow = "intake" }) {
     setJobTextTranslationError(null);
 
     try {
-      const translated = await translateText(jobText, code, null);
-      setJobTextTranslations((prev) => ({ ...prev, [code]: translated }));
+      const { translation, warning } = await translateText(
+        jobText,
+        code,
+        null,
+        getLanguageTranslateParams(profileLanguages, code, translationProvider),
+      );
+      if (warning) setJobTextTranslationError(warning);
+      setJobTextTranslations((prev) => ({ ...prev, [code]: translation }));
       setLastJobTextSnapshot(jobText);
     } catch (e) {
       setJobTextTranslationError(e.message || "Translation failed");

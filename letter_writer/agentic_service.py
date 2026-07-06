@@ -31,7 +31,7 @@ from .generation import (
     is_agentic_skip,
     rewrite_letter,
 )
-from .phased_service import get_effective_additional_user_info, get_metadata_field
+from .phased_service import get_effective_additional_user_info, get_metadata_field, language_prefix_for_session
 from .cost_tracker import track_api_cost
 from .retrieval import select_top_documents
 from .research import company_research
@@ -2222,6 +2222,7 @@ def run_agentic_draft(
         cv_text, top_docs, company_report, job_text, ai_client, trace_dir,
         style_instructions, additional_user_info,
         hire_problem=hire_problem,
+        language_prefix=language_prefix_for_session(metadata, ModelVendor(draft_vendor), _user_id(session)),
     )
     cost = getattr(ai_client, "total_cost", 0.0) or 0.0
 
@@ -2336,6 +2337,7 @@ def run_agentic_draft_multi(
             cv_text, top_docs, company_report, job_text, ai_client, trace_dir,
             style_instructions, additional_user_info,
             hire_problem=hire_problem,
+            language_prefix=language_prefix_for_session(metadata, ModelVendor(vendor), uid),
         )
         cost = getattr(ai_client, "total_cost", 0.0) or 0.0
         return (vendor, letter, cost)
@@ -2963,6 +2965,7 @@ def run_agentic_refine(
         return state
 
     user_id = _user_id(session)
+    refine_metadata = state.get("metadata") or {}
     sample_n = _default_refine_sample_n() if refine_sample_count is None else max(1, min(20, int(refine_sample_count)))
     refine_samples: Dict[str, List[str]] = {}
     vendor_errors: Dict[str, str] = dict(state.get("vendor_errors") or {})
@@ -3002,6 +3005,7 @@ def run_agentic_refine(
             ai_client, trace_dir,
             letter_plan="",
             style_instructions="",
+            language_prefix=language_prefix_for_session(refine_metadata, ModelVendor(vendor), user_id),
         )
         cost_inc = getattr(ai_client, "total_cost", 0.0) or 0.0
         return vendor, letter, cost_inc

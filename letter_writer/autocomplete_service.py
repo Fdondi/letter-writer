@@ -28,6 +28,7 @@ from letter_writer.autocomplete_core import (
 from letter_writer.client import get_client
 from letter_writer.clients.base import ModelRole
 from letter_writer.cost_tracker import track_api_cost
+from letter_writer.language_settings import build_language_system_prefix
 from letter_writer.generation import get_style_instructions
 from letter_writer.personal_data_sections import (
     get_autocomplete_max_words,
@@ -150,6 +151,7 @@ def run_autocomplete_completion(
         active_section_plan=active_section_plan or "",
         active_section_proposal=active_section_proposal or "",
         section_proposal_stale=section_proposal_stale,
+        language_prefix=build_language_system_prefix(user_data or {}, language or ""),
     )
 
     normalized_key = normalize_autocomplete_model_key(model_key) or model_key
@@ -398,6 +400,7 @@ def _autocomplete_plan_client_setup(
         requirements=requirements,
         competences=competences,
         point_of_contact=point_of_contact,
+        language_prefix=build_language_system_prefix(user_data or {}, language or ""),
     )
 
     explicit = str(model_key).strip() if model_key and str(model_key).strip() else None

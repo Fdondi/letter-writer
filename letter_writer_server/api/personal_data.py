@@ -38,6 +38,11 @@ from letter_writer.personal_data_sections import get_style_instructions as get_u
 from letter_writer.personal_data_sections import get_search_instructions as get_user_search_instructions
 from letter_writer.personal_data_sections import get_structure_instructions as get_user_structure_instructions
 from letter_writer.cost_tracker import get_all_model_pricing
+from letter_writer.language_settings import (
+    get_default_languages,
+    get_translation_provider,
+    normalize_default_languages,
+)
 from datetime import datetime, timezone
 
 router = APIRouter()
@@ -336,7 +341,8 @@ async def get_personal_data(session: Session = Depends(get_session)):
     
     # Logic similar to views.py to parse revisions, languages, etc.
     revisions = get_cv_revisions(user_data)
-    default_languages = user_data.get("default_languages") or []
+    default_languages = get_default_languages(user_data)
+    translation_provider = get_translation_provider(user_data)
     default_models = get_models(user_data)
     default_background_models = get_background_models(user_data)
     agentic_draft_model = get_agentic_draft_model(user_data)
@@ -357,6 +363,7 @@ async def get_personal_data(session: Session = Depends(get_session)):
         "revisions": response_revisions,
         "extra_info": get_extra_info(user_data),
         "default_languages": default_languages,
+        "translation_provider": translation_provider,
         "default_models": default_models,
         "default_background_models": default_background_models,
         "agentic_draft_model": agentic_draft_model,
@@ -422,7 +429,12 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
         now = datetime.utcnow()
         
         if "default_languages" in data:
-            updates["default_languages"] = data["default_languages"]
+            updates["default_languages"] = normalize_default_languages(data["default_languages"])
+        if "translation_provider" in data:
+            provider = str(data["translation_provider"] or "google").strip().lower()
+            if provider not in ("google", "llm"):
+                raise HTTPException(status_code=400, detail="translation_provider must be 'google' or 'llm'")
+            updates["translation_provider"] = wrap_new_field("translation_provider", provider, now)
         if "default_models" in data:
             updates["models"] = wrap_new_field("models", data["default_models"], now)
             # Update session

@@ -66,6 +66,7 @@ class ModelRole(Enum):
     AGENTIC = "agentic"
     AUTOCOMPLETE = "autocomplete"
     AUTOCOMPLETE_PLAN = "autocomplete_plan"
+    TRANSLATION = "translation"
 
 
 class BaseClient:

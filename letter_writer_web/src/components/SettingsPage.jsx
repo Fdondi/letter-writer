@@ -14,7 +14,7 @@ export default function SettingsPage({
   onCompetenceScalesChange,
   guardBeforeEnablingLocal = (fn) => fn(),
 }) {
-  const { languages, saveDefaults, setLanguages } = useLanguages();
+  const { languages, saveDefaults, setLanguages, translationProvider, setTranslationProvider } = useLanguages();
   const [savingLanguages, setSavingLanguages] = useState(false);
   const [defaultModels, setDefaultModels] = useState(new Set());
   const [savingModels, setSavingModels] = useState(false);
@@ -95,6 +95,9 @@ export default function SettingsPage({
           } else if (data.default_models?.length) {
             setAutocompleteModels(new Set(data.default_models));
           }
+          if (data.translation_provider === "llm" || data.translation_provider === "google") {
+            setTranslationProvider(data.translation_provider);
+          }
         }
       } catch (e) {
         console.error("Failed to load settings:", e);
@@ -121,7 +124,7 @@ export default function SettingsPage({
     try {
       setSavingLanguages(true);
       setError(null);
-      await saveDefaults();
+      await saveDefaults(languages, translationProvider);
     } catch (e) {
       setError("Failed to save language defaults");
     } finally {
@@ -390,9 +393,32 @@ export default function SettingsPage({
             color: "var(--secondary-text-color)",
           }}
         >
-          Configure the languages available for translation. These defaults will
-          be loaded when you start a new session.
+          Configure translation languages, CEFR levels, and language-specific instructions for generation and translation.
+          German defaults include umlaut rules. Levels apply to cover letter generation (job language) and LLM translation.
         </p>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Translation provider</div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 6, cursor: "pointer" }}>
+            <input
+              type="radio"
+              name="translation_provider"
+              value="google"
+              checked={translationProvider === "google"}
+              onChange={() => setTranslationProvider("google")}
+            />
+            Google Translate (fast; no CEFR level control)
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+            <input
+              type="radio"
+              name="translation_provider"
+              value="llm"
+              checked={translationProvider === "llm"}
+              onChange={() => setTranslationProvider("llm")}
+            />
+            LLM (uses level &amp; language instructions; Gemini flash-lite)
+          </label>
+        </div>
         <LanguageConfig />
       </div>
 

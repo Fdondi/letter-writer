@@ -1,19 +1,32 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { DEFAULT_LANGUAGES } from "../utils/useTranslation";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
+import {
+  defaultInstructionsForCode,
+  defaultLevelForCode,
+  normalizeLanguageEntry,
+  normalizeLanguages,
+} from "../utils/languageLevels";
 
 const LanguageContext = createContext();
 
+function withLanguageDefaults(languages) {
+  return normalizeLanguages(languages).map((lang) => ({
+    ...lang,
+    level: lang.level || defaultLevelForCode(lang.code),
+    instructions: lang.instructions ?? defaultInstructionsForCode(lang.code),
+  }));
+}
+
 /**
  * Language configuration context provider
- * Manages the list of available languages for translation across the app
+ * Manages translation languages, CEFR levels, and per-language instructions.
  */
 export function LanguageProvider({ children }) {
-  // Load from backend on mount, fallback to defaults
-  const [languages, setLanguages] = useState(DEFAULT_LANGUAGES);
+  const [languages, setLanguages] = useState(withLanguageDefaults(DEFAULT_LANGUAGES));
+  const [translationProvider, setTranslationProvider] = useState("google");
   const [loading, setLoading] = useState(true);
 
-  // Fetch defaults from backend
   useEffect(() => {
     const fetchDefaults = async () => {
       try {
@@ -21,7 +34,10 @@ export function LanguageProvider({ children }) {
         if (res.ok) {
           const data = await res.json();
           if (data.default_languages && Array.isArray(data.default_languages) && data.default_languages.length > 0) {
-            setLanguages(data.default_languages);
+            setLanguages(withLanguageDefaults(data.default_languages));
+          }
+          if (data.translation_provider === "llm" || data.translation_provider === "google") {
+            setTranslationProvider(data.translation_provider);
           }
         }
       } catch (e) {
@@ -38,21 +54,20 @@ export function LanguageProvider({ children }) {
     if (!normalizedCode) return;
 
     setLanguages((prev) => {
-      // Check if language already exists
       const exists = prev.some((lang) => lang.code === normalizedCode);
       if (exists) {
-        // Enable it if it was disabled
         return prev.map((lang) =>
           lang.code === normalizedCode ? { ...lang, enabled: true } : lang
         );
       }
-      // Add new language
-      const newLang = {
+      const newLang = normalizeLanguageEntry({
         code: normalizedCode,
         label: label || normalizedCode.toUpperCase(),
         color: color || getDefaultColorForCode(normalizedCode),
         enabled: true,
-      };
+        level: defaultLevelForCode(normalizedCode),
+        instructions: defaultInstructionsForCode(normalizedCode),
+      });
       return [...prev, newLang];
     });
   };
@@ -76,30 +91,61 @@ export function LanguageProvider({ children }) {
       )
     );
   };
-  
-  // Save current languages as defaults to backend
-  const saveDefaults = async (newLanguages) => {
+
+  const updateLanguageLevel = useCallback((code, level) => {
+    updateLanguage(code, { level });
+  }, []);
+
+  const updateLanguageInstructions = useCallback((code, instructions) => {
+    updateLanguage(code, { instructions });
+  }, []);
+
+  const saveDefaults = useCallback(async (newLanguages, providerOverride = null) => {
     try {
-      // Use provided languages or current state
-      const languagesToSave = newLanguages || languages;
-      
+      const languagesToSave = withLanguageDefaults(newLanguages || languages);
+      const provider = providerOverride ?? translationProvider;
+
       await fetchWithHeartbeat("/api/personal-data/", {
         method: "POST",
         body: JSON.stringify({
           default_languages: languagesToSave,
+          translation_provider: provider,
         }),
       });
-      
-      // Update local state if new languages provided
+
       if (newLanguages) {
-        setLanguages(newLanguages);
+        setLanguages(languagesToSave);
+      }
+      if (providerOverride) {
+        setTranslationProvider(providerOverride);
       }
       return true;
     } catch (e) {
       console.error("Failed to save default languages:", e);
       return false;
     }
-  };
+  }, [languages, translationProvider]);
+
+  const persistLanguages = useCallback(async (nextLanguages, provider = null) => {
+    const languagesToSave = withLanguageDefaults(nextLanguages);
+    setLanguages(languagesToSave);
+    return saveDefaults(languagesToSave, provider);
+  }, [saveDefaults]);
+
+  const updateLanguageLevelAndSave = useCallback(async (code, level) => {
+    const next = languages.map((lang) =>
+      lang.code === code ? { ...lang, level } : lang
+    );
+    await persistLanguages(next);
+  }, [languages, persistLanguages]);
+
+  const getLevelForCode = useCallback(
+    (code) => {
+      const entry = languages.find((l) => l.code === code);
+      return entry?.level || defaultLevelForCode(code);
+    },
+    [languages]
+  );
 
   const getEnabledLanguages = () => languages.filter((lang) => lang.enabled);
 
@@ -108,10 +154,16 @@ export function LanguageProvider({ children }) {
       value={{
         languages,
         enabledLanguages: getEnabledLanguages(),
+        translationProvider,
+        setTranslationProvider,
         addLanguage,
         removeLanguage,
         toggleLanguage,
         updateLanguage,
+        updateLanguageLevel,
+        updateLanguageInstructions,
+        updateLanguageLevelAndSave,
+        getLevelForCode,
         setLanguages,
         saveDefaults,
         loading,
@@ -122,9 +174,6 @@ export function LanguageProvider({ children }) {
   );
 }
 
-/**
- * Hook to use language context
- */
 export function useLanguages() {
   const context = useContext(LanguageContext);
   if (!context) {
@@ -133,20 +182,16 @@ export function useLanguages() {
   return context;
 }
 
-/**
- * Get a default color for a language code
- */
 function getDefaultColorForCode(code) {
-  // Simple hash-based color generation for consistency
   const colors = [
-    "#3b82f6", // blue
-    "#6366f1", // indigo
-    "#f97316", // orange
-    "#8b5cf6", // purple
-    "#10b981", // green
-    "#ef4444", // red
-    "#f59e0b", // amber
-    "#06b6d4", // cyan
+    "#3b82f6",
+    "#6366f1",
+    "#f97316",
+    "#8b5cf6",
+    "#10b981",
+    "#ef4444",
+    "#f59e0b",
+    "#06b6d4",
   ];
   let hash = 0;
   for (let i = 0; i < code.length; i++) {

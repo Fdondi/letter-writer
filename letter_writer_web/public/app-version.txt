@@ -1,3 +1,10 @@
+0.52.6 - Remove duplicate Languages row and OR/AND toggle from LetterTabs
+0.52.5 - Language config: vertical pencil SVG, per-language accent colors
+0.52.4 - Enforce CEFR level in LLM prompts; pass level on translate; warn on Google
+0.52.3 - Remove section-level translation buttons where fields have their own
+0.52.2 - Level controls only in page-top LanguageConfig, not on each translate button
+0.52.1 - Compact language level row in Settings (pencil for instructions)
+0.52.0 - Per-language CEFR levels, instructions, LLM translation option
 0.51.0 - Render plan phase markdown in read-only view
 0.50.2 - Fix upstream instruction merge; per-chunk Take default / Keep mine
 0.50.1 - Run App.hooks tests during frontend Docker build

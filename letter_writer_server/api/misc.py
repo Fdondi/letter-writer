@@ -372,19 +372,62 @@ class TranslateRequest(BaseModel):
     text: str
     target_language: str
     source_language: Optional[str] = None
+    provider: Optional[str] = None
+    target_level: Optional[str] = None
+    language_instructions: Optional[str] = None
 
 @router.post("/translate/")
 async def translate(data: TranslateRequest, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     import httpx
     import os
     from letter_writer.cost_tracker import calculate_translation_cost, track_api_cost
-
-    api_key = os.environ.get("GOOGLE_TRANSLATE_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="Translation service is not configured")
+    from letter_writer.firestore_store import get_user_data
+    from letter_writer.generation import translate_with_llm
+    from letter_writer.language_settings import get_translation_provider, resolve_language_entry
 
     if not data.text or not data.text.strip():
         return {"status": "ok", "translation": ""}
+
+    user = session.get("user")
+    user_id = user["id"] if user else "anonymous"
+    user_data = get_user_data(user_id, use_cache=False) or {} if user else {}
+    provider = (data.provider or get_translation_provider(user_data)).strip().lower()
+    level_override = (data.target_level or "").strip() or None
+    instructions_override = data.language_instructions if data.language_instructions is not None else None
+    resolved = resolve_language_entry(
+        user_data,
+        data.target_language,
+        level_override=level_override,
+        instructions_override=instructions_override,
+    )
+    applied_level = (resolved or {}).get("level")
+
+    if provider == "llm":
+        try:
+            translated = translate_with_llm(
+                data.text,
+                data.target_language,
+                user_data,
+                user_id,
+                source_language=data.source_language,
+                level_override=level_override,
+                instructions_override=instructions_override,
+            )
+            return with_user_monthly_cost({
+                "status": "ok",
+                "translation": translated,
+                "provider": "llm",
+                "level_applied": applied_level,
+            }, session)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("[TRANSLATE] LLM error: %s: %s", type(e).__name__, e)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    api_key = os.environ.get("GOOGLE_TRANSLATE_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Translation service is not configured (GOOGLE_TRANSLATE_API_KEY missing; switch to LLM translation in Settings)")
 
     params = {
         "q": data.text,
@@ -411,8 +454,6 @@ async def translate(data: TranslateRequest, session: Session = Depends(get_sessi
         translated = body["data"]["translations"][0]["translatedText"]
 
         # Track cost
-        user = session.get("user")
-        user_id = user["id"] if user else "anonymous"
         char_count = len(data.text)
         cost = calculate_translation_cost(char_count)
         track_api_cost(
@@ -420,10 +461,19 @@ async def translate(data: TranslateRequest, session: Session = Depends(get_sessi
             phase="translate",
             vendor="google_translate",
             cost=cost,
-            metadata={"character_count": char_count, "target_language": data.target_language},
+            metadata={"character_count": char_count, "target_language": data.target_language, "provider": "google"},
         )
 
-        return with_user_monthly_cost({"status": "ok", "translation": translated}, session)
+        return with_user_monthly_cost({
+            "status": "ok",
+            "translation": translated,
+            "provider": "google",
+            "level_applied": None,
+            "warning": (
+                f"Google Translate ignores CEFR level ({applied_level or 'unset'}). "
+                "Switch to LLM translation in Settings to honor language level."
+            ) if applied_level else None,
+        }, session)
 
     except HTTPException:
         raise

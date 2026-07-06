@@ -45,6 +45,7 @@ from .personal_data_sections import (
     format_agent_feedback_context_for_prompt,
     get_agent_feedback_context,
 )
+from .language_settings import build_language_system_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +177,26 @@ def get_effective_additional_user_info(
         + "\n\n---\n\nSaved notes for model context (from feedback):\n\n"
         + appendix
     )
+
+
+def language_prefix_for_session(
+    metadata: dict,
+    vendor: ModelVendor,
+    user_id: Optional[str],
+) -> str:
+    """CEFR level + language-specific instructions for the job posting language."""
+    if not user_id or str(user_id).strip() in ("", "anonymous"):
+        return ""
+    try:
+        user_data = get_user_data(user_id, use_cache=False) or {}
+    except Exception:
+        logger.warning("language_prefix_for_session: failed to load user profile", exc_info=True)
+        return ""
+    lang = get_metadata_field(metadata, vendor, "language", "")
+    if not (lang or "").strip():
+        # Fall back to common metadata when vendor-local language is unset.
+        lang = str((metadata.get("common") or {}).get("language") or "")
+    return build_language_system_prefix(user_data, lang)
 
 
 def set_metadata_field(metadata: dict, vendor: ModelVendor, field: str, value: str):
@@ -449,6 +470,7 @@ def advance_to_plan(
         _reset_client_counters(ai_client)
         logger.info("[PHASE] plan -> %s :: generate_letter_plan (LETTER_PLAN)", vendor.value)
         hire_problem = str(get_metadata_field(session.metadata, vendor, "hire_problem", "") or "")
+        language_prefix = language_prefix_for_session(session.metadata, vendor, user_id)
         letter_plan = generate_letter_plan(
             cv_text,
             top_docs,
@@ -459,6 +481,7 @@ def advance_to_plan(
             structure_instructions=si,
             additional_user_info=additional_user_info,
             hire_problem=hire_problem,
+            language_prefix=language_prefix,
         )
         _update_cost(state, ai_client, phase="plan", user_id=user_id, vendor_str=vendor.value)
         _reset_client_counters(ai_client)
@@ -581,6 +604,7 @@ def advance_to_draft(
     # User notes for this job plus persisted feedback Q&A (agent_feedback_context in profile)
     additional_user_info = get_effective_additional_user_info(session.metadata, vendor, user_id)
     hire_problem = str(get_metadata_field(session.metadata, vendor, "hire_problem", "") or "")
+    language_prefix = language_prefix_for_session(session.metadata, vendor, user_id)
 
     state.company_report = company_report
     state.top_docs = top_docs
@@ -601,6 +625,7 @@ def advance_to_draft(
             additional_user_info,
             letter_plan=letter_plan,
             hire_problem=hire_problem,
+            language_prefix=language_prefix,
         )
         
         # Capture draft cost before feedback generation
@@ -751,6 +776,7 @@ def advance_to_refinement(
             trace_dir,
             letter_plan=letter_plan,
             style_instructions=si,
+            language_prefix=language_prefix_for_session(session.metadata, vendor, user_id),
         )
 
         if fancy:

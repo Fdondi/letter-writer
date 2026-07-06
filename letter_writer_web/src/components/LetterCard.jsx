@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { translateText } from "../utils/translate";
+import { getLanguageTranslateParams } from "../utils/languageLevels";
 import LanguageSelector from "./LanguageSelector";
 import { useLanguages } from "../contexts/LanguageContext";
 
@@ -34,6 +35,8 @@ export default function LetterCard({ title, text, loading = false, error = null,
     languageContext = null;
   }
   const buttonLanguages = languages || languageContext?.enabledLanguages || [];
+  const profileLanguages = languageContext?.languages || buttonLanguages;
+  const translationProvider = languageContext?.translationProvider || "google";
 
   const requestTranslation = async (targetLanguage) => {
     if (isTranslating) return;
@@ -45,8 +48,14 @@ export default function LetterCard({ title, text, loading = false, error = null,
     setIsTranslating(true);
     setTranslationError(null);
     try {
-      const translated = await translateText(text, targetLanguage, null);
-      setTranslations((prev) => ({ ...prev, [targetLanguage]: translated }));
+      const { translation, warning } = await translateText(
+        text,
+        targetLanguage,
+        null,
+        getLanguageTranslateParams(profileLanguages, targetLanguage, translationProvider),
+      );
+      if (warning) setTranslationError(warning);
+      setTranslations((prev) => ({ ...prev, [targetLanguage]: translation }));
       setLastSourceSnapshot(text);
       setViewLanguage(targetLanguage);
     } catch (e) {

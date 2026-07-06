@@ -3,6 +3,7 @@ import { useDrag, useDrop } from "react-dnd";
 import { HoverContext } from "../contexts/HoverContext";
 import { v4 as uuidv4 } from "uuid";
 import { translateText } from "../utils/translate";
+import { getLanguageTranslateParams } from "../utils/languageLevels";
 import { ItemTypes } from "../constants";
 import LanguageSelector from "./LanguageSelector";
 import { useLanguages } from "../contexts/LanguageContext";
@@ -526,14 +527,18 @@ export default function Paragraph({
     setIsTranslating(true);
     setTranslationError(null);
     try {
-      const translated = await translateText(paragraph.text, targetLanguage, null);
+      const { translation, warning } = await translateText(
+        paragraph.text,
+        targetLanguage,
+        null,
+        getLanguageTranslateParams(profileLanguages, targetLanguage, translationProvider),
+      );
+      if (warning) setTranslationError(warning);
       
       if (isControlled && onTranslationLoaded) {
-        // onTranslationLoaded now sets both translations AND viewLanguage
-        // so we don't need to call onViewLanguageChange separately
-        onTranslationLoaded(targetLanguage, translated);
+        onTranslationLoaded(targetLanguage, translation);
       } else {
-        setLocalTranslations((prev) => ({ ...prev, [targetLanguage]: translated }));
+        setLocalTranslations((prev) => ({ ...prev, [targetLanguage]: translation }));
         setLocalViewLanguage(targetLanguage);
       }
       
@@ -553,6 +558,8 @@ export default function Paragraph({
     languageContext = null;
   }
   const buttonLanguages = languages.length ? languages : (languageContext?.enabledLanguages || []);
+  const profileLanguages = languageContext?.languages || buttonLanguages;
+  const translationProvider = languageContext?.translationProvider || "google";
 
   const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   const idleBg = color?.replace(/hsl\(([^)]+)\)/, isDarkMode ? "hsla($1,0.5)" : "hsla($1,0.3)") || "var(--panel-bg)";

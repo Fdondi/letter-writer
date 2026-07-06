@@ -1448,95 +1448,78 @@ function VendorCard({
 
   return (
     <div style={{ ...effectiveCardStyle, opacity: disabled ? 0.6 : 1, pointerEvents: disabled ? "none" : "auto" }}>
-      <div style={cardHeaderStyle} data-vendor-column-header>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap" }}>
-          <h4 style={{ margin: 0, flex: "1 1 auto", textTransform: "capitalize", fontSize: 14, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {vendor}
-          </h4>
-          {onExpand && !isExpanded && (
-            <button
-              type="button"
-              onClick={onExpand}
-              title="Expand to 80% width"
-              aria-label="Expand column"
-              style={iconButtonStyle}
-            >
-              <ExpandOutIcon />
-            </button>
-          )}
-          {isExpanded && onCloseExpand && (
-            <button
-              type="button"
-              onClick={onCloseExpand}
-              title="Close expanded view"
-              aria-label="Close expanded view"
-              style={{ ...iconButtonStyle, fontSize: 16, lineHeight: 1 }}
-            >
-              ×
-            </button>
-          )}
-          {isDone && (
-            <button
-              type="button"
-              onClick={() => setCollapsed(!collapsed)}
-              style={{ fontSize: 11, padding: "2px 6px" }}
-            >
-              {collapsed ? "Show" : "Hide"}
-            </button>
-          )}
-          {!isLoadingWithoutData && cardPhase && phaseModule && (
-            <button
-              type="button"
-              onClick={() => {
-                void executePrimaryApprove();
-              }}
-              disabled={!readyForApproval || (approved && !thisPhaseDirty)}
-              style={{
-                fontSize: 12,
-                padding: "4px 10px",
-                flexShrink: 0,
-                opacity: readyForApproval ? 1 : 0.6,
-                cursor: readyForApproval ? "pointer" : "not-allowed",
-              }}
-            >
-              {approveButtonLabel}
-            </button>
-          )}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-          {(phaseCost > 0 || runningTotal > 0) && (
-            <div style={{ fontSize: "11px", color: "var(--secondary-text-color)", whiteSpace: "nowrap" }}>
-              ${phaseCost.toFixed(4)} <span style={{ fontSize: "10px", opacity: 0.8 }}>(Total: ${runningTotal.toFixed(4)})</span>
-            </div>
-          )}
-          {cardPhase !== "draft" && (
-            <LanguageSelector
-              languages={translation.languages}
-              viewLanguage={translation.viewLanguage}
-              onLanguageChange={handleLanguageChange}
-              hasTranslation={hasAnyTranslation}
-              disabled={isLoading}
-              isTranslating={translation.isAnyTranslating}
-              size="small"
-            />
-          )}
-        </div>
-        {Object.keys(translation.translationErrors).length > 0 && (
-          <div style={{ color: "var(--error-text)", fontSize: "12px" }}>
-            {Object.values(translation.translationErrors)[0]}
-          </div>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
+        <h4 style={{ margin: 0, flex: 1, textTransform: "capitalize" }}>{vendor}</h4>
+        {onExpand && !isExpanded && (
+          <button
+            type="button"
+            onClick={onExpand}
+            title="Expand to 80% width"
+            style={{
+              fontSize: 12,
+              padding: "2px 8px",
+              background: "var(--panel-bg)",
+              color: "var(--text-color)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 4,
+              cursor: "pointer",
+            }}
+          >
+            Expand
+          </button>
         )}
-        {cardPhase && phaseModule?.renderAdditionalButtons && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {phaseModule.renderAdditionalButtons({
-              isDone,
-              cardPhase,
-              collapsed,
-              vendor,
-            })}
-          </div>
+        {isExpanded && onCloseExpand && (
+          <button
+            type="button"
+            onClick={onCloseExpand}
+            title="Close expanded view"
+            style={{
+              fontSize: 12,
+              padding: "2px 8px",
+              background: "var(--panel-bg)",
+              color: "var(--text-color)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 4,
+              cursor: "pointer",
+            }}
+          >
+            × Close
+          </button>
+        )}
+        {isDone && (
+          <button onClick={() => setCollapsed(!collapsed)} style={{ fontSize: 12, padding: "4px 8px" }}>
+            {collapsed ? "Expand" : "Collapse"}
+          </button>
         )}
       </div>
+      
+      {/* Cost and Translation bar */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
+        {(phaseCost > 0 || runningTotal > 0) && (
+          <div style={{ fontSize: "11px", color: "var(--secondary-text-color)", whiteSpace: "nowrap" }}>
+            ${phaseCost.toFixed(4)} <span style={{ fontSize: "10px", opacity: 0.8 }}>(Total: ${runningTotal.toFixed(4)})</span>
+          </div>
+        )}
+        {/* Only show card-level language selector for phases without per-field selectors */}
+        {/* Draft phase has per-field selectors, so hide card-level selector */}
+        {cardPhase !== "draft" && (
+          <LanguageSelector
+            languages={translation.languages}
+            viewLanguage={translation.viewLanguage}
+            onLanguageChange={handleLanguageChange}
+            hasTranslation={hasAnyTranslation}
+            disabled={isLoading}
+            isTranslating={translation.isAnyTranslating}
+            size="small"
+          />
+        )}
+      </div>
+      {/* Translation errors */}
+      {Object.keys(translation.translationErrors).length > 0 && (
+        <div style={{ color: "var(--error-text)", fontSize: "12px", marginBottom: 8 }}>
+          {Object.values(translation.translationErrors)[0]}
+        </div>
+      )}
 
       {isLoadingWithoutData && (
         <div style={{ padding: 6, color: "#6b7280", fontSize: 12 }}>

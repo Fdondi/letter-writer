@@ -719,8 +719,12 @@ def build_autocomplete_cache_prefix(
     active_section_plan: str = "",
     active_section_proposal: str = "",
     section_proposal_stale: bool = False,
+    language_prefix: str = "",
 ) -> str:
     parts: List[str] = []
+    prefix = (language_prefix or "").strip()
+    if prefix:
+        parts.append("========== Language requirements ==========\n" + prefix)
     summary = (plan_context_summary or "").strip()
     if summary:
         parts.append(

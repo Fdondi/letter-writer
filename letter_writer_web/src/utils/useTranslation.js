@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { translateText } from "./translate";
+import { getLanguageTranslateParams } from "./languageLevels";
 import { useLanguages } from "../contexts/LanguageContext";
 
 export const DEFAULT_LANGUAGES = [
-  { code: "de", label: "DE", color: "#3b82f6", enabled: true },
-  { code: "en", label: "EN", color: "#6366f1", enabled: true },
+  { code: "de", label: "DE", color: "#3b82f6", enabled: true, level: "B2", instructions: "Verwende echte Umlaute (ä, ö, ü, ß) — niemals ae, oe, ue oder ss als Ersatz." },
+  { code: "en", label: "EN", color: "#6366f1", enabled: true, level: "C2", instructions: "" },
 ];
 
 /**
@@ -23,6 +24,8 @@ export function useTranslation(languages = null) {
   }
   
   const effectiveLanguages = languages || (languageContext?.enabledLanguages || DEFAULT_LANGUAGES);
+  const profileLanguages = languageContext?.languages || effectiveLanguages;
+  const translationProvider = languageContext?.translationProvider || "google";
   const [viewLanguage, setViewLanguage] = useState("source"); // Global view language (for backward compatibility)
   const [fieldViewLanguages, setFieldViewLanguages] = useState({}); // Map of fieldId -> viewLanguage
   const [translations, setTranslations] = useState({}); // Map of fieldId -> {langCode -> translatedText}
@@ -93,12 +96,23 @@ export function useTranslation(languages = null) {
     });
 
     try {
-      const translated = await translateText(sourceText, targetLanguage, null);
+      const { translation, warning } = await translateText(
+        sourceText,
+        targetLanguage,
+        null,
+        getLanguageTranslateParams(profileLanguages, targetLanguage, translationProvider),
+      );
+      if (warning) {
+        setTranslationErrors((prev) => ({
+          ...prev,
+          [fieldId]: warning,
+        }));
+      }
       setTranslations((prev) => ({
         ...prev,
         [fieldId]: {
           ...(prev[fieldId] || {}),
-          [targetLanguage]: translated,
+          [targetLanguage]: translation,
         },
       }));
       setSourceSnapshots((prev) => ({ ...prev, [fieldId]: sourceText }));
@@ -114,7 +128,7 @@ export function useTranslation(languages = null) {
         return next;
       });
     }
-  }, [translations, sourceSnapshots, isTranslating]);
+  }, [translations, sourceSnapshots, isTranslating, profileLanguages, translationProvider]);
 
   /**
    * Persist user edits to a cached translation (does not change source text).

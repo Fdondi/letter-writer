@@ -8,8 +8,6 @@ import { HoverProvider } from "../contexts/HoverContext";
 import { v4 as uuidv4 } from "uuid";
 import { useLanguages } from "../contexts/LanguageContext";
 import JobDescriptionColumn from "./JobDescriptionColumn";
-import LanguageSelector from "./LanguageSelector";
-import { translateText } from "../utils/translate";
 import { normalizeForMatch } from "../utils/textMatch";
 import { useLetterSave } from "../hooks/useLetterSave";
 
@@ -160,7 +158,6 @@ export default function LetterTabs({
   }, [originalText]);
 
   const [translationStates, setTranslationStates] = useState({}); // { [id]: { translations: {}, viewLanguage: 'source' } }
-  const [translationError, setTranslationError] = useState(null);
   const [translateAllViewLanguage, setTranslateAllViewLanguage] = useState("source");
   const [translateAllInProgress, setTranslateAllInProgress] = useState(false);
   const finalColumnRef = useRef(null);
@@ -193,7 +190,10 @@ export default function LetterTabs({
     applyFinalColumnScrollRestore();
   }, [finalParagraphs, translationStates]);
   
-  const { enabledLanguages: languageOptions } = useLanguages();
+  // Use shared language context instead of local state
+  const { enabledLanguages: languageOptions, addLanguage, toggleLanguage } = useLanguages();
+  const [languageInput, setLanguageInput] = useState("");
+  const [languageLogic, setLanguageLogic] = useState("OR"); // "OR" or "AND"
 
   const toggleCollapse = (vendor) => {
     setCollapsed((prev) =>
@@ -539,7 +539,7 @@ export default function LetterTabs({
       return;
     }
     setTranslateAllInProgress(true);
-    setTranslationError(null);
+    setColumnError(null);
     try {
       const updates = {};
       for (let i = 0; i < finalParagraphs.length; i++) {
@@ -560,7 +560,7 @@ export default function LetterTabs({
       });
       setTranslateAllViewLanguage(targetLanguage);
     } catch (e) {
-      setTranslationError(e.message || "Translation failed");
+      setColumnError(e.message || "Translation failed");
     } finally {
       setTranslateAllInProgress(false);
     }
@@ -710,13 +710,13 @@ export default function LetterTabs({
             )}
           </div>
         </h4>
-        {/* Line 2: language selector + Copy / Save (under Expand) */}
+        {/* Line 2: language selector + Save & Copy (under Expand) */}
         <div
           style={{
             padding: "6px 12px 8px",
             display: "flex",
             alignItems: "center",
-            justifyContent: "space-between",
+            justifyContent: "flex-end",
             gap: 8,
             flexWrap: "wrap",
             borderTop: "1px solid var(--border-color)",
@@ -730,74 +730,16 @@ export default function LetterTabs({
             isTranslating={translateAllInProgress}
             size="tiny"
           />
-          <div style={{ display: "flex", gap: 6 }}>
-            <button
-              id="copy-letter-btn"
-              type="button"
-              onClick={handleCopy}
-              disabled={finalParagraphs.length === 0 || copyFeedback === "success"}
-              title="Copy letter to clipboard"
-              style={{
-                padding: "4px 8px",
-                fontSize: "12px",
-                minWidth: "4.5em",
-                background:
-                  finalParagraphs.length === 0
-                    ? "var(--border-color)"
-                    : copyFeedback === "success"
-                      ? "#10b981"
-                      : "var(--panel-bg)",
-                color: copyFeedback === "success" ? "white" : "var(--text-color)",
-                border: "1px solid var(--border-color)",
-                borderRadius: 4,
-                cursor:
-                  finalParagraphs.length === 0 || copyFeedback === "success"
-                    ? "not-allowed"
-                    : "pointer",
-                transition: "background 0.2s ease",
-              }}
-            >
-              {copyFeedback === "success" ? "✓" : "Copy"}
-            </button>
-            <button
-              id="save-letter-btn"
-              type="button"
-              onClick={handleSave}
-              disabled={finalParagraphs.length === 0 || savingFinal || !isDirty || !onSave}
-              title={isDirty ? "Save letter to your documents" : "No unsaved changes"}
-              style={{
-                padding: "4px 8px",
-                fontSize: "12px",
-                minWidth: "4.5em",
-                background:
-                  finalParagraphs.length === 0 || savingFinal || !isDirty
-                    ? "var(--border-color)"
-                    : "#3b82f6",
-                color: "white",
-                border: "none",
-                borderRadius: 4,
-                cursor:
-                  finalParagraphs.length === 0 || savingFinal || !isDirty || !onSave
-                    ? "not-allowed"
-                    : "pointer",
-              }}
-            >
-              {savingFinal ? "Saving…" : "Save"}
-            </button>
-          </div>
+          <SaveAndCopyButton
+            id="save-copy-btn"
+            onClick={saveCopy.handleClick}
+            disabled={saveCopy.disabled}
+            savedState={saveCopy.buttonSavedState}
+            label={saveCopy.label}
+          />
         </div>
       </div>
-      {(saveError || translationError) && (
-        <div style={{
-          padding: "4px 12px",
-          fontSize: "12px",
-          background: "var(--error-bg)",
-          color: "var(--error-text)",
-          borderBottom: "1px solid var(--border-color)"
-        }}>
-          {saveError || translationError}
-        </div>
-      )}
+      <SaveCopyErrorBanner message={saveCopy.saveError || columnError} />
       {/* Scrollable content area */}
       <div 
         ref={(node) => {

@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect } from "react";
 import LanguageSelector from "./LanguageSelector";
 import { translateText } from "../utils/translate";
+import { getLanguageTranslateParams } from "../utils/languageLevels";
 import CompetencesList from "./CompetencesList";
+import { useLanguages } from "../contexts/LanguageContext";
 import { getEffectiveRating, getEffectiveImportance } from "../utils/competenceScales";
 
 // Job Description Column with resizable/collapsible requirements section
@@ -27,6 +29,7 @@ const JobDescriptionColumn = ({
   competenceCounts = {},
   finalAssemblyText = "",
 }) => {
+  const { languages: profileLanguages, translationProvider } = useLanguages();
   const showPlanContextTab = contextSummary !== undefined;
   const [referenceTab, setReferenceTab] = useState("job"); // "job" | "report" | "planContext"
   const [requirementsHeight, setRequirementsHeight] = useState(25); // Percentage of column height
@@ -88,8 +91,10 @@ const JobDescriptionColumn = ({
     setJobTranslationError(null);
     
     try {
-      const translated = await translateText(jobText, targetLanguage, null);
-      setJobTranslations((prev) => ({ ...prev, [targetLanguage]: translated }));
+      const params = getLanguageTranslateParams(profileLanguages, targetLanguage, translationProvider);
+      const { translation, warning } = await translateText(jobText, targetLanguage, null, params);
+      if (warning) setJobTranslationError(warning);
+      setJobTranslations((prev) => ({ ...prev, [targetLanguage]: translation }));
       setJobViewLanguage(targetLanguage);
       setLastJobSource(jobText);
     } catch (err) {
@@ -116,9 +121,12 @@ const JobDescriptionColumn = ({
     setReqTranslationError(null);
     
     try {
-      // Translate each requirement individually
+      const params = getLanguageTranslateParams(profileLanguages, targetLanguage, translationProvider);
       const translatedReqs = await Promise.all(
-        requirementsList.map(req => translateText(req, targetLanguage, null))
+        requirementsList.map(async (req) => {
+          const { translation } = await translateText(req, targetLanguage, null, params);
+          return translation;
+        })
       );
       setReqTranslations((prev) => ({ ...prev, [targetLanguage]: translatedReqs }));
       setReqViewLanguage(targetLanguage);

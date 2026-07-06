@@ -4,6 +4,7 @@ import { useLanguages } from "../contexts/LanguageContext";
 import LanguageSelector from "./LanguageSelector";
 import { translateText } from "../utils/translate";
 import { useLetterSave } from "../hooks/useLetterSave";
+import { getLanguageTranslateParams } from "../utils/languageLevels";
 
 export default function FinalReview({
   initialText,
@@ -17,6 +18,10 @@ export default function FinalReview({
   saving,
 }) {
   const [text, setText] = useState(initialText || "");
+  const [buttonState, setButtonState] = useState("save_copy"); // "save_copy" | "copy"
+  const [copyFeedback, setCopyFeedback] = useState(null); // null | "success"
+  const copyFeedbackTimerRef = useRef(null);
+  const [saveError, setSaveError] = useState(null);
   const { enabledLanguages } = useLanguages();
   
   // Translation state for the letter
@@ -67,8 +72,14 @@ export default function FinalReview({
     setLetterTranslationError(null);
     
     try {
-      const translated = await translateText(text, targetLanguage, null);
-      setLetterTranslations((prev) => ({ ...prev, [targetLanguage]: translated }));
+      const { translation, warning } = await translateText(
+        text,
+        targetLanguage,
+        null,
+        getLanguageTranslateParams(profileLanguages, targetLanguage, translationProvider),
+      );
+      if (warning) setLetterTranslationError(warning);
+      setLetterTranslations((prev) => ({ ...prev, [targetLanguage]: translation }));
       setLetterViewLanguage(targetLanguage);
       setLastLetterSource(text);
     } catch (err) {

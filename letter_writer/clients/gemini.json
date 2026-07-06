@@ -16,7 +16,8 @@
     "letter_refine":    { "model": "gemini-3.1-pro-preview",   "thinking_level": "High" },
     "agentic":          { "model": "gemini-2.5-flash-lite", "thinking_level": null },
     "autocomplete":         { "model": "gemini-2.5-flash-lite", "thinking_level": null },
-    "autocomplete_plan":    { "model": "gemini-3.1-pro-preview", "thinking_level": "High" }
+    "autocomplete_plan":    { "model": "gemini-3.1-pro-preview", "thinking_level": "High" },
+    "translation":          { "model": "gemini-2.5-flash-lite", "thinking_level": null }
   },
   "models":{
     "gemini-3.5-flash": {
