@@ -15,3 +15,10 @@ gcloud-credentials.json
 db.sqlite3
 certs/*
 
+
+# local fine-tuning artifacts
+finetune/cache/
+finetune/datasets/
+finetune/runs/
+finetune/.venv/
+data_backup/

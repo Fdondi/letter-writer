@@ -1,0 +1,14 @@
+# Training environment for finetune/ — keep separate from the app env.
+# Install torch first with a CUDA build, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+# If you use torch cu132+, bitsandbytes may lack a matching DLL; finetune scripts
+# auto-set BNB_CUDA_VERSION (e.g. 130). Editor 4-bit needs bitsandbytes working.
+transformers>=4.46,<5
+trl>=0.12,<0.16
+peft>=0.13
+datasets>=3.0
+accelerate>=1.0
+bitsandbytes>=0.44   # 4-bit base for the editor; Windows wheels exist since 0.43
+datasets>=3.4.0
+# Only needed for --source cloud (reuses the app's Firestore conventions):
+# google-cloud-firestore>=2.16

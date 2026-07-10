@@ -1,4 +1,4 @@
-0.52.6 - Remove duplicate Languages row and OR/AND toggle from LetterTabs
+0.52.9 - Auto BNB_CUDA_VERSION when torch cu132 lacks matching bitsandbytes DLL
 0.52.5 - Language config: vertical pencil SVG, per-language accent colors
 0.52.4 - Enforce CEFR level in LLM prompts; pass level on translate; warn on Google
 0.52.3 - Remove section-level translation buttons where fields have their own
