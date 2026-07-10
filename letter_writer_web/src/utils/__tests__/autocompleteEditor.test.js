@@ -32,6 +32,7 @@ import {
   shouldExtendAutocompleteCache,
   isSectionProposalStale,
   canUseProposalAutocompleteBuffer,
+  isProposalBufferExhaustedAtCursor,
   shouldUseCompletionModelForSection,
   buildSectionProposalAutocompleteBuffer,
   PROPOSAL_AUTOCOMPLETE_CACHE_SOURCE,
@@ -109,12 +110,35 @@ describe("proposal autocomplete buffer", () => {
   test("completion model when no proposal", () => {
     expect(shouldUseCompletionModelForSection({ proposal: "" })).toBe(true);
     expect(
-      shouldUseCompletionModelForSection({
-        proposal: "Guide",
-        proposalSourceBody: "Hi",
-        body: "Hi",
-      })
+      shouldUseCompletionModelForSection(
+        {
+          proposal: "Hi, guide to more",
+          proposalSourceBody: "Hi",
+          body: "Hi",
+        },
+        2
+      )
     ).toBe(false);
+    expect(
+      shouldUseCompletionModelForSection(
+        {
+          proposal: "Hello world",
+          proposalSourceBody: "Hello world",
+          body: "Hello world",
+        },
+        11
+      )
+    ).toBe(true);
+    expect(
+      isProposalBufferExhaustedAtCursor(
+        {
+          proposal: "Hello world",
+          proposalSourceBody: "Hello world",
+          body: "Hello world",
+        },
+        11
+      )
+    ).toBe(true);
   });
 
   test("proposal cache source marker", () => {

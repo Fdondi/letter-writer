@@ -82,10 +82,20 @@ export function canUseProposalAutocompleteBuffer(section) {
   return Boolean(section?.proposal?.trim()) && !isSectionProposalStale(section);
 }
 
-/** Smaller completion model runs only after a manual edit (or when no proposal exists). */
-export function shouldUseCompletionModelForSection(section) {
+/** True when the hidden proposal has no more text to stream at the cursor. */
+export function isProposalBufferExhaustedAtCursor(section, cursorInSection) {
+  if (!canUseProposalAutocompleteBuffer(section)) return false;
+  return !buildSectionProposalAutocompleteBuffer(section, cursorInSection);
+}
+
+/** Completion model after a manual edit, when no proposal exists, or when the proposal buffer is exhausted. */
+export function shouldUseCompletionModelForSection(section, cursorInSection) {
   if (!section?.proposal?.trim()) return true;
-  return isSectionProposalStale(section);
+  if (isSectionProposalStale(section)) return true;
+  if (cursorInSection !== undefined && cursorInSection !== null) {
+    return isProposalBufferExhaustedAtCursor(section, cursorInSection);
+  }
+  return false;
 }
 
 /**

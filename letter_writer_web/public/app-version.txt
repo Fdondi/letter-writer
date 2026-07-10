@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 0.58.0 - Fix mypy: Optional prompt_cache_key parts; Mistral _reraise_sdk_error NoReturn
 0.57.0 - Build-gate page render smoke tests; fix LetterTabs Save&Copy import break in final assembly
 0.57.0 - Silent host session backups with Settings restore
@@ -43,3 +44,7 @@
 0.48.0 - Make plan step optional in vendor flow
 0.47.0 - Shorten letter plan to ~10-line telegraphic format
 0.46.0 - Parse changelog format in app-version.txt
+=======
+0.45.0 - Tab uses completion model when hidden proposal is exhausted, without requiring a manual edit
+0.44.1
+>>>>>>> a4a313d (fine tune autocomplete)

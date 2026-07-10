@@ -621,8 +621,10 @@ export default function AutocompleteFlow({
       extendCache = false,
       silent = false,
     } = {}) => {
+      const el = textareaRefs.current[activeSectionIndex];
+      const cur = el ? el.selectionStart ?? cursorInSection : cursorInSection;
       const activeSec = sections[activeSectionIndex];
-      if (!extendCache && !shouldUseCompletionModelForSection(activeSec)) {
+      if (!extendCache && !shouldUseCompletionModelForSection(activeSec, cur)) {
         if (!silent) {
           setError(
             "Completion model is used only after you edit a paragraph. Tab streams the hidden proposal until then."
@@ -630,9 +632,6 @@ export default function AutocompleteFlow({
         }
         return;
       }
-
-      const el = textareaRefs.current[activeSectionIndex];
-      const cur = el ? el.selectionStart ?? cursorInSection : cursorInSection;
       const reqId = ++requestIdRef.current;
       const letterTextAtRequest = sectionsToBodyText(sections);
       const prefixKey = getCompletionPrefixKey(activeSectionIndex, cur);
@@ -780,7 +779,8 @@ export default function AutocompleteFlow({
       if (
         cache.raw &&
         cache.prefixKey === prefixKey &&
-        isProposalAutocompleteCache(cache)
+        isProposalAutocompleteCache(cache) &&
+        cache.offset < cache.raw.length
       ) {
         return true;
       }
@@ -901,18 +901,12 @@ export default function AutocompleteFlow({
             setError(null);
             return;
           }
-          if (shouldUseCompletionModelForSection(activeSec)) {
-            clearCompletionCache();
-            const modelForTab = resolveCompletionModel(completionModel, modelUsed, cycleModels);
-            requestCompletion({
-              model: modelForTab || undefined,
-              autoInsert: true,
-            });
-          } else {
-            setError(
-              "Hidden proposal has no more text at the cursor. Edit the paragraph to get completion-model suggestions."
-            );
-          }
+          clearCompletionCache();
+          const modelForTab = resolveCompletionModel(completionModel, modelUsed, cycleModels);
+          requestCompletion({
+            model: modelForTab || undefined,
+            autoInsert: true,
+          });
         }
         return;
       }
@@ -1052,8 +1046,8 @@ export default function AutocompleteFlow({
           <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--secondary-text-color)" }}>
             Section titles and goals guide the AI only — the saved letter uses paragraph text
             below each goal. Tab first streams the hidden proposal (up to {settings.autocomplete_max_words} words
-            {settings.autocomplete_stop_on_period ? ", until period" : ""}); after you edit a paragraph, Tab uses the
-            completion model to adjust. Chunks are cached for fast repeat Tab.
+            {settings.autocomplete_stop_on_period ? ", until period" : ""}); when that runs out—or after you edit a
+            paragraph—Tab uses the completion model. Chunks are cached for fast repeat Tab.
             Space: accept ghost text. Pick the active model in the panel on the left.
           </p>
 
