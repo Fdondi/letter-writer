@@ -3355,11 +3355,14 @@ export default function App({ flow = "intake" }) {
             alignItems: "flex-start",
             gap: 12,
             width: "100%",
+            height: "calc(100vh - 120px)",
             minHeight: "calc(100vh - 120px)",
+            maxHeight: "calc(100vh - 120px)",
             boxSizing: "border-box",
+            overflow: "hidden",
           }}
         >
-        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
         <div
           style={{
             display: "flex",
@@ -3488,7 +3491,7 @@ export default function App({ flow = "intake" }) {
             </div>
           )}
           {flow === "vendor" && (
-            <div style={{ display: (vendorStage === "assembly" && assemblyVisible) ? "none" : "block" }}>
+            <div style={{ display: (vendorStage === "assembly" && assemblyVisible) ? "none" : "flex", flex: 1, minHeight: 0, flexDirection: "column", overflow: "auto" }}>
               <PhaseFlow
                 vendorsList={vendorsList}
                 flowResetKey={phaseFlowResetKey}
