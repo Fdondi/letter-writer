@@ -1609,26 +1609,10 @@ def company_research(
     prompt = company_prompt + user_company_context + poc_context
     if len(prompt) == 0:
         logger.warning("Not enough information to research the company.")
-        # #region agent log
-        try:
-            import json
-            with open("/home/fdondi/Documents/#GitHub/letter-writer/.cursor/debug-5b1b21.log", "a") as _f:
-                _f.write(json.dumps({"sessionId": "5b1b21", "hypothesisId": "H1", "location": "generation.py:company_research", "message": "company_research returning None (empty prompt)", "data": {"company_name": company_name, "job_text_is_none": job_text is None}, "timestamp": __import__("time").time() * 1000}) + "\n")
-        except Exception as e:
-            logger.debug("trace write failed: %s", e)
-        # #endregion
         return None
 
     result = client.call(model, system, [prompt], search=search)
     (trace_dir / "company_research.txt").write_text(result, encoding="utf-8")
-    # #region agent log
-    try:
-        import json
-        with open("/home/fdondi/Documents/#GitHub/letter-writer/.cursor/debug-5b1b21.log", "a") as _f:
-            _f.write(json.dumps({"sessionId": "5b1b21", "hypothesisId": "H1", "location": "generation.py:company_research", "message": "company_research return", "data": {"result_is_none": result is None, "result_type": type(result).__name__}, "timestamp": __import__("time").time() * 1000}) + "\n")
-    except Exception as e:
-        logger.debug("trace write failed: %s", e)
-    # #endregion
     return result
 
 
@@ -1723,14 +1707,6 @@ def generate_letter(
     Args:
         additional_user_info: User-provided information about themselves relevant to this position (not in CV).
     """
-    # #region agent log
-    try:
-        import json
-        with open("/home/fdondi/Documents/#GitHub/letter-writer/.cursor/debug-5b1b21.log", "a") as _f:
-            _f.write(json.dumps({"sessionId": "5b1b21", "hypothesisId": "H3", "location": "generation.py:generate_letter", "message": "generate_letter entry", "data": {"company_report_is_none": company_report is None, "job_text_is_none": job_text is None, "company_report_type": type(company_report).__name__, "job_text_type": type(job_text).__name__}, "timestamp": __import__("time").time() * 1000}) + "\n")
-    except Exception as e:
-        logger.debug("trace write failed: %s", e)
-    # #endregion
     company_report = company_report if company_report is not None else ""
     job_text = job_text if job_text is not None else ""
     # Validate CV text is present
@@ -1783,14 +1759,6 @@ def generate_letter(
         ),
         language_prefix,
     )
-    # #region agent log
-    try:
-        import json
-        with open("/home/fdondi/Documents/#GitHub/letter-writer/.cursor/debug-5b1b21.log", "a") as _f:
-            _f.write(json.dumps({"sessionId": "5b1b21", "hypothesisId": "H3", "location": "generation.py:generate_letter:before_prompt", "message": "before prompt build", "data": {"company_report_is_none": company_report is None, "job_text_is_none": job_text is None}, "timestamp": __import__("time").time() * 1000}) + "\n")
-    except Exception as e:
-        logger.debug("trace write failed: %s", e)
-    # #endregion
     hire_block = ""
     hp = (hire_problem or "").strip()
     if hp:

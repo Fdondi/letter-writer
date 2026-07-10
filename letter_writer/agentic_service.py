@@ -2305,14 +2305,6 @@ def run_agentic_draft_multi(
                 additional_company_info=additional_company_info,
                 search_instructions=search_instructions,
             ) or ""
-        # #region agent log
-        try:
-            import json
-            with open("/home/fdondi/Documents/#GitHub/letter-writer/.cursor/debug-5b1b21.log", "a") as _f:
-                _f.write(json.dumps({"sessionId": "5b1b21", "hypothesisId": "H4", "location": "agentic_service.py:run_agentic_draft_multi", "message": "after company_research", "data": {"company_report_is_none": company_report is None, "company_report_type": type(company_report).__name__}, "timestamp": __import__("time").time() * 1000}) + "\n")
-        except Exception:
-            pass
-        # #endregion
 
     top_docs = _refresh_top_docs_from_session_search_if_needed(
         session, job_text, metadata, first_vendor, top_docs
