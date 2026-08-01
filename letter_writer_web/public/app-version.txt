@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 0.59.0 - Keep fixed vendor columns on rebase; constrain vendor flow viewport height in App
 0.58.0 - Fix mypy: Optional prompt_cache_key parts; Mistral _reraise_sdk_error NoReturn
 0.57.0 - Build-gate page render smoke tests; fix LetterTabs Save&Copy import break in final assembly
@@ -44,3 +45,11 @@
 0.48.0 - Make plan step optional in vendor flow
 0.47.0 - Shorten letter plan to ~10-line telegraphic format
 0.46.0 - Parse changelog format in app-version.txt
+=======
+0.46.2 - Feedback flags dishonest framing of known weaknesses (e.g. fluent + B2), not only silent omission
+0.46.1 - Known weaknesses are a second field on the draft JSON output, not a separate LLM call
+0.46.0 - Draft phase lists objective known weaknesses; feedback skips unfixable gap action items
+0.45.1 - Vendor phase columns wrap and fill viewport height instead of horizontal squeeze
+0.45.0 - Tab uses completion model when hidden proposal is exhausted, without requiring a manual edit
+0.44.1
+>>>>>>> 0e25b90 (refinements)

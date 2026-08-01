@@ -261,6 +261,7 @@ function extractVendorDataFromRegistry(phaseRegistry) {
             if (data.top_docs !== undefined) serializable.top_docs = data.top_docs;
             if (data.company_report !== undefined) serializable.company_report = data.company_report;
             if (data.draft_letter !== undefined) serializable.draft_letter = data.draft_letter;
+            if (data.known_weaknesses !== undefined) serializable.known_weaknesses = data.known_weaknesses;
             if (data.final_letter !== undefined) serializable.final_letter = data.final_letter;
             if (data.feedback !== undefined) serializable.feedback = data.feedback;
             if (data.cost !== undefined) serializable.cost = data.cost;
@@ -283,6 +284,7 @@ function extractVendorDataFromRegistry(phaseRegistry) {
             if (data.top_docs !== undefined) serializable.top_docs = data.top_docs;
             if (data.company_report !== undefined) serializable.company_report = data.company_report;
             if (data.draft_letter !== undefined) serializable.draft_letter = data.draft_letter;
+            if (data.known_weaknesses !== undefined) serializable.known_weaknesses = data.known_weaknesses;
             if (data.final_letter !== undefined) serializable.final_letter = data.final_letter;
             if (data.feedback !== undefined) serializable.feedback = data.feedback;
             if (data.cost !== undefined) serializable.cost = data.cost;

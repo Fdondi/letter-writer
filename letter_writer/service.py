@@ -210,7 +210,7 @@ def _process_single_vendor(
     company_report = company_report_future.result()
 
     # letter generation
-    letter = generate_letter(
+    letter, _known_weaknesses = generate_letter(
         cv_text, top_docs, company_report, job_text, ai_client, trace_dir, style_instructions
     )
     (trace_dir / "first_draft.txt").write_text(letter, encoding="utf-8")

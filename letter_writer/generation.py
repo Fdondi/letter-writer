@@ -276,6 +276,153 @@ def normalize_parsed_feedback_items(
     return out
 
 
+KNOWN_WEAKNESSES_JSON_SCHEMA: Dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "known_weaknesses",
+        "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "weaknesses": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "requirement": {"type": "string"},
+                            "gap": {"type": "string"},
+                        },
+                        "required": ["requirement", "gap"],
+                    },
+                },
+            },
+            "required": ["weaknesses"],
+        },
+    },
+}
+
+DRAFT_LETTER_JSON_SCHEMA: Dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "draft_letter_output",
+        "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "draft_letter": {"type": "string"},
+                "known_weaknesses": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "requirement": {"type": "string"},
+                            "gap": {"type": "string"},
+                        },
+                        "required": ["requirement", "gap"],
+                    },
+                },
+            },
+            "required": ["draft_letter", "known_weaknesses"],
+        },
+    },
+}
+
+KNOWN_WEAKNESSES_FEEDBACK_RULES = (
+    "\n\nKnown weaknesses rules (when the block above is non-empty):\n"
+    "- These are objective requirement gaps that CANNOT be fixed by obtaining the credential mid-application "
+    "(missing mandatory certifications, language level below the posting, years-of-experience shortfalls, etc.). "
+    "Assume the applicant is aware and may bet on transferable skills or willingness to learn.\n"
+    "- Do NOT emit PLEASE_FIX asking to obtain the missing credential, raise a language level overnight, invent "
+    "experience, or otherwise pretend the gap can be closed.\n"
+    "- A gap counts as honestly addressed only when the letter acknowledges the real shortfall and argues around it "
+    "with truthful framing (transferable skills, adjacent experience, concrete learning plan) — without inflating or "
+    "mislabeling qualifications.\n"
+    "- ALWAYS emit PLEASE_FIX when the letter misrepresents a known weakness, even if the topic is mentioned. "
+    "This includes inflated labels (e.g. calling B2 'fluent'), incompatible pairs (e.g. 'fluent German (B2)'), "
+    "implying the requirement is met when known_weaknesses says it is not, or silent omission with no honest "
+    "compensating argument.\n"
+    "- Mentioning a gap is not enough if the wording is dishonest or equivocating. Accuracy or precision critiques "
+    "that catch false fluency, false certification, or inflated experience on a known weakness must stay as PLEASE_FIX.\n"
+    "- If the letter honestly frames the gap, omit it or mark ALREADY_GOOD — never turn honest framing into an "
+    "action item.\n"
+)
+
+
+def normalize_known_weaknesses(data: Any) -> List[Dict[str, str]]:
+    """Normalize parsed JSON into known_weaknesses rows with stable ids."""
+    raw: List[Any] = []
+    if isinstance(data, dict) and isinstance(data.get("known_weaknesses"), list):
+        raw = data["known_weaknesses"]
+    elif isinstance(data, dict) and isinstance(data.get("weaknesses"), list):
+        raw = data["weaknesses"]
+    elif isinstance(data, dict) and isinstance(data.get("items"), list):
+        raw = data["items"]
+    elif isinstance(data, list):
+        raw = data
+    out: List[Dict[str, str]] = []
+    seen: set = set()
+    for it in raw:
+        if not isinstance(it, dict):
+            continue
+        req = str(it.get("requirement", "")).strip()
+        gap = str(it.get("gap", "")).strip()
+        desc = str(it.get("description", "")).strip()
+        if req and gap:
+            key = (req.lower(), gap.lower())
+            line_req, line_gap = req, gap
+        elif desc:
+            key = (desc.lower(), "")
+            line_req, line_gap = desc, ""
+        else:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"id": str(uuid.uuid4()), "requirement": line_req, "gap": line_gap})
+    return out
+
+
+def parse_draft_letter_output(data: Any) -> Tuple[str, List[Dict[str, str]]]:
+    """Parse draft generation JSON into letter text and normalized known_weaknesses."""
+    if isinstance(data, str):
+        text = data.strip()
+        if not text:
+            raise ValueError("empty draft_letter")
+        return text, []
+    if not isinstance(data, dict):
+        raise TypeError("draft output must be a JSON object")
+    letter = str(data.get("draft_letter", "")).strip()
+    if not letter:
+        raise ValueError("missing draft_letter")
+    weaknesses = normalize_known_weaknesses(data)
+    return letter, weaknesses
+
+
+def format_known_weaknesses_block(known_weaknesses: Optional[Sequence[Dict[str, Any]]]) -> str:
+    """Context block injected into feedback prompts when objective gaps were pre-identified."""
+    if not known_weaknesses:
+        return ""
+    lines: List[str] = []
+    for i, w in enumerate(known_weaknesses, 1):
+        if not isinstance(w, dict):
+            continue
+        req = str(w.get("requirement", "")).strip()
+        gap = str(w.get("gap", "")).strip()
+        if req and gap:
+            lines.append(f"{i}. Requirement: {req} | Applicant gap: {gap}")
+        elif req:
+            lines.append(f"{i}. {req}")
+        elif gap:
+            lines.append(f"{i}. {gap}")
+    if not lines:
+        return ""
+    return (
+        "\n\n========== Known weaknesses (objective gaps the applicant cannot fix; they are aware and chose to apply anyway) ==========\n"
+        + "\n".join(lines)
+        + "\n==========\n"
+    )
+
+
 @traceable(run_type="chain", name="call_vendor_feedback_items")
 def _call_vendor_feedback_items(
     client: BaseClient,
@@ -289,6 +436,7 @@ def _call_vendor_feedback_items(
     max_retries: int = 2,
     system_cache_prefix: Optional[str] = None,
     prompt_cache_key: Optional[str] = None,
+    known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Call an LLM; response must be JSON with an items array of {observation, type}."""
     allowed = allowed_context_sources & FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN
@@ -336,7 +484,10 @@ def _call_vendor_feedback_items(
         "4) Do NOT write generic requests like 'add metrics' or 'add examples' unless you can provide the concrete metrics/examples in context_field.items (SUFFICIENT) \n"
         "Never invent facts."
     )
-    enforced_system = system + common_instructions
+    kw_block = format_known_weaknesses_block(known_weaknesses)
+    kw_rules = KNOWN_WEAKNESSES_FEEDBACK_RULES if kw_block else ""
+    enforced_system = system + common_instructions + kw_rules
+    enforced_prompt = prompt + kw_block
     from .clients.prompt_cache import cache_key_for_prefix
 
     resolved_cache_key = prompt_cache_key or (
@@ -351,7 +502,7 @@ def _call_vendor_feedback_items(
             last_raw = client.call(
                 model_role,
                 enforced_system,
-                [prompt],
+                [enforced_prompt],
                 search=search,
                 response_format=response_schema,
                 system_cache_prefix=system_cache_prefix,
@@ -491,6 +642,8 @@ def _phased_feedback_checker_accuracy_prompts(
         "Examples of incoherhence:  'I am highly expert in Go, I used it once' (using once is not enough to claim experitise), or 'I used Python libraries such as Boost' (Boost is a C++ library)\n"
         "2. Is what is written coherent with the user's CV? Is every claimed expertise supported?"
         "Also pay attention to claims not strictly about tools, they also need to be supported in some way.\n"
+        "3. If known_weaknesses are listed in context, flag misrepresentation: inflated labels (fluent for B2), "
+        "incompatible pairs ('fluent German (B2)'), or implying a requirement is met when the gap block says otherwise.\n"
         "Example: 'Crypto made me a programmer' [it's a claim, it needs to be supported by the CV]\n"
         "Be especially wary of claims of a 'common thread' or 'throughout my carreer' if it's not supported by the CV.\n"
         "Keep each observation brief; no praise or reassurance. If there is no meaningful issue, return an empty items list.\n"
@@ -561,6 +714,8 @@ def _phased_feedback_checker_precision_prompts(
     system = (
         "You are a senior HR manager at the company. Evaluate how well the cover letter addresses the needs of the company, as described in the company report and job description. "
         "1. Were all the requests in the letter addressed, either by claiming and substantiating the necessary competence, or a reasonably substitutable one, or at least ability and willingness to learn in this specific field?\n"
+        "When known_weaknesses are listed in context, honest framing of a gap counts as addressed; dishonest framing does not — "
+        "e.g. 'fluent German (B2)' or calling B2 fluent when the job requires fluency is a PLEASE_FIX, not acceptable coverage.\n"
         "Example: 'required: Python, GO' -> 'I have several years of Python experience' [GO is missing]\n"
         "Example: 'required: GO' -> 'while I have not used GO professionally, I have 5 years of C++ experience, and I have follwed a course on GO. When I tried GO on LeetCode, it was easy for me to use' [OK, demonstrates ability to learn]\n"
         "2. Is there on the contrary any claimed competence that really is superflous, does not adress the explicit or implicit requirements for the job or the company, to the point it makes you wonder if the person understands the job at all?\n"
@@ -1772,9 +1927,13 @@ def generate_letter(
     hire_problem: str = "",
     language_prefix: str = "",
     model_role: ModelRole | str | None = None,
-) -> str:
-    """Generate a personalized cover letter based on CV, examples, company report, and job description.
-    
+    max_retries: int = 2,
+) -> Tuple[str, List[Dict[str, str]]]:
+    """Generate a cover letter and objective known_weaknesses in one call (shared context).
+
+    Returns:
+        (draft_letter, known_weaknesses)
+
     Args:
         additional_user_info: User-provided information about themselves relevant to this position (not in CV).
     """
@@ -1820,8 +1979,20 @@ def generate_letter(
         "Use the examples at a higher level: look at style, structure, what is paid attention to, etc.\n"
         + style_instructions
         + plan_block
-        + additional_context +
-        "\n\n"
+        + additional_context
+        + "\n\n"
+        "Reply with JSON only: {\"draft_letter\": string, \"known_weaknesses\": [{\"requirement\": string, \"gap\": string}, ...]}.\n"
+        "draft_letter is the full cover letter prose.\n"
+        "known_weaknesses lists objective requirement gaps the applicant CANNOT fix by editing the letter "
+        "(missing mandatory certifications, language level below the posting, absent years-of-experience, degree "
+        "requirements not met, etc.). Only include gaps substantiated from the CV, additional info, or job text. "
+        "Do not invent gaps. Do not list stylistic preferences or fixable omissions. "
+        "The applicant is aware of these gaps and chose to apply anyway. "
+        "requirement = what the job asks for; gap = what the applicant actually has or lacks. "
+        "Use an empty array when there are no such objective unfixable gaps.\n"
+        "When framing a known weakness in draft_letter, be truthful: state the actual level or fact and argue "
+        "transferability or willingness to learn. Never mislabel (e.g. do not call B2 'fluent', do not write "
+        "'fluent German (B2)').\n"
         ),
         language_prefix,
     )
@@ -1833,15 +2004,42 @@ def generate_letter(
         hire_problem=hire_problem,
     )
     (trace_dir / "prompt.txt").write_text(context, encoding="utf-8")
-    return client.call(
-        model_role if model_role is not None else ModelRole.LETTER_DRAFT,
-        system,
-        ["Write the personalized cover letter."],
-        system_cache_prefix=context,
-    )
+
+    last_raw = ""
+    for attempt in range(1, max_retries + 1):
+        try:
+            last_raw = client.call(
+                model_role if model_role is not None else ModelRole.LETTER_DRAFT,
+                system,
+                ["Write the personalized cover letter as JSON."],
+                response_format=DRAFT_LETTER_JSON_SCHEMA,
+                system_cache_prefix=context,
+            )
+            data = _extract_json_value(last_raw)
+            return parse_draft_letter_output(data)
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            logger.warning(
+                "Draft letter JSON parse failed (attempt %s/%s): %s",
+                attempt,
+                max_retries,
+                e,
+            )
+        except Exception as e:
+            logger.warning(
+                "Draft letter LLM call failed (attempt %s/%s): %s",
+                attempt,
+                max_retries,
+                e,
+            )
+    raise RuntimeError(f"Draft letter generation failed after {max_retries} attempts: {last_raw[:500]}")
 
 @traceable(run_type="chain", name="instruction_check")
-def instruction_check(letter: str, client: BaseClient, style_instructions: str = "") -> List[Dict[str, Any]]:
+def instruction_check(
+    letter: str,
+    client: BaseClient,
+    style_instructions: str = "",
+    known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     """Check the letter for consistency with the instructions."""
     si = style_instructions or get_style_instructions()
     system, prompt = _phased_feedback_checker_instruction_prompts(letter=letter, style_instructions=si)
@@ -1855,11 +2053,18 @@ def instruction_check(letter: str, client: BaseClient, style_instructions: str =
         allowed_context_sources=allowed,
         legacy_string_source=legacy,
         system_cache_prefix=_instruction_check_context(style_instructions=si, letter=letter),
+        known_weaknesses=known_weaknesses,
     )
 
 
 @traceable(run_type="chain", name="accuracy_check")
-def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_user_info: str = "") -> List[Dict[str, Any]]:
+def accuracy_check(
+    letter: str,
+    cv_text: str,
+    client: BaseClient,
+    additional_user_info: str = "",
+    known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     """Check the accuracy of the cover letter against the user's CV.
 
     Args:
@@ -1880,10 +2085,17 @@ def accuracy_check(letter: str, cv_text: str, client: BaseClient, additional_use
         allowed_context_sources=allowed,
         legacy_string_source=legacy,
         system_cache_prefix=_cv_letter_context(cv_text=cv_text, letter=letter),
+        known_weaknesses=known_weaknesses,
     )
 
 @traceable(run_type="chain", name="precision_check")
-def precision_check(letter: str, company_report: str, job_text: str, client: BaseClient) -> List[Dict[str, Any]]:
+def precision_check(
+    letter: str,
+    company_report: str,
+    job_text: str,
+    client: BaseClient,
+    known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     """Check the precision and style of the cover letter against the company report and job description."""
     system, prompt = _phased_feedback_checker_precision_prompts(
         letter=letter,
@@ -1902,10 +2114,17 @@ def precision_check(letter: str, company_report: str, job_text: str, client: Bas
         system_cache_prefix=_company_job_letter_context(
             company_report=company_report, job_text=job_text, letter=letter
         ),
+        known_weaknesses=known_weaknesses,
     )
 
 @traceable(run_type="chain", name="company_fit_check")
-def company_fit_check(letter: str, company_report: str, job_offer: str, client: BaseClient) -> List[Dict[str, Any]]:
+def company_fit_check(
+    letter: str,
+    company_report: str,
+    job_offer: str,
+    client: BaseClient,
+    known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     """Check how well the cover letter aligns with the company's values, culture, tone, and needs."""
     system, prompt = _phased_feedback_checker_company_fit_prompts(
         letter=letter,
@@ -1924,6 +2143,7 @@ def company_fit_check(letter: str, company_report: str, job_offer: str, client: 
         system_cache_prefix=_company_job_letter_context(
             company_report=company_report, job_text=job_offer, letter=letter
         ),
+        known_weaknesses=known_weaknesses,
     )
 
 @traceable(run_type="chain", name="goal_fit_check")
@@ -1933,6 +2153,7 @@ def goal_fit_check(
     job_offer: str,
     client: BaseClient,
     hire_problem: str = "",
+    known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Check whether the letter shows understanding of the hiring goal and readiness to contribute."""
     system, prompt = _phased_feedback_checker_goal_fit_prompts(
@@ -1956,6 +2177,7 @@ def goal_fit_check(
             letter=letter,
             hire_problem=hire_problem,
         ),
+        known_weaknesses=known_weaknesses,
     )
 
 @traceable(run_type="chain", name="user_fit_check")
@@ -1965,6 +2187,7 @@ def user_fit_check(
     client: BaseClient,
     cv_text: str = "",
     additional_user_info: str = "",
+    known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Check how well the cover letter showcases the user's unique value proposition."""
     system, prompt = _phased_feedback_checker_user_fit_prompts(
@@ -1983,6 +2206,7 @@ def user_fit_check(
         allowed_context_sources=allowed,
         legacy_string_source=legacy,
         system_cache_prefix=_cv_letter_context(cv_text=cv_text, letter=letter),
+        known_weaknesses=known_weaknesses,
     )
 
 def _format_correction(corr: dict) -> str:
@@ -2015,6 +2239,7 @@ def run_phased_feedback_checks(
     style_instructions: str = "",
     additional_user_info: str = "",
     hire_problem: str = "",
+    known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Run all draft feedback checks with cache-aware scheduling.
 
@@ -2041,41 +2266,57 @@ def run_phased_feedback_checks(
         (
             "instruction",
             instruction_ctx,
-            lambda: instruction_check(draft_letter, client, si),
+            lambda: instruction_check(draft_letter, client, si, known_weaknesses),
         ),
         (
             "accuracy",
             cv_letter_ctx,
-            lambda: accuracy_check(draft_letter, cv_text, client, additional_user_info),
+            lambda: accuracy_check(
+                draft_letter, cv_text, client, additional_user_info, known_weaknesses
+            ),
         ),
         (
             "precision",
             company_job_ctx,
-            lambda: precision_check(draft_letter, company_report, job_text, client),
+            lambda: precision_check(
+                draft_letter, company_report, job_text, client, known_weaknesses
+            ),
         ),
         (
             "company_fit",
             company_job_ctx,
-            lambda: company_fit_check(draft_letter, company_report, job_text, client),
+            lambda: company_fit_check(
+                draft_letter, company_report, job_text, client, known_weaknesses
+            ),
         ),
         (
             "goal_fit",
             goal_ctx,
             lambda: goal_fit_check(
-                draft_letter, company_report, job_text, client, hire_problem
+                draft_letter,
+                company_report,
+                job_text,
+                client,
+                hire_problem,
+                known_weaknesses,
             ),
         ),
         (
             "user_fit",
             cv_letter_ctx,
             lambda: user_fit_check(
-                draft_letter, top_docs, client, cv_text, additional_user_info
+                draft_letter,
+                top_docs,
+                client,
+                cv_text,
+                additional_user_info,
+                known_weaknesses,
             ),
         ),
         (
             "human",
             human_ctx,
-            lambda: human_check(draft_letter, top_docs, client),
+            lambda: human_check(draft_letter, top_docs, client, known_weaknesses),
         ),
     ]
 
@@ -2092,7 +2333,12 @@ def run_phased_feedback_checks(
 
 
 @traceable(run_type="chain", name="human_check")
-def human_check(letter: str, examples: Sequence[TopDocument], client: BaseClient) -> List[Dict[str, Any]]:
+def human_check(
+    letter: str,
+    examples: Sequence[TopDocument],
+    client: BaseClient,
+    known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     """Check the letter against human-rewritten example patterns."""
     prompts = _phased_feedback_checker_human_prompts(letter=letter, top_docs=examples)
     if prompts is None:
@@ -2112,6 +2358,7 @@ def human_check(letter: str, examples: Sequence[TopDocument], client: BaseClient
         allowed_context_sources=allowed,
         legacy_string_source=legacy,
         system_cache_prefix=_human_check_context(top_docs=examples, letter=letter),
+        known_weaknesses=known_weaknesses,
     )
 
 

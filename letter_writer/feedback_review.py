@@ -9,12 +9,13 @@ import json
 import logging
 import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from langsmith import traceable
 
 from .clients.base import BaseClient, ModelRole
-from .generation import normalize_feedback_map
+from .generation import normalize_feedback_map, format_known_weaknesses_block, KNOWN_WEAKNESSES_FEEDBACK_RULES
 from .typed_shapes import TopDocument
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,7 @@ def _build_justification_context(
     job_text: str,
     top_docs: Sequence[TopDocument],
     hire_problem: str = "",
+    known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> str:
     """Mirror the checker inputs so the reviewer can judge whether the critique is fair."""
     from .generation import get_style_instructions
@@ -88,6 +90,7 @@ def _build_justification_context(
     cr = company_report or ""
     jt = job_text or ""
     add = (additional_user_info or "").strip()
+    kw_suffix = format_known_weaknesses_block(known_weaknesses)
 
     if category == "instruction":
         return (
@@ -96,6 +99,7 @@ def _build_justification_context(
             + "\n==========\n\n========== Cover Letter:\n"
             + letter
             + "\n==========\n"
+            + kw_suffix
         )
     if category == "accuracy":
         extra = ""
@@ -110,6 +114,7 @@ def _build_justification_context(
             + letter
             + "\n==========\n"
             + extra
+            + kw_suffix
         )
     if category in ("precision", "company_fit"):
         return (
@@ -120,6 +125,7 @@ def _build_justification_context(
             + "\n==========\n\n========== Cover Letter:\n"
             + letter
             + "\n==========\n"
+            + kw_suffix
         )
     if category == "goal_fit":
         hp = (hire_problem or "").strip()
@@ -139,6 +145,7 @@ def _build_justification_context(
             + "\n==========\n\n========== Cover Letter:\n"
             + letter
             + "\n==========\n"
+            + kw_suffix
         )
     if category == "user_fit":
         examples_formatted = "\n\n".join(
@@ -169,6 +176,7 @@ def _build_justification_context(
             + "\n========== Cover Letter:\n"
             + letter
             + "\n==========\n"
+            + kw_suffix
         )
     if category == "human":
         examples_formatted = "\n\n".join(
@@ -183,8 +191,9 @@ def _build_justification_context(
             + "\n==========\n\n========== Cover Letter:\n"
             + letter
             + "\n==========\n"
+            + kw_suffix
         )
-    return "========== Cover Letter:\n" + letter + "\n==========\n"
+    return "========== Cover Letter:\n" + letter + "\n==========\n" + kw_suffix
 
 
 @traceable(run_type="chain", name="feedback_review_stage12_batch")
@@ -216,8 +225,13 @@ def _stage12_batch(
         "For each item set keep=false if it is:\n"
         "  • incoherent, empty, tautological, or not actionable, OR\n"
         "  • unjustified: misreads the letter, claims a mismatch not supported by the context, "
-        "or demands something already present.\n"
-        "Otherwise keep=true.\n"
+        "or demands something already present, OR\n"
+        "  • asks to fix an objective known weakness (missing cert, language level, etc.) when the letter already "
+        "honestly acknowledges and frames the gap with truthful wording — see known weaknesses block in context if present.\n"
+        "  • Do NOT set keep=false for critiques that catch dishonest framing of a known weakness (inflated labels, "
+        "false fluency, incompatible level claims).\n"
+        + KNOWN_WEAKNESSES_FEEDBACK_RULES
+        + "\nOtherwise keep=true.\n"
         "Reply JSON only: {\"results\": [{\"id\": \"<id>\", \"keep\": true}, ...]}\n"
         "Return exactly one object per id — no omissions."
     )
@@ -434,6 +448,7 @@ def review_feedback_for_vendor(
     top_docs: Sequence[TopDocument],
     vendor: str,
     hire_problem: str = "",
+    known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Stages 1+2 combined (one batch call per category, run in parallel), then
@@ -463,6 +478,7 @@ def review_feedback_for_vendor(
                 job_text=job_text,
                 top_docs=top_docs,
                 hire_problem=hire_problem,
+                known_weaknesses=known_weaknesses,
             )
         cat_to_items.setdefault(cat, []).append((str(it["id"]), obs))
 

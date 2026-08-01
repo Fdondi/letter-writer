@@ -12,6 +12,7 @@ import {
   newId,
   selectNextTabIfCategoryDone,
 } from "./feedbackItemUtils";
+import { KnownWeaknessesPanel } from "./KnownWeaknessesPanel";
 
 function LanguageSelectorTiny({ fieldId, observation, translation, disabled }) {
   const fieldViewLanguage = translation.getFieldViewLanguage(fieldId);
@@ -50,6 +51,7 @@ export function FeedbackItemsPanel({
   inputClusterText = {},
   onInputClusterBroadcast = undefined,
   vendor = undefined,
+  knownWeaknesses = undefined,
 }) {
   const [editingId, setEditingId] = useState(null);
   /** Set while POST /feedback/request-context/ is in flight for one item id. */
@@ -1385,6 +1387,8 @@ export function FeedbackItemsPanel({
           </ul>
         </details>
       ) : null}
+
+      <KnownWeaknessesPanel items={knownWeaknesses} />
     </div>
   );
 }

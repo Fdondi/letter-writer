@@ -2218,7 +2218,7 @@ def run_agentic_draft(
     trace_dir = Path("trace", "agentic.draft")
     trace_dir.mkdir(parents=True, exist_ok=True)
     ai_client = get_client(ModelVendor(draft_vendor))
-    draft_letter = generate_letter(
+    draft_letter, _known_weaknesses = generate_letter(
         cv_text, top_docs, company_report, job_text, ai_client, trace_dir,
         style_instructions, additional_user_info,
         hire_problem=hire_problem,
@@ -2325,7 +2325,7 @@ def run_agentic_draft_multi(
         additional_user_info = get_effective_additional_user_info(metadata, ModelVendor(vendor), uid)
         hire_problem = str(get_metadata_field(metadata, ModelVendor(vendor), "hire_problem", "") or "")
         ai_client = get_client(ModelVendor(vendor))
-        letter = generate_letter(
+        letter, _known_weaknesses = generate_letter(
             cv_text, top_docs, company_report, job_text, ai_client, trace_dir,
             style_instructions, additional_user_info,
             hire_problem=hire_problem,

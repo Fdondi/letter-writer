@@ -547,6 +547,7 @@ def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, session:
         return with_user_monthly_cost({
             "status": "ok",
             "draft_letter": state.draft_letter,
+            "known_weaknesses": state.known_weaknesses,
             "feedback": state.feedback,
             "cost": state.cost
         }, session)

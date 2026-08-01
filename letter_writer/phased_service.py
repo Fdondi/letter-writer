@@ -79,6 +79,7 @@ class VendorPhaseState:
     company_report: Optional[str] = None
     letter_plan: Optional[str] = None
     draft_letter: Optional[str] = None
+    known_weaknesses: List[Dict[str, Any]] = field(default_factory=list)
     final_letter: Optional[str] = None
     feedback: Dict[str, Any] = field(default_factory=dict)
     # Legacy aggregate fields (for backward compatibility)
@@ -629,7 +630,7 @@ def advance_to_draft(
         _reset_client_counters(ai_client)
         
         logger.info("[PHASE] draft -> %s :: generate_letter (LETTER_DRAFT)", vendor.value)
-        draft_letter = generate_letter(
+        draft_letter, known_weaknesses = generate_letter(
             cv_text,
             top_docs,
             company_report,
@@ -643,6 +644,7 @@ def advance_to_draft(
             language_prefix=language_prefix,
             model_role=_phase_model_role_for_call(vendor, "letter_draft", user_id),
         )
+        state.known_weaknesses = known_weaknesses
         
         # Capture draft cost before feedback generation
         _update_cost(state, ai_client, phase="draft", user_id=user_id, vendor_str=vendor.value)
@@ -660,6 +662,7 @@ def advance_to_draft(
             style_instructions=style_instructions,
             additional_user_info=additional_user_info,
             hire_problem=hire_problem,
+            known_weaknesses=known_weaknesses,
         )
         
         # Capture feedback cost separately
@@ -678,6 +681,7 @@ def advance_to_draft(
             top_docs=top_docs,
             vendor=vendor.value,
             hire_problem=hire_problem,
+            known_weaknesses=known_weaknesses,
         )
         state.feedback = feedback
         session.vendors[vendor.value] = state
@@ -692,6 +696,7 @@ def advance_to_draft(
         raise
 
     state.draft_letter = draft_letter
+    state.known_weaknesses = known_weaknesses
     state.feedback = feedback
     
     # Save vendor-specific data to session_vendors collection (lock-free)

@@ -1,5 +1,6 @@
 import React from "react";
 import { FeedbackItemsPanel } from "./FeedbackItemsPanel";
+import { KnownWeaknessesPanel } from "./KnownWeaknessesPanel";
 import {
   mergeCategoryItems,
   categoryHasPleaseFix,
@@ -176,6 +177,7 @@ export function renderContent({
         fieldId="draft_letter"
         translation={translation}
       />
+      <KnownWeaknessesPanel items={cardPhaseData.known_weaknesses} />
       {feedbackKeys.length > 0 && (
         <div style={{ marginTop: 8 }}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -236,6 +238,7 @@ export function renderContent({
               inputClusterText={inputClusterText || {}}
               onInputClusterBroadcast={broadcastInputCluster}
               vendor={vendor}
+              knownWeaknesses={cardPhaseData.known_weaknesses}
             />
           )}
         </div>
