@@ -519,7 +519,6 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
         if ctrl_map_key and raw_map is not None:
             if not isinstance(raw_map, dict):
                 raise HTTPException(status_code=400, detail="autocomplete_ctrl_letter_map must be an object")
-            from letter_writer.autocomplete_core import normalize_autocomplete_model_key
 
             cleaned_map: Dict[str, str] = {}
             for letter, model in raw_map.items():
