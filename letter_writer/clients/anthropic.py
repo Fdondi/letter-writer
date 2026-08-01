@@ -1,5 +1,7 @@
 import json
+
 from .base import BaseClient, ModelRole
+from .prompt_cache import merge_cache_prefixes, prepare_cache_block
 from .model_override import apply_model_override_thinking
 from anthropic import Anthropic
 from typing import List, Dict, Any, Optional, FrozenSet
@@ -10,7 +12,7 @@ from langsmith import traceable
 # families; use adaptive thinking + ``output_config.effort`` instead. See:
 # https://platform.claude.com/docs/en/about-claude/models/migration-guide
 _ADAPTIVE_THINKING_MODEL_MARKERS: FrozenSet[str] = frozenset(
-    ("opus-4-7", "opus-4-6", "sonnet-4-6")
+    ("fable-5", "opus-4-8", "opus-4-7", "opus-4-6", "sonnet-5", "sonnet-4-6")
 )
 _VALID_THINKING_EFFORTS: FrozenSet[str] = frozenset(
     ("low", "medium", "high", "max", "xhigh")
@@ -36,7 +38,7 @@ class ClaudeClient(BaseClient):
     ) -> Dict[str, Any]:
         """Build ``thinking`` / ``output_config`` for :meth:`messages.create`.
 
-        Newer models (Opus 4.7, Opus 4.6, Sonnet 4.6, Mythos) require
+        Newer models (Fable 5, Opus 4.8+, Sonnet 5, Sonnet 4.6, Mythos) require
         ``thinking.type`` ``adaptive`` and reject ``enabled`` + ``budget_tokens``.
         Older models still need manual extended thinking with ``budget_tokens``.
         See https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
@@ -46,8 +48,11 @@ class ClaudeClient(BaseClient):
         norm = (model or "").lower()
         # Substrings match dated IDs (e.g. claude-opus-4-7-20250514).
         adaptive_markers = (
+            "claude-fable-5",
+            "claude-opus-4-8",
             "claude-opus-4-7",
             "claude-opus-4-6",
+            "claude-sonnet-5",
             "claude-sonnet-4-6",
             "claude-mythos",
             "mythos-preview",
@@ -157,14 +162,25 @@ class ClaudeClient(BaseClient):
         response_format: Optional[Dict[str, Any]] = None,
         cache_prefix: Optional[str] = None,
         system_cache_prefix: Optional[str] = None,
+        prompt_cache_key: Optional[str] = None,
     ) -> str:
-        messages = self._format_messages(user_messages, cache_prefix=cache_prefix)
+        _ = prompt_cache_key  # Anthropic matches on prefix content; scheduling is caller-side
         if isinstance(model_role, str):
             model, thinking_cfg = apply_model_override_thinking("anthropic", model_role)
         else:
             model = self.get_model_for_role(model_role)
             thinking_cfg = self.get_thinking_config(model_role)
         thinking_enabled = bool(thinking_cfg.get("thinking", False))
+
+        sys_cache_raw, usr_cache_raw = merge_cache_prefixes(system_cache_prefix, cache_prefix)
+        sys_cache = prepare_cache_block(sys_cache_raw, vendor="anthropic", model=model) if sys_cache_raw else None
+        usr_cache = prepare_cache_block(usr_cache_raw, vendor="anthropic", model=model) if usr_cache_raw else None
+        if sys_cache and sys_cache != (sys_cache_raw or ""):
+            typer.echo(f"[INFO] Anthropic cache padding: ~{len(sys_cache) - len(sys_cache_raw or '')} chars added to system prefix")
+        if usr_cache and usr_cache != (usr_cache_raw or ""):
+            typer.echo(f"[INFO] Anthropic cache padding: ~{len(usr_cache) - len(usr_cache_raw or '')} chars added to user prefix")
+
+        messages = self._format_messages(user_messages, cache_prefix=usr_cache)
         def _return_with_audit(text: str) -> str:
             self._record_llm_io(
                 model=model,
@@ -179,7 +195,8 @@ class ClaudeClient(BaseClient):
             f"[INFO] using Anthropic model {model}"
             + (" with thinking" if thinking_enabled else "")
             + (" with search" if search else "")
-            + (" with cache_prefix" if cache_prefix else "")
+            + (" with cache_prefix" if usr_cache_raw else "")
+            + (" with system_cache_prefix" if sys_cache_raw else "")
         )
 
         # Build system block list.
@@ -193,17 +210,22 @@ class ClaudeClient(BaseClient):
         #
         # Without system_cache_prefix the regular system text itself is cached,
         # which still helps for parallel observation-level calls in stage 2.
-        if system_cache_prefix:
+        if sys_cache:
             cached_system: Any = [
-                {"type": "text", "text": system_cache_prefix,
+                {"type": "text", "text": sys_cache,
                  "cache_control": {"type": "ephemeral"}},
-                {"type": "text", "text": system},
             ]
-        else:
+            if (system or "").strip():
+                cached_system.append({"type": "text", "text": system})
+        elif (system or "").strip():
+            # Short task-only system prompts: cache_control may help implicit reuse,
+            # but do not pad — padding is only for large shared prefix blocks.
             cached_system = [
                 {"type": "text", "text": system,
                  "cache_control": {"type": "ephemeral"}},
             ]
+        else:
+            cached_system = []
 
         if response_format and isinstance(response_format, dict):
             schema = ((response_format.get("json_schema") or {}).get("schema") or {})
@@ -243,6 +265,8 @@ class ClaudeClient(BaseClient):
                 )
                 if cr:
                     typer.echo(f"[INFO] Anthropic cache read: {cr} tokens")
+                if cw:
+                    typer.echo(f"[INFO] Anthropic cache write: {cw} tokens")
             if response.content:
                 for block in response.content:
                     if getattr(block, "type", None) == "tool_use":
@@ -299,6 +323,8 @@ class ClaudeClient(BaseClient):
             total_cache_write += cw
             if cr:
                 typer.echo(f"[INFO] Anthropic cache read: {cr} tokens")
+            if cw:
+                typer.echo(f"[INFO] Anthropic cache write: {cw} tokens")
 
         # Log stop reason for debugging
         stop_reason = getattr(response, 'stop_reason', None)

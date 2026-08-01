@@ -7,12 +7,9 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from letter_writer.clients.base import ModelVendor
-from letter_writer.personal_data_sections import (
-    VALID_VENDOR_KEYS,
-    get_autocomplete_models,
-    get_models,
-)
+from letter_writer.clients.base import ModelVendor, normalize_config_vendor_key, VALID_VENDOR_KEYS
+from letter_writer.personal_data_sections import get_autocomplete_models, get_models
+from letter_writer.personal_data_sections import get_autocomplete_models, get_models
 
 _SHORTCUT_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
@@ -122,7 +119,7 @@ def _role_defaults_for_config_role(role_name: str, *, fallbacks: tuple[str, ...]
     if not clients_dir.exists():
         return out
     for json_path in sorted(clients_dir.glob("*.json")):
-        vendor_key = json_path.stem
+        vendor_key = normalize_config_vendor_key(json_path.stem)
         if vendor_key not in VALID_VENDOR_KEYS:
             continue
         try:

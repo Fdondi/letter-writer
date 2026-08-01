@@ -349,10 +349,10 @@ describe("assignShortcutLetters", () => {
 
   test("increments when initial is taken", () => {
     expect(
-      assignShortcutLetters(["gemini/gemini-2.5-flash-lite", "grok/grok-4-1-fast-non-reasoning"])
+      assignShortcutLetters(["gemini/gemini-2.5-flash-lite", "grok/grok-4.3"])
     ).toEqual({
       G: "gemini/gemini-2.5-flash-lite",
-      H: "grok/grok-4-1-fast-non-reasoning",
+      H: "grok/grok-4.3",
     });
   });
 

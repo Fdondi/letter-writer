@@ -23,8 +23,8 @@ function PencilButton({ active, onClick, title, accentColor }) {
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        width: 22,
-        height: 22,
+        width: 20,
+        height: 20,
         padding: 0,
         border: `1px solid ${active ? color : "transparent"}`,
         borderRadius: 3,
@@ -34,7 +34,7 @@ function PencilButton({ active, onClick, title, accentColor }) {
         lineHeight: 1,
       }}
     >
-      <PencilIcon size={12} color={color} />
+      <PencilIcon size={11} color={color} />
     </button>
   );
 }
@@ -76,35 +76,83 @@ export default function LanguageConfig() {
       }}>
         <span style={{ fontWeight: 600, fontSize: 13 }}>Languages:</span>
         <div style={{ display: "flex", alignItems: "center", border: "1px solid var(--border-color)", borderRadius: 4, padding: "2px 6px", flexWrap: "wrap", gap: 4, background: "var(--input-bg)" }}>
-          {enabledLanguages.map((lang) => (
-            <div
-              key={lang.code}
-              style={{
-                background: "var(--header-bg)",
-                padding: "2px 6px",
-                borderRadius: 3,
-                fontSize: 12,
-                display: "flex",
-                alignItems: "center",
-                gap: 4,
-              }}
-            >
-              {lang.label}
-              <button
-                onClick={() => toggleLanguage(lang.code)}
+          {enabledLanguages.map((lang) => {
+            const accent = lang.color || "#3b82f6";
+            const lbl = lang.label || lang.code.toUpperCase();
+            return (
+              <div
+                key={lang.code}
                 style={{
-                  background: "none",
-                  border: "none",
-                  color: "var(--secondary-text-color)",
-                  cursor: "pointer",
-                  padding: 0,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 2,
                   fontSize: 12,
+                  borderRadius: 3,
+                  border: `1px solid ${accent}`,
+                  overflow: "hidden",
                 }}
               >
-                X
-              </button>
-            </div>
-          ))}
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 3,
+                    fontWeight: 600,
+                    padding: "2px 4px",
+                    background: accent,
+                    color: "white",
+                    lineHeight: 1.2,
+                  }}
+                >
+                  {lbl}
+                  <select
+                    value={lang.level || "B2"}
+                    onChange={(e) => updateLanguageLevelAndSave(lang.code, e.target.value)}
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      padding: 0,
+                      margin: 0,
+                      border: "none",
+                      background: "transparent",
+                      color: "white",
+                      outline: "none",
+                      cursor: "pointer",
+                      lineHeight: 1.2,
+                    }}
+                    aria-label={`CEFR level for ${lbl}`}
+                  >
+                    {CEFR_LEVELS.map((lv) => (
+                      <option key={lv} value={lv}>{lv === "native" ? "native" : lv}</option>
+                    ))}
+                  </select>
+                </span>
+                <PencilButton
+                  active={expandedCode === lang.code}
+                  accentColor={accent}
+                  title="custom instructions for language"
+                  onClick={() => setExpandedCode(expandedCode === lang.code ? null : lang.code)}
+                />
+                <button
+                  type="button"
+                  onClick={() => toggleLanguage(lang.code)}
+                  title={`Remove ${lbl}`}
+                  aria-label={`Remove ${lbl}`}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "var(--secondary-text-color)",
+                    cursor: "pointer",
+                    padding: "0 4px 0 0",
+                    fontSize: 12,
+                    lineHeight: 1,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
           <input
             type="text"
             value={languageInput}
@@ -142,69 +190,6 @@ export default function LanguageConfig() {
           </button>
         </div>
       </div>
-
-      {languages.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 14px", alignItems: "center", paddingLeft: 2 }}>
-          {languages.map((lang) => {
-            const accent = lang.color || "#3b82f6";
-            const lbl = lang.label || lang.code.toUpperCase();
-            return (
-            <div key={lang.code} style={{ display: "contents" }}>
-              <div
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 3,
-                  fontSize: 12,
-                  padding: "1px 2px",
-                  borderRadius: 4,
-                  border: `2px solid ${accent}`,
-                  background: "var(--input-bg)",
-                }}
-              >
-                <span
-                  style={{
-                    fontWeight: 600,
-                    padding: "2px 6px",
-                    borderRadius: 2,
-                    background: accent,
-                    color: "white",
-                    lineHeight: 1.2,
-                  }}
-                >
-                  {lbl}
-                </span>
-                <select
-                  value={lang.level || "B2"}
-                  onChange={(e) => updateLanguageLevelAndSave(lang.code, e.target.value)}
-                  style={{
-                    fontSize: 12,
-                    padding: "2px 4px",
-                    maxWidth: 64,
-                    border: "none",
-                    background: "transparent",
-                    color: "var(--text-color)",
-                    outline: "none",
-                    cursor: "pointer",
-                  }}
-                  aria-label={`CEFR level for ${lbl}`}
-                >
-                  {CEFR_LEVELS.map((lv) => (
-                    <option key={lv} value={lv}>{lv === "native" ? "native" : lv}</option>
-                  ))}
-                </select>
-                <PencilButton
-                  active={expandedCode === lang.code}
-                  accentColor={accent}
-                  title="custom instructions for language"
-                  onClick={() => setExpandedCode(expandedCode === lang.code ? null : lang.code)}
-                />
-              </div>
-            </div>
-            );
-          })}
-        </div>
-      )}
 
       {expandedCode && (() => {
         const expanded = languages.find((l) => l.code === expandedCode);

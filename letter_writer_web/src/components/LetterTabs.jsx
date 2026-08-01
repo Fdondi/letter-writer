@@ -8,8 +8,13 @@ import { HoverProvider } from "../contexts/HoverContext";
 import { v4 as uuidv4 } from "uuid";
 import { useLanguages } from "../contexts/LanguageContext";
 import JobDescriptionColumn from "./JobDescriptionColumn";
+import LanguageSelector from "./LanguageSelector";
 import { normalizeForMatch } from "../utils/textMatch";
-import { useLetterSave } from "../hooks/useLetterSave";
+import { translateText } from "../utils/translate";
+import SaveAndCopyButton, {
+  SaveCopyErrorBanner,
+  useSaveAndCopy,
+} from "./SaveAndCopyButton";
 
 const FeedbackForm = ({ rating, comment, onChange }) => {
   return (
@@ -160,6 +165,7 @@ export default function LetterTabs({
   const [translationStates, setTranslationStates] = useState({}); // { [id]: { translations: {}, viewLanguage: 'source' } }
   const [translateAllViewLanguage, setTranslateAllViewLanguage] = useState("source");
   const [translateAllInProgress, setTranslateAllInProgress] = useState(false);
+  const [columnError, setColumnError] = useState(null);
   const finalColumnRef = useRef(null);
   const scrollPositionRef = useRef(0);
   const expandedDialogRef = useRef(null);
@@ -515,11 +521,11 @@ export default function LetterTabs({
     }
   }, [finalParagraphs, translationStates]);
 
-  const { isDirty, handleCopy, handleSave, copyFeedback, saveError } = useLetterSave({
-    getFullText: () => finalAssemblyText,
+  const saveCopy = useSaveAndCopy({
+    letterText: finalAssemblyText,
     onSave,
     saving: savingFinal,
-    contentRevision: finalAssemblyText,
+    resetKey: finalAssemblyText,
   });
 
   // Warm normalization once so downstream checks are cheap.

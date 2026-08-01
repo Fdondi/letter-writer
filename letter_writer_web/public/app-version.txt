@@ -1,3 +1,31 @@
+0.58.0 - Fix mypy: Optional prompt_cache_key parts; Mistral _reraise_sdk_error NoReturn
+0.57.0 - Build-gate page render smoke tests; fix LetterTabs Save&Copy import break in final assembly
+0.57.0 - Silent host session backups with Settings restore
+0.56.1 - Fix missing LanguageSelector import in LetterTabs (final assembly)
+0.56.0 - Grok: grok-4.3 for cheap roles, grok-4.5 for premium; update xAI pricing
+0.55.0 - Anthropic: add Fable 5, Sonnet 5, Opus 4.8 to model picker and pricing
+0.54.14 - Language level selector merged into Languages chip row
+0.54.13 - Compact language selectors: CEFR level inside badge, remove × at end
+0.54.12 - Wider settings model pickers; flow sections collapsed by default (accordion)
+0.54.11 - Default model price in parentheses; red if cheaper, green if pricier than selected
+0.54.10 - Show selected model $/1M input/output prices next to settings pickers
+0.54.9 - Show (default) on config default model name in picker, not as side badge
+0.54.8 - Settings model flows: Initial (extraction/rag/research) + feedback roles under Vendor flow
+0.54.7 - Vendor models by flow in Settings; defaults read from clients/<vendor>.json per role
+0.54.6 - Fix phase model defaults: deepseek config alias, lock vendor per row, Sonnet for Anthropic letters
+0.54.5 - Phase model settings: pre-fill config defaults, (default) badge, reset + config default hint
+0.54.4 - Settings: per-vendor phase model pickers (plan/draft/refine) with persistence
+0.54.3 - Rebuild UI: restore Approve on cards, fixed column height, auto-collapse Plan when Draft appears
+0.54.2 - Mistral: chat.complete for normal calls; clearer 401 when MISTRAL_API_KEY is rejected
+0.54.1 - Vendor phase columns fixed to one viewport height each, independent of siblings
+0.54.0 - Restore per-vendor Approve button and sticky card header in PhaseFlow; stop grid stretch gap
+0.53.6 - Schedule feedback checks by shared cache prefix; pass prompt_cache_key to OpenAI
+0.53.5 - Cap prompt-cache padding at 2× block size; skip padding when minimum unreachable
+0.53.4 - Fix runaway prompt-cache padding (337k-token prompts)
+0.53.3 - Fix missing merge_system_cache_prefix_into_system import in OpenAI client
+0.53.2 - Combine cache blocks + pad to provider minimum for reliable 90% cache reads
+0.53.1 - GPT-5.6 Sol/Terra/Luna models; OpenAI explicit prompt-cache breakpoints
+0.53.0 - Anthropic prompt caching: move large letter/extraction context into cache_control blocks
 0.52.9 - Auto BNB_CUDA_VERSION when torch cu132 lacks matching bitsandbytes DLL
 0.52.5 - Language config: vertical pencil SVG, per-language accent colors
 0.52.4 - Enforce CEFR level in LLM prompts; pass level on translate; warn on Google

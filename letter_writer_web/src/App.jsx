@@ -48,6 +48,12 @@ import {
   clearAutocompleteFlowCache,
   sectionsToProposalText,
 } from "./utils/autocompleteEditor";
+import {
+  extractFormFieldsFromSessionState,
+  extractVendorShelfEntries,
+  inferVendorStageFromVendors,
+  extractLettersFromVendors,
+} from "./utils/sessionRehydrate";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
@@ -173,6 +179,8 @@ export default function App({ flow = "intake" }) {
   const [agenticSaveError, setAgenticSaveError] = useState(null);
   const [agenticFinalParagraphs, setAgenticFinalParagraphs] = useState([]);
   const rehydrationAttemptedRef = useRef(false);
+  /** Shelf entries waiting for PhaseFlow to register after a backup restore. */
+  const pendingShelfEntriesRef = useRef(null);
   const latestFormSnapshotRef = useRef(null);
   // Best-known threads ref: updated whenever we receive non-empty threads.
   // Used as a last-resort fallback so the UI never loses comments it has already seen.
@@ -806,6 +814,126 @@ export default function App({ flow = "intake" }) {
     }
   }, []);
 
+  const applyShelfEntries = useCallback(
+    (entries) => {
+      if (!Array.isArray(entries) || entries.length === 0) return false;
+      if (!phaseRegistryRef.current) {
+        pendingShelfEntriesRef.current = entries;
+        return false;
+      }
+      entries.forEach(({ phaseName, vendor, data }) => {
+        populatePhaseShelf(phaseName, vendor, data);
+      });
+      pendingShelfEntriesRef.current = null;
+      return true;
+    },
+    [populatePhaseShelf]
+  );
+
+  /**
+   * Apply a full session_state snapshot to Compose UI (reload or host-backup restore).
+   * Returns true if anything meaningful was applied.
+   */
+  const applyRestoredSessionState = useCallback(
+    (sessionState, { sessionId = null, navigateToVendorFlow = false } = {}) => {
+      if (!sessionState || typeof sessionState !== "object") return false;
+      let restoredSomething = false;
+
+      if (sessionId) {
+        setPhaseSessionId(sessionId);
+        restoredSomething = true;
+      }
+
+      const fields = extractFormFieldsFromSessionState(sessionState);
+      if (fields) {
+        if (fields.jobText !== undefined) setJobText(fields.jobText);
+        if (fields.companyName !== undefined) setCompanyName(fields.companyName);
+        if (fields.jobTitle !== undefined) setJobTitle(fields.jobTitle);
+        if (fields.location !== undefined) setLocation(fields.location);
+        if (fields.language !== undefined) setLanguage(fields.language);
+        if (fields.salary !== undefined) setSalary(fields.salary);
+        if (fields.additionalUserInfo !== undefined) setAdditionalUserInfo(fields.additionalUserInfo);
+        if (fields.additionalCompanyInfo !== undefined) {
+          setAdditionalCompanyInfo(fields.additionalCompanyInfo);
+        }
+        if (fields.hireProblem !== undefined) setHireProblem(fields.hireProblem);
+        if (fields.requirements !== undefined) setRequirements(fields.requirements);
+        if (fields.competences !== undefined) setCompetences(fields.competences);
+        if (fields.pointOfContact !== undefined) setPointOfContact(fields.pointOfContact);
+        restoredSomething = true;
+      }
+
+      const vendors = sessionState.vendors;
+      const shelfEntries = extractVendorShelfEntries(vendors);
+      const vendorStageHint = inferVendorStageFromVendors(vendors);
+      const lettersFromVendors = extractLettersFromVendors(vendors);
+
+      if (shelfEntries.length > 0 || vendorStageHint !== "input") {
+        if (navigateToVendorFlow || flow === "vendor") {
+          if (navigateToVendorFlow && flow !== "vendor") {
+            navigate("/flows/vendors");
+          }
+          setVendorStage(vendorStageHint === "input" ? "phases" : vendorStageHint);
+          if (vendorStageHint === "assembly") setAssemblyVisible(true);
+          applyShelfEntries(shelfEntries);
+          // Retry once after React mounts/registers PhaseFlow
+          if (shelfEntries.length > 0) {
+            setTimeout(() => applyShelfEntries(shelfEntries), 0);
+            setTimeout(() => applyShelfEntries(shelfEntries), 50);
+          }
+          restoredSomething = true;
+        }
+      }
+
+      if (Object.keys(lettersFromVendors).length > 0) {
+        setLetters((prev) => ({ ...prev, ...lettersFromVendors }));
+        const paragraphs = {};
+        Object.entries(lettersFromVendors).forEach(([vendor, text]) => {
+          paragraphs[vendor] = splitIntoParagraphs(text || "", vendor);
+        });
+        setVendorParagraphs((prev) => ({ ...prev, ...paragraphs }));
+        setFinalParagraphs((prev) => (prev?.length ? prev : Object.values(paragraphs)[0] || prev));
+        restoredSomething = true;
+      }
+
+      const rawAgentic = sessionState.agentic;
+      if (rawAgentic && typeof rawAgentic === "object" && rawAgentic.status) {
+        const normalized = normalizeAgenticThreads(
+          rawAgentic.threads || {},
+          rawAgentic.topic_meta || {}
+        );
+        const restoredAgentic = {
+          ...rawAgentic,
+          threads: normalized.threads,
+          topic_meta: normalized.topicMeta,
+        };
+        setAgenticState(restoredAgentic);
+        if (restoredAgentic.max_rounds != null) {
+          syncAgenticMaxRoundsFromServer(restoredAgentic.max_rounds);
+        }
+        if (restoredAgentic.sub_comment_rounds != null) {
+          syncAgenticSubCommentRoundsFromServer(restoredAgentic.sub_comment_rounds);
+        }
+        if (restoredAgentic.status === "done") setAgenticStage("assembly");
+        else setAgenticStage("agentic");
+        if (flow !== "agentic" && navigateToVendorFlow === false) {
+          // Keep current route; agentic UI only shows on agentic flow.
+        }
+        restoredSomething = true;
+      }
+
+      return restoredSomething;
+    },
+    [
+      applyShelfEntries,
+      flow,
+      navigate,
+      normalizeAgenticThreads,
+      syncAgenticMaxRoundsFromServer,
+      syncAgenticSubCommentRoundsFromServer,
+    ]
+  );
+
   /** Surface background fetch failures on the phase card (never leave the card stuck on "Loading…"). */
   const setPhaseCardFetchError = useCallback((phaseName, vendor, message) => {
     if (!phaseRegistryRef.current) return;
@@ -921,13 +1049,6 @@ export default function App({ flow = "intake" }) {
     rehydrationAttemptedRef.current = true;
     let cancelled = false;
 
-    const safeString = (value) => (value == null ? "" : String(value));
-    const normalizeRequirements = (value) => {
-      if (Array.isArray(value)) return value.filter(Boolean);
-      if (typeof value === "string" && value.trim()) return [value.trim()];
-      return [];
-    };
-
     (async () => {
       try {
         const [sessionRes, agenticRes] = await Promise.all([
@@ -947,95 +1068,17 @@ export default function App({ flow = "intake" }) {
         }
 
         const sessionId = sessionPayload?.session_id;
-        const state = sessionPayload?.session_state || {};
-        const common = state?.metadata?.common || {};
-        let restoredSomething = false;
-
-        if (sessionId) {
-          setPhaseSessionId(sessionId);
-          restoredSomething = true;
-        }
-        if (state?.job_text != null) {
-          setJobText(safeString(state.job_text));
-          restoredSomething = true;
-        }
-        if (common.company_name != null) {
-          setCompanyName(safeString(common.company_name));
-          restoredSomething = true;
-        }
-        if (common.job_title != null) {
-          setJobTitle(safeString(common.job_title));
-          restoredSomething = true;
-        }
-        if (common.location != null) {
-          setLocation(safeString(common.location));
-          restoredSomething = true;
-        }
-        if (common.language != null) {
-          setLanguage(safeString(common.language));
-          restoredSomething = true;
-        }
-        if (common.salary != null) {
-          setSalary(safeString(common.salary));
-          restoredSomething = true;
-        }
-        if (common.additional_user_info != null) {
-          setAdditionalUserInfo(safeString(common.additional_user_info));
-          restoredSomething = true;
-        }
-        if (common.additional_company_info != null) {
-          setAdditionalCompanyInfo(safeString(common.additional_company_info));
-          restoredSomething = true;
-        }
-        if (common.hire_problem != null) {
-          setHireProblem(safeString(common.hire_problem));
-          restoredSomething = true;
-        }
-        if (common.requirements != null) {
-          setRequirements(normalizeRequirements(common.requirements));
-          restoredSomething = true;
-        }
-        if (common.competences && typeof common.competences === "object") {
-          setCompetences(common.competences);
-          restoredSomething = true;
-        }
-        if (common.point_of_contact && typeof common.point_of_contact === "object") {
-          setPointOfContact({
-            name: safeString(common.point_of_contact.name),
-            role: safeString(common.point_of_contact.role),
-            contact_details: safeString(common.point_of_contact.contact_details),
-            notes: safeString(common.point_of_contact.notes),
-            company: safeString(common.point_of_contact.company),
-          });
-          restoredSomething = true;
-        }
+        const state = { ...(sessionPayload?.session_state || {}) };
 
         if (flow === "agentic" && agenticRes && agenticRes.ok) {
           const agenticPayload = await agenticRes.json();
           if (cancelled) return;
-          const rawRestoredAgentic = agenticPayload?.agentic_state || null;
-          const restoredAgentic = (() => {
-            if (!rawRestoredAgentic || typeof rawRestoredAgentic !== "object") return rawRestoredAgentic;
-            const normalized = normalizeAgenticThreads(
-              rawRestoredAgentic.threads || {},
-              rawRestoredAgentic.topic_meta || {}
-            );
-            return {
-              ...rawRestoredAgentic,
-              threads: normalized.threads,
-              topic_meta: normalized.topicMeta,
-            };
-          })();
-          if (restoredAgentic && restoredAgentic.status) {
-            setAgenticState(restoredAgentic);
-            if (restoredAgentic.max_rounds != null) syncAgenticMaxRoundsFromServer(restoredAgentic.max_rounds);
-            if (restoredAgentic.sub_comment_rounds != null) syncAgenticSubCommentRoundsFromServer(restoredAgentic.sub_comment_rounds);
-            if (restoredAgentic.status === "done") setAgenticStage("assembly");
-            else setAgenticStage("agentic");
-            restoredSomething = true;
+          if (agenticPayload?.agentic_state) {
+            state.agentic = agenticPayload.agentic_state;
           }
         }
 
+        const restoredSomething = applyRestoredSessionState(state, { sessionId });
         if (restoredSomething) {
           showNotification("Recovered previous session after browser reload");
         }
@@ -1051,10 +1094,7 @@ export default function App({ flow = "intake" }) {
     checkingAuth,
     isAuthenticated,
     flow,
-    normalizeAgenticThreads,
-    stripAgenticThreadFields,
-    syncAgenticMaxRoundsFromServer,
-    syncAgenticSubCommentRoundsFromServer,
+    applyRestoredSessionState,
     isFormSnapshotPristine,
   ]);
 
@@ -3463,6 +3503,9 @@ export default function App({ flow = "intake" }) {
                 onRetryPhaseFetch={onRetryPhaseFetch}
                 onRegisterPhases={(phases) => {
                   phaseRegistryRef.current = phases;
+                  if (pendingShelfEntriesRef.current) {
+                    applyShelfEntries(pendingShelfEntriesRef.current);
+                  }
                 }}
                 onPhaseComplete={(vendor, phase, data) => {
                   if (phase === "draft" && data?.final_letter) {
@@ -3900,6 +3943,16 @@ export default function App({ flow = "intake" }) {
           setBackgroundModels={setBackgroundModels}
           onCompetenceScalesChange={() => setCompetenceScaleConfig(getScaleConfig())}
           guardBeforeEnablingLocal={guardBeforeEnablingLocal}
+          onSessionRestored={(sessionState, sessionId) => {
+            const ok = applyRestoredSessionState(sessionState, {
+              sessionId,
+              navigateToVendorFlow: true,
+            });
+            if (ok) {
+              showNotification("Session restored from host backup");
+              setShowSettingsOverlay(false);
+            }
+          }}
         />
       </OverlayPanel>
       <OverlayPanel title="API Costs" isOpen={showCostsOverlay} onClose={() => setShowCostsOverlay(false)}>

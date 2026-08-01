@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "jest --testPathPatterns=\"App.hooks|pages.render\" --ci --forceExit",
     "build": "vite build",
     "preview": "vite preview",
     "test": "jest",

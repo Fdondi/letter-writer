@@ -11,6 +11,7 @@ services:
       - ./letters:/app/letters
       - ./trace:/app/trace
       - ./jobs:/app/jobs
+      - ./session_backups:/app/session_backups
       # Mount Google Cloud credentials file for Firestore access.
       # IMPORTANT: source must be a real JSON file (not a directory).
       # create_host_path: false prevents Docker from auto-creating a directory when the file is missing.
@@ -54,6 +55,8 @@ services:
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
       - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-letter-writer}
       - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      # Silent session backups on the host (./session_backups)
+      - SESSION_BACKUP_DIR=${SESSION_BACKUP_DIR:-/app/session_backups}
       # LM Studio on the host (Podman has no /.dockerenv; default URL targets host.docker.internal)
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-http://host.docker.internal:1234/v1}
       - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}

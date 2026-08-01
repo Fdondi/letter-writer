@@ -23,6 +23,27 @@
       "input":            { "low": 30.00, "high": 60.00  },
       "output":           { "low": 180.00,"high": 270.00 }
     },
+    "gpt-5.6-sol": {
+      "input":            { "low": 5.00,  "high": 10.00  },
+      "input_cached_mult": 0.10,
+      "cache_write_mult": 1.25,
+      "output":           { "low": 30.00, "high": 45.00 },
+      "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+    },
+    "gpt-5.6-terra": {
+      "input":            { "low": 2.00,  "high": 4.00  },
+      "input_cached_mult": 0.10,
+      "cache_write_mult": 1.25,
+      "output":           { "low": 12.00, "high": 18.00 },
+      "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+    },
+    "gpt-5.6-luna": {
+      "input":            { "low": 0.20,  "high": 0.40  },
+      "input_cached_mult": 0.10,
+      "cache_write_mult": 1.25,
+      "output":           { "low": 1.20,  "high": 1.80  },
+      "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+    },
     "gpt-5.5": {
       "input":            { "low": 5.00, "high": 10.00  },
       "output":           { "low": 30.00,"high": 45.00 }

@@ -51,6 +51,18 @@ class ModelVendor(Enum):
     LOCAL = "local"
 
 
+VALID_VENDOR_KEYS = frozenset(v.value for v in ModelVendor)
+
+# clients/*.json filename stems that differ from the canonical vendor key
+_CONFIG_VENDOR_STEM_ALIASES = {"deepseeek": "deepseek"}
+
+
+def normalize_config_vendor_key(stem_or_key: str) -> str:
+    """Map a client JSON filename stem (or vendor key) to the canonical vendor key."""
+    k = str(stem_or_key or "").strip().lower()
+    return _CONFIG_VENDOR_STEM_ALIASES.get(k, k)
+
+
 class ModelRole(Enum):
     """Named LLM roles — each vendor maps roles to a concrete model in ``*.json``."""
 
@@ -184,6 +196,7 @@ class BaseClient:
         if not isinstance(defaults, dict):
             defaults = {}
         cached_mult = float(model_cfg.get("input_cached_mult", defaults.get("input_cached_mult", 0.5)) or 0.5)
+        cache_write_mult = float(model_cfg.get("cache_write_mult", defaults.get("cache_write_mult", 1.0)) or 1.0)
 
         search_raw = model_cfg.get("search", default_search)
         search_price = _parse_price_per_million_usd(search_raw) if search_raw is not None else default_search
@@ -193,6 +206,7 @@ class BaseClient:
             "output": _parse_price_per_million_usd(model_cfg.get("output", 0.0)),
             "search": float(search_price or 0.0),
             "input_cached_mult": cached_mult,
+            "cache_write_mult": cache_write_mult,
         }
 
     def track_cost(
@@ -270,6 +284,7 @@ class BaseClient:
         response_format: Optional[Dict[str, Any]] = None,
         cache_prefix: Optional[str] = None,
         system_cache_prefix: Optional[str] = None,
+        prompt_cache_key: Optional[str] = None,
     ) -> str:
         """Execute an LLM call.
 
@@ -284,5 +299,10 @@ class BaseClient:
         split cached system blocks.  Other clients must merge this into
         ``system`` via ``merge_system_cache_prefix_into_system`` (see OpenAI,
         Gemini, etc.).
+
+        ``prompt_cache_key`` — optional stable routing key for providers that
+        require it (OpenAI GPT-5.6+).  When omitted, vendors derive one from
+        the cache prefix.  Callers that share a prefix should pass the same key
+        and run sequentially within that group.
         """
         raise NotImplementedError("Subclasses must implement this method")

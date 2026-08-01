@@ -267,6 +267,72 @@ def restore_session(request: Request, data: InitSessionRequest, session: Session
         "message": "Session restored successfully"
     }
 
+
+class RestoreFromBackupRequest(BaseModel):
+    filename: str
+
+
+@router.get("/backups/")
+def list_backups(limit: int = 100):
+    from letter_writer_server.core.session_backup import list_session_backups
+
+    safe_limit = max(1, min(int(limit or 100), 500))
+    backups = list_session_backups(limit=safe_limit)
+    return {"status": "ok", "backups": backups}
+
+
+@router.post("/restore-from-backup/")
+def restore_from_backup(
+    request: Request,
+    data: RestoreFromBackupRequest,
+    session: Session = Depends(get_session),
+):
+    """Load a host backup file into the current cookie session and return full state."""
+    from letter_writer_server.core.session_backup import (
+        apply_backup_to_session_dict,
+        load_backup_envelope,
+    )
+
+    set_current_request(request)
+    log_user_input_event("phases.restore_from_backup", {"filename": data.filename})
+
+    user = session.get("user") or {}
+    current_user_id = str(user["id"]) if isinstance(user, dict) and user.get("id") is not None else None
+
+    try:
+        envelope = load_backup_envelope(data.filename)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Backup not found: {data.filename}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to load backup %s: %s", data.filename, e)
+        raise HTTPException(status_code=400, detail=f"Failed to read backup: {e}")
+
+    try:
+        # Session is a dict subclass; apply mutates it in place.
+        session_state = apply_backup_to_session_dict(session, envelope, current_user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Ensure dirty tracking so middleware persists the restored work keys.
+    for key in list(session_state.keys()):
+        if key in session:
+            session[key] = session[key]
+
+    # Never send CV text to the browser; it stays in the server session only.
+    response_state = dict(session_state)
+    response_state.pop("cv_text", None)
+
+    return {
+        "status": "ok",
+        "session_id": session.session_key,
+        "filename": data.filename,
+        "message": "Session restored from host backup",
+        "session_state": response_state,
+    }
+
+
 @router.get("/state/")
 def get_session_state(session: Session = Depends(get_session)):
     # Return full session state (excluding potentially huge/sensitive fields if needed, but logic says allow all except CV)

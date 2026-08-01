@@ -137,7 +137,9 @@ class GeminiClient(BaseClient):
         response_format: Optional[Dict[str, Any]] = None,
         cache_prefix: Optional[str] = None,
         system_cache_prefix: Optional[str] = None,
+        prompt_cache_key: Optional[str] = None,
     ) -> str:
+        _ = prompt_cache_key
         _ = cache_prefix  # user-message cache block is Anthropic-only today
         system_prompt = merge_system_cache_prefix_into_system(system, system_cache_prefix)
         if types is None:

@@ -9,8 +9,7 @@ import json
 import logging
 import re
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from langsmith import traceable
 
@@ -209,10 +208,10 @@ def _stage12_batch(
     if not items:
         return {}
     system_cache_prefix = (
-        f"Category: {category}\n\n"
         f"========== Context the checker saw ==========\n{context_block}"
     )
     system = (
+        f"Category: {category}\n\n"
         "You filter cover-letter critique bullets in bulk.\n"
         "For each item set keep=false if it is:\n"
         "  • incoherent, empty, tautological, or not actionable, OR\n"
@@ -224,8 +223,15 @@ def _stage12_batch(
     )
     lines = [f"id={oid}: {obs.strip()[:1200]}" for oid, obs in items]
     prompt = "Critiques:\n" + "\n".join(lines)
+    from .clients.prompt_cache import cache_key_for_prefix
+
+    cache_key = cache_key_for_prefix(system_cache_prefix, fallback=f"feedback_review:{category}")
     raw = client.call(
-        ModelRole.FEEDBACK_REVIEW, system, [prompt], system_cache_prefix=system_cache_prefix
+        ModelRole.FEEDBACK_REVIEW,
+        system,
+        [prompt],
+        system_cache_prefix=system_cache_prefix,
+        prompt_cache_key=cache_key,
     )
     def _parse_results(raw_response: str) -> Dict[str, bool]:
         data = _extract_json_object(raw_response)
@@ -249,7 +255,11 @@ def _stage12_batch(
         retry_lines = [f"id={oid}: {obs.strip()[:1200]}" for oid, obs in missing_items]
         retry_prompt = "Critiques:\n" + "\n".join(retry_lines)
         retry_raw = client.call(
-            ModelRole.FEEDBACK_REVIEW, system, [retry_prompt], system_cache_prefix=system_cache_prefix
+            ModelRole.FEEDBACK_REVIEW,
+            system,
+            [retry_prompt],
+            system_cache_prefix=system_cache_prefix,
+            prompt_cache_key=cache_key,
         )
         out.update(_parse_results(retry_raw))
 
@@ -385,32 +395,29 @@ def _parallel_stage12(
     cat_to_items: Dict[str, List[Tuple[str, str]]],
     ctx_cache: Dict[str, str],
 ) -> Dict[str, bool]:
-    """Run _stage12_batch once per category in parallel; merge keep maps.
+    """Run _stage12_batch per category, grouped by shared context cache key.
 
-    cat_to_items: {category: [(id, observation), ...]}
-    ctx_cache:    {category: context_block_string}
-    Returns:      {id: keep_bool}
+    Categories that share the same ``context_block`` run sequentially so the
+    provider reuses one cache write; independent context groups run in parallel.
     """
     if not cat_to_items:
         return {}
+    from .clients.prompt_cache import cache_key_for_prefix, run_cache_grouped_tasks
+
     out: Dict[str, bool] = {}
-    max_workers = min(7, len(cat_to_items))
 
-    def _run_cat(cat: str) -> Tuple[str, Dict[str, bool]]:
-        return cat, _stage12_batch(client, cat, cat_to_items[cat], ctx_cache[cat])
+    def _run_cat(cat: str) -> Dict[str, bool]:
+        return _stage12_batch(client, cat, cat_to_items[cat], ctx_cache[cat])
 
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futs = {ex.submit(_run_cat, cat): cat for cat in cat_to_items}
-        for fut in as_completed(futs):
-            cat = futs[fut]
-            try:
-                _, keep_map = fut.result()
-                out.update(keep_map)
-            except Exception as e:
-                logger.warning("feedback review stage12 failed category=%s: %s", cat, e)
-                # fail-open: keep all items in this category
-                for oid, _ in cat_to_items[cat]:
-                    out[oid] = True
+    tasks: List[Tuple[str, Optional[str], Any]] = []
+    for cat in cat_to_items:
+        ctx = ctx_cache.get(cat, "")
+        tasks.append((cat, ctx, lambda c=cat: _run_cat(c)))
+
+    grouped_results = run_cache_grouped_tasks(tasks, max_parallel_groups=7)
+    for cat, keep_map in grouped_results.items():
+        if isinstance(keep_map, dict):
+            out.update(keep_map)
     return out
 
 

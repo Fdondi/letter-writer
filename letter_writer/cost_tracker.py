@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
+from letter_writer.clients.base import normalize_config_vendor_key
+
 logger = logging.getLogger(__name__)
 
 # Redis connection (lazy-loaded)
@@ -110,7 +112,7 @@ _CLIENT_JSON_VENDORS = {
     "gemini": "Google",
     "mistral": "Mistral",
     "grok": "xAI",
-    "deepseeek": "DeepSeek",
+    "deepseek": "DeepSeek",
     "local": "Local (LM Studio)",
 }
 
@@ -153,7 +155,7 @@ def _model_reasoning_efforts(
 
 def _supports_search(vendor_key: str, model_id: str, model_cfg: Dict[str, Any], default_search: float) -> bool:
     """Best-effort capability flag for model-level web search support."""
-    if vendor_key == "deepseeek":
+    if vendor_key == "deepseek":
         return False
     if vendor_key == "openai":
         # OpenAI search support is model-specific in this codebase.
@@ -178,7 +180,7 @@ def get_all_model_pricing(search_only: bool = False) -> Dict[str, List[Dict[str,
 
     result: Dict[str, List[Dict[str, Any]]] = {}
     for json_path in sorted(clients_dir.glob("*.json")):
-        vendor_key = json_path.stem
+        vendor_key = normalize_config_vendor_key(json_path.stem)
         vendor_label = _CLIENT_JSON_VENDORS.get(vendor_key, vendor_key.replace("_", " ").title())
         try:
             cfg = json.loads(json_path.read_text(encoding="utf-8"))

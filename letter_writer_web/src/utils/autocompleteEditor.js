@@ -344,6 +344,8 @@ export function buildGroupedModels(availableModels) {
       composite: `${m.vendor_key || vendorKey}/${m.id}`,
       vendorLabel,
       reasoningEfforts: Array.isArray(m.reasoning_efforts) ? m.reasoning_efforts : [],
+      input: typeof m.input === "number" ? m.input : Number(m.input) || 0,
+      output: typeof m.output === "number" ? m.output : Number(m.output) || 0,
     }));
   });
   return { grouped, vendors: [...vendors].sort() };

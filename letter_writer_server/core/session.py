@@ -64,6 +64,12 @@ def _save_to_filesystem(session_key: str, data: Dict[str, Any]) -> None:
             with open(tmp_path, 'wb') as f:
                 f.write(serialized)
             tmp_path.rename(file_path)
+        # Silent host backup (never raises into the request path).
+        try:
+            from letter_writer_server.core.session_backup import maybe_write_session_backup
+            maybe_write_session_backup(session_key, data)
+        except Exception as backup_err:
+            logger.warning("session backup hook failed for %s: %s", session_key, backup_err)
     except Exception as e:
         logger.error(f"Failed to save session {session_key} to filesystem: {e}")
 

@@ -1,7 +1,7 @@
 import React from 'react';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 import LetterTabs from '../LetterTabs';
-import { AllTestProviders } from '../../utils/__tests__/testUtils';
+import { AllTestProviders, getSaveCopyButton } from '../../utils/__tests__/testUtils';
 
 /**
  * FOCUSED LOGIC TESTS WITH PROPER DND CONTEXT
@@ -222,7 +222,19 @@ describe('LetterTabs Core Logic Tests', () => {
   });
 
   describe('Copy Functionality Tests', () => {
-    test('copyFinalText preserves exact paragraph order', () => {
+    async function clickSaveCopyAndWait(mockWriteText) {
+      const copyButton = getSaveCopyButton();
+      expect(copyButton).toBeInTheDocument();
+      await act(async () => {
+        copyButton.click();
+      });
+      await waitFor(() => {
+        expect(mockWriteText).toHaveBeenCalled();
+      });
+      return copyButton;
+    }
+
+    test('copyFinalText preserves exact paragraph order', async () => {
       const finalParagraphs = [
         { id: 'final-1', text: 'First paragraph text', vendor: 'openai' },
         { id: 'final-2', text: 'Second paragraph text', vendor: 'anthropic' },
@@ -240,13 +252,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      // Find and click the copy button
-      const copyButton = screen.getByText('Copy');
-      expect(copyButton).toBeInTheDocument();
-
-      act(() => {
-        copyButton.click();
-      });
+      await clickSaveCopyAndWait(mockWriteText);
 
       // Verify the text was copied in the correct order
       expect(mockWriteText).toHaveBeenCalledWith(
@@ -254,7 +260,7 @@ describe('LetterTabs Core Logic Tests', () => {
       );
     });
 
-    test('copyFinalText handles single paragraph correctly', () => {
+    test('copyFinalText handles single paragraph correctly', async () => {
       const finalParagraphs = [
         { id: 'final-1', text: 'Only paragraph text', vendor: 'openai' }
       ];
@@ -268,16 +274,12 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('Copy');
-      
-      act(() => {
-        copyButton.click();
-      });
+      await clickSaveCopyAndWait(mockWriteText);
 
       expect(mockWriteText).toHaveBeenCalledWith('Only paragraph text');
     });
 
-    test('copyFinalText includes all paragraphs without missing any', () => {
+    test('copyFinalText includes all paragraphs without missing any', async () => {
       const finalParagraphs = [
         { id: 'final-1', text: 'Paragraph A', vendor: 'openai' },
         { id: 'final-2', text: 'Paragraph B', vendor: 'anthropic' },
@@ -295,11 +297,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('Copy');
-      
-      act(() => {
-        copyButton.click();
-      });
+      await clickSaveCopyAndWait(mockWriteText);
 
       const expectedText = 'Paragraph A\n\nParagraph B\n\nParagraph C\n\nParagraph D\n\nParagraph E';
       expect(mockWriteText).toHaveBeenCalledWith(expectedText);
@@ -313,7 +311,7 @@ describe('LetterTabs Core Logic Tests', () => {
       expect(copiedText.split('Paragraph E')).toHaveLength(2);
     });
 
-    test('copyFinalText does not duplicate paragraphs', () => {
+    test('copyFinalText does not duplicate paragraphs', async () => {
       const finalParagraphs = [
         { id: 'final-1', text: 'Unique paragraph 1', vendor: 'openai' },
         { id: 'final-2', text: 'Unique paragraph 2', vendor: 'openai' },
@@ -329,11 +327,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('Copy');
-      
-      act(() => {
-        copyButton.click();
-      });
+      await clickSaveCopyAndWait(mockWriteText);
 
       const copiedText = mockWriteText.mock.calls[0][0];
       
@@ -346,7 +340,7 @@ describe('LetterTabs Core Logic Tests', () => {
       expect(copiedText).toBe('Unique paragraph 1\n\nUnique paragraph 2\n\nUnique paragraph 3');
     });
 
-    test('copyFinalText handles empty paragraphs correctly', () => {
+    test('copyFinalText handles empty paragraphs correctly', async () => {
       const finalParagraphs = [
         { id: 'final-1', text: 'First paragraph', vendor: 'openai' },
         { id: 'final-2', text: '', vendor: 'anthropic' }, // Empty paragraph
@@ -362,17 +356,13 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('Copy');
-      
-      act(() => {
-        copyButton.click();
-      });
+      await clickSaveCopyAndWait(mockWriteText);
 
       // Empty paragraphs should still be included in the structure
       expect(mockWriteText).toHaveBeenCalledWith('First paragraph\n\n\n\nThird paragraph');
     });
 
-    test('copyFinalText handles whitespace-only paragraphs correctly', () => {
+    test('copyFinalText handles whitespace-only paragraphs correctly', async () => {
       const finalParagraphs = [
         { id: 'final-1', text: 'First paragraph', vendor: 'openai' },
         { id: 'final-2', text: '   \n  \t  ', vendor: 'anthropic' }, // Whitespace only
@@ -388,17 +378,13 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('Copy');
-      
-      act(() => {
-        copyButton.click();
-      });
+      await clickSaveCopyAndWait(mockWriteText);
 
       // Whitespace paragraphs should be preserved as-is
       expect(mockWriteText).toHaveBeenCalledWith('First paragraph\n\n   \n  \t  \n\nThird paragraph');
     });
 
-    test('copyFinalText handles special characters in paragraph text', () => {
+    test('copyFinalText handles special characters in paragraph text', async () => {
       const finalParagraphs = [
         { id: 'final-1', text: 'Paragraph with "quotes" and \'apostrophes\'', vendor: 'openai' },
         { id: 'final-2', text: 'Paragraph with\nnewlines\nand\ttabs', vendor: 'anthropic' },
@@ -414,11 +400,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('Copy');
-      
-      act(() => {
-        copyButton.click();
-      });
+      await clickSaveCopyAndWait(mockWriteText);
 
       const expectedText = 'Paragraph with "quotes" and \'apostrophes\'\n\nParagraph with\nnewlines\nand\ttabs\n\nParagraph with émojis 🚀 and ünicöde';
       expect(mockWriteText).toHaveBeenCalledWith(expectedText);
@@ -429,7 +411,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('Copy');
+      const copyButton = getSaveCopyButton();
       expect(copyButton).toBeDisabled();
     });
 
@@ -447,25 +429,15 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={finalParagraphs} />);
 
-      const copyButton = screen.getByText('Copy');
-      await act(async () => {
-        copyButton.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
+      await clickSaveCopyAndWait(mockWriteText);
 
       expect(mockWriteText).toHaveBeenCalledWith('Test paragraph');
-      expect(screen.getByText('Clipboard access denied')).toBeInTheDocument();
+      expect(await screen.findByText('Clipboard access denied')).toBeInTheDocument();
     });
 
-    test('copyFinalText preserves exact order after drag and drop operations', () => {
+    test('copyFinalText preserves exact order after drag and drop operations', async () => {
       // This test verifies that after paragraphs are moved around, 
       // the copy function still respects the current display order
-      const initialParagraphs = [
-        { id: 'final-1', text: 'Original first', vendor: 'openai' },
-        { id: 'final-2', text: 'Original second', vendor: 'anthropic' },
-        { id: 'final-3', text: 'Original third', vendor: 'gemini' }
-      ];
-
       const mockWriteText = jest.fn().mockResolvedValue();
       Object.assign(navigator, {
         clipboard: {
@@ -482,11 +454,7 @@ describe('LetterTabs Core Logic Tests', () => {
 
       render(<TestWrapper {...defaultProps} finalParagraphs={reorderedParagraphs} />);
 
-      const copyButton = screen.getByText('Copy');
-      
-      act(() => {
-        copyButton.click();
-      });
+      await clickSaveCopyAndWait(mockWriteText);
 
       // Should copy in the NEW order, not the original order
       expect(mockWriteText).toHaveBeenCalledWith('Original third\n\nOriginal first\n\nOriginal second');

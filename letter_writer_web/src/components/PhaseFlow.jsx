@@ -264,11 +264,10 @@ function PhaseSection({
           display: "grid",
           gridAutoFlow: "column",
           gridAutoColumns,
-          gridAutoRows: "1fr",
           gap: 12,
           marginTop: 8,
           overflowX: "auto",
-          alignItems: "stretch",
+          alignItems: "start",
         }}
       >
         {children}
@@ -772,6 +771,8 @@ function ExtractionCard({
 }
 
 const VENDOR_COLUMN_WIDTH = 340;
+/** Fixed viewport height per column — independent of sibling columns. */
+const VENDOR_COLUMN_HEIGHT = "calc(100dvh - 80px)";
 
 const cardStyle = {
   border: "1px solid #e5e7eb",
@@ -787,8 +788,9 @@ const cardStyle = {
   width: VENDOR_COLUMN_WIDTH,
   minWidth: VENDOR_COLUMN_WIDTH,
   maxWidth: VENDOR_COLUMN_WIDTH,
-  maxHeight: "min(75vh, 900px)",
-  minHeight: 120,
+  height: VENDOR_COLUMN_HEIGHT,
+  minHeight: VENDOR_COLUMN_HEIGHT,
+  maxHeight: VENDOR_COLUMN_HEIGHT,
   position: "relative",
   boxSizing: "border-box",
   overflow: "hidden",
@@ -1448,78 +1450,95 @@ function VendorCard({
 
   return (
     <div style={{ ...effectiveCardStyle, opacity: disabled ? 0.6 : 1, pointerEvents: disabled ? "none" : "auto" }}>
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
-        <h4 style={{ margin: 0, flex: 1, textTransform: "capitalize" }}>{vendor}</h4>
-        {onExpand && !isExpanded && (
-          <button
-            type="button"
-            onClick={onExpand}
-            title="Expand to 80% width"
-            style={{
-              fontSize: 12,
-              padding: "2px 8px",
-              background: "var(--panel-bg)",
-              color: "var(--text-color)",
-              border: "1px solid var(--border-color)",
-              borderRadius: 4,
-              cursor: "pointer",
-            }}
-          >
-            Expand
-          </button>
-        )}
-        {isExpanded && onCloseExpand && (
-          <button
-            type="button"
-            onClick={onCloseExpand}
-            title="Close expanded view"
-            style={{
-              fontSize: 12,
-              padding: "2px 8px",
-              background: "var(--panel-bg)",
-              color: "var(--text-color)",
-              border: "1px solid var(--border-color)",
-              borderRadius: 4,
-              cursor: "pointer",
-            }}
-          >
-            × Close
-          </button>
-        )}
-        {isDone && (
-          <button onClick={() => setCollapsed(!collapsed)} style={{ fontSize: 12, padding: "4px 8px" }}>
-            {collapsed ? "Expand" : "Collapse"}
-          </button>
-        )}
-      </div>
-      
-      {/* Cost and Translation bar */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
-        {(phaseCost > 0 || runningTotal > 0) && (
-          <div style={{ fontSize: "11px", color: "var(--secondary-text-color)", whiteSpace: "nowrap" }}>
-            ${phaseCost.toFixed(4)} <span style={{ fontSize: "10px", opacity: 0.8 }}>(Total: ${runningTotal.toFixed(4)})</span>
+      <div style={cardHeaderStyle} data-vendor-column-header>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap" }}>
+          <h4 style={{ margin: 0, flex: "1 1 auto", textTransform: "capitalize", fontSize: 14, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {vendor}
+          </h4>
+          {onExpand && !isExpanded && (
+            <button
+              type="button"
+              onClick={onExpand}
+              title="Expand to 80% width"
+              aria-label="Expand column"
+              style={iconButtonStyle}
+            >
+              <ExpandOutIcon />
+            </button>
+          )}
+          {isExpanded && onCloseExpand && (
+            <button
+              type="button"
+              onClick={onCloseExpand}
+              title="Close expanded view"
+              aria-label="Close expanded view"
+              style={{ ...iconButtonStyle, fontSize: 16, lineHeight: 1 }}
+            >
+              ×
+            </button>
+          )}
+          {isDone && (
+            <button
+              type="button"
+              onClick={() => setCollapsed(!collapsed)}
+              style={{ fontSize: 11, padding: "2px 6px" }}
+            >
+              {collapsed ? "Show" : "Hide"}
+            </button>
+          )}
+          {!isLoadingWithoutData && cardPhase && phaseModule && (
+            <button
+              type="button"
+              onClick={() => {
+                void executePrimaryApprove();
+              }}
+              disabled={!readyForApproval || (approved && !thisPhaseDirty)}
+              style={{
+                fontSize: 12,
+                padding: "4px 10px",
+                flexShrink: 0,
+                opacity: readyForApproval ? 1 : 0.6,
+                cursor: readyForApproval ? "pointer" : "not-allowed",
+              }}
+            >
+              {approveButtonLabel}
+            </button>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+          {(phaseCost > 0 || runningTotal > 0) && (
+            <div style={{ fontSize: "11px", color: "var(--secondary-text-color)", whiteSpace: "nowrap" }}>
+              ${phaseCost.toFixed(4)} <span style={{ fontSize: "10px", opacity: 0.8 }}>(Total: ${runningTotal.toFixed(4)})</span>
+            </div>
+          )}
+          {cardPhase !== "draft" && (
+            <LanguageSelector
+              languages={translation.languages}
+              viewLanguage={translation.viewLanguage}
+              onLanguageChange={handleLanguageChange}
+              hasTranslation={hasAnyTranslation}
+              disabled={isLoading}
+              isTranslating={translation.isAnyTranslating}
+              size="small"
+            />
+          )}
+        </div>
+        {Object.keys(translation.translationErrors).length > 0 && (
+          <div style={{ color: "var(--error-text)", fontSize: "12px" }}>
+            {Object.values(translation.translationErrors)[0]}
           </div>
         )}
-        {/* Only show card-level language selector for phases without per-field selectors */}
-        {/* Draft phase has per-field selectors, so hide card-level selector */}
-        {cardPhase !== "draft" && (
-          <LanguageSelector
-            languages={translation.languages}
-            viewLanguage={translation.viewLanguage}
-            onLanguageChange={handleLanguageChange}
-            hasTranslation={hasAnyTranslation}
-            disabled={isLoading}
-            isTranslating={translation.isAnyTranslating}
-            size="small"
-          />
+        {cardPhase && phaseModule?.renderAdditionalButtons && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {phaseModule.renderAdditionalButtons({
+              isDone,
+              cardPhase,
+              collapsed,
+              vendor,
+            })}
+          </div>
         )}
       </div>
-      {/* Translation errors */}
-      {Object.keys(translation.translationErrors).length > 0 && (
-        <div style={{ color: "var(--error-text)", fontSize: "12px", marginBottom: 8 }}>
-          {Object.values(translation.translationErrors)[0]}
-        </div>
-      )}
 
       {isLoadingWithoutData && (
         <div style={{ padding: 6, color: "#6b7280", fontSize: 12 }}>
@@ -1737,16 +1756,30 @@ export default function PhaseFlow({
   const planVendorSettledAtRef = useRef({});
   const prevPlanVendorSettledRef = useRef({});
   const planAutoApproveTimerRef = useRef(null);
+  /** Once Draft appears, collapse Plan so Draft columns can use a full screen height. */
+  const autoCollapsedPlanForDraftRef = useRef(false);
 
   useEffect(() => {
     setCollapsedPhases({ plan: false, draft: false });
     planVendorSettledAtRef.current = {};
     prevPlanVendorSettledRef.current = {};
+    autoCollapsedPlanForDraftRef.current = false;
     if (planAutoApproveTimerRef.current) {
       clearTimeout(planAutoApproveTimerRef.current);
       planAutoApproveTimerRef.current = null;
     }
   }, [flowResetKey]);
+
+  // Collapse Plan the first time Draft becomes visible so vendor columns sit at the top of the viewport.
+  useEffect(() => {
+    const phases = phasesRef.current;
+    const planPhase = phases?.find((p) => p.phase === "plan");
+    if (!planPhase) return;
+    const draftVisible = (planPhase.approvedVendors?.size ?? 0) > 0;
+    if (!draftVisible || autoCollapsedPlanForDraftRef.current) return;
+    autoCollapsedPlanForDraftRef.current = true;
+    setCollapsedPhases((prev) => ({ ...prev, plan: true }));
+  }, [phaseUpdateTrigger, flowResetKey]);
 
   useEffect(() => {
     return () => {

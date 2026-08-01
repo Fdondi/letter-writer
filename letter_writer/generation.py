@@ -288,6 +288,7 @@ def _call_vendor_feedback_items(
     search: bool = False,
     max_retries: int = 2,
     system_cache_prefix: Optional[str] = None,
+    prompt_cache_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Call an LLM; response must be JSON with an items array of {observation, type}."""
     allowed = allowed_context_sources & FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN
@@ -336,6 +337,13 @@ def _call_vendor_feedback_items(
         "Never invent facts."
     )
     enforced_system = system + common_instructions
+    from .clients.prompt_cache import cache_key_for_prefix
+
+    resolved_cache_key = prompt_cache_key or (
+        cache_key_for_prefix(system_cache_prefix, fallback="")
+        if system_cache_prefix
+        else None
+    )
 
     last_raw = ""
     for attempt in range(1, max_retries + 1):
@@ -347,6 +355,7 @@ def _call_vendor_feedback_items(
                 search=search,
                 response_format=response_schema,
                 system_cache_prefix=system_cache_prefix,
+                prompt_cache_key=resolved_cache_key or None,
             )
             data = _extract_json_value(last_raw)
             items = normalize_parsed_feedback_items(
@@ -1012,6 +1021,52 @@ EXTRACTION_SYSTEM = (
 
 _JOB_PREFIX = "Job description:\n"
 
+
+def _job_extraction_cache_prefix(job_text: str) -> str:
+    """Single cached block: shared extraction instructions + job text."""
+    from .clients.prompt_cache import combine_cache_parts
+
+    return combine_cache_parts(EXTRACTION_SYSTEM, f"{_JOB_PREFIX}{job_text}")
+
+
+def _format_letter_examples(examples: Sequence[TopDocument]) -> str:
+    return "\n\n".join(
+        f"---- Example #{i+1} [estimated relevance: {ex.get('score', 0)}/10] - {ex.get('company_name', '')} ----\n"
+        f"Job Description:\n{ex.get('job_text', '')}\n\n"
+        f"Cover Letter:\n{ex.get('letter_text', '')}\n\n"
+        for i, ex in enumerate(examples) if (ex.get("letter_text") or "").strip()
+    )
+
+
+def _letter_generation_context(
+    *,
+    cv_text: str,
+    examples_formatted: str,
+    company_report: str,
+    job_text: str,
+    hire_problem: str = "",
+) -> str:
+    """Shared cached context for letter plan + draft (CV, examples, company, job).
+
+    Passed as ``system_cache_prefix`` so Anthropic caches this block across plan → draft
+    (and other calls that share the same documents within the 5-minute TTL).
+    """
+    hire_block = ""
+    hp = (hire_problem or "").strip()
+    if hp:
+        hire_block = (
+            "\n\n========== Hire goal / problem this role should address (from posting extraction) ==========\n"
+            + hp
+            + "\n==========\n"
+        )
+    return (
+        "========== User CV:\n" + cv_text + "\n==========\n"
+        "========== Examples:\n" + examples_formatted + "\n==========\n"
+        "========== Company Report:\n" + company_report + "\n==========\n"
+        "========== Target Job Description:\n" + job_text + "\n=========="
+        + hire_block
+    )
+
 # Structured extraction: single JSON object with competence category arrays plus this string key.
 HIRE_PROBLEM_JSON_KEY = "hire_problem"
 
@@ -1029,9 +1084,15 @@ def extract_job_metadata_no_requirements(
         "If no point of contact is found, set point_of_contact to null."
     )
     example = '{"company_name":"Acme","job_title":"Senior Engineer","location":"Remote","language":"English","salary":"€80-100k","point_of_contact":{"name":"John Doe","role":"HR Manager","contact_details":"john.doe@acme.com","notes":"Please contact via email"}}'
-    prompt = f"{_JOB_PREFIX}{job_text}\n\n{task}\n\nRespond with JSON only. Example format:\n{example}"
-    raw = client.call(ModelRole.EXTRACTION, EXTRACTION_SYSTEM, [prompt])
-    _write_trace(trace_dir, EXTRACTION_SYSTEM, prompt, raw)
+    prompt = f"{task}\n\nRespond with JSON only. Example format:\n{example}"
+    cache_block = _job_extraction_cache_prefix(job_text)
+    raw = client.call(
+        ModelRole.EXTRACTION,
+        "",
+        [prompt],
+        system_cache_prefix=cache_block,
+    )
+    _write_trace(trace_dir, cache_block, prompt, raw)
 
     try:
         data = json.loads(raw)
@@ -1112,9 +1173,15 @@ def extract_key_competences(
         "Separate competences that are ANDed: 'German and English' is ['German', 'English']. "
         "Single competence for alternatives: 'like C++ or Java' -> one competence."
     )
-    prompt = f"{_JOB_PREFIX}{job_text}\n\n{task}\n\nRespond with JSON only. Example format:\n{example}"
-    raw = client.call(ModelRole.EXTRACTION, EXTRACTION_SYSTEM, [prompt])
-    _write_trace(trace_dir, EXTRACTION_SYSTEM, prompt, raw)
+    prompt = f"{task}\n\nRespond with JSON only. Example format:\n{example}"
+    cache_block = _job_extraction_cache_prefix(job_text)
+    raw = client.call(
+        ModelRole.EXTRACTION,
+        "",
+        [prompt],
+        system_cache_prefix=cache_block,
+    )
+    _write_trace(trace_dir, cache_block, prompt, raw)
 
     try:
         data = json.loads(raw)
@@ -1191,17 +1258,22 @@ def grade_competence_cv_match(
         "Return strict JSON: a single object whose keys are the competences (exactly as given) "
         "and whose values are the level strings. Do not add any other keys or prose."
     )
+    cv_excerpt = cv_text[:12000] if len(cv_text) > 12000 else cv_text
+    from .clients.prompt_cache import combine_cache_parts
+
+    cache_block = combine_cache_parts(
+        system,
+        f"========== User CV:\n{cv_excerpt}\n==========",
+    )
     prompt = (
         "Key competences (one per line):\n"
         + "\n".join(competences)
-        + "\n\n---\n\nCV (excerpt):\n"
-        + (cv_text[:12000] if len(cv_text) > 12000 else cv_text)
         + "\n\nAssign each competence one of: " + level_list + ".\n\n"
         "Respond with JSON only. Example format:\n"
         f"{example_str}"
     )
-    raw = client.call(ModelRole.EXTRACTION, system, [prompt])
-    _write_trace(trace_dir, system, prompt, raw)
+    raw = client.call(ModelRole.EXTRACTION, "", [prompt], system_cache_prefix=cache_block)
+    _write_trace(trace_dir, cache_block, prompt, raw)
 
     try:
         data = json.loads(raw)
@@ -1376,16 +1448,22 @@ def extract_job_metadata(
         "Do not add any additional keys or prose."
     )
     prompt = (
-        "Job description:\n"
-        f"{job_text}\n\n"
         "Respond with JSON only. Example format:\n"
         '{"company_name":"Acme","job_title":"Senior Engineer","location":"Remote","language":"English","salary":"€80-100k","requirements":["Python","AWS"],"point_of_contact":{"name":"John Doe","role":"HR Manager","contact_details":"john.doe@acme.com","notes":"Please contact via email"}}'
     )
-    raw = client.call(ModelRole.EXTRACTION, system, [prompt])
+    from .clients.prompt_cache import combine_cache_parts
+
+    cache_block = combine_cache_parts(system, f"{_JOB_PREFIX}{job_text}")
+    raw = client.call(
+        ModelRole.EXTRACTION,
+        "",
+        [prompt],
+        system_cache_prefix=cache_block,
+    )
     if trace_dir is not None:
         trace_dir.mkdir(parents=True, exist_ok=True)
         try:
-            (trace_dir / "prompt.txt").write_text(f"SYSTEM:\n{system}\n\nPROMPT:\n{prompt}", encoding="utf-8")
+            (trace_dir / "prompt.txt").write_text(f"CACHE:\n{cache_block}\n\nPROMPT:\n{prompt}", encoding="utf-8")
             (trace_dir / "raw.txt").write_text(raw, encoding="utf-8")
         except Exception as e:
             logger.debug("trace write failed: %s", e)
@@ -1628,6 +1706,7 @@ def generate_letter_plan(
     additional_user_info: str = "",
     hire_problem: str = "",
     language_prefix: str = "",
+    model_role: ModelRole | str | None = None,
 ) -> str:
     """High-level cover letter plan: strengths, weaknesses to frame, and layout (no draft prose)."""
     company_report = company_report if company_report is not None else ""
@@ -1639,12 +1718,7 @@ def generate_letter_plan(
 
     si = (structure_instructions or "").strip() or get_structure_instructions()
 
-    examples_formatted = "\n\n".join(
-        f"---- Example #{i+1} [estimated relevance: {ex.get('score', 0)}/10] - {ex.get('company_name', '')} ----\n"
-        f"Job Description:\n{ex.get('job_text', '')}\n\n"
-        f"Cover Letter:\n{ex.get('letter_text', '')}\n\n"
-        for i, ex in enumerate(examples) if (ex.get("letter_text") or "").strip()
-    )
+    examples_formatted = _format_letter_examples(examples)
 
     additional_context = ""
     if additional_user_info and additional_user_info.strip():
@@ -1668,24 +1742,20 @@ def generate_letter_plan(
         language_prefix,
     )
 
-    hire_block = ""
-    hp = (hire_problem or "").strip()
-    if hp:
-        hire_block = (
-            "\n\n========== Hire goal / problem this role should address (from posting extraction) ==========\n"
-            + hp
-            + "\n==========\n"
-        )
-
-    prompt = (
-        "========== User CV:\n" + cv_text + "\n==========\n" +
-        "========== Examples:\n" + examples_formatted + "\n==========\n" +
-        "========== Company Report:\n" + company_report + "\n==========\n" +
-        "========== Target Job Description:\n" + job_text + "\n=========="
-        + hire_block
+    context = _letter_generation_context(
+        cv_text=cv_text,
+        examples_formatted=examples_formatted,
+        company_report=company_report,
+        job_text=job_text,
+        hire_problem=hire_problem,
     )
-    (trace_dir / "plan_prompt.txt").write_text(prompt, encoding="utf-8")
-    return client.call(ModelRole.LETTER_PLAN, system, [prompt])
+    (trace_dir / "plan_prompt.txt").write_text(context, encoding="utf-8")
+    return client.call(
+        model_role if model_role is not None else ModelRole.LETTER_PLAN,
+        system,
+        ["Produce the strategic plan for the cover letter."],
+        system_cache_prefix=context,
+    )
 
 
 @traceable(run_type="chain", name="generate_letter")
@@ -1701,6 +1771,7 @@ def generate_letter(
     letter_plan: str = "",
     hire_problem: str = "",
     language_prefix: str = "",
+    model_role: ModelRole | str | None = None,
 ) -> str:
     """Generate a personalized cover letter based on CV, examples, company report, and job description.
     
@@ -1718,12 +1789,7 @@ def generate_letter(
     if not style_instructions:
         style_instructions = get_style_instructions()
 
-    examples_formatted = "\n\n".join(
-        f"---- Example #{i+1} [estimated relevance: {ex.get('score', 0)}/10] - {ex.get('company_name', '')} ----\n"
-        f"Job Description:\n{ex.get('job_text', '')}\n\n"
-        f"Cover Letter:\n{ex.get('letter_text', '')}\n\n"
-        for i, ex in enumerate(examples) if (ex.get("letter_text") or "").strip()
-    )
+    examples_formatted = _format_letter_examples(examples)
     
     # Build system prompt with optional additional user info
     additional_context = ""
@@ -1759,23 +1825,20 @@ def generate_letter(
         ),
         language_prefix,
     )
-    hire_block = ""
-    hp = (hire_problem or "").strip()
-    if hp:
-        hire_block = (
-            "\n\n========== Hire goal / problem this role should address (from posting extraction) ==========\n"
-            + hp
-            + "\n==========\n"
-        )
-    prompt = (
-        "========== User CV:\n" + cv_text + "\n==========\n" +
-        "========== Examples:\n" + examples_formatted + "\n==========\n" +
-        "========== Company Report:\n" + company_report + "\n==========\n" +
-        "========== Target Job Description:\n" + job_text + "\n=========="
-        + hire_block
+    context = _letter_generation_context(
+        cv_text=cv_text,
+        examples_formatted=examples_formatted,
+        company_report=company_report,
+        job_text=job_text,
+        hire_problem=hire_problem,
     )
-    (trace_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
-    return client.call(ModelRole.LETTER_DRAFT, system, [prompt])
+    (trace_dir / "prompt.txt").write_text(context, encoding="utf-8")
+    return client.call(
+        model_role if model_role is not None else ModelRole.LETTER_DRAFT,
+        system,
+        ["Write the personalized cover letter."],
+        system_cache_prefix=context,
+    )
 
 @traceable(run_type="chain", name="instruction_check")
 def instruction_check(letter: str, client: BaseClient, style_instructions: str = "") -> List[Dict[str, Any]]:
@@ -1939,6 +2002,94 @@ def _format_correction(corr: dict) -> str:
         original = corr.get("original", "").strip()
         edited = corr.get("edited", "").strip()
         return f"  Original: {original}\n  Edited: {edited}"
+
+@traceable(run_type="chain", name="run_phased_feedback_checks")
+def run_phased_feedback_checks(
+    *,
+    draft_letter: str,
+    cv_text: str,
+    company_report: str,
+    job_text: str,
+    top_docs: Sequence[TopDocument],
+    client: BaseClient,
+    style_instructions: str = "",
+    additional_user_info: str = "",
+    hire_problem: str = "",
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Run all draft feedback checks with cache-aware scheduling.
+
+    Checks that share the same ``system_cache_prefix`` run sequentially so
+    providers bill one cache write and subsequent reads at the discount rate.
+    """
+    from .clients.prompt_cache import run_cache_grouped_tasks
+
+    si = style_instructions or get_style_instructions()
+    company_job_ctx = _company_job_letter_context(
+        company_report=company_report, job_text=job_text, letter=draft_letter
+    )
+    cv_letter_ctx = _cv_letter_context(cv_text=cv_text, letter=draft_letter)
+    instruction_ctx = _instruction_check_context(style_instructions=si, letter=draft_letter)
+    goal_ctx = _company_job_hire_goal_letter_context(
+        company_report=company_report,
+        job_text=job_text,
+        letter=draft_letter,
+        hire_problem=hire_problem,
+    )
+    human_ctx = _human_check_context(top_docs=top_docs, letter=draft_letter)
+
+    tasks: List[Tuple[str, Optional[str], Any]] = [
+        (
+            "instruction",
+            instruction_ctx,
+            lambda: instruction_check(draft_letter, client, si),
+        ),
+        (
+            "accuracy",
+            cv_letter_ctx,
+            lambda: accuracy_check(draft_letter, cv_text, client, additional_user_info),
+        ),
+        (
+            "precision",
+            company_job_ctx,
+            lambda: precision_check(draft_letter, company_report, job_text, client),
+        ),
+        (
+            "company_fit",
+            company_job_ctx,
+            lambda: company_fit_check(draft_letter, company_report, job_text, client),
+        ),
+        (
+            "goal_fit",
+            goal_ctx,
+            lambda: goal_fit_check(
+                draft_letter, company_report, job_text, client, hire_problem
+            ),
+        ),
+        (
+            "user_fit",
+            cv_letter_ctx,
+            lambda: user_fit_check(
+                draft_letter, top_docs, client, cv_text, additional_user_info
+            ),
+        ),
+        (
+            "human",
+            human_ctx,
+            lambda: human_check(draft_letter, top_docs, client),
+        ),
+    ]
+
+    results = run_cache_grouped_tasks(tasks, max_parallel_groups=7)
+    return {
+        "instruction": results.get("instruction") or [],
+        "accuracy": results.get("accuracy") or [],
+        "precision": results.get("precision") or [],
+        "company_fit": results.get("company_fit") or [],
+        "goal_fit": results.get("goal_fit") or [],
+        "user_fit": results.get("user_fit") or [],
+        "human": results.get("human") or [],
+    }
+
 
 @traceable(run_type="chain", name="human_check")
 def human_check(letter: str, examples: Sequence[TopDocument], client: BaseClient) -> List[Dict[str, Any]]:
@@ -2199,6 +2350,7 @@ def rewrite_letter(
     letter_plan: str = "",
     style_instructions: str = "",
     language_prefix: str = "",
+    model_role: ModelRole | str | None = None,
 ) -> str:
     """Rewrite the cover letter incorporating all feedback."""
     si = (style_instructions or "").strip() or get_style_instructions()
@@ -2223,7 +2375,7 @@ def rewrite_letter(
         language_prefix,
     )
     had_feedback = False
-    prompt = "========== Original Cover Letter:\n" + original_letter + "\n==========\n"
+    context_parts = ["========== Original Cover Letter:\n" + original_letter + "\n==========\n"]
     dim_blocks = (
         ("Instruction Feedback", instruction_feedback),
         ("Accuracy Feedback", accuracy_feedback),
@@ -2238,19 +2390,25 @@ def rewrite_letter(
         if not block:
             continue
         had_feedback = True
-        prompt += f"========== {title}:\n" + block + "\n==========\n"
+        context_parts.append(f"========== {title}:\n" + block + "\n==========\n")
     if not had_feedback:
         logger.info("No feedback provided, returning original letter.")
         return original_letter
-    
-    prompt += (
+
+    context = "".join(context_parts)
+    user_prompt = (
         "Please rewrite the cover letter incorporating all the feedback. Output only the revised letter.\n"
         "ONLY address the feedback that was provided. Do not change any part of the letter except what is touched by feedback. \n"
         "Feedback is meant to call attention to specific aspects, but can be short-sighted in context. "
         "If you see that no feedback meaningfully needs to be addressed, output NO REVISIONS and end the answer.\n"
     )
-    (trace_dir / "rewrite_prompt.txt").write_text(prompt, encoding="utf-8")
-    revised_letter = client.call(ModelRole.LETTER_REFINE, system, [prompt])
+    (trace_dir / "rewrite_prompt.txt").write_text(context + "\n\n" + user_prompt, encoding="utf-8")
+    revised_letter = client.call(
+        model_role if model_role is not None else ModelRole.LETTER_REFINE,
+        system,
+        [user_prompt],
+        system_cache_prefix=context,
+    )
     if "NO REVISIONS" in revised_letter:
         logger.info("No revisions needed, returning original letter.")
         return original_letter
@@ -2265,9 +2423,11 @@ def fancy_letter(letter: str, client: BaseClient) -> str:
         "The first paragraph should start with the company name itself. For example:\n"
         "Apple -> 'Apple means excellence... Passion for me is... Pluses of employing me... Leading comes natural to me... Excited to contribute...' "
     )
-    prompt = (
-        "========== Cover Letter:\n" + letter + "\n==========\n" +
-        "Please rewrite the cover letter in a more fancy style. "
+    context = "========== Cover Letter:\n" + letter + "\n==========\n"
+    return client.call(
+        ModelRole.LETTER_REFINE,
+        system,
+        ["Please rewrite the cover letter in a more fancy style."],
+        system_cache_prefix=context,
     )
-    return client.call(ModelRole.LETTER_REFINE, system, [prompt])
 

@@ -4,6 +4,7 @@
 trace/
 letters/
 jobs/
+session_backups/
 __pycache__/
 letter_writer/__pycache__/*
 letter_writer_web/dist/

@@ -20,6 +20,7 @@ from letter_writer.personal_data_sections import (
     get_models,
     get_background_models,
     get_agentic_draft_model,
+    get_phase_model_overrides,
     get_autocomplete_max_words,
     get_autocomplete_stop_on_period,
     get_autocomplete_models,
@@ -34,6 +35,15 @@ from letter_writer.personal_data_sections import (
     get_custom_instruction,
     instruction_firestore_keys,
 )
+from letter_writer.phase_model_settings import (
+    get_letter_draft_role_defaults,
+    get_letter_plan_role_defaults,
+    get_letter_refine_role_defaults,
+    get_merged_phase_models,
+    get_merged_vendor_role_models,
+    normalize_vendor_role_model_overrides,
+)
+from letter_writer.vendor_model_flows import get_vendor_model_flows
 from letter_writer.personal_data_sections import get_style_instructions as get_user_style_instructions
 from letter_writer.personal_data_sections import get_search_instructions as get_user_search_instructions
 from letter_writer.personal_data_sections import get_structure_instructions as get_user_structure_instructions
@@ -377,6 +387,14 @@ async def get_personal_data(session: Session = Depends(get_session)):
         "autocomplete_role_defaults": get_autocomplete_role_defaults(),
         "autocomplete_plan_role_defaults": get_autocomplete_plan_role_defaults(),
         "autocomplete_plan_model": get_autocomplete_plan_model(user_data),
+        "phase_model_overrides": get_phase_model_overrides(user_data),
+        "vendor_role_model_overrides": get_phase_model_overrides(user_data),
+        "phase_models": get_merged_phase_models(get_phase_model_overrides(user_data)),
+        "vendor_role_models": get_merged_vendor_role_models(get_phase_model_overrides(user_data)),
+        "vendor_model_flows": get_vendor_model_flows(),
+        "letter_plan_role_defaults": get_letter_plan_role_defaults(),
+        "letter_draft_role_defaults": get_letter_draft_role_defaults(),
+        "letter_refine_role_defaults": get_letter_refine_role_defaults(),
     }
 
 @router.post("/personal-data/")
@@ -457,6 +475,17 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             val = data["agentic_draft_model"]
             stored = (val or "").strip() if isinstance(val, str) else (str(val).strip() if val is not None else None)
             updates["agentic_draft_model"] = wrap_new_field("agentic_draft_model", stored or None, now)
+
+        if "phase_model_overrides" in data or "vendor_role_model_overrides" in data:
+            raw_overrides = data.get("vendor_role_model_overrides")
+            if raw_overrides is None:
+                raw_overrides = data.get("phase_model_overrides")
+            if raw_overrides is not None and not isinstance(raw_overrides, dict):
+                raise HTTPException(status_code=400, detail="vendor_role_model_overrides must be an object")
+            cleaned_overrides = normalize_vendor_role_model_overrides(raw_overrides or {})
+            wrapped = wrap_new_field("vendor_role_model_overrides", cleaned_overrides, now)
+            updates["vendor_role_model_overrides"] = wrapped
+            updates["phase_model_overrides"] = wrapped
 
         if "autocomplete_max_words" in data:
             try:

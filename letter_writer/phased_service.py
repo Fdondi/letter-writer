@@ -5,14 +5,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 from uuid import uuid4
-from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 
 from langsmith import traceable
 from openai import OpenAI
 
 from .client import get_client
-from .clients.base import ModelVendor
+from .clients.base import ModelVendor, ModelRole
 from .generation import (
     accuracy_check,
     company_fit_check,
@@ -27,6 +26,7 @@ from .generation import (
     instruction_check,
     precision_check,
     rewrite_letter,
+    run_phased_feedback_checks,
     user_fit_check,
     normalize_feedback_map,
     extract_job_metadata,
@@ -44,10 +44,24 @@ from .typed_shapes import TopDocument
 from .personal_data_sections import (
     format_agent_feedback_context_for_prompt,
     get_agent_feedback_context,
+    get_phase_model_overrides,
 )
+from .phase_model_settings import resolve_client_model_role
 from .language_settings import build_language_system_prefix
 
 logger = logging.getLogger(__name__)
+
+
+def _phase_model_role_for_call(
+    vendor: ModelVendor,
+    phase_role: str,
+    user_id: Optional[str],
+) -> ModelRole | str:
+    if not user_id:
+        return ModelRole(phase_role)
+    user_data = get_user_data(user_id, use_cache=True) or {}
+    overrides = get_phase_model_overrides(user_data)
+    return resolve_client_model_role(vendor.value, phase_role, overrides)
 
 
 @dataclass
@@ -482,6 +496,7 @@ def advance_to_plan(
             additional_user_info=additional_user_info,
             hire_problem=hire_problem,
             language_prefix=language_prefix,
+            model_role=_phase_model_role_for_call(vendor, "letter_plan", user_id),
         )
         _update_cost(state, ai_client, phase="plan", user_id=user_id, vendor_str=vendor.value)
         _reset_client_counters(ai_client)
@@ -626,6 +641,7 @@ def advance_to_draft(
             letter_plan=letter_plan,
             hire_problem=hire_problem,
             language_prefix=language_prefix,
+            model_role=_phase_model_role_for_call(vendor, "letter_draft", user_id),
         )
         
         # Capture draft cost before feedback generation
@@ -634,32 +650,17 @@ def advance_to_draft(
         
         # Run checks on the draft so the user can review/override feedback before refinement
         logger.info("[PHASE] draft -> %s :: running checks (FEEDBACK)", vendor.value)
-        with ThreadPoolExecutor(max_workers=7) as executor:
-            instruction_future = executor.submit(instruction_check, draft_letter, ai_client, style_instructions)
-            accuracy_future = executor.submit(accuracy_check, draft_letter, cv_text, ai_client, additional_user_info)
-            precision_future = executor.submit(
-                precision_check, draft_letter, company_report, job_text, ai_client
-            )
-            company_fit_future = executor.submit(
-                company_fit_check, draft_letter, company_report, job_text, ai_client
-            )
-            goal_fit_future = executor.submit(
-                goal_fit_check, draft_letter, company_report, job_text, ai_client, hire_problem
-            )
-            user_fit_future = executor.submit(
-                user_fit_check, draft_letter, top_docs, ai_client, cv_text, additional_user_info
-            )
-            human_future = executor.submit(human_check, draft_letter, top_docs, ai_client)
-
-        feedback = {
-            "instruction": instruction_future.result(),
-            "accuracy": accuracy_future.result(),
-            "precision": precision_future.result(),
-            "company_fit": company_fit_future.result(),
-            "goal_fit": goal_fit_future.result(),
-            "user_fit": user_fit_future.result(),
-            "human": human_future.result(),
-        }
+        feedback = run_phased_feedback_checks(
+            draft_letter=draft_letter,
+            cv_text=cv_text,
+            company_report=company_report,
+            job_text=job_text,
+            top_docs=top_docs,
+            client=ai_client,
+            style_instructions=style_instructions,
+            additional_user_info=additional_user_info,
+            hire_problem=hire_problem,
+        )
         
         # Capture feedback cost separately
         _update_cost(state, ai_client, phase="feedback", user_id=user_id, vendor_str=vendor.value)
@@ -777,6 +778,7 @@ def advance_to_refinement(
             letter_plan=letter_plan,
             style_instructions=si,
             language_prefix=language_prefix_for_session(session.metadata, vendor, user_id),
+            model_role=_phase_model_role_for_call(vendor, "letter_refine", user_id),
         )
 
         if fancy:

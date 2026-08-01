@@ -10,9 +10,9 @@
     "feedback_context": { "model": "claude-haiku-4-5",  "thinking": false },
     "rag_ranker":       { "model": "claude-sonnet-4-6", "thinking": true, "effort": "medium" },
     "company_research": { "model": "claude-sonnet-4-6", "thinking": true, "effort": "medium" },
-    "letter_plan":      { "model": "claude-opus-4-7",   "thinking": true, "effort": "high" },
-    "letter_draft":     { "model": "claude-opus-4-7",   "thinking": true, "effort": "high" },
-    "letter_refine":    { "model": "claude-opus-4-7",   "thinking": true, "effort": "high" },
+    "letter_plan":      { "model": "claude-sonnet-4-6", "thinking": true, "effort": "medium" },
+    "letter_draft":     { "model": "claude-sonnet-4-6", "thinking": true, "effort": "medium" },
+    "letter_refine":    { "model": "claude-sonnet-4-6", "thinking": true, "effort": "medium" },
     "agentic":          { "model": "claude-haiku-4-5",  "thinking": false },
     "autocomplete":         { "model": "claude-haiku-4-5",  "thinking": false },
     "autocomplete_plan":    { "model": "claude-opus-4-7",   "thinking": true, "effort": "high" }
@@ -35,6 +35,10 @@
       "input": 3.00,
       "output": 15.00
     },
+    "claude-sonnet-5": {
+      "input": 2.00,
+      "output": 10.00
+    },
     "claude-opus-4-5": {
       "input": 5.00,
       "output": 25.00
@@ -46,6 +50,14 @@
     "claude-opus-4-7": {
       "input": 5.00,
       "output": 25.00
+    },
+    "claude-opus-4-8": {
+      "input": 5.00,
+      "output": 25.00
+    },
+    "claude-fable-5": {
+      "input": 10.00,
+      "output": 50.00
     }
   }
 }

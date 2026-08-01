@@ -98,10 +98,10 @@ def test_resolve_autocomplete_model_ctrl_letter():
 def test_derive_ctrl_letter_map_collisions():
     from letter_writer.autocomplete_core import derive_ctrl_letter_map_from_models
 
-    models = ["gemini/gemini-2.5-flash-lite", "grok/grok-4-1-fast-non-reasoning"]
+    models = ["gemini/gemini-2.5-flash-lite", "grok/grok-4.3"]
     mapped = derive_ctrl_letter_map_from_models(models)
     assert mapped["G"] == "gemini/gemini-2.5-flash-lite"
-    assert mapped["H"] == "grok/grok-4-1-fast-non-reasoning"
+    assert mapped["H"] == "grok/grok-4.3"
 
 
 def test_merge_ctrl_letter_map_honors_stored_override():

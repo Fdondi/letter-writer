@@ -2,6 +2,7 @@ from typing import Dict, Any, List, Optional, Set
 from datetime import datetime
 import logging
 from letter_writer.cost_tracker import get_all_model_pricing
+from letter_writer.clients.base import ModelVendor, normalize_config_vendor_key
 
 logger = logging.getLogger(__name__)
 
@@ -9,7 +10,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_BACKGROUND_MODELS = ["gemini/gemini-3-flash-preview"]
 
 # Valid vendor prefixes for model IDs (must match ModelVendor enum values)
-VALID_VENDOR_KEYS: Set[str] = {"openai", "anthropic", "gemini", "mistral", "grok", "deepseek", "local"}
+VALID_VENDOR_KEYS: Set[str] = {v.value for v in ModelVendor}
 
 def get_cv_revisions(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return user_data.get("cv_revisions", [])
@@ -185,6 +186,20 @@ def get_agentic_draft_model(user_data: Dict[str, Any]) -> Optional[str]:
     raw = user_data.get("agentic_draft_model")
     out = unwrap_for_response("agentic_draft_model", raw) if raw is not None else None
     return (out or "").strip() or None
+
+
+def get_phase_model_overrides(user_data: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+    """Per-vendor overrides for plan/draft/refine (and other configurable roles)."""
+    from letter_writer.phase_model_settings import normalize_vendor_role_model_overrides
+
+    for field in ("vendor_role_model_overrides", "phase_model_overrides"):
+        raw = user_data.get(field)
+        if raw is None:
+            continue
+        stored = unwrap_for_response(field, raw) if field in user_data else raw
+        if isinstance(stored, dict) and stored:
+            return normalize_vendor_role_model_overrides(stored)
+    return {}
 
 
 def get_autocomplete_max_words(user_data: Dict[str, Any]) -> int:

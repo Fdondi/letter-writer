@@ -27,8 +27,9 @@ class GrokClient(BaseClient):
         response_format: Optional[Dict[str, Any]] = None,
         cache_prefix: Optional[str] = None,
         system_cache_prefix: Optional[str] = None,
+        prompt_cache_key: Optional[str] = None,
     ) -> str:
-        _ = response_format, cache_prefix
+        _ = response_format, cache_prefix, prompt_cache_key
         system_prompt = merge_system_cache_prefix_into_system(system, system_cache_prefix)
         if isinstance(model_role, str):
             model = model_role

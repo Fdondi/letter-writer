@@ -1,9 +1,10 @@
 import os
 import threading
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, NoReturn, Optional, cast
 
 import typer
 from mistralai.client import Mistral
+from mistralai.client.errors import SDKError
 
 from .base import BaseClient, ModelRole, merge_system_cache_prefix_into_system
 from langsmith import traceable
@@ -13,11 +14,8 @@ class MistralClient(BaseClient):
     HTTP requests. This avoids schema/validation errors (like the missing
     `inputs` field the user hit) and automatically picks the right endpoint.
     
-    Uses Mistral's agents API for all requests:
-    - With search: agent includes web_search tool ($30 per 1k search calls)
-    - Without search: agent has no tools (no extra connector fees)
-    
-    This provides a consistent interface and enables web search when needed.
+    Uses chat.complete for normal requests (plan, draft, JSON feedback, etc.).
+    Uses Mistral's Agents API only when search=True (web_search tool).
 
     The SDK uses httpx; one Mistral instance must not be shared across threads.
     Phased_service runs parallel feedback checks, so each thread lazily gets its own
@@ -60,6 +58,18 @@ class MistralClient(BaseClient):
                 cached_tokens=cached_tokens,
             )
 
+    def _reraise_sdk_error(self, e: Exception) -> NoReturn:
+        if isinstance(e, SDKError):
+            status = getattr(e, "status_code", None)
+            body = str(e)
+            if status == 401 or "Status 401" in body or "Unauthorized" in body:
+                raise RuntimeError(
+                    "Mistral API rejected MISTRAL_API_KEY (401 Unauthorized). "
+                    "Create a new key at https://console.mistral.ai/api-keys/, "
+                    "set MISTRAL_API_KEY in .env (no 'Bearer ' prefix), and restart the backend."
+                ) from e
+        raise e
+
     def _format_messages(self, system: str, user_messages: List[str]) -> List[Dict]:
         """Return messages in the schema expected by the SDK."""
         return (
@@ -99,7 +109,7 @@ class MistralClient(BaseClient):
                 self._agent_cache[cache_key] = agent_id
                 return agent_id
             except Exception as e:
-                raise RuntimeError(f"Failed to create Mistral agent: {e}") from e
+                self._reraise_sdk_error(e)
 
     def _extract_text_from_chunks(self, content) -> str:
         """Extract text from Mistral response content which may be chunks or a string.
@@ -173,8 +183,9 @@ class MistralClient(BaseClient):
         response_format: Optional[Dict[str, Any]] = None,
         cache_prefix: Optional[str] = None,
         system_cache_prefix: Optional[str] = None,
+        prompt_cache_key: Optional[str] = None,
     ) -> str:
-        _ = cache_prefix
+        _ = cache_prefix, prompt_cache_key
         system_prompt = merge_system_cache_prefix_into_system(system, system_cache_prefix)
         if isinstance(model_role, str):
             model = model_role
@@ -195,11 +206,17 @@ class MistralClient(BaseClient):
             f"[INFO] using Mistral model {model}" + (" with search" if search else "")
         )
 
-        # JSON / structured output: use chat.complete (Agents API ignores response_format).
-        if response_format and not search:
-            typer.echo("[INFO] Mistral: using chat.complete with JSON object mode (not Agents API)")
+        if not search:
+            if response_format:
+                typer.echo("[INFO] Mistral: using chat.complete with JSON object mode")
             try:
-                out = self._chat_complete(model, system_prompt, user_messages, response_format=response_format, search=False)
+                out = self._chat_complete(
+                    model,
+                    system_prompt,
+                    user_messages,
+                    response_format=response_format,
+                    search=False,
+                )
             except Exception as e:
                 self._record_llm_io(
                     model=model,
@@ -209,17 +226,16 @@ class MistralClient(BaseClient):
                     response_format=response_format,
                     error=str(e),
                 )
-                raise
+                self._reraise_sdk_error(e)
             return _return_with_audit(out)
-        if response_format and search:
+
+        if response_format:
             typer.echo(
                 "[WARNING] Mistral: response_format ignored when search=True (Agents API path)"
             )
 
-        # Agents API when search OR when no structured output is requested
-        # When search=False, agent is created without tools (no extra cost)
-        # When search=True, agent includes web_search tool ($30 per 1k calls)
-        agent_id = self._get_or_create_agent(model, system_prompt, search=search)
+        # Agents API only for web search ($30 per 1k search calls)
+        agent_id = self._get_or_create_agent(model, system_prompt, search=True)
 
         # Combine user messages into a single input
         user_input = "\n\n".join(user_messages)
@@ -239,7 +255,7 @@ class MistralClient(BaseClient):
                 response_format=response_format,
                 error=str(e),
             )
-            raise
+            self._reraise_sdk_error(e)
 
         # Extract the assistant's reply from the response
         # Response has 'outputs' array with entries of different types

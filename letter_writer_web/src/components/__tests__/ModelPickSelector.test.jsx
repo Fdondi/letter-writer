@@ -28,21 +28,110 @@ describe("ModelPickSelector", () => {
     expect(screen.getByLabelText("Reasoning effort")).toBeInTheDocument();
   });
 
-  test("calls onChange with composite when reasoning changes", () => {
+  test("fixedVendor hides vendor select and keeps vendor on change", () => {
     const onChange = jest.fn();
+    const deepseekGrouped = {
+      deepseek: [
+        {
+          id: "deepseek-v4-pro",
+          name: "Deepseek V4 Pro",
+          composite: "deepseek/deepseek-v4-pro",
+          reasoningEfforts: [],
+        },
+      ],
+    };
     render(
       <ModelPickSelector
-        value="openai/gpt-5.5"
-        grouped={grouped}
+        fixedVendor="deepseek"
+        value="deepseek/deepseek-v4-pro"
+        grouped={deepseekGrouped}
         onChange={onChange}
+        showReasoning={false}
       />
     );
-    fireEvent.change(screen.getByLabelText("Reasoning effort"), { target: { value: "high" } });
+    expect(screen.queryByLabelText("Vendor")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Model")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "deepseek-v4-pro" },
+    });
     expect(onChange).toHaveBeenCalledWith(
-      "openai",
-      "gpt-5.5",
-      "high",
-      "openai/gpt-5.5@high"
+      "deepseek",
+      "deepseek-v4-pro",
+      "",
+      "deepseek/deepseek-v4-pro"
     );
+  });
+
+  test("defaultComposite marks default model in option label", () => {
+    render(
+      <ModelPickSelector
+        fixedVendor="openai"
+        value="openai/gpt-5.5@high"
+        defaultComposite="openai/gpt-5.5@high"
+        grouped={grouped}
+        onChange={() => {}}
+      />
+    );
+    expect(screen.getByRole("option", { name: "Gpt 5.5 (default)" })).toBeInTheDocument();
+  });
+
+  test("shows pricing next to selector when grouped entry has input/output", () => {
+    const priced = {
+      openai: [
+        {
+          id: "gpt-5.5",
+          name: "Gpt 5.5",
+          composite: "openai/gpt-5.5",
+          reasoningEfforts: ["none", "high"],
+          input: 3,
+          output: 15,
+        },
+      ],
+    };
+    render(
+      <ModelPickSelector
+        value="openai/gpt-5.5@high"
+        grouped={priced}
+        onChange={() => {}}
+      />
+    );
+    expect(screen.getByLabelText("Model pricing")).toHaveTextContent("$3.00 in · $15.00 out / 1M");
+  });
+
+  test("shows default price in parentheses with comparison color", () => {
+    const priced = {
+      openai: [
+        {
+          id: "gpt-5.5",
+          name: "Gpt 5.5",
+          composite: "openai/gpt-5.5",
+          reasoningEfforts: [],
+          input: 5,
+          output: 20,
+        },
+        {
+          id: "gpt-5-nano",
+          name: "Gpt 5 Nano",
+          composite: "openai/gpt-5-nano",
+          reasoningEfforts: [],
+          input: 1,
+          output: 2,
+        },
+      ],
+    };
+    render(
+      <ModelPickSelector
+        fixedVendor="openai"
+        value="openai/gpt-5.5"
+        defaultComposite="openai/gpt-5-nano"
+        grouped={priced}
+        onChange={() => {}}
+        showReasoning={false}
+      />
+    );
+    const el = screen.getByLabelText("Model pricing");
+    expect(el).toHaveTextContent("$5.00 in · $20.00 out / 1M");
+    expect(el).toHaveTextContent("($1.00 in · $2.00 out / 1M)");
+    expect(el.querySelector("span[style]")).toHaveStyle({ color: "#dc2626" });
   });
 });
