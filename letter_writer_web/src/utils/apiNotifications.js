@@ -18,25 +18,27 @@ const formatUrl = (input) => {
  * Check if this URL should trigger a notification.
  * Only count:
  * - Extractions: /api/extract/
- * - Phase cards: /api/phases/draft/<vendor>/ and /api/phases/refine/<vendor>/
- * Exclude agentic flow: notifications for agentic are shown only when ongoing becomes false (in App).
+ * - Phase cards: /api/phases/{plan|draft|refine}/<vendor>/
+ * Exclude silent session bookkeeping (/session/, /init/, /state/, backups) and agentic
+ * (agentic completion is notified separately when ongoing becomes false in App).
  */
 const shouldNotify = (url) => {
   if (typeof url !== "string") return false;
   if (url.includes("/api/phases/agentic")) return false;
 
-  // Extract endpoint
   if (url.includes("/api/extract/")) {
     return true;
   }
 
-  // Phase cards (draft and refine phases)
-  if (url.includes("/api/phases")) {
+  // Phase card completions only — not session metadata syncs (those spam "Session started").
+  if (/\/api\/phases\/(plan|draft|refine)\/[^/]+\//.test(url)) {
     return true;
   }
 
   return false;
 };
+
+export { shouldNotify };
 
 const updateTitleBadge = () => {
   if (typeof document === "undefined") return;
@@ -65,11 +67,6 @@ const formatNotificationMessage = (url, status) => {
     return isSuccess ? "Extraction completed" : "Extraction failed";
   }
   
-  // Init endpoint
-  if (url.includes("/api/phases/init/")) {
-    return isSuccess ? "init succeeded" : "init failed";
-  }
-  
   // Phase cards - extract phase name and vendor name
   const phaseMatch = url.match(/\/api\/phases\/(draft|refine|plan)\/([^/]+)\//);
   if (phaseMatch) {
@@ -77,13 +74,8 @@ const formatNotificationMessage = (url, status) => {
     const vendor = phaseMatch[2];
     return isSuccess ? `${phaseName}/${vendor} completed` : `${phaseName}/${vendor} failed`;
   }
-  
-  // Fallback for other phase endpoints
-  if (url.includes("/api/phases/session")) {
-    return isSuccess ? "Session started" : "Session start failed";
-  }
-  
-  // Default fallback
+
+  // Default fallback (shouldNotify already filters; keep for safety)
   return isSuccess ? "Completed" : "Failed";
 };
 

@@ -639,6 +639,7 @@ export default function App({ flow = "intake" }) {
         point_of_contact: hasPointOfContactData ? pointOfContact : null,
         additional_user_info: additionalUserInfo || "",
         additional_company_info: additionalCompanyInfo || "",
+        hire_problem: hireProblem || "",
         structure_instructions: structureInstructions || "",
       };
       if (Object.keys(competences).length > 0) payload.competences = competences;
@@ -657,6 +658,7 @@ export default function App({ flow = "intake" }) {
       pointOfContact,
       additionalUserInfo,
       additionalCompanyInfo,
+      hireProblem,
       structureInstructions,
       competences,
       jobIntakeTopDocsForSession,
@@ -723,6 +725,24 @@ export default function App({ flow = "intake" }) {
     }, 400);
     return () => clearTimeout(t);
   }, [phaseSessionId, allSearchResults.length, effectiveTopDocs]);
+
+  // Persist About You / About Company (and hire problem) into session metadata so
+  // reload rehydration and host-backup restore can recover them.
+  useEffect(() => {
+    if (!phaseSessionId) return undefined;
+    const t = setTimeout(() => {
+      fetchWithHeartbeat("/api/phases/session/", {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: phaseSessionId,
+          additional_user_info: additionalUserInfo || "",
+          additional_company_info: additionalCompanyInfo || "",
+          hire_problem: hireProblem || "",
+        }),
+      }).catch((e) => console.warn("Failed to persist additional job notes to session:", e));
+    }, 400);
+    return () => clearTimeout(t);
+  }, [phaseSessionId, additionalUserInfo, additionalCompanyInfo, hireProblem]);
 
   // Handle job text language change
   const handleJobTextLanguageChange = async (code) => {
@@ -856,10 +876,28 @@ export default function App({ flow = "intake" }) {
         if (fields.additionalCompanyInfo !== undefined) {
           setAdditionalCompanyInfo(fields.additionalCompanyInfo);
         }
+        if (
+          String(fields.additionalUserInfo || "").trim() ||
+          String(fields.additionalCompanyInfo || "").trim()
+        ) {
+          setShowAdditionalInfo(true);
+        }
         if (fields.hireProblem !== undefined) setHireProblem(fields.hireProblem);
         if (fields.requirements !== undefined) setRequirements(fields.requirements);
         if (fields.competences !== undefined) setCompetences(fields.competences);
-        if (fields.pointOfContact !== undefined) setPointOfContact(fields.pointOfContact);
+        if (fields.pointOfContact !== undefined) {
+          setPointOfContact(fields.pointOfContact);
+          const poc = fields.pointOfContact;
+          if (
+            String(poc?.name || "").trim() ||
+            String(poc?.role || "").trim() ||
+            String(poc?.contact_details || "").trim() ||
+            String(poc?.notes || "").trim() ||
+            String(poc?.company || "").trim()
+          ) {
+            setShowPointOfContact(true);
+          }
+        }
         restoredSomething = true;
       }
 
@@ -2063,60 +2101,16 @@ export default function App({ flow = "intake" }) {
 
   const approveExtraction = async (vendor) => {
     if (!phaseSessionId || !vendor) return;
-    
-    // Check if extraction was edited (different from extracted data)
-    const currentExtraction = {
-      company_name: companyName,
-      job_title: jobTitle,
-      location: location,
-      language: language,
-      salary: salary,
-      requirements: Array.isArray(requirements) ? requirements : requirements ? [requirements] : [],
-      point_of_contact: (pointOfContact.name || pointOfContact.role || pointOfContact.contact_details || pointOfContact.notes || pointOfContact.company) ? pointOfContact : null,
-    };
-    const extractionEdited = extractedData && (
-      extractedData.company_name !== currentExtraction.company_name ||
-      extractedData.job_title !== currentExtraction.job_title ||
-      extractedData.location !== currentExtraction.location ||
-      extractedData.language !== currentExtraction.language ||
-      extractedData.salary !== currentExtraction.salary ||
-      JSON.stringify(extractedData.requirements) !== JSON.stringify(currentExtraction.requirements) ||
-      JSON.stringify(extractedData.point_of_contact || null) !== JSON.stringify(currentExtraction.point_of_contact)
-    );
 
     setError(null);
 
     try {
-      // If extraction was edited, save it to session first
-      if (extractionEdited) {
-        await fetchWithHeartbeat("/api/phases/session/", {
-          method: "POST",
-          body: JSON.stringify({
-            session_id: phaseSessionId,
-            job_text: jobText,
-            company_name: companyName,
-            job_title: jobTitle,
-            location: location,
-            language: language,
-            salary: salary,
-            requirements: currentExtraction.requirements.filter(Boolean),
-            competences: Object.keys(competences).length > 0 ? competences : undefined,
-            point_of_contact: currentExtraction.point_of_contact,
-            structure_instructions: structureInstructions || "",
-            ...jobIntakeTopDocsForSession,
-          }),
-        });
-      } else {
-        await fetchWithHeartbeat("/api/phases/session/", {
-          method: "POST",
-          body: JSON.stringify({
-            session_id: phaseSessionId,
-            structure_instructions: structureInstructions || "",
-            ...jobIntakeTopDocsForSession,
-          }),
-        });
-      }
-      
+      // Always sync full job intake (including About You / About Company) before phases.
+      await fetchWithHeartbeat("/api/phases/session/", {
+        method: "POST",
+        body: JSON.stringify(buildJobSessionPayload(phaseSessionId)),
+      });
+
       await startInitialVendorPhase(vendor, phaseSessionId);
     } catch (e) {
       console.error(`${includePlanStep ? "Plan" : "Draft"} phase error after extraction approval:`, e);

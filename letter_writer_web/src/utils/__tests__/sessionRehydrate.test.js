@@ -22,6 +22,20 @@ describe("sessionRehydrate", () => {
     expect(fields.requirements).toEqual(["Python", "FastAPI"]);
   });
 
+  it("extracts About You / About Company additional notes", () => {
+    const fields = extractFormFieldsFromSessionState({
+      job_text: "Job",
+      metadata: {
+        common: {
+          additional_user_info: "Power user of their product",
+          additional_company_info: "Insider: they care about reliability",
+        },
+      },
+    });
+    expect(fields.additionalUserInfo).toBe("Power user of their product");
+    expect(fields.additionalCompanyInfo).toBe("Insider: they care about reliability");
+  });
+
   it("maps vendor artifacts to shelf phases", () => {
     const entries = extractVendorShelfEntries({
       openai: {
