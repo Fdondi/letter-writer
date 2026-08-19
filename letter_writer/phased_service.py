@@ -12,25 +12,25 @@ from openai import OpenAI
 
 from .client import get_client
 from .clients.base import ModelVendor, ModelRole
-from .generation import (
+from .feedback_checks import (
     accuracy_check,
     company_fit_check,
-    company_research,
-    fancy_letter,
-    generate_letter,
-    generate_letter_plan,
-    resolve_search_instructions,
-    get_structure_instructions,
     goal_fit_check,
     human_check,
     instruction_check,
+    normalize_feedback_map,
     precision_check,
-    rewrite_letter,
     run_phased_feedback_checks,
     user_fit_check,
-    normalize_feedback_map,
-    extract_job_metadata,
 )
+from .instructions import (
+    company_research,
+    get_structure_instructions,
+    resolve_search_instructions,
+)
+from .job_extraction import MissingCVError, extract_job_metadata
+from .letter_generation import fancy_letter, generate_letter, generate_letter_plan
+from .rewrite import rewrite_letter
 from .feedback_review import (
     FEEDBACK_REVIEW_PHASE,
     merge_input_clusters_across_session_vendors,
@@ -340,7 +340,7 @@ def _run_background_phase(
     search_result = common_data.get("search_result", [])
     
     # Fail fast: validate critical data before doing any work
-    from .generation import MissingCVError
+    from .job_extraction import MissingCVError
     if cv_text is None or not cv_text or not str(cv_text).strip():
         error_msg = f"CV text is missing or empty in session {session_id} - cannot proceed with background phase"
         logger.error(error_msg, extra={"session_id": session_id, "vendor": vendor.value, "cv_text": cv_text, "cv_text_type": type(cv_text).__name__})

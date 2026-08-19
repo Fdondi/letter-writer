@@ -1,35 +1,33 @@
 /**
  * PHASED EXECUTION MODEL - ARCHITECTURAL OVERVIEW
- * 
+ *
  * This component implements a reactive, "Passive Card" model.
- * 
+ *
  * DATA FLOW:
  * 1. Actor (App.jsx): Launches API calls (initial start, approval, or retry).
  * 2. Shelf (cardData): App.jsx populates the 'shelf' for the target phase.
  * 3. Observer (VendorCardWrapper): Detects data on the shelf and renders.
- * 
+ *
  * PHASES IN THIS PIPELINE:
  * - PLAN: Strategic outline (strengths, weaknesses to frame, layout) from /api/phases/plan/.
  *         Approving calls /api/phases/draft/ with the approved plan text.
  * - DRAFT: Draft letter + feedback (from /api/phases/draft/). Approving calls /api/phases/refine/
  *          for the final letter.
  * - ASSEMBLY: A separate UI rendered by App.jsx that holds the result of the refine call.
- * 
+ *
  * KEY RULES:
  * - NO CARD FETCHES ITS OWN DATA: VendorCardWrapper has no fetch logic.
- * - LOADING STATE: If a phase is 'approved' but its shelf is empty, the 
+ * - LOADING STATE: If a phase is 'approved' but its shelf is empty, the
  *   card automatically shows "Loading...".
- * - RE-RENDERING: App.jsx triggers a re-render of PhaseFlow whenever 
+ * - RE-RENDERING: App.jsx triggers a re-render of PhaseFlow whenever
  *   the shelf is updated.
  */
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
-import ReactMarkdown from "react-markdown";
 import { phases as phaseModules } from "./phases";
-import { fetchWithHeartbeat } from "../utils/apiHelpers";
-import { useTranslation } from "../utils/useTranslation";
-import LanguageSelector from "./LanguageSelector";
-import { FEEDBACK_TYPES, firstFeedbackKeyWithItems, mergeCategoryItems } from "./phases/feedbackItemUtils";
+import PhaseSection from "./phase-flow/PhaseSection";
+import VendorCardWrapper from "./phase-flow/VendorCardWrapper";
+import { CardStatus } from "./phase-flow/cardStatus";
 
 /**
  * Bump when the vendor phase pipeline (order, phase names, or phase modules) changes.
@@ -41,1634 +39,46 @@ const PHASE_FLOW_SCHEMA_VERSION = 3;
 /** After all plan models have returned (success or error), auto-run plan approval for ready cards. */
 const PLAN_AUTO_APPROVE_MS = 30000;
 
-function deepCloneJson(obj) {
-  if (obj === undefined || obj === null) return obj;
-  try {
-    return JSON.parse(JSON.stringify(obj));
-  } catch {
-    return obj;
-  }
-}
-
-/**
- * True if local `edits` differ from `reference` (server snapshot or post-approval baseline).
- * Mirrors VendorCard dirty detection: only keys present on `edits` are compared.
- */
-function computeEditsDifferFromReference(cardPhaseEdits, reference) {
-  if (!reference || !cardPhaseEdits) return false;
-  return Object.keys(cardPhaseEdits).some((key) => {
-    const editValue = cardPhaseEdits[key];
-    const dataValue = reference[key];
-
-    if (editValue && typeof editValue === "object" && !Array.isArray(editValue)) {
-      const dataObj = dataValue && typeof dataValue === "object" && !Array.isArray(dataValue) ? dataValue : {};
-      const editKeys = Object.keys(editValue);
-      const dataKeys = Object.keys(dataObj);
-      if (editKeys.length === 0 && dataKeys.length === 0) return false;
-      if (editKeys.length !== dataKeys.length) return true;
-      return editKeys.some((k) => {
-        const ev = editValue[k];
-        const dv = dataObj[k];
-        if (ev !== null && typeof ev === "object") {
-          return JSON.stringify(ev) !== JSON.stringify(dv);
-        }
-        return ev !== dv;
-      });
-    }
-
-    const editStr = (editValue ?? "").toString().trim();
-    const dataStr = (dataValue ?? "").toString().trim();
-    return editStr !== dataStr;
-  });
-}
-
-// Card status enum - cards report their status to phases
-const CardStatus = {
-  PENDING: 'pending',
-  READY: 'ready',
-  APPROVED: 'approved',
-};
-
-// Feedback type descriptions for tooltips (based on actual prompts in generation.py)
-const FEEDBACK_DESCRIPTIONS = {
-  'instruction': 'Checks the letter for consistency with the style instructions. Flags any strong inconsistencies with the specified writing style and tone.',
-  'instruction_feedback': 'Checks the letter for consistency with the style instructions. Flags any strong inconsistencies with the specified writing style and tone.',
-  'accuracy': 'Verifies factual accuracy against your CV. Checks if claims are coherent with themselves and supported by your CV. Flags unsupported expertise claims or inconsistencies.',
-  'accuracy_feedback': 'Verifies factual accuracy against your CV. Checks if claims are coherent with themselves and supported by your CV. Flags unsupported expertise claims or inconsistencies.',
-  'precision': 'Evaluates how well the letter addresses job requirements. Checks if all required competencies are addressed (or substituted), flags superfluous claims, and verifies company-related claims match the company report.',
-  'precision_feedback': 'Evaluates how well the letter addresses job requirements. Checks if all required competencies are addressed (or substituted), flags superfluous claims, and verifies company-related claims match the company report.',
-  'company_fit': 'Assesses alignment with the company\'s values, mission, tone, and culture. Checks if the letter feels personalized for the company rather than generic.',
-  'company_fit_feedback': 'Assesses alignment with the company\'s values, mission, tone, and culture. Checks if the letter feels personalized for the company rather than generic.',
-  'user_fit': 'Compares the letter to your previous cover letters for voice and habits (same-hand cues): tone, structure, how strengths and caveats are framed—not the same topics or facts as older letters.',
-  'user_fit_feedback': 'Compares the letter to your previous cover letters for voice and habits (same-hand cues): tone, structure, how strengths and caveats are framed—not the same topics or facts as older letters.',
-  'human': 'Analyzes patterns from your previous letter revisions. Flags elements that were typically changed or removed in your past edits, based on your review history.',
-  'human_feedback': 'Analyzes patterns from your previous letter revisions. Flags elements that were typically changed or removed in your past edits, based on your review history.',
-};
-
-/** Outward arrows — expand column to overlay (compact icon button). */
-function ExpandOutIcon({ size = 14 }) {
-  const s = size;
-  return (
-    <svg
-      width={s}
-      height={s}
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M6 2H2v4M10 2h4v4M10 14h4v-4M6 14H2v-4" />
-    </svg>
-  );
-}
-
-const iconButtonStyle = {
-  flexShrink: 0,
-  width: 26,
-  height: 26,
-  padding: 0,
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  border: "1px solid var(--border-color, #d1d5db)",
-  borderRadius: 4,
-  background: "var(--panel-bg, #fff)",
-  color: "var(--text-color, #111827)",
-  cursor: "pointer",
-};
-
-// Tooltip component
-function InfoTooltip({ text, children }) {
-  const [showTooltip, setShowTooltip] = useState(false);
-  const tooltipRef = useRef(null);
-
-  useEffect(() => {
-    if (showTooltip && tooltipRef.current) {
-      const handleMouseLeave = () => setShowTooltip(false);
-      const element = tooltipRef.current;
-      element.addEventListener('mouseleave', handleMouseLeave);
-      return () => element.removeEventListener('mouseleave', handleMouseLeave);
-    }
-  }, [showTooltip]);
-
-  return (
-    <span
-      ref={tooltipRef}
-      style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}
-      onMouseEnter={() => setShowTooltip(true)}
-      onMouseLeave={() => setShowTooltip(false)}
-    >
-      {children}
-      {showTooltip && text && (
-        <div
-          style={{
-            position: 'absolute',
-            bottom: '100%',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            marginBottom: '4px',
-            padding: '6px 10px',
-            backgroundColor: 'var(--bg-color)',
-            color: 'var(--text-color)',
-            border: '1px solid var(--border-color)',
-            borderRadius: '4px',
-            fontSize: '12px',
-            zIndex: 1000,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-            maxWidth: '250px',
-            whiteSpace: 'normal',
-            textAlign: 'left',
-          }}
-        >
-          {text}
-          <div
-            style={{
-              position: 'absolute',
-              top: '100%',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              width: 0,
-              height: 0,
-              borderLeft: '6px solid transparent',
-              borderRight: '6px solid transparent',
-              borderTop: '6px solid var(--bg-color)',
-            }}
-          />
-          <div
-            style={{
-              position: 'absolute',
-              top: '100%',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              width: 0,
-              height: 0,
-              borderLeft: '7px solid transparent',
-              borderRight: '7px solid transparent',
-              borderTop: '7px solid var(--border-color)',
-              zIndex: -1,
-            }}
-          />
-        </div>
-      )}
-    </span>
-  );
-}
-
-function PhaseSection({
-  title,
-  children,
-  collapsed,
-  onToggle,
-  onApproveAll,
-  approveAllDisabled,
-  showApproveAll,
-  readyCount,
-  totalCount,
-  gridAutoColumns = "340px",
-}) {
-  // Always show count format when we have counts: "Approve (X/Y)"
-  // Only show "Approve all" when all are ready (readyCount === totalCount > 0)
-  const approveButtonText = readyCount !== undefined && totalCount !== undefined
-    ? readyCount === totalCount && readyCount > 0
-      ? "Approve all"
-      : `Approve (${readyCount}/${totalCount})`
-    : "Approve all";
-  
-  return (
-    <details open={!collapsed} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
-      <summary
-        style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", listStyle: "none" }}
-        onClick={onToggle}
-      >
-        <h3 style={{ margin: 0 }}>{title}</h3>
-        {showApproveAll && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onApproveAll?.();
-            }}
-            disabled={approveAllDisabled || readyCount === 0}
-            style={{ fontSize: 12, padding: "4px 8px", opacity: (approveAllDisabled || readyCount === 0) ? 0.6 : 1 }}
-          >
-            {approveButtonText}
-          </button>
-        )}
-      </summary>
-      <div
-        style={{
-          display: "grid",
-          gridAutoFlow: "column",
-          gridAutoColumns,
-          gap: 12,
-          marginTop: 8,
-          overflowX: "auto",
-          alignItems: "start",
-        }}
-      >
-        {children}
-      </div>
-    </details>
-  );
-}
-
-const planMarkdownComponents = {
-  h1: ({ children }) => (
-    <h1 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 6px", color: "#111827" }}>{children}</h1>
-  ),
-  h2: ({ children }) => (
-    <h2 style={{ fontSize: 14, fontWeight: 600, margin: "14px 0 4px", color: "#111827" }}>{children}</h2>
-  ),
-  h3: ({ children }) => (
-    <h3 style={{ fontSize: 13, fontWeight: 600, margin: "10px 0 4px", color: "#374151" }}>{children}</h3>
-  ),
-  p: ({ children }) => <p style={{ margin: "4px 0" }}>{children}</p>,
-  ul: ({ children }) => <ul style={{ margin: "4px 0 4px 18px", padding: 0 }}>{children}</ul>,
-  ol: ({ children }) => <ol style={{ margin: "4px 0 4px 18px", padding: 0 }}>{children}</ol>,
-  li: ({ children }) => <li style={{ margin: "2px 0" }}>{children}</li>,
-  strong: ({ children }) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
-};
-
-function EditableField({
-  label,
-  value,
-  minHeight = 120,
-  placeholder,
-  onSave,
-  disabled = false,
-  fieldId,
-  translation,
-  renderAsMarkdown = false,
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value || "");
-
-  useEffect(() => {
-    if (!editing) {
-      setDraft(value || "");
-    }
-  }, [value, editing]);
-
-  // Reset translation when source text changes
-  useEffect(() => {
-    if (translation && fieldId) {
-      translation.resetFieldTranslation(fieldId, value || "");
-    }
-  }, [value, fieldId, translation]);
-
-  // Get displayed text (translated or original)
-  const displayedText = translation && fieldId
-    ? translation.getTranslatedText(fieldId, value || "")
-    : (value || placeholder || "");
-
-  // Get field-specific view language
-  const fieldViewLanguage = translation && fieldId
-    ? translation.getFieldViewLanguage(fieldId)
-    : "source";
-
-  // Handle field-specific language change
-  const handleFieldLanguageChange = async (code) => {
-    if (!translation || !fieldId) return;
-    
-    translation.setFieldViewLanguage(fieldId, code);
-    
-    if (code === "source") {
-      return; // No translation needed for source
-    }
-    
-    const sourceText = value || "";
-    if (sourceText) {
-      await translation.translateField(fieldId, sourceText, code);
-    }
-  };
-
-  return (
-    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <label style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>{label}</label>
-        {!editing && (
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            disabled={disabled}
-            style={{ 
-              fontSize: 12, 
-              padding: "4px 8px",
-              opacity: disabled ? 0.6 : 1,
-              cursor: disabled ? "not-allowed" : "pointer"
-            }}
-          >
-            ✎ Edit
-          </button>
-        )}
-      </div>
-      {editing ? (
-        <>
-          <textarea
-            style={{ width: "100%", minHeight, padding: 8 }}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder={placeholder}
-            disabled={disabled}
-            // allow long URLs to wrap
-            wrap="soft"
-            spellCheck={true}
-          />
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={() => {
-                onSave(draft);
-                setEditing(false);
-              }}
-              disabled={disabled}
-            >
-              Save
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setDraft(value || "");
-                setEditing(false);
-              }}
-              disabled={disabled}
-            >
-              Discard
-            </button>
-          </div>
-        </>
-      ) : (
-        <div style={{ position: "relative" }}>
-          {translation && fieldId && (
-            <div style={{ 
-              position: "absolute", 
-              right: -1, 
-              top: -10, 
-              zIndex: 10,
-              background: "#f9fafb",
-              border: "1px solid #e5e7eb",
-              borderLeft: "none",
-              borderTopRightRadius: 4,
-              borderBottomRightRadius: 4,
-              padding: "2px 2px 2px 4px",
-            }}>
-              <LanguageSelector
-                languages={translation.languages}
-                viewLanguage={fieldViewLanguage}
-                onLanguageChange={handleFieldLanguageChange}
-                hasTranslation={(code) => translation.hasTranslation(fieldId, code)}
-                disabled={disabled}
-                isTranslating={translation.isTranslating[fieldId] || false}
-                size="tiny"
-              />
-            </div>
-          )}
-          <div
-            style={{
-              width: "100%",
-              minHeight,
-              padding: 8,
-              border: "1px solid #e5e7eb",
-              borderRadius: 4,
-              background: "#f9fafb",
-              whiteSpace: renderAsMarkdown ? "normal" : "pre-wrap",
-              fontSize: 13,
-              lineHeight: 1.5,
-            }}
-          >
-            {renderAsMarkdown ? (
-              <ReactMarkdown components={planMarkdownComponents}>{displayedText}</ReactMarkdown>
-            ) : (
-              displayedText
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function EditableFeedback({
-  label,
-  value,
-  placeholder,
-  onSave,
-  approved,
-  onApprove,
-  hasContent,
-  isModified,
-  fieldId,
-  translation,
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value || "");
-
-  useEffect(() => {
-    if (!editing) {
-      setDraft(value || "");
-    }
-  }, [value, editing]);
-
-  // Reset translation when source text changes
-  useEffect(() => {
-    if (translation && fieldId) {
-      translation.resetFieldTranslation(fieldId, value || "");
-    }
-  }, [value, fieldId, translation]);
-
-  // Get displayed text (translated or original)
-  const displayedText = translation && fieldId
-    ? translation.getTranslatedText(fieldId, value || "")
-    : (value || placeholder || "");
-
-  // Get field-specific view language
-  const fieldViewLanguage = translation && fieldId
-    ? translation.getFieldViewLanguage(fieldId)
-    : "source";
-
-  // Handle field-specific language change
-  const handleFieldLanguageChange = async (code) => {
-    if (!translation || !fieldId) return;
-    
-    translation.setFieldViewLanguage(fieldId, code);
-    
-    if (code === "source") {
-      return; // No translation needed for source
-    }
-    
-    const sourceText = value || "";
-    if (sourceText) {
-      await translation.translateField(fieldId, sourceText, code);
-    }
-  };
-
-  const statusColor = hasContent ? "#2563eb" : "#9ca3af"; // comment presence
-  const approveColor = approved ? "#16a34a" : "#9ca3af";
-
-  const feedbackDescription = FEEDBACK_DESCRIPTIONS[label] || `Feedback about ${label.replace(/_/g, ' ')}.`;
-
-  return (
-    <div style={{ marginTop: 8, padding: 10, border: "1px solid #e5e7eb", borderRadius: 6, background: "#f9fafb" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, fontWeight: 600 }}>
-          {label}
-          <InfoTooltip text={feedbackDescription}>
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '12px',
-                fontWeight: 'normal',
-                color: 'var(--text-color)',
-                opacity: 0.6,
-                cursor: 'help',
-                lineHeight: '1',
-                fontStyle: 'italic',
-                marginLeft: '4px',
-              }}
-              title={feedbackDescription}
-            >
-              (i)
-            </span>
-          </InfoTooltip>
-        </div>
-        {!editing && (
-          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            {hasContent && (
-              <button 
-                type="button" 
-                onClick={() => onSave("NO COMMENT")} 
-                style={{ 
-                  fontSize: 11, 
-                  padding: "2px 6px",
-                  border: "1px solid #dc2626",
-                  background: "#fff",
-                  color: "#dc2626",
-                  cursor: "pointer",
-                  borderRadius: 3,
-                }}
-              >
-                Remove
-              </button>
-            )}
-            <button 
-              type="button" 
-              onClick={() => setEditing(true)} 
-              style={{ 
-                fontSize: 11, 
-                padding: "2px 6px",
-                borderRadius: 3,
-              }}
-            >
-              Edit
-            </button>
-            {isModified ? (
-              <span
-                style={{
-                  fontSize: 11,
-                  padding: "2px 6px",
-                  border: "1px solid #fca5a5",
-                  background: "#fff1f2",
-                  color: "#b91c1c",
-                  borderRadius: 3,
-                }}
-              >
-                Edited
-              </span>
-            ) : (
-              <button
-                type="button"
-                onClick={onApprove}
-                style={{
-                  fontSize: 11,
-                  padding: "2px 6px",
-                  border: "1px solid #16a34a",
-                  background: approved ? "#dcfce7" : "#fff",
-                  color: "#166534",
-                  cursor: approved ? "default" : "pointer",
-                  borderRadius: 3,
-                }}
-                disabled={approved}
-              >
-                {approved ? "Approved" : "Approve"}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {editing ? (
-        <>
-          <textarea
-            style={{ width: "100%", minHeight: 120, padding: 8 }}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder={placeholder}
-          />
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
-            <button
-              type="button"
-              onClick={() => {
-                onSave(draft);
-                setEditing(false);
-              }}
-            >
-              Save
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setDraft(value || "");
-                setEditing(false);
-              }}
-            >
-              Discard
-            </button>
-          </div>
-        </>
-      ) : (
-        <div style={{ position: "relative" }}>
-          {translation && fieldId && (
-            <div style={{ 
-              position: "absolute", 
-              right: -1, 
-              top: -10, 
-              zIndex: 10,
-              background: "#fff",
-              border: "1px solid #e5e7eb",
-              borderLeft: "none",
-              borderTopRightRadius: 4,
-              borderBottomRightRadius: 4,
-              padding: "2px 2px 2px 4px",
-            }}>
-              <LanguageSelector
-                languages={translation.languages}
-                viewLanguage={fieldViewLanguage}
-                onLanguageChange={handleFieldLanguageChange}
-                hasTranslation={(code) => translation.hasTranslation(fieldId, code)}
-                disabled={false}
-                isTranslating={translation.isTranslating[fieldId] || false}
-                size="tiny"
-              />
-            </div>
-          )}
-          <div
-            style={{
-              width: "100%",
-              minHeight: 80,
-              padding: 8,
-              border: "1px solid #e5e7eb",
-              borderRadius: 4,
-              background: "#fff",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              overflowWrap: "anywhere",
-              fontSize: 13,
-            }}
-          >
-            {displayedText}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ExtractionCard({
-  vendor,
-  data,
-  edits,
-  onChange,
-  onApprove,
-  loading,
-  error,
-  approved,
-}) {
-  const fields = [
-    { key: "company_name", label: "Company", placeholder: "Detected company name" },
-    { key: "job_title", label: "Job title", placeholder: "e.g. Senior Backend Engineer" },
-    { key: "location", label: "Location", placeholder: "e.g. Remote, Berlin, Hybrid" },
-    { key: "language", label: "Language", placeholder: "Primary language" },
-    { key: "salary", label: "Salary", placeholder: "Salary range or notes" },
-  ];
-
-  const requirementsValue = Array.isArray(edits?.requirements)
-    ? edits.requirements.join("\n")
-    : edits?.requirements || data?.requirements?.join?.("\n") || data?.requirements || "";
-
-  return (
-    <div style={{ ...cardStyle, flex: "1 1 360px", maxWidth: 420 }}>
-      <h3 style={{ marginTop: 0, marginBottom: 6 }}>1) Extract job info ({vendor})</h3>
-      <div style={{ fontSize: 13, color: "#374151", marginBottom: 8 }}>
-        We parsed the job description. Tweak any fields, then approve to generate the draft.
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
-        {fields.map(({ key, label, placeholder }) => (
-          <label key={key} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
-            <span style={{ fontWeight: 600 }}>{label}</span>
-            <input
-              value={edits?.[key] ?? data?.[key] ?? ""}
-              onChange={(e) => onChange?.(key, e.target.value)}
-              placeholder={placeholder}
-              style={{ padding: 8, border: "1px solid #e5e7eb", borderRadius: 4 }}
-            />
-          </label>
-        ))}
-
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
-          <span style={{ fontWeight: 600 }}>Main requirements</span>
-          <textarea
-            value={requirementsValue}
-            onChange={(e) =>
-              onChange?.(
-                "requirements",
-                e.target.value
-                  .split("\n")
-                  .map((line) => line.trim())
-                  .filter(Boolean)
-              )
-            }
-            placeholder="One per line"
-            style={{ padding: 8, minHeight: 90, border: "1px solid #e5e7eb", borderRadius: 4 }}
-          />
-        </label>
-      </div>
-
-      {error && (
-        <div style={{
-          marginTop: 8,
-          color: "var(--error-text)",
-          fontSize: 12,
-          padding: 8,
-          background: "var(--error-bg)",
-          border: "1px solid var(--error-border)",
-          borderRadius: 4
-        }}>
-          {error}
-        </div>
-      )}
-
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-        <button
-          onClick={() => onApprove(vendor)}
-          disabled={loading || !(edits?.company_name || data?.company_name)}
-          style={{
-            padding: "8px 12px",
-            opacity: loading || !(edits?.company_name || data?.company_name) ? 0.6 : 1,
-            cursor: loading || !(edits?.company_name || data?.company_name) ? "not-allowed" : "pointer",
-          }}
-        >
-          {loading ? "Generating draft..." : approved ? "Re-run draft" : "Approve & generate draft"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-const VENDOR_COLUMN_WIDTH = 340;
-/** Fixed viewport height per column — independent of sibling columns. */
-const VENDOR_COLUMN_HEIGHT = "calc(100dvh - 80px)";
-
-const cardStyle = {
-  border: "1px solid #e5e7eb",
-  borderRadius: 8,
-  padding: 12,
-  background: "#fafafa",
-  display: "flex",
-  flexDirection: "column",
-  justifyContent: "flex-start",
-  alignItems: "stretch",
-  gap: 0,
-  flex: `0 0 ${VENDOR_COLUMN_WIDTH}px`,
-  width: VENDOR_COLUMN_WIDTH,
-  minWidth: VENDOR_COLUMN_WIDTH,
-  maxWidth: VENDOR_COLUMN_WIDTH,
-  height: VENDOR_COLUMN_HEIGHT,
-  minHeight: VENDOR_COLUMN_HEIGHT,
-  maxHeight: VENDOR_COLUMN_HEIGHT,
-  position: "relative",
-  boxSizing: "border-box",
-  overflow: "hidden",
-};
-
-const cardHeaderStyle = {
-  flex: "0 0 auto",
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-  paddingBottom: 8,
-  marginBottom: 8,
-  borderBottom: "1px solid #e5e7eb",
-  background: "#fafafa",
-  position: "sticky",
-  top: 0,
-  zIndex: 2,
-};
-
-const contentContainerStyle = {
-  flex: 1,
-  minHeight: 0,
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  overflowY: "auto",
-  paddingRight: 2,
-  paddingBottom: 8,
-  boxSizing: "border-box",
-};
-
-// VendorCardWrapper - handles data from the "shelf" (pre-fetched by previous phase)
-function VendorCardWrapper({
-  phaseName,
-  vendor,
-  phaseObj,
-  phaseModule,
-  sessionId,
-  documentId,
-  draftFeedbackRegistryRef,
-  onEditChange,
-  onApprove,
-  onSaveFeedbackOverride,
-  onPhaseComplete,
-  triggerUpdate,
-  onExpand,
-  isExpanded,
-  onCloseExpand,
-  useOverlayWidth,
-  onAfterApproveInExpanded,
-  inputClusterText,
-  broadcastInputCluster,
-  onRetryPhaseFetch,
-  onClearPhaseFetchError,
-}) {
-  // Get previous phase data (to check if we SHOULD be loading)
-  const previousPhaseApproved = phaseObj.previous ? phaseObj.previous.approvedVendors.has(vendor) : true;
-  
-  // Get data for THIS phase from the shelf
-  const currentPhaseData = phaseObj.cardData?.[vendor] || null;
-  const shelfError = phaseObj.cardErrors?.[vendor] ?? null;
-  
-  // Local state for UI only
-  const [error, setError] = React.useState(null);
-
-  // Sync currentPhaseData to VendorCard
-  // We don't need a complex useEffect with fetch anymore.
-  // The card is purely a consumer of phaseObj.cardData[vendor].
-  
-  // Status logic:
-  // - "error" if we have an error (takes priority)
-  // - "success" if we have data (already processed)
-  // - "loading" only if previous phase is approved AND we don't have data (triggers API call)
-  // - "idle" otherwise (waiting for previous phase or no data)
-  // Note: When navigating back from assembly, data should already be in shelf, so status will be "success"
-  const combinedError = error || shelfError;
-  const status = combinedError
-    ? "error"
-    : currentPhaseData 
-      ? "success" 
-      : (previousPhaseApproved ? "loading" : "idle");
-
-  return (
-    <VendorCard
-      key={`${phaseName}-${vendor}`}
-      vendor={vendor}
-      phases={[]} 
-      phaseObj={phaseObj}
-      previousPhaseApproved={previousPhaseApproved}
-      allPhasesDone={false}
-      data={currentPhaseData}
-      status={status}
-      error={combinedError}
-      onEditChange={onEditChange}
-      onApprove={onApprove}
-      sessionId={sessionId}
-      documentId={documentId}
-      draftFeedbackRegistryRef={draftFeedbackRegistryRef}
-      onStatusChange={useOverlayWidth ? undefined : (status) => phaseObj.registerStatus?.(vendor, status)}
-      onSaveFeedbackOverride={(key, val) => {
-        // Use the onSaveFeedbackOverride prop (which is the saveFeedbackOverride callback from parent)
-        if (typeof onSaveFeedbackOverride === 'function') {
-          onSaveFeedbackOverride(vendor, key, val);
-        } else {
-          // Fallback: use onEditChange if available
-          if (onEditChange) {
-            onEditChange(vendor, "draft", "feedback_overrides", { [key]: val });
-          }
-        }
-      }}
-      onPhaseComplete={(vendor, phase, completionData) => {
-        // Completion data is already handled by the onApprove caller (App.jsx)
-        // which populates the shelf. We just need to ensure the current phase
-        // is marked as approved and downstream is cleared.
-        
-        // Mark current phase as approved
-        if (phaseObj.approvedVendors) {
-          phaseObj.approvedVendors.add(vendor);
-        }
-
-        // Clear downstream (App.jsx also handles this via populatePhaseShelf re-render,
-        // but we do it here for extra safety)
-        let current = phaseObj.next;
-        while (current) {
-          // If we just got data for the immediate next phase, don't clear its shelf
-          if (current !== phaseObj.next && current.cardData) delete current.cardData[vendor];
-          if (current !== phaseObj.next && current.cardErrors) delete current.cardErrors[vendor];
-          if (current.approvedVendors) current.approvedVendors.delete(vendor);
-          current = current.next;
-        }
-
-        if (triggerUpdate) triggerUpdate();
-        if (onPhaseComplete) onPhaseComplete(vendor, phase, completionData);
-      }}
-      setStatus={() => {}} // No-op, status is computed
-      setData={() => {}}   // No-op, data comes from shelf
-      setError={setError}
-      onRetryPhaseFetch={onRetryPhaseFetch}
-      onClearPhaseFetchError={onClearPhaseFetchError}
-      onExpand={onExpand}
-      isExpanded={isExpanded}
-      onCloseExpand={onCloseExpand}
-      useOverlayWidth={useOverlayWidth}
-      onAfterApproveInExpanded={onAfterApproveInExpanded}
-      inputClusterText={inputClusterText}
-      broadcastInputCluster={broadcastInputCluster}
-    />
-  );
-}
-
-function VendorCard({
-  vendor,
-  // Phase structure - for navigation only, not for state
-  phases, // Array of phase objects
-  phaseObj, // The phase object this card belongs to: { phase: "draft", previous: null, next: <phaseObj>, ... }
-  // Data from outer component
-  data = null, // Data from API (passed from wrapper)
-  status = "idle", // "idle" | "loading" | "success" | "error"
-  error = null, // Error message if status === "error"
-  previousPhaseApproved = true, // Whether the previous phase is approved for this vendor
-  allPhasesDone = false, // Whether all phases are done for this vendor
-  onEditChange,
-  onSaveFeedbackOverride,
-  onApprove,
-  sessionId, // Required: session ID for API calls
-  documentId,
-  draftFeedbackRegistryRef,
-  onStatusChange, // Callback to register status with phase: (status: CardStatus) => void
-  disabled = false,
-  // Callbacks for when card completes phases (to update parent state)
-  onPhaseComplete, // (vendor, phase, data) => void - called when phase completes
-  // State setters from wrapper (for rerun functionality)
-  setStatus,
-  setData,
-  setError,
-  onRetryPhaseFetch,
-  onClearPhaseFetchError,
-  onExpand,
-  isExpanded,
-  onCloseExpand,
-  useOverlayWidth,
-  onAfterApproveInExpanded,
-  inputClusterText,
-  broadcastInputCluster,
-}) {
-  // This card knows which phase it belongs to
-  const cardPhase = phaseObj?.phase || null;
-  
-  // Card owns its approval and edit state (but not data fetching)
-  const [approved, setApproved] = React.useState(false);
-  /** Snapshot of `edits` at last successful approve; dirty vs this = "after final approve" only. */
-  const [approvedEditsBaseline, setApprovedEditsBaseline] = React.useState(null);
-  const [edits, setEdits] = React.useState({});
-  const [phaseCost, setPhaseCost] = React.useState(0);
-  const [runningTotal, setRunningTotal] = React.useState(0);
-  
-  // Initialize edits and costs when data arrives
-  React.useEffect(() => {
-    if (data && status === "success") {
-      try {
-        // Initialize edits with data values using phase module
-        const phaseModule = phaseModules[cardPhase];
-        if (phaseModule && phaseModule.initializeEditsFromData) {
-          const initialEdits = phaseModule.initializeEditsFromData(data);
-          if (initialEdits && Object.keys(initialEdits).length > 0) {
-            setEdits(initialEdits);
-          }
-        }
-        
-        // Update costs
-        if (data.cost !== undefined) {
-          setRunningTotal(data.cost);
-          setPhaseCost(data.cost);
-        }
-      } catch (e) {
-        console.error(`Error initializing edits from data for ${cardPhase}:`, e, data);
-        setError(`Failed to parse ${cardPhase} data: ${e.message}`);
-      }
-    }
-  }, [data, status, cardPhase]);
-  
-  // Use data from props
-  const cardPhaseData = data || {};
-  const isCardPhaseApproved = approved;
-  const cardPhaseEdits = edits;
-  const isLoading = status === "loading";
-  const cardError = error;
-  
-  // Card-specific UI state
-  const [selectedFeedbackTab, setSelectedFeedbackTab] = useState(null);
-  const [feedbackItemApprovals, setFeedbackItemApprovals] = useState({});
-  const [collapsed, setCollapsed] = useState(false);
-  
-  // Translation support for this card
-  const translation = useTranslation();
-
-  /** Last `data` we saw for success; when it changes, sync post-approval baseline from server-shaped edits. */
-  const lastSuccessDataRef = useRef(null);
-
-  // Track current registered status to avoid infinite loops
-  const registeredStatusRef = useRef(null);
-  
-  // Register status changes with phase (only when status actually changes)
-  React.useEffect(() => {
-    if (!cardPhase || !onStatusChange) return;
-    
-    const hasData = data !== null && Object.keys(data).length > 0;
-    
-    let newStatus = null;
-    if (approved) {
-      newStatus = CardStatus.APPROVED;
-    } else if (status === "loading") {
-      newStatus = CardStatus.PENDING;
-    } else if (status === "error") {
-      // Errors are treated as pending - user needs to retry
-      newStatus = CardStatus.PENDING;
-    } else if (status === "success" && hasData) {
-      newStatus = CardStatus.READY;
-    }
-    
-    // Only register if status changed
-    if (newStatus && newStatus !== registeredStatusRef.current) {
-      registeredStatusRef.current = newStatus;
-      onStatusChange(newStatus);
-    }
-  }, [status, data, approved, cardPhase, onStatusChange]);
-  
-  // Get phase module
-  const phaseModule = phaseModules[cardPhase];
-  
-  // Initialize refine-specific feedback state from phase module
-  React.useEffect(() => {
-    if (cardPhase && phaseModule?.initializeFeedbackFromData && data) {
-      try {
-        const feedbackData = phaseModule.initializeFeedbackFromData(data);
-        if (feedbackData && feedbackData.feedbackKeys && feedbackData.feedbackKeys.length > 0) {
-          setFeedbackItemApprovals((prev) => {
-            const next = { ...prev };
-            feedbackData.feedbackKeys.forEach((k) => {
-              const items = mergeCategoryItems(feedbackData.feedback, {}, k);
-              items.forEach((it) => {
-                if (it.type === "PLEASE_FIX" && next[it.id] === undefined) {
-                  next[it.id] = false;
-                }
-              });
-            });
-            return next;
-          });
-        }
-      } catch (e) {
-        console.error(`Error initializing feedback from data for ${cardPhase}:`, e, data);
-        // Don't set error here - feedback is optional, just log it
-      }
-    }
-  }, [cardPhase, data, phaseModule]);
-
-  // After a regeneration (new `data` object), align baseline so "dirty" is not stuck on pre-approve edits.
-  React.useEffect(() => {
-    if (!data || status !== "success") return;
-    if (lastSuccessDataRef.current === data) return;
-    lastSuccessDataRef.current = data;
-    if (!approved) return;
-    const pm = phaseModules[cardPhase];
-    if (!pm?.initializeEditsFromData) return;
-    const initialEdits = pm.initializeEditsFromData(data);
-    if (!initialEdits || Object.keys(initialEdits).length === 0) return;
-    setApprovedEditsBaseline(deepCloneJson(initialEdits));
-  }, [data, status, approved, cardPhase]);
-
-  // Get feedback data using phase module (with error handling)
-  let feedbackData = null;
-  let feedback = {};
-  let feedbackKeys = [];
-  try {
-    if (cardPhase && phaseModule?.initializeFeedbackFromData && data) {
-      feedbackData = phaseModule.initializeFeedbackFromData(data);
-      feedback = feedbackData?.feedback || {};
-      feedbackKeys = feedbackData?.feedbackKeys || [];
-    }
-  } catch (e) {
-    console.error(`Error getting feedback data for ${cardPhase}:`, e, data);
-    // Fallback to empty feedback
-    feedback = {};
-    feedbackKeys = [];
-  }
-  
-  // Handle edit changes - update local edits state
-  const handleEditChange = (field, value) => {
-    setEdits(prev => ({
-      ...prev,
-      [field]: value,
-    }));
-    // Also notify parent if callback provided
-    if (onEditChange) {
-      onEditChange(vendor, cardPhase, field, value);
-    }
-  };
-
-  // Dirty vs server before approve; vs last-approve snapshot after approve (so pre-approve feedback edits don't read as "restart").
-  const referenceForDirty =
-    approved && approvedEditsBaseline != null ? approvedEditsBaseline : cardPhaseData;
-  const thisPhaseDirty = phaseObj
-    ? computeEditsDifferFromReference(cardPhaseEdits, referenceForDirty)
-    : false;
-  
-  // Check if all phases are done (for "done" state) - use prop
-  const isDone = allPhasesDone;
-  
-  // Get feedback overrides - phase-specific
-  const feedbackOverrides = feedbackData ? (edits?.feedback_overrides || {}) : {};
-  const preferredFeedbackTab = useMemo(
-    () => firstFeedbackKeyWithItems(feedbackKeys, feedback, feedbackOverrides),
-    [feedbackKeys, feedback, feedbackOverrides],
-  );
-  /** User-chosen tab wins; otherwise first topic that has items; if all empty, first key. */
-  const activeFeedbackKey =
-    selectedFeedbackTab ?? preferredFeedbackTab ?? feedbackKeys[0] ?? null;
-
-  React.useEffect(() => {
-    if (cardPhase !== "draft" || !draftFeedbackRegistryRef) return undefined;
-    const fn = () => ({
-      feedback,
-      feedback_overrides: edits?.feedback_overrides || {},
-      feedbackKeys,
-    });
-    draftFeedbackRegistryRef.current[vendor] = fn;
-    return () => {
-      delete draftFeedbackRegistryRef.current[vendor];
-    };
-  }, [cardPhase, vendor, feedback, feedbackKeys, edits?.feedback_overrides, draftFeedbackRegistryRef]);
-  
-  // Handle feedback override save
-  const handleSaveFeedbackOverride = (key, val) => {
-    const currentOverrides = edits?.feedback_overrides || {};
-    const updatedOverrides = { ...currentOverrides, [key]: val };
-    handleEditChange("feedback_overrides", updatedOverrides);
-    // Also notify parent if callback provided
-    if (onSaveFeedbackOverride) {
-      onSaveFeedbackOverride(key, val);
-    }
-    if (feedbackKeys.length > 0 && feedbackData) {
-      void (async () => {
-        try {
-          const result = await fetchWithHeartbeat("/api/phase-feedback/snapshot/", {
-            method: "POST",
-            body: JSON.stringify({
-              session_id: sessionId,
-              document_id: documentId || null,
-              vendor,
-              feedback,
-              feedback_overrides: updatedOverrides,
-            }),
-          });
-          if (result.isHeartbeat) return;
-          if (!result.data || result.data.status !== "ok") {
-            console.warn("phase feedback snapshot unexpected:", result);
-          }
-        } catch (e) {
-          console.warn("phase feedback snapshot error", e);
-        }
-      })();
-    }
-  };
-
-  // Pre-fill INPUT_NEEDED rows from the same input_cluster_key answered on another vendor card.
-  useEffect(() => {
-    if (!inputClusterText || !Object.keys(inputClusterText).length) return;
-    if (cardPhase !== "draft" && cardPhase !== "refine") return;
-    if (!data?.feedback || !feedbackKeys?.length) return;
-    const baseFeedback = data.feedback;
-    setEdits((prev) => {
-      const overrides = prev.feedback_overrides || {};
-      const nextOverrides = { ...overrides };
-      let any = false;
-      for (const key of feedbackKeys) {
-        const merged = mergeCategoryItems(baseFeedback, nextOverrides, key);
-        const newItems = merged.map((item) => {
-          const ck = item.input_cluster_key;
-          if (!ck || String(item.status || "").toUpperCase() !== "INPUT_NEEDED") return item;
-          const v = inputClusterText[ck];
-          if (v == null || String(v).trim() === "") return item;
-          const current = String(item.user_context || "").trim();
-          if (current) return item;
-          return { ...item, user_context: v };
-        });
-        if (JSON.stringify(newItems) !== JSON.stringify(merged)) {
-          nextOverrides[key] = newItems;
-          any = true;
-        }
-      }
-      if (!any) return prev;
-      const next = { ...prev, feedback_overrides: nextOverrides };
-      if (onEditChange) onEditChange(vendor, cardPhase, "feedback_overrides", nextOverrides);
-      return next;
-    });
-  }, [inputClusterText, cardPhase, data, feedbackKeys]);
-
-  // Pre-approve all INPUT_NEEDED items sharing input_cluster_key when any has an answer (or declined).
-  React.useEffect(() => {
-    if (cardPhase !== "draft" && cardPhase !== "refine") return;
-    const base = data?.feedback;
-    if (!base || !feedbackKeys?.length) return;
-    const overrides = edits?.feedback_overrides || {};
-    const byCluster = new Map();
-    for (const k of feedbackKeys) {
-      for (const it of mergeCategoryItems(base, overrides, k)) {
-        if (it.type !== FEEDBACK_TYPES.PLEASE_FIX) continue;
-        const ck = it.input_cluster_key;
-        if (!ck || String(it.status || "").toUpperCase() !== "INPUT_NEEDED") continue;
-        if (!byCluster.has(ck)) byCluster.set(ck, []);
-        byCluster.get(ck).push({
-          id: it.id,
-          filled: String(it.user_context || "").trim().length > 0,
-          declined: it.input_declined === true,
-        });
-      }
-    }
-    setFeedbackItemApprovals((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      for (const rows of byCluster.values()) {
-        const anyReady = rows.some((r) => r.filled || r.declined);
-        if (!anyReady) continue;
-        for (const r of rows) {
-          if (next[r.id] !== true) {
-            next[r.id] = true;
-            changed = true;
-          }
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [cardPhase, data, feedbackKeys, edits?.feedback_overrides]);
-
-  // Auto-collapse when done
-  useEffect(() => {
-    if (isDone && !collapsed) {
-      setCollapsed(true);
-    }
-  }, [isDone, collapsed]);
-  
-  // Phase-agnostic check: show loading UI when loading and no data yet
-  // When re-running, old data is cleared so we go back to loading state
-  const hasPhaseData = cardPhase && data !== null && Object.keys(data).length > 0;
-  const isLoadingWithoutData = status === "loading" && !hasPhaseData && !approved;
-  
-  // Compute ready state - use phase module function
-  const readyForApproval = React.useMemo(() => {
-    if (!cardPhase || !phaseModule?.computeReadyForApproval) {
-      // Fallback for phases without computeReadyForApproval
-      if (isLoading) return false;
-      if (approved && !thisPhaseDirty) return false;
-      return true;
-    }
-    return phaseModule.computeReadyForApproval({
-      isLoading,
-      approved,
-      thisPhaseDirty,
-      previousPhaseApproved,
-      feedbackKeys,
-      feedbackItemApprovals,
-      feedbackOverrides,
-      feedback,
-      cardPhaseEdits,
-      cardPhaseData,
-    });
-  }, [isLoading, approved, thisPhaseDirty, cardPhase, previousPhaseApproved, feedbackKeys, feedbackItemApprovals, feedbackOverrides, feedback, phaseModule, cardPhaseEdits, cardPhaseData]);
-
-  const executePrimaryApprove = useCallback(async () => {
-    if (approved && !thisPhaseDirty) return;
-    if (!readyForApproval) return;
-    if (onClearPhaseFetchError && cardPhase) {
-      onClearPhaseFetchError(cardPhase, vendor);
-    }
-    setError(null);
-    if (hasPhaseData && thisPhaseDirty) {
-      setStatus("loading");
-      setData(null);
-      if (onStatusChange) onStatusChange(CardStatus.PENDING);
-    }
-    try {
-      if (onApprove) {
-        const snapshotAtApprove = deepCloneJson(cardPhaseEdits);
-        setApproved(true);
-        setApprovedEditsBaseline(snapshotAtApprove);
-        if (onPhaseComplete) {
-          onPhaseComplete(vendor, cardPhase, null);
-        }
-        if (onAfterApproveInExpanded) {
-          onAfterApproveInExpanded();
-        }
-        const nextPhaseData = await onApprove(cardPhase, vendor, cardPhaseEdits);
-        if (nextPhaseData === null) {
-          console.log(`Phase ${cardPhase} for ${vendor} still processing (heartbeat)`);
-          return;
-        }
-        if (onPhaseComplete && nextPhaseData) {
-          onPhaseComplete(vendor, cardPhase, nextPhaseData);
-        }
-      }
-    } catch (e) {
-      setError(e.message || String(e));
-      setApproved(false);
-      setApprovedEditsBaseline(null);
-      if (phaseObj?.approvedVendors) {
-        phaseObj.approvedVendors.delete(vendor);
-      }
-    }
-  }, [
-    approved,
-    thisPhaseDirty,
-    readyForApproval,
-    hasPhaseData,
-    onClearPhaseFetchError,
-    cardPhase,
-    vendor,
-    setError,
-    setStatus,
-    setData,
-    onStatusChange,
-    onApprove,
-    cardPhaseEdits,
-    setApproved,
-    setApprovedEditsBaseline,
-    onPhaseComplete,
-    onAfterApproveInExpanded,
-    phaseObj,
-  ]);
-
-  const planApproveRunnerRef = useRef(executePrimaryApprove);
-  planApproveRunnerRef.current = executePrimaryApprove;
-  useEffect(() => {
-    if (cardPhase !== "plan" || !phaseObj?.planApproveRunners) return undefined;
-    const wrapped = () => planApproveRunnerRef.current();
-    phaseObj.planApproveRunners.set(vendor, wrapped);
-    return () => {
-      phaseObj.planApproveRunners.delete(vendor);
-    };
-  }, [cardPhase, vendor, phaseObj, executePrimaryApprove]);
-
-  // Helper to check if any field has translation for a language
-  const hasAnyTranslation = useCallback((code) => {
-    if (cardPhase === "draft") {
-      const itemFieldHas = feedbackKeys.some((k) => {
-        const items = mergeCategoryItems(feedback, feedbackOverrides, k);
-        return items.some((it) => translation.hasTranslation(`feedback_${k}_${it.id}`));
-      });
-      return translation.hasTranslation("draft_letter") || itemFieldHas;
-    }
-    return false;
-  }, [cardPhase, translation, feedbackKeys, feedback, feedbackOverrides]);
-
-  // Handle language change
-  const handleLanguageChange = useCallback(async (code) => {
-    // Set view language immediately
-    translation.setViewLanguage(code);
-    
-    if (code === "source") {
-      return; // No translation needed for source
-    }
-    
-    // Translate all fields in this card if not already cached
-    if (cardPhase === "draft") {
-      // Translate draft and all feedback fields independently in parallel
-      const translationPromises = [];
-      
-      // Translate draft independently
-      const draftText = cardPhaseEdits.draft_letter ?? cardPhaseData.draft_letter ?? "";
-      if (draftText) {
-        translationPromises.push(
-          translation.translateField("draft_letter", draftText, code)
-        );
-      }
-      
-      // Translate each feedback field independently
-      for (const key of feedbackKeys) {
-        const items = mergeCategoryItems(feedback, feedbackOverrides, key);
-        for (const it of items) {
-          if (it.observation) {
-            const fid = `feedback_${key}_${it.id}`;
-            translationPromises.push(translation.translateField(fid, it.observation, code));
-          }
-        }
-      }
-      
-      // Execute all translations in parallel
-      await Promise.all(translationPromises);
-    }
-  }, [cardPhase, cardPhaseData, cardPhaseEdits, translation, feedbackKeys, feedbackOverrides, feedback]);
-
-  const effectiveCardStyle = useOverlayWidth
-    ? {
-        ...cardStyle,
-        width: "100%",
-        minWidth: 0,
-        maxWidth: "none",
-        flex: "1 1 auto",
-        minHeight: 0,
-        maxHeight: "none",
-        height: "100%",
-      }
-    : cardStyle;
-
-  const approveButtonLabel = isLoading
-    ? "Processing..."
-    : approved
-      ? thisPhaseDirty
-        ? "Save and restart from here"
-        : "Approved"
-      : readyForApproval
-        ? "Approve"
-        : cardPhase === "plan" ||
-            cardPhase === "draft" ||
-            (cardPhase === "refine" && previousPhaseApproved)
-          ? "Check feedback"
-          : "Approve";
-
-  return (
-    <div style={{ ...effectiveCardStyle, opacity: disabled ? 0.6 : 1, pointerEvents: disabled ? "none" : "auto" }}>
-      <div style={cardHeaderStyle} data-vendor-column-header>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap" }}>
-          <h4 style={{ margin: 0, flex: "1 1 auto", textTransform: "capitalize", fontSize: 14, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {vendor}
-          </h4>
-          {onExpand && !isExpanded && (
-            <button
-              type="button"
-              onClick={onExpand}
-              title="Expand to 80% width"
-              aria-label="Expand column"
-              style={iconButtonStyle}
-            >
-              <ExpandOutIcon />
-            </button>
-          )}
-          {isExpanded && onCloseExpand && (
-            <button
-              type="button"
-              onClick={onCloseExpand}
-              title="Close expanded view"
-              aria-label="Close expanded view"
-              style={{ ...iconButtonStyle, fontSize: 16, lineHeight: 1 }}
-            >
-              ×
-            </button>
-          )}
-          {isDone && (
-            <button
-              type="button"
-              onClick={() => setCollapsed(!collapsed)}
-              style={{ fontSize: 11, padding: "2px 6px" }}
-            >
-              {collapsed ? "Show" : "Hide"}
-            </button>
-          )}
-          {!isLoadingWithoutData && cardPhase && phaseModule && (
-            <button
-              type="button"
-              onClick={() => {
-                void executePrimaryApprove();
-              }}
-              disabled={!readyForApproval || (approved && !thisPhaseDirty)}
-              style={{
-                fontSize: 12,
-                padding: "4px 10px",
-                flexShrink: 0,
-                opacity: readyForApproval ? 1 : 0.6,
-                cursor: readyForApproval ? "pointer" : "not-allowed",
-              }}
-            >
-              {approveButtonLabel}
-            </button>
-          )}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-          {(phaseCost > 0 || runningTotal > 0) && (
-            <div style={{ fontSize: "11px", color: "var(--secondary-text-color)", whiteSpace: "nowrap" }}>
-              ${phaseCost.toFixed(4)} <span style={{ fontSize: "10px", opacity: 0.8 }}>(Total: ${runningTotal.toFixed(4)})</span>
-            </div>
-          )}
-          {cardPhase !== "draft" && (
-            <LanguageSelector
-              languages={translation.languages}
-              viewLanguage={translation.viewLanguage}
-              onLanguageChange={handleLanguageChange}
-              hasTranslation={hasAnyTranslation}
-              disabled={isLoading}
-              isTranslating={translation.isAnyTranslating}
-              size="small"
-            />
-          )}
-        </div>
-        {Object.keys(translation.translationErrors).length > 0 && (
-          <div style={{ color: "var(--error-text)", fontSize: "12px" }}>
-            {Object.values(translation.translationErrors)[0]}
-          </div>
-        )}
-        {cardPhase && phaseModule?.renderAdditionalButtons && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {phaseModule.renderAdditionalButtons({
-              isDone,
-              cardPhase,
-              collapsed,
-              vendor,
-            })}
-          </div>
-        )}
-      </div>
-
-      {isLoadingWithoutData && (
-        <div style={{ padding: 6, color: "#6b7280", fontSize: 12 }}>
-          Loading...
-        </div>
-      )}
-
-      {error && !isLoadingWithoutData && (
-        <div style={{
-          color: "var(--error-text)",
-          marginBottom: 8,
-          fontSize: 13,
-          padding: 8,
-          background: "var(--error-bg)",
-          border: "1px solid var(--error-border)",
-          borderRadius: 4
-        }}>
-          {error}
-        </div>
-      )}
-
-      {error && !hasPhaseData && onRetryPhaseFetch && (
-        <div style={{ marginBottom: 10 }}>
-          <button
-            type="button"
-            onClick={() => {
-              void onRetryPhaseFetch(cardPhase, vendor);
-            }}
-            style={{
-              fontSize: 13,
-              padding: "6px 12px",
-              background: "var(--button-bg)",
-              color: "var(--text-color)",
-              border: "1px solid var(--border-color)",
-              borderRadius: 4,
-              cursor: "pointer",
-            }}
-          >
-            Retry
-          </button>
-        </div>
-      )}
-
-      {!isLoadingWithoutData && (
-      <div style={contentContainerStyle}>
-        {cardPhase && phaseModule?.renderContent && (
-          phaseModule.renderContent({
-            EditableField,
-            EditableFeedback,
-            cardPhaseEdits,
-            cardPhaseData,
-            handleEditChange,
-            isLoading,
-            previousPhaseApproved,
-            approved,
-            phaseObj,
-            cardPhase,
-            vendor,
-            feedback,
-            feedbackKeys,
-            feedbackOverrides,
-            activeFeedbackKey,
-            feedbackItemApprovals,
-            setSelectedFeedbackTab,
-            setFeedbackItemApprovals,
-            handleSaveFeedbackOverride,
-            translation,
-            inputClusterText,
-            broadcastInputCluster,
-          })
-        )}
-      </div>
-      )}
-    </div>
-  );
-}
-
-// Transform to phase-indexed structure - cards now own their state, so we just create phase objects
-// Output: phases = [{ phase: "plan", ... }, { phase: "draft", ... }, ...]
 function transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCounters, setPhaseCounters, includePlanStep = true) {
   const phaseOrder = includePlanStep ? ["plan", "draft"] : ["draft"];
-  
-  // First pass: create all phase objects - cards will own their own state
-  const phaseObjects = phaseOrder.map((phaseName, index) => {
-    
-    // Get or initialize counters (preserve state across re-renders)
+
+  const phaseObjects = phaseOrder.map((phaseName) => {
     const existingCounters = phaseCounters && phaseCounters[phaseName];
     const vendorCount = vendorsList.length;
-    
+
     let readyCount = existingCounters?.readyCount ?? 0;
     let pendingCount = existingCounters?.pendingCount ?? vendorCount;
-    
+
     if (!existingCounters) {
-      // Initialize counters - all cards start as pending
       pendingCount = vendorCount;
       readyCount = 0;
-      
-      // Store initial counters
+
       setPhaseCounters(prev => ({
         ...prev,
         [phaseName]: { readyCount, pendingCount }
       }));
     }
-    
+
     const phaseObj = {
       phase: phaseName,
-      previous: null, // Will be set in second pass
-      next: null, // Will be set in second pass
-      readyCount, // Number of cards ready for approval
-      pendingCount, // Number of cards pending (not approved)
-      // Store completion data per vendor (for next phase to access)
-      cardData: {}, // { vendor: completionData }
-      cardErrors: {}, // { vendor: string } — fetch failures from parent (e.g. plan API), surfaced on the card
-      approvedVendors: new Set(), // Track which vendors are approved in this phase
-      // Status registration function - updates counters
-      // Status parameter IS the card's status - no need to look it up
+      previous: null,
+      next: null,
+      readyCount,
+      pendingCount,
+      cardData: {},
+      cardErrors: {},
+      approvedVendors: new Set(),
       registerStatus: (vendor, status) => {
         switch (status) {
           case CardStatus.PENDING:
-            // Card is loading - decrement readyCount if it was ready (but don't change pendingCount)
             if (phaseObj.readyCount > 0) {
               phaseObj.readyCount--;
             }
             break;
           case CardStatus.READY:
-            // Card has data and is ready - increment readyCount
             phaseObj.readyCount++;
             break;
           case CardStatus.APPROVED:
-            // Card is approved - decrement both counters
             if (phaseObj.readyCount > 0) {
               phaseObj.readyCount--;
             }
@@ -1677,26 +87,17 @@ function transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCoun
             }
             break;
           default:
-            // Unknown status - ignore
             break;
         }
-        
-        // Update stored counters
+
         setPhaseCounters(prev => ({
           ...prev,
           [phaseName]: { readyCount: phaseObj.readyCount, pendingCount: phaseObj.pendingCount }
         }));
-        
-        // Force re-render
+
         setPhaseUpdateTrigger(prev => prev + 1);
       },
-      // Function to approve all ready cards - cards will handle their own approval
-      // This is now just a callback that can be used by the phase section
-      approveAllReady: () => {
-        // Cards will handle their own approval via onApprove callback
-        // Return empty array - parent will need to track which vendors to approve
-        return [];
-      }
+      approveAllReady: () => [],
     };
 
     if (phaseName === "plan") {
@@ -1705,13 +106,12 @@ function transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCoun
 
     return phaseObj;
   });
-  
-  // Second pass: link phase objects with actual object references
+
   phaseObjects.forEach((phaseObj, index) => {
     phaseObj.previous = index > 0 ? phaseObjects[index - 1] : null;
     phaseObj.next = index < phaseObjects.length - 1 ? phaseObjects[index + 1] : null;
   });
-  
+
   return phaseObjects;
 }
 
@@ -1720,21 +120,14 @@ export default function PhaseFlow({
   onEditChange,
   onApprove,
   onApproveAll,
-  /** When false, only the draft phase is shown (plan is skipped). */
   includePlanStep = true,
-  // Required for cards to make API calls
   sessionId,
   documentId = null,
   draftFeedbackRegistryRef = null,
-  /** Bumped when App starts a new vendor flow run — resets section collapse and plan auto-approve timers. */
   flowResetKey = 0,
-  // Callback for when a phase completes
-  onPhaseComplete, // (vendor, phase, data) => void
-  // Callback to register the phase objects with the parent
-  onRegisterPhases, // (phases) => void
-  /** Clear server-fetch error for a vendor on this phase (parent owns `phase.cardErrors`). */
+  onPhaseComplete,
+  onRegisterPhases,
   onClearPhaseFetchError,
-  /** Retry background fetch for a phase (e.g. plan after a failed POST). */
   onRetryPhaseFetch,
 }) {
   const [collapsedPhases, setCollapsedPhases] = useState({
@@ -1742,21 +135,19 @@ export default function PhaseFlow({
     draft: false,
   });
 
-  const [expandedCard, setExpandedCard] = useState(null); // { phase, vendor } | null
+  const [expandedCard, setExpandedCard] = useState(null);
   const toggleExpand = useCallback((phase, vendor) => {
     setExpandedCard((prev) =>
       prev?.phase === phase && prev?.vendor === vendor ? null : { phase, vendor }
     );
   }, []);
   const closeExpand = useCallback(() => setExpandedCard(null), []);
-  
-  // Track phase updates to trigger re-renders when status changes
+
   const [phaseUpdateTrigger, setPhaseUpdateTrigger] = useState(0);
 
   const planVendorSettledAtRef = useRef({});
   const prevPlanVendorSettledRef = useRef({});
   const planAutoApproveTimerRef = useRef(null);
-  /** Once Draft appears, collapse Plan so Draft columns can use a full screen height. */
   const autoCollapsedPlanForDraftRef = useRef(false);
 
   useEffect(() => {
@@ -1770,7 +161,6 @@ export default function PhaseFlow({
     }
   }, [flowResetKey]);
 
-  // Collapse Plan the first time Draft becomes visible so vendor columns sit at the top of the viewport.
   useEffect(() => {
     const phases = phasesRef.current;
     const planPhase = phases?.find((p) => p.phase === "plan");
@@ -1790,11 +180,6 @@ export default function PhaseFlow({
     };
   }, []);
 
-  /**
-   * When every vendor's plan model has returned (plan text or plan error), wait PLAN_AUTO_APPROVE_MS
-   * from the last return, then run the same approve path as the Approve button for each vendor that
-   * still has a non-empty plan and is not approved.
-   */
   useEffect(() => {
     const phases = phasesRef.current;
     const planPhase = phases?.find((p) => p.phase === "plan");
@@ -1876,7 +261,6 @@ export default function PhaseFlow({
     }, delay);
   }, [phaseUpdateTrigger, vendorsList]);
 
-  /** Shared INPUT_NEEDED answers across vendor cards (same input_cluster_key). */
   const [inputClusterText, setInputClusterText] = useState({});
   const broadcastInputCluster = useCallback((clusterKey, text) => {
     if (!clusterKey) return;
@@ -1884,19 +268,15 @@ export default function PhaseFlow({
     if (!t) return;
     setInputClusterText((prev) => ({ ...prev, [clusterKey]: text }));
   }, []);
-  
-  // Store counters per phase (preserved across re-renders)
-  // readyCount: number of cards ready for approval (starts at 0, incremented when card becomes ready)
-  // pendingCount: number of cards pending (starts at vendor count, decremented on error/approval)
-  const [phaseCounters, setPhaseCounters] = useState({}); // { phaseName: { readyCount: 0, pendingCount: vendorCount } }
-  
-  // Use ref to store stable phase objects - recreate when vendor count or phase pipeline schema changes
+
+  const [phaseCounters, setPhaseCounters] = useState({});
+
   const phasesRef = useRef(null);
   const vendorsListLengthRef = useRef(vendorsList.length);
   const phasesSchemaVersionRef = useRef(0);
   const includePlanStepRef = useRef(includePlanStep);
   const expandedDialogRef = useRef(null);
-  
+
   if (
     !phasesRef.current ||
     vendorsListLengthRef.current !== vendorsList.length ||
@@ -1907,17 +287,14 @@ export default function PhaseFlow({
     includePlanStepRef.current = includePlanStep;
     vendorsListLengthRef.current = vendorsList.length;
     phasesSchemaVersionRef.current = PHASE_FLOW_SCHEMA_VERSION;
-    
-    // Notify parent of the new phase structure
+
     if (onRegisterPhases) {
-      // Use setTimeout to avoid updating parent during render
       setTimeout(() => onRegisterPhases(phasesRef.current), 0);
     }
   }
-  
+
   const phases = phasesRef.current;
-  
-  // Update phase counters in the ref when they change
+
   useEffect(() => {
     if (phasesRef.current) {
       phasesRef.current.forEach(phaseObj => {
@@ -1989,7 +366,6 @@ export default function PhaseFlow({
     return () => window.removeEventListener("keydown", handler);
   }, [expandedCard, goLeft, goRight]);
 
-  // Focus the expanded dialog so browser Find (Ctrl+F) searches inside it
   useEffect(() => {
     if (!expandedCard) return;
     const frame = requestAnimationFrame(() => {
@@ -1998,16 +374,13 @@ export default function PhaseFlow({
     return () => cancelAnimationFrame(frame);
   }, [expandedCard]);
 
-  // Stabilize saveFeedbackOverride with useCallback
   const saveFeedbackOverride = useCallback((vendor, key, val) => {
     if (!vendor || !key) return;
-    // Cards now own their state, so we just notify parent if callback provided
     if (onEditChange) {
       onEditChange(vendor, "draft", "feedback_overrides", { [key]: val });
     }
   }, [onEditChange]);
 
-  // Add rendering configuration to phase objects - use useMemo to stabilize renderVendor
   const memoizedRenderVendors = useMemo(() => {
     const renderFunctions = new Map();
     phases.forEach(phaseObj => {
@@ -2042,20 +415,17 @@ export default function PhaseFlow({
     });
     return renderFunctions;
   }, [phases, sessionId, documentId, draftFeedbackRegistryRef, onEditChange, onApprove, onPhaseComplete, saveFeedbackOverride, toggleExpand, closeExpand, onAfterApproveInExpanded, inputClusterText, broadcastInputCluster, onRetryPhaseFetch, onClearPhaseFetchError]);
-  
+
   phases.forEach(phaseObj => {
     const phaseName = phaseObj.phase;
     const phaseModule = phaseModules[phaseName];
     const title = phaseModule?.getPhaseTitle() || phaseName;
-    
-    // Visibility: first phase always shown. Downstream sections (e.g. Draft) only after
-    // the previous phase has at least one approved vendor — matches per-card gating
-    // (VendorCardWrapper previousPhaseApproved) so the Draft block is not empty noise.
+
     let visible = true;
     if (phaseObj.previous) {
       visible = (phaseObj.previous.approvedVendors?.size ?? 0) > 0;
     }
-    
+
     phaseObj.title = title;
     phaseObj.visible = visible;
     phaseObj.collapsed = collapsedPhases[phaseName] || false;
@@ -2169,21 +539,16 @@ export default function PhaseFlow({
           readyCount={phase.readyCount || 0}
           totalCount={phase.pendingCount || 0}
           onApproveAll={() => {
-            // Approve all ready vendors
-            // Use the parent's handler if provided - it handles parallel requests efficiently
             if (onApproveAll) {
               onApproveAll(phase.phase);
             }
-            
-            // Mark all vendors as approved in the local phase state
-            // This ensures the NEXT phase shows "Loading..." immediately
+
             vendorsList.forEach(vendor => {
               if (phase.approvedVendors) {
                 phase.approvedVendors.add(vendor);
               }
             });
-            
-            // Force re-render to update UI (show loading on next phase)
+
             setPhaseUpdateTrigger(prev => prev + 1);
           }}
         >
@@ -2196,4 +561,3 @@ export default function PhaseFlow({
     </>
   );
 }
-

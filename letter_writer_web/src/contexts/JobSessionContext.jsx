@@ -13,6 +13,9 @@ import {
   reportSessionExpired,
 } from "../utils/authSession.js";
 import { scheduleGoogleOAuthRedirect, clearOAuthRedirectCooldown } from "../utils/googleOAuthRedirect";
+import { syncStateToServer } from "../utils/localState.js";
+import { useSessionRehydration } from "../hooks/useSessionRehydration";
+import { applyRestoredSessionState } from "../utils/applySessionRestore";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
@@ -100,11 +103,6 @@ export function JobSessionProvider({ children }) {
     };
   }, [isAuthenticated, checkingAuth]);
 
-  useEffect(() => {
-    if (authRefreshGeneration === 0) return;
-    initializeCsrfToken().catch((e) => console.warn("Failed to refresh CSRF:", e));
-  }, [authRefreshGeneration]);
-
   // Core intake fields
   const [jobText, setJobText] = useState("");
   const [companyName, setCompanyName] = useState("");
@@ -184,9 +182,26 @@ export function JobSessionProvider({ children }) {
   // Vendor feedback
   const [vendorFeedback, setVendorFeedback] = useState({});
 
+  // Flow restore payloads (reload / backup restore)
+  const [pendingVendorRestore, setPendingVendorRestore] = useState(null);
+  const [pendingAgenticRestore, setPendingAgenticRestore] = useState(null);
+
   // Refs
   const latestFormSnapshotRef = useRef(null);
   const competencesScrollRef = useRef(null);
+  const restoreStateGetterRef = useRef(() => ({
+    jobText: "",
+    cvText: "",
+    extractedData: null,
+    phaseRegistry: null,
+  }));
+
+  const registerRestoreStateGetter = useCallback((getter) => {
+    restoreStateGetterRef.current = typeof getter === "function" ? getter : restoreStateGetterRef.current;
+  }, []);
+
+  const clearPendingVendorRestore = useCallback(() => setPendingVendorRestore(null), []);
+  const clearPendingAgenticRestore = useCallback(() => setPendingAgenticRestore(null), []);
 
   // ─── Derived values ────────────────────────────────────────────────────────
 
@@ -333,6 +348,57 @@ export function JobSessionProvider({ children }) {
       additionalCompanyInfo,
       extractedData,
     ]
+  );
+
+  const sessionSetters = useMemo(
+    () => ({
+      setPhaseSessionId,
+      setJobText,
+      setCompanyName,
+      setJobTitle,
+      setLocation,
+      setLanguage,
+      setSalary,
+      setAdditionalUserInfo,
+      setAdditionalCompanyInfo,
+      setShowAdditionalInfo,
+      setHireProblem,
+      setRequirements,
+      setCompetences,
+      setPointOfContact,
+      setShowPointOfContact,
+      setExtractedData,
+    }),
+    []
+  );
+
+  useSessionRehydration({
+    checkingAuth,
+    isAuthenticated,
+    isFormSnapshotPristine,
+    latestFormSnapshotRef,
+    sessionSetters,
+    setPendingVendorRestore,
+    setPendingAgenticRestore,
+  });
+
+  useEffect(() => {
+    if (authRefreshGeneration === 0) return;
+    initializeCsrfToken().catch((e) => console.warn("Failed to refresh CSRF:", e));
+    const state = restoreStateGetterRef.current();
+    syncStateToServer(state).catch((e) => {
+      console.warn("Failed to sync local state to server after re-auth:", e);
+    });
+  }, [authRefreshGeneration]);
+
+  const applyBackupRestore = useCallback(
+    (sessionState, sessionId) => {
+      const result = applyRestoredSessionState(sessionState, sessionSetters, { sessionId });
+      if (result.vendor) setPendingVendorRestore(result.vendor);
+      if (result.agentic) setPendingAgenticRestore(result.agentic);
+      return result;
+    },
+    [sessionSetters]
   );
 
   const buildJobSessionPayload = useCallback(
@@ -963,6 +1029,13 @@ export function JobSessionProvider({ children }) {
     canScrollCompetencesDown, setCanScrollCompetencesDown,
     // Vendor feedback
     vendorFeedback, setVendorFeedback,
+    // Restore
+    pendingVendorRestore,
+    pendingAgenticRestore,
+    clearPendingVendorRestore,
+    clearPendingAgenticRestore,
+    registerRestoreStateGetter,
+    applyBackupRestore,
     // Refs
     latestFormSnapshotRef,
     competencesScrollRef,

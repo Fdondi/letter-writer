@@ -10,8 +10,8 @@ import { fetchWithHeartbeat, publishUserMonthlyCost } from "../utils/apiHelpers"
 import { splitIntoParagraphs } from "../utils/split";
 import { persistLetterDocument, buildAgenticAiLetters } from "../utils/persistLetterDocument";
 import { showNotification } from "../utils/apiNotifications";
-
-const AGENTIC_TOPICS = ["instruction", "company_fit", "goal_fit", "precision", "user_fit", "human", "accuracy"];
+import { AGENTIC_TOPICS } from "../constants/feedbackTopics.js";
+import { normalizeAgenticThreads, stripAgenticThreadFields } from "../utils/agenticThreads";
 
 const REFERENCE_SIDEBAR_VIEWPORT_STYLE = {
   alignSelf: "flex-start",
@@ -39,7 +39,6 @@ export default function AgenticFlowPage() {
   const [agenticFinalParagraphs, setAgenticFinalParagraphs] = useState([]);
   const [referenceSidebarCollapsed, setReferenceSidebarCollapsed] = useState(false);
 
-  const bestKnownThreadsRef = useRef(null);
   const agenticPhasesRef = useRef(null);
   const startedRef = useRef(false);
   const agenticOngoingRef = useRef(undefined);
@@ -55,50 +54,11 @@ export default function AgenticFlowPage() {
     return errorStr.replace(/^Error:\s*/, "").trim() || "Unknown error";
   }, []);
 
-  const normalizeAgenticThreads = useCallback((threadsPayload = {}, topicMetaPayload = {}) => {
-    const threadsOut = AGENTIC_TOPICS.reduce((acc, topic) => ({ ...acc, [topic]: [] }), {});
-    const topicMetaOut = { ...(topicMetaPayload && typeof topicMetaPayload === "object" ? topicMetaPayload : {}) };
-    const assignTopic = (topicKey, rawValue) => {
-      if (!topicKey || typeof topicKey !== "string") return;
-      const topic = topicKey.trim();
-      if (!topic) return;
-      if (!(topic in threadsOut)) threadsOut[topic] = [];
-      if (Array.isArray(rawValue)) { threadsOut[topic] = rawValue; return; }
-      if (!rawValue || typeof rawValue !== "object") { threadsOut[topic] = []; return; }
-      const candidateThread = Array.isArray(rawValue.thread) ? rawValue.thread : Array.isArray(rawValue.comments) ? rawValue.comments : Array.isArray(rawValue.messages) ? rawValue.messages : [];
-      threadsOut[topic] = candidateThread;
-      const round = rawValue.round;
-      const done = rawValue.done;
-      const messages = rawValue.messages_count ?? rawValue.count ?? rawValue.messages;
-      if (round != null || done != null || messages != null || "waiting_for" in rawValue) {
-        const nextMeta = { ...(topicMetaOut[topic] || {}), ...(round != null && { round }), ...(messages != null && { messages: Number.isFinite(Number(messages)) ? Number(messages) : candidateThread.length }), ...(done != null && { done: done === true }) };
-        if ("waiting_for" in rawValue) {
-          const wf = rawValue.waiting_for;
-          if (wf != null && typeof wf === "object") nextMeta.waiting_for = wf;
-          else if (wf != null && String(wf).trim() !== "") nextMeta.waiting_for = String(wf).trim();
-          else delete nextMeta.waiting_for;
-        }
-        topicMetaOut[topic] = nextMeta;
-      }
-    };
-    if (Array.isArray(threadsPayload)) {
-      threadsPayload.forEach((entry) => { if (!entry || typeof entry !== "object") return; assignTopic(entry.topic || entry.key || entry.name, entry.thread ?? entry.comments ?? entry.messages ?? entry); });
-    } else if (threadsPayload && typeof threadsPayload === "object") {
-      Object.entries(threadsPayload).forEach(([topic, value]) => assignTopic(topic, value));
-    }
-    return { threads: threadsOut, topicMeta: topicMetaOut };
-  }, []);
-
-  const stripAgenticThreadFields = useCallback((state) => {
-    if (!state || typeof state !== "object") return state;
-    const next = { ...state }; delete next.threads; delete next.topic_meta; return next;
-  }, []);
-
   const mergeAgenticUpdate = useCallback((prevState, update) => {
     const cleanUpdate = stripAgenticThreadFields(update);
     if (!cleanUpdate || typeof cleanUpdate !== "object") return prevState || null;
     return { ...(prevState || {}), ...cleanUpdate };
-  }, [stripAgenticThreadFields]);
+  }, []);
 
   const syncAgenticMaxRoundsFromServer = useCallback((value) => {
     if (value == null || value === "") return; const n = Number(value); if (!Number.isFinite(n)) return; setAgenticMaxRounds(n);
@@ -125,6 +85,17 @@ export default function AgenticFlowPage() {
   }, [agenticState?.status]);
 
   useEffect(() => {
+    const restore = session.pendingAgenticRestore;
+    if (!restore) return;
+    startedRef.current = true;
+    setAgenticState(restore.state);
+    setAgenticStage(restore.stage || "agentic");
+    if (restore.maxRounds != null) syncAgenticMaxRoundsFromServer(restore.maxRounds);
+    if (restore.subCommentRounds != null) syncAgenticSubCommentRoundsFromServer(restore.subCommentRounds);
+    session.clearPendingAgenticRestore();
+  }, [session.pendingAgenticRestore, session, syncAgenticMaxRoundsFromServer, syncAgenticSubCommentRoundsFromServer]);
+
+  useEffect(() => {
     if (startedRef.current) return;
     if (!navLocation.state?.start) return;
     startedRef.current = true;
@@ -136,7 +107,6 @@ export default function AgenticFlowPage() {
     setAgenticLoading(true);
     setAgenticError(null);
     setAgenticState(null);
-    bestKnownThreadsRef.current = null;
     setAgenticStage("agentic");
 
     (async () => {
@@ -161,7 +131,13 @@ export default function AgenticFlowPage() {
     })();
   }, [navLocation.state?.start]);
 
-  if (!navLocation.state?.start && !session.phaseSessionId && !startedRef.current) {
+  if (
+    !navLocation.state?.start &&
+    !navLocation.state?.rehydrated &&
+    !session.phaseSessionId &&
+    !startedRef.current &&
+    !session.pendingAgenticRestore
+  ) {
     return <Navigate to="/" replace />;
   }
 
@@ -172,28 +148,22 @@ export default function AgenticFlowPage() {
       const data = await res.json();
       publishUserMonthlyCost(data);
       const normalized = normalizeAgenticThreads(data.threads || {}, data.topic_meta || {});
-      const best = bestKnownThreadsRef.current || {};
-      let bestUpdated = false;
-      for (const topic of AGENTIC_TOPICS) {
-        const incoming = normalized.threads[topic] || [];
-        if (incoming.length > (best[topic]?.length || 0)) { best[topic] = incoming; bestUpdated = true; }
+      const allThreadsEmpty = AGENTIC_TOPICS.every((topic) => !(normalized.threads[topic]?.length));
+      if (data.ongoing === true && allThreadsEmpty) {
+        setAgenticError(
+          "Feedback is running but the server returned empty threads. The worker may have failed or poll data is missing — check server logs."
+        );
       }
-      if (bestUpdated) bestKnownThreadsRef.current = { ...best };
-      setAgenticState((prev) => {
-        const threads = {};
-        for (const topic of AGENTIC_TOPICS) {
-          const prevList = prev?.threads?.[topic] || [];
-          const nextList = normalized.threads[topic] || [];
-          const refList = bestKnownThreadsRef.current?.[topic] || [];
-          threads[topic] = [prevList, nextList, refList].reduce((a, b) => (b.length > a.length ? b : a), []);
-        }
-        return {
-          ...(prev || {}), threads, status: data.status ?? prev?.status, ongoing: data.ongoing,
-          feedback_suspended: data.feedback_suspended, topic_meta: normalized.topicMeta,
-          ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
-          ...(data.sub_comment_rounds != null && { sub_comment_rounds: data.sub_comment_rounds }),
-        };
-      });
+      setAgenticState((prev) => ({
+        ...(prev || {}),
+        threads: normalized.threads,
+        status: data.status ?? prev?.status,
+        ongoing: data.ongoing,
+        feedback_suspended: data.feedback_suspended,
+        topic_meta: normalized.topicMeta,
+        ...(data.max_rounds != null && { max_rounds: data.max_rounds }),
+        ...(data.sub_comment_rounds != null && { sub_comment_rounds: data.sub_comment_rounds }),
+      }));
       if (data.max_rounds != null) syncAgenticMaxRoundsFromServer(data.max_rounds);
       if (data.sub_comment_rounds != null) syncAgenticSubCommentRoundsFromServer(data.sub_comment_rounds);
       return data.ongoing === true;

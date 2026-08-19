@@ -6,6 +6,7 @@ import React, { useEffect, useRef, useState } from "react";
 import AgenticThread from "./AgenticThread";
 import { useTranslation } from "../utils/useTranslation";
 import LanguageSelector from "./LanguageSelector";
+import { AGENTIC_TOPICS } from "../constants/feedbackTopics.js";
 
 const FEEDBACK_DESCRIPTIONS = {
   instruction: "Style and tone vs instructions.",
@@ -16,8 +17,6 @@ const FEEDBACK_DESCRIPTIONS = {
   human: "Patterns from your past revisions.",
   accuracy: "CV accuracy check (last word).",
 };
-
-const TOPIC_KEYS = ["instruction", "company_fit", "goal_fit", "precision", "user_fit", "human", "accuracy"];
 const VOTE_COUNTDOWN_SECONDS = 15;
 const REFINE_SAMPLE_COUNT_KEY = "agenticRefineSampleCount";
 const REFINE_START_DELAY_SEC = 3;
@@ -37,7 +36,7 @@ const DRAFT_FIELD_ID = "agentic_draft";
 
 function hasAnyThreadComments(threadMap) {
   if (!threadMap || typeof threadMap !== "object") return false;
-  return TOPIC_KEYS.some((topic) => {
+  return AGENTIC_TOPICS.some((topic) => {
     const list = threadMap[topic];
     return Array.isArray(list) && list.some((comment) => !comment?.carried);
   });
@@ -714,7 +713,7 @@ export default function AgenticFlow({
                   overflowAnchor: "none",
                 }}
               >
-                {TOPIC_KEYS.map((topic, idx) => (
+                {AGENTIC_TOPICS.map((topic, idx) => (
                   <React.Fragment key={topic}>
                     <AgenticThread
                       topic={topic}
@@ -736,7 +735,7 @@ export default function AgenticFlow({
                       onRemoveAddendum={handleRemoveAddendum}
                       onEditAddendum={handleEditAddendum}
                     />
-                    {idx < TOPIC_KEYS.length - 1 && (
+                    {idx < AGENTIC_TOPICS.length - 1 && (
                       <div
                         aria-hidden
                         style={{

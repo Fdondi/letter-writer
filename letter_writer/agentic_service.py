@@ -23,14 +23,14 @@ def _log(msg: str) -> None:
 
 from .client import get_client
 from .clients.base import ModelVendor, ModelRole
-from .generation import (
-    AGENTIC_TOPIC_KEYS,
+from .feedback_checks import (
     get_agentic_topic_context,
-    get_style_instructions,
-    generate_letter,
     is_agentic_skip,
-    rewrite_letter,
 )
+from .feedback_topics import AGENTIC_TOPIC_KEYS
+from .instructions import get_style_instructions
+from .letter_generation import generate_letter
+from .rewrite import rewrite_letter
 from .phased_service import get_effective_additional_user_info, get_metadata_field, language_prefix_for_session
 from .cost_tracker import track_api_cost
 from .retrieval import select_top_documents
@@ -2189,7 +2189,7 @@ def run_agentic_draft(
         if not company_report:
             point_of_contact = metadata.get("common", {}).get("point_of_contact")
             additional_company_info = get_metadata_field(metadata, vendor_enum, "additional_company_info", "")
-            from .generation import resolve_search_instructions
+            from .instructions import resolve_search_instructions
             from .firestore_store import get_user_data
 
             user_data = get_user_data(_user_id(session), use_cache=True) if _user_id(session) else {}
@@ -2291,7 +2291,7 @@ def run_agentic_draft_multi(
         if not company_report:
             point_of_contact = metadata.get("common", {}).get("point_of_contact")
             additional_company_info = get_metadata_field(metadata, vendor_enum, "additional_company_info", "")
-            from .generation import resolve_search_instructions
+            from .instructions import resolve_search_instructions
             from .firestore_store import get_user_data
 
             user_data = get_user_data(_user_id(session), use_cache=True) if _user_id(session) else {}
@@ -2674,193 +2674,6 @@ def _run_one_topic_sequential(
         except Exception as e:
             _log(f"AGENTIC feedback agent error topic={topic} vendor={vendor}: {e}")
     return (topic, thread, True)
-
-
-def run_agentic_feedback_step(
-    session,
-) -> Tuple[Dict[str, Any], bool]:
-    """
-    Run one full feedback round per poll: for each topic, run all vendors sequentially so each
-    agent sees the previous agents' comments and addendums. Topics are processed in parallel.
-    Returns (full state, ongoing).
-    """
-    _require_session(session)
-    state = get_agentic_state(session)
-    if not state:
-        return (state or {}, False)
-    if not state.get("feedback_ongoing"):
-        _log("AGENTIC poll step: early return (feedback_ongoing false)")
-        return (state, False)
-
-    cursors = state.get("topic_cursors") or {}
-    entry_summary = {t: ((cursors.get(t) or {}).get("round", 1), (cursors.get(t) or {}).get("vendor_index", 0), len((cursors.get(t) or {}).get("vendor_order") or [])) for t in AGENTIC_TOPIC_KEYS}
-    _log(f"AGENTIC poll step: entry feedback_ongoing=True per_topic(round,vi,order_len)={entry_summary}")
-
-    draft_letter = state.get("draft_letter") or ""
-    draft_vendor = state.get("draft_vendor") or ""
-    threads = state.get("threads") or _empty_threads()
-    top_docs = cast(List[TopDocument], state.get("top_docs") or [])
-    company_report = state.get("company_report") or ""
-    job_text = state.get("job_text") or ""
-    cv_text = state.get("cv_text") or ""
-    metadata = state.get("metadata") or {}
-    style_instructions = state.get("style_instructions") or get_style_instructions()
-    additional_user_info = get_effective_additional_user_info(
-        metadata, ModelVendor(draft_vendor), _user_id(session)
-    )
-    hire_problem = str(get_metadata_field(metadata, ModelVendor(draft_vendor), "hire_problem", "") or "")
-    topic_cursors = _get_topic_cursors(state)
-
-    trace_dir = Path("trace", "agentic.feedback")
-    trace_dir.mkdir(parents=True, exist_ok=True)
-
-    # Ensure every topic has vendor_order (re-init from persisted list if empty, e.g. after reload)
-    fallback_order = state.get("feedback_vendor_order") or []
-    for topic in AGENTIC_TOPIC_KEYS:
-        cur = topic_cursors.get(topic) or {"round": 1, "vendor_index": 0, "vendor_order": []}
-        order = cur.get("vendor_order") or []
-        if not order and fallback_order:
-            cur["vendor_order"] = list(random.sample(fallback_order, len(fallback_order)))
-            cur["vendor_index"] = 0
-        topic_cursors[topic] = cur
-
-    draft_letters_multi = state.get("draft_letters") or {}
-    # Build one work item per topic: run all vendors for that topic sequentially so each sees prior addendums
-    work = []
-    for topic in AGENTIC_TOPIC_KEYS:
-        cur = topic_cursors[topic]
-        order = cur.get("vendor_order") or []
-        if not order:
-            continue
-        round_num = int(cur.get("round") or 1)
-        prior_comments = get_prior_topic_top_comments(threads, topic)
-        prior_comments_text = format_prior_topic_comments_for_prompt(prior_comments)
-        initial_vote_comment_ids = [str(c.get("id")) for c in prior_comments if c.get("id")]
-        context = get_agentic_topic_context(
-            topic, draft_letter, cv_text, company_report, job_text, top_docs,
-            style_instructions, additional_user_info,
-            draft_letters=draft_letters_multi if len(draft_letters_multi) > 0 else None,
-            hire_problem=hire_problem,
-        )
-        # Copy thread so each topic's worker has its own list/dicts (no shared refs across parallel topics)
-        thread_copy = []
-        for c in (threads.get(topic) or []):
-            nc = dict(c)
-            nc["addendums"] = []
-            for a in (nc.get("addendums") or []):
-                na = dict(a)
-                na["up"] = list(na.get("up") or [])
-                na["down"] = list(na.get("down") or [])
-                nc["addendums"].append(na)
-            nc["subcomments"] = list(nc.get("subcomments") or [])
-            v = nc.get("votes") or {}
-            nc["votes"] = {
-                "up": list(v.get("up", [])),
-                "down": list(v.get("down", [])),
-                "abstain": list(v.get("abstain", [])),
-            }
-            vbr = nc.get("votes_by_round") or {}
-            nc["votes_by_round"] = {}
-            for rk, bucket in vbr.items():
-                if not isinstance(bucket, dict):
-                    continue
-                nc["votes_by_round"][str(rk)] = {
-                    "up": list(bucket.get("up") or []),
-                    "down": list(bucket.get("down") or []),
-                    "abstain": list(bucket.get("abstain") or []),
-                    "reasons": dict(bucket.get("reasons") or {}),
-                    "topic": bucket.get("topic"),
-                    "round": bucket.get("round"),
-                }
-            thread_copy.append(nc)
-        seed_thread_with_prior_topic_comments(thread_copy, prior_comments)
-        work.append((topic, context, thread_copy, order, trace_dir, prior_comments_text, round_num, initial_vote_comment_ids))
-
-    if not work:
-        # No topics have vendor_order (shouldn't happen after init). Advance rounds and re-check.
-        for topic in AGENTIC_TOPIC_KEYS:
-            cur = topic_cursors.get(topic) or {}
-            order = cur.get("vendor_order") or []
-            if order:
-                cur["vendor_index"] = 0
-                cur["round"] = cur.get("round", 1) + 1
-                random.shuffle(order)
-        rounds = {t: (topic_cursors.get(t) or {}).get("round", 1) for t in AGENTIC_TOPIC_KEYS}
-        min_round = min(rounds.values())
-        positive_count = _count_positive_comments(threads)
-        max_rounds = _get_max_rounds(state)
-        all_topics_finished = all(r > max_rounds for r in rounds.values())
-        if min_round <= MIN_ROUNDS_BEFORE_DONE:
-            _log(f"AGENTIC no work this poll, min_round={min_round} — not stopping (need all topics >{max_rounds} or positive cap)")
-        elif all_topics_finished or positive_count > MAX_POSITIVE_COMMENTS:
-            state["feedback_ongoing"] = False
-            state["status"] = STATUS_FEEDBACK_DONE
-            _log(f"AGENTIC feedback done (all topics signalled): rounds={rounds} positive_count={positive_count}")
-        save_agentic_state(session, state)
-        return (state, state.get("feedback_ongoing", False))
-
-    # Run each topic's full vendor sequence in parallel (within a topic, vendors run sequentially and see prior addendums)
-    with ThreadPoolExecutor(max_workers=len(AGENTIC_TOPIC_KEYS)) as executor:
-        futures = {
-            executor.submit(
-                _run_one_topic_sequential,
-                t,
-                c,
-                th,
-                order,
-                trace_dir,
-                prior_text,
-                None,
-                round_num,
-                initial_vote_ids,
-            ): t
-            for (t, c, th, order, trace_dir, prior_text, round_num, initial_vote_ids) in work
-        }
-        # Collect all results first before merging, so we can process in AGENTIC_TOPIC_KEYS
-        # order. This prevents a race condition where a dependent topic (e.g. user_fit)
-        # finishes before its source topic (e.g. precision) and correctly merges votes back
-        # into threads["precision"], only for precision's result to then overwrite that with
-        # its thread_copy (which never saw user_fit's votes).
-        completed: Dict[str, List[Dict]] = {}
-        for fut in as_completed(futures):
-            topic, updated_thread, _ = fut.result()
-            completed[topic] = updated_thread
-        for topic in AGENTIC_TOPIC_KEYS:
-            if topic not in completed:
-                continue
-            threads[topic] = merge_carryover_updates_and_strip(completed[topic], threads)
-            cur = topic_cursors[topic]
-            cur["vendor_index"] = 0
-            cur["round"] = cur.get("round", 1) + 1
-            order = cur.get("vendor_order") or []
-            if order:
-                random.shuffle(order)
-                cur["vendor_order"] = order
-
-    # Single write back to session state (no overwrite: we mutated state["threads"] and state["topic_cursors"] in place)
-    state["threads"] = threads
-    state["topic_cursors"] = topic_cursors
-
-    rounds_per_topic = {t: (topic_cursors.get(t) or {}).get("round", 1) for t in AGENTIC_TOPIC_KEYS}
-    min_round = min(rounds_per_topic.values())
-    positive_count = _count_positive_comments(threads)
-    max_rounds = _get_max_rounds(state)
-    _log(f"AGENTIC poll step: work_count={len(work)} min_round={min_round} rounds={rounds_per_topic}")
-
-    # Ongoing becomes false only when every topic thread has signalled done (round > max_rounds for all), or positive cap.
-    # We never set done just because this poll ran — only when the state explicitly has all topics finished.
-    all_topics_finished = all(r > max_rounds for r in rounds_per_topic.values())
-    if min_round <= MIN_ROUNDS_BEFORE_DONE:
-        _log(f"AGENTIC not done: min_round={min_round} (need all topics >{max_rounds} or positive cap)")
-    elif all_topics_finished or positive_count > MAX_POSITIVE_COMMENTS:
-        state["feedback_ongoing"] = False
-        state["status"] = STATUS_FEEDBACK_DONE
-        _log(f"AGENTIC feedback done (all topics signalled after work): rounds={rounds_per_topic} positive_count={positive_count}")
-
-    save_agentic_state(session, state)
-    ongoing = state.get("feedback_ongoing", False)
-    _log(f"AGENTIC poll step: returning ongoing={ongoing} (saved to session)")
-    return (state, ongoing)
 
 
 def run_agentic_refine(

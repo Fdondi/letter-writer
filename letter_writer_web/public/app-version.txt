@@ -1,3 +1,11 @@
+0.61.8 - Re-export KNOWN_WEAKNESSES_FEEDBACK_RULES from generation shim after split
+0.61.7 - Split LetterTabs into letter-tabs modules
+0.61.6 - Split FeedbackItemsPanel row components
+0.61.5 - Extract PhaseFlow subcomponents into phase-flow/
+0.61.4 - Split generation.py into focused modules
+0.61.3 - Feedback topic registry (Python + JS constants)
+0.61.2 - Extract agentic worker to agentic_worker.py + api/agentic.py; fix poll contract
+0.61.1 - Session reload rehydration, backup restore to vendor/agentic flows, post-auth syncStateToServer
 0.61.0 - Fix test gap: render SaveAndCopyButton in final-assembly smoke test; stale browser cache caused BRPHZQZX error
 0.60.3 - Fix white bar: make AppLayout a flex column, pages use flex:1 instead of hardcoded vh calcs
 0.60.2 - Fix duplicate apiHelpers import causing isLocalPricingWarningDismissed ReferenceError

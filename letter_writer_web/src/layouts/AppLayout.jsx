@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useNavigate } from "react-router-dom";
 import StyleInstructionsBlade from "../components/StyleInstructionsBlade";
 import OverlayPanel from "../components/OverlayPanel";
 import PersonalDataPage from "../components/PersonalDataPage";
@@ -17,9 +17,9 @@ import { scheduleGoogleOAuthRedirect } from "../utils/googleOAuthRedirect";
 import { showNotification } from "../utils/apiNotifications";
 import { useJobSession } from "../contexts/JobSessionContext";
 import { getScaleConfig } from "../utils/competenceScales";
-import { extractFormFieldsFromSessionState } from "../utils/sessionRehydrate";
 
 export default function AppLayout() {
+  const navigate = useNavigate();
   const session = useJobSession();
   const { isAuthenticated, checkingAuth, showSessionExpiredModal } = session;
 
@@ -131,33 +131,16 @@ export default function AppLayout() {
           onCompetenceScalesChange={() => session.setCompetenceScaleConfig(getScaleConfig())}
           guardBeforeEnablingLocal={session.guardBeforeEnablingLocal}
           onSessionRestored={(sessionState, sessionId) => {
-            const fields = extractFormFieldsFromSessionState(sessionState);
-            if (fields) {
-              if (fields.jobText !== undefined) session.setJobText(fields.jobText);
-              if (fields.companyName !== undefined) session.setCompanyName(fields.companyName);
-              if (fields.jobTitle !== undefined) session.setJobTitle(fields.jobTitle);
-              if (fields.location !== undefined) session.setLocation(fields.location);
-              if (fields.language !== undefined) session.setLanguage(fields.language);
-              if (fields.salary !== undefined) session.setSalary(fields.salary);
-              if (fields.additionalUserInfo !== undefined) session.setAdditionalUserInfo(fields.additionalUserInfo);
-              if (fields.additionalCompanyInfo !== undefined) session.setAdditionalCompanyInfo(fields.additionalCompanyInfo);
-              if (fields.hireProblem !== undefined) session.setHireProblem(fields.hireProblem);
-              if (fields.requirements !== undefined) session.setRequirements(fields.requirements);
-              if (fields.competences !== undefined) session.setCompetences(fields.competences);
-              if (fields.pointOfContact !== undefined) {
-                session.setPointOfContact(fields.pointOfContact);
-                const poc = fields.pointOfContact;
-                if (String(poc?.name || "").trim() || String(poc?.role || "").trim() || String(poc?.contact_details || "").trim() || String(poc?.notes || "").trim() || String(poc?.company || "").trim()) {
-                  session.setShowPointOfContact(true);
-                }
-              }
-              if (String(fields.additionalUserInfo || "").trim() || String(fields.additionalCompanyInfo || "").trim()) {
-                session.setShowAdditionalInfo(true);
-              }
+            const result = session.applyBackupRestore(sessionState, sessionId);
+            if (result.vendor) {
+              navigate("/flows/vendors", { state: { rehydrated: true } });
+            } else if (result.agentic) {
+              navigate("/flows/agentic", { state: { rehydrated: true } });
             }
-            if (sessionId) session.setPhaseSessionId(sessionId);
-            showNotification("Session restored from host backup");
-            setShowSettingsOverlay(false);
+            if (result.restored) {
+              showNotification("Session restored from host backup");
+              setShowSettingsOverlay(false);
+            }
           }}
         />
       </OverlayPanel>

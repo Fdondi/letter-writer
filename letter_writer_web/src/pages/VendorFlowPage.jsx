@@ -11,11 +11,6 @@ import { splitIntoParagraphs } from "../utils/split";
 import { phases as phaseModules } from "../components/phases";
 import { mergeAgentContextFromFeedback, mergeExtraInfoFromFeedback } from "../components/phases/feedbackItemUtils";
 import { persistLetterDocument, buildVendorAiLetters } from "../utils/persistLetterDocument";
-import {
-  extractVendorShelfEntries,
-  inferVendorStageFromVendors,
-  extractLettersFromVendors,
-} from "../utils/sessionRehydrate";
 
 const REFERENCE_SIDEBAR_VIEWPORT_STYLE = {
   alignSelf: "flex-start",
@@ -86,6 +81,18 @@ export default function VendorFlowPage() {
     phaseRegistry: phaseRegistryRef.current,
   }), [session.jobText, session.extractedData]);
 
+  useEffect(() => {
+    session.registerRestoreStateGetter(getStateForRestore);
+    return () => {
+      session.registerRestoreStateGetter(() => ({
+        jobText: session.jobText || "",
+        cvText: "",
+        extractedData: session.extractedData,
+        phaseRegistry: null,
+      }));
+    };
+  }, [session, getStateForRestore]);
+
   const phaseErrorKey = (phase, vendor) => `${phase}:${vendor}`;
 
   const setPhaseVendorError = (phase, vendor, message) => {
@@ -130,6 +137,29 @@ export default function VendorFlowPage() {
     pendingShelfEntriesRef.current = null;
     return true;
   }, [populatePhaseShelf]);
+
+  useEffect(() => {
+    const restore = session.pendingVendorRestore;
+    if (!restore) return;
+    startedRef.current = true;
+    setVendorStage(restore.vendorStage || "phases");
+    if (restore.assemblyVisible) setAssemblyVisible(true);
+    if (restore.shelfEntries?.length) {
+      applyShelfEntries(restore.shelfEntries);
+      setTimeout(() => applyShelfEntries(restore.shelfEntries), 0);
+      setTimeout(() => applyShelfEntries(restore.shelfEntries), 50);
+    }
+    if (restore.letters && Object.keys(restore.letters).length > 0) {
+      setLetters((prev) => ({ ...prev, ...restore.letters }));
+      const paragraphs = {};
+      Object.entries(restore.letters).forEach(([vendor, text]) => {
+        paragraphs[vendor] = splitIntoParagraphs(text || "", vendor);
+      });
+      setVendorParagraphs((prev) => ({ ...prev, ...paragraphs }));
+      setFinalParagraphs((prev) => (prev?.length ? prev : Object.values(paragraphs)[0] || prev));
+    }
+    session.clearPendingVendorRestore();
+  }, [session.pendingVendorRestore, applyShelfEntries, session]);
 
   const clearPhaseRegistryForNewRun = () => {
     const phases = phaseRegistryRef.current;
@@ -373,7 +403,13 @@ export default function VendorFlowPage() {
     });
   }, [navLocation.state?.start]);
 
-  if (!navLocation.state?.start && !session.phaseSessionId && !startedRef.current) {
+  if (
+    !navLocation.state?.start &&
+    !navLocation.state?.rehydrated &&
+    !session.phaseSessionId &&
+    !startedRef.current &&
+    !session.pendingVendorRestore
+  ) {
     return <Navigate to="/" replace />;
   }
 
