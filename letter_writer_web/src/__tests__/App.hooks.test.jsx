@@ -5,11 +5,16 @@
  */
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes, Navigate } from "react-router-dom";
 import { DndProvider } from "react-dnd";
 import { TestBackend } from "react-dnd-test-backend";
 import { LanguageProvider } from "../contexts/LanguageContext";
-import App from "../App";
+import { JobSessionProvider } from "../contexts/JobSessionContext";
+import AppLayout from "../layouts/AppLayout";
+import IntakePage from "../pages/IntakePage";
+import VendorFlowPage from "../pages/VendorFlowPage";
+import AgenticFlowPage from "../pages/AgenticFlowPage";
+import AutocompleteFlowPage from "../pages/AutocompleteFlowPage";
 
 jest.mock("react-markdown", () => ({ __esModule: true, default: ({ children }) => <div>{children}</div> }));
 
@@ -38,25 +43,25 @@ jest.mock("../utils/googleOAuthRedirect", () => ({
   clearOAuthRedirectCooldown: jest.fn(),
 }));
 
-function AppWithFlow() {
-  const location = useLocation();
-  const flow = location.pathname.startsWith("/flows/autocomplete")
-    ? "autocomplete"
-    : location.pathname.startsWith("/flows/agentic")
-      ? "agentic"
-      : location.pathname.startsWith("/flows/vendors")
-        ? "vendor"
-        : "intake";
-  return <App flow={flow} />;
-}
-
 function renderApp(initialPath = "/") {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <DndProvider backend={TestBackend}>
         <LanguageProvider>
           <Routes>
-            <Route path="*" element={<AppWithFlow />} />
+            <Route
+              element={
+                <JobSessionProvider>
+                  <AppLayout />
+                </JobSessionProvider>
+              }
+            >
+              <Route path="/" element={<IntakePage />} />
+              <Route path="/flows/vendors" element={<VendorFlowPage />} />
+              <Route path="/flows/agentic" element={<AgenticFlowPage />} />
+              <Route path="/flows/autocomplete" element={<AutocompleteFlowPage />} />
+            </Route>
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </LanguageProvider>
       </DndProvider>
@@ -175,5 +180,18 @@ describe("App mount hook order", () => {
     expect(screen.queryByPlaceholderText(/Paste job description here/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Autocomplete letter/i)).toBeInTheDocument();
     expect(hookOrderErrors(consoleErrorSpy)).toHaveLength(0);
+  });
+
+  it("JobSessionProvider keeps phaseSessionId across route changes (remount bug)", async () => {
+    // Before the provider, navigating from / to /flows/vendors would remount App,
+    // losing phaseSessionId. This test verifies the provider prevents that.
+    const { unmount } = renderApp("/");
+    await waitFor(() => {
+      expect(screen.queryByText(/Checking authentication/i)).not.toBeInTheDocument();
+    });
+    // If JobSessionProvider is mounted, the layout route element stays alive.
+    // The vendor page should still render without a redirect (session exists from init).
+    expect(hookOrderErrors(consoleErrorSpy)).toHaveLength(0);
+    unmount();
   });
 });

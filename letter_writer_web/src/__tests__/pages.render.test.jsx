@@ -6,12 +6,17 @@
 import React from "react";
 import { render, screen, waitFor, within, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes, Navigate } from "react-router-dom";
 import { DndProvider } from "react-dnd";
 import { TestBackend } from "react-dnd-test-backend";
 import { LanguageProvider } from "../contexts/LanguageContext";
-import { AllTestProviders, createDefaultLetterTabsProps } from "../utils/__tests__/testUtils";
-import App from "../App";
+import { JobSessionProvider } from "../contexts/JobSessionContext";
+import { AllTestProviders, createDefaultLetterTabsProps, getSaveCopyButton } from "../utils/__tests__/testUtils";
+import AppLayout from "../layouts/AppLayout";
+import IntakePage from "../pages/IntakePage";
+import VendorFlowPage from "../pages/VendorFlowPage";
+import AgenticFlowPage from "../pages/AgenticFlowPage";
+import AutocompleteFlowPage from "../pages/AutocompleteFlowPage";
 import LetterTabs from "../components/LetterTabs";
 import PhaseFlow from "../components/PhaseFlow";
 import AgenticFlow from "../components/AgenticFlow";
@@ -43,25 +48,25 @@ jest.mock("../utils/googleOAuthRedirect", () => ({
   clearOAuthRedirectCooldown: jest.fn(),
 }));
 
-function AppWithFlow() {
-  const location = useLocation();
-  const flow = location.pathname.startsWith("/flows/autocomplete")
-    ? "autocomplete"
-    : location.pathname.startsWith("/flows/agentic")
-      ? "agentic"
-      : location.pathname.startsWith("/flows/vendors")
-        ? "vendor"
-        : "intake";
-  return <App flow={flow} />;
-}
-
 function renderApp(initialPath = "/") {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <DndProvider backend={TestBackend}>
         <LanguageProvider>
           <Routes>
-            <Route path="*" element={<AppWithFlow />} />
+            <Route
+              element={
+                <JobSessionProvider>
+                  <AppLayout />
+                </JobSessionProvider>
+              }
+            >
+              <Route path="/" element={<IntakePage />} />
+              <Route path="/flows/vendors" element={<VendorFlowPage />} />
+              <Route path="/flows/agentic" element={<AgenticFlowPage />} />
+              <Route path="/flows/autocomplete" element={<AutocompleteFlowPage />} />
+            </Route>
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </LanguageProvider>
       </DndProvider>
@@ -208,13 +213,13 @@ describe("pages render smoke (build gate)", () => {
     {
       path: "/flows/vendors",
       assert: async () => {
-        expect(screen.getByPlaceholderText(/Paste job description here/i)).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /Back to job details/i })).toBeInTheDocument();
       },
     },
     {
       path: "/flows/agentic",
       assert: async () => {
-        expect(screen.getByPlaceholderText(/Paste job description here/i)).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /Back to job details/i })).toBeInTheDocument();
       },
     },
     {
@@ -278,7 +283,7 @@ describe("pages render smoke (build gate)", () => {
     expect(renderErrors(consoleErrorSpy)).toHaveLength(0);
   });
 
-  it("final assembly LetterTabs renders", async () => {
+  it("final assembly LetterTabs renders including SaveAndCopyButton", async () => {
     render(
       <AllTestProviders>
         <LetterTabs {...createDefaultLetterTabsProps()} />
@@ -286,6 +291,8 @@ describe("pages render smoke (build gate)", () => {
     );
     expect(screen.getByText("Final Letter")).toBeInTheDocument();
     expect(screen.getByText("openai")).toBeInTheDocument();
+    // Verify SaveAndCopyButton renders — this would catch a missing import (ReferenceError).
+    expect(getSaveCopyButton()).toBeInTheDocument();
     expect(renderErrors(consoleErrorSpy)).toHaveLength(0);
   });
 
@@ -385,3 +392,4 @@ describe("pages render smoke (build gate)", () => {
     expect(renderErrors(consoleErrorSpy)).toHaveLength(0);
   });
 });
+

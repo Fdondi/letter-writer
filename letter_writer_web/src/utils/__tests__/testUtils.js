@@ -82,7 +82,10 @@ export const createMockVendorColors = () => ({
 export const createDefaultLetterTabsProps = (overrides = {}) => ({
   vendorsList: ['openai', 'anthropic', 'gemini'],
   vendorParagraphs: createMockVendorParagraphs(),
-  finalParagraphs: [],
+  // Non-empty so LetterTabs renders the final-assembly column including SaveAndCopyButton.
+  finalParagraphs: [
+    createMockParagraph({ id: 'f1', text: 'Final paragraph 1', vendor: 'openai' }),
+  ],
   setFinalParagraphs: jest.fn(),
   originalText: 'Original letter text here...',
   failedVendors: {},
@@ -90,6 +93,8 @@ export const createDefaultLetterTabsProps = (overrides = {}) => ({
   onRetry: jest.fn(),
   vendorColors: createMockVendorColors(),
   onAddParagraph: jest.fn(),
+  onSave: jest.fn(),
+  savingFinal: false,
   ...overrides
 });
 

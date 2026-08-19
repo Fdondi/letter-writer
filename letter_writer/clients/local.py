@@ -40,7 +40,7 @@ class LocalClient(BaseClient):
     def __init__(self):
         super().__init__()
         self._base_url = os.getenv("LOCAL_LLM_BASE_URL") or _default_local_base_url()
-        api_key = os.getenv("LOCAL_LLM_API_KEY", "lm-studio")
+        api_key = os.getenv("LOCAL_LLM_API_KEY") or "lm-studio"
         # Match reverse-proxy long timeouts: local inference often runs many minutes.
         _timeout_s = float(os.getenv("LOCAL_LLM_HTTP_TIMEOUT_SECONDS", "1800"))
         self.client = OpenAI(

@@ -65,10 +65,8 @@ services:
       - LOCAL_ENERGY_PRICE_PER_KWH=${LOCAL_ENERGY_PRICE_PER_KWH:-}
     env_file:
       - .env
-    # Linux (Docker Engine / Podman): map host.docker.internal to the host gateway so the
-    # default LOCAL_LLM URL in letter_writer/clients/local.py can reach LM Studio on the host.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # NOTE: On Linux/Podman add: extra_hosts: ["host.docker.internal:host-gateway"]
+    # Docker Desktop for Windows/Mac injects host.docker.internal automatically; the override breaks it.
     depends_on:
       - redis
 

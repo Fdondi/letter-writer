@@ -1,3 +1,8 @@
+0.61.0 - Fix test gap: render SaveAndCopyButton in final-assembly smoke test; stale browser cache caused BRPHZQZX error
+0.60.3 - Fix white bar: make AppLayout a flex column, pages use flex:1 instead of hardcoded vh calcs
+0.60.2 - Fix duplicate apiHelpers import causing isLocalPricingWarningDismissed ReferenceError
+0.60.1 - Delete App.jsx god-object; move auth into JobSessionProvider
+0.60.0 - Split App.jsx into JobSessionProvider, AppLayout, and per-flow pages
 0.59.3 - Stop notifying on /api/phases/session/ bookkeeping (Session started spam)
 0.59.2 - Persist and expand About You / About Company on session restore
 0.59.1 - Fix UnboundLocalError: drop shadowed local import of normalize_autocomplete_model_key
