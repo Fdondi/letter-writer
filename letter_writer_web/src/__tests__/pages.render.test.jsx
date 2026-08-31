@@ -24,6 +24,7 @@ import AutocompleteFlow from "../components/AutocompleteFlow";
 import PersonalDataPage from "../components/PersonalDataPage";
 import DocumentsPage from "../components/DocumentsPage";
 import SettingsPage from "../components/SettingsPage";
+import SessionBackupsPage from "../components/SessionBackupsPage";
 import CostsPage from "../components/CostsPage";
 import StyleInstructionsBlade from "../components/StyleInstructionsBlade";
 
@@ -132,6 +133,9 @@ function installFetchMock({ authenticated = true } = {}) {
     }
     if (String(url).includes("/api/documents/")) {
       return jsonResponse({ documents: [] });
+    }
+    if (String(url).includes("/api/phases/backups/")) {
+      return jsonResponse({ backups: [] });
     }
     if (
       String(url).includes("/api/style-instructions/") ||
@@ -245,7 +249,7 @@ describe("pages render smoke (build gate)", () => {
     expect(renderErrors(consoleErrorSpy)).toHaveLength(0);
   });
 
-  it("opens CV, Documents, Settings, Costs, and AI Instructions overlays", async () => {
+  it("opens CV, Documents, Restore, Settings, Costs, and AI Instructions overlays", async () => {
     const user = userEvent.setup();
     renderApp("/flows/vendors");
     await waitForAuthenticatedApp();
@@ -259,6 +263,13 @@ describe("pages render smoke (build gate)", () => {
     const docsDialog = await screen.findByRole("dialog", { name: /Previous Examples/i });
     expect(within(docsDialog).getByRole("heading", { name: /^Documents$/i })).toBeInTheDocument();
     await user.click(within(docsDialog).getByRole("button", { name: /Close/i }));
+
+    await user.click(screen.getByRole("button", { name: /^Restore$/i }));
+    const restoreDialog = await screen.findByRole("dialog", { name: /^Restore$/i });
+    await waitFor(() => {
+      expect(within(restoreDialog).getByRole("heading", { name: /^Session backups$/i })).toBeInTheDocument();
+    });
+    await user.click(within(restoreDialog).getByRole("button", { name: /Close/i }));
 
     await user.click(screen.getByRole("button", { name: /^Settings$/i }));
     const settingsDialog = await screen.findByRole("dialog", { name: /^Settings$/i });
@@ -371,6 +382,17 @@ describe("pages render smoke (build gate)", () => {
     });
     expect(renderErrors(consoleErrorSpy)).toHaveLength(0);
     unmountSettings();
+
+    const { unmount: unmountRestore } = render(
+      <AllTestProviders>
+        <SessionBackupsPage />
+      </AllTestProviders>
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /^Session backups$/i })).toBeInTheDocument();
+    });
+    expect(renderErrors(consoleErrorSpy)).toHaveLength(0);
+    unmountRestore();
 
     const { unmount: unmountCosts } = render(
       <AllTestProviders>

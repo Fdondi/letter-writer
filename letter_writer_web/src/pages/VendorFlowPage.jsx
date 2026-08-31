@@ -36,6 +36,7 @@ export default function VendorFlowPage() {
   const [phaseSessions, setPhaseSessions] = useState({});
   const [phaseFlowResetKey, setPhaseFlowResetKey] = useState(0);
   const [assemblyVisible, setAssemblyVisible] = useState(true);
+  const [suppressPlanAutoApprove, setSuppressPlanAutoApprove] = useState(false);
   const [referenceSidebarCollapsed, setReferenceSidebarCollapsed] = useState(false);
 
   const phaseRegistryRef = useRef(null);
@@ -132,6 +133,14 @@ export default function VendorFlowPage() {
     if (!Array.isArray(entries) || entries.length === 0) return false;
     if (!phaseRegistryRef.current) { pendingShelfEntriesRef.current = entries; return false; }
     entries.forEach(({ phaseName, vendor, data }) => populatePhaseShelf(phaseName, vendor, data));
+    // Vendors that already have a draft have left the plan step; mark plan approved so
+    // Draft columns show and plan auto-approve does not re-run them.
+    const planPhase = phaseRegistryRef.current.find((p) => p.phase === "plan");
+    if (planPhase?.approvedVendors) {
+      entries.forEach(({ phaseName, vendor }) => {
+        if (phaseName === "draft") planPhase.approvedVendors.add(vendor);
+      });
+    }
     pendingShelfEntriesRef.current = null;
     return true;
   }, [populatePhaseShelf]);
@@ -142,6 +151,7 @@ export default function VendorFlowPage() {
     startedRef.current = true;
     setVendorStage(restore.vendorStage || "phases");
     if (restore.assemblyVisible) setAssemblyVisible(true);
+    if (restore.suppressPlanAutoApprove) setSuppressPlanAutoApprove(true);
     if (restore.shelfEntries?.length) {
       applyShelfEntries(restore.shelfEntries);
       setTimeout(() => applyShelfEntries(restore.shelfEntries), 0);
@@ -154,7 +164,7 @@ export default function VendorFlowPage() {
         paragraphs[vendor] = splitIntoParagraphs(text || "", vendor);
       });
       setVendorParagraphs((prev) => ({ ...prev, ...paragraphs }));
-      setFinalParagraphs((prev) => (prev?.length ? prev : Object.values(paragraphs)[0] || prev));
+      // Do not copy a vendor letter into the assembly canvas — that mix is user-built and was never stored.
     }
     session.clearPendingVendorRestore();
   }, [session.pendingVendorRestore, applyShelfEntries, session]);
@@ -385,6 +395,7 @@ export default function VendorFlowPage() {
     clearPhaseRegistryForNewRun();
     setPhaseFlowResetKey((k) => k + 1);
     setVendorStage("phases");
+    setSuppressPlanAutoApprove(false);
 
     const vList = Array.from(session.selectedVendors);
     const sid = session.phaseSessionId;
@@ -433,6 +444,7 @@ export default function VendorFlowPage() {
             vendorsList={vendorsList}
             flowResetKey={phaseFlowResetKey}
             includePlanStep={session.includePlanStep}
+            disablePlanAutoApprove={suppressPlanAutoApprove}
             onEditChange={() => {}}
             onApprove={approvePhase}
             onApproveAll={approveAllPhase}

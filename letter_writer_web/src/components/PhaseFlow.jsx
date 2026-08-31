@@ -121,6 +121,7 @@ export default function PhaseFlow({
   onApprove,
   onApproveAll,
   includePlanStep = true,
+  disablePlanAutoApprove = false,
   sessionId,
   documentId = null,
   draftFeedbackRegistryRef = null,
@@ -196,6 +197,14 @@ export default function PhaseFlow({
   useEffect(() => {
     const phases = phasesRef.current;
     const planPhase = phases?.find((p) => p.phase === "plan");
+    if (disablePlanAutoApprove) {
+      if (planAutoApproveTimerRef.current) {
+        clearTimeout(planAutoApproveTimerRef.current);
+        planAutoApproveTimerRef.current = null;
+      }
+      planAutoApproveFiredRef.current = true;
+      return;
+    }
     if (!planPhase?.planApproveRunners || vendorsList.length === 0) {
       if (planAutoApproveTimerRef.current) {
         clearTimeout(planAutoApproveTimerRef.current);
@@ -279,7 +288,7 @@ export default function PhaseFlow({
         })
       );
     }, delay);
-  }, [phaseUpdateTrigger, vendorsList]);
+  }, [phaseUpdateTrigger, vendorsList, disablePlanAutoApprove]);
 
   const [inputClusterText, setInputClusterText] = useState({});
   const broadcastInputCluster = useCallback((clusterKey, text) => {

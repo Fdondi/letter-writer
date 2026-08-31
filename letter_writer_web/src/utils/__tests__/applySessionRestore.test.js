@@ -41,9 +41,48 @@ describe("applyRestoredSessionState", () => {
     expect(result.vendor).toMatchObject({
       vendorStage: "assembly",
       assemblyVisible: true,
+      suppressPlanAutoApprove: true,
     });
     expect(result.vendor.shelfEntries.length).toBeGreaterThan(0);
     expect(result.vendor.letters.openai).toContain("refined");
+  });
+
+  it("stays on phases when some vendors still have unrefined drafts", () => {
+    const setters = {
+      setPhaseSessionId: jest.fn(),
+      setJobText: jest.fn(),
+      setCompanyName: jest.fn(),
+      setJobTitle: jest.fn(),
+      setLocation: jest.fn(),
+      setLanguage: jest.fn(),
+      setSalary: jest.fn(),
+      setAdditionalUserInfo: jest.fn(),
+      setAdditionalCompanyInfo: jest.fn(),
+      setShowAdditionalInfo: jest.fn(),
+      setHireProblem: jest.fn(),
+      setRequirements: jest.fn(),
+      setCompetences: jest.fn(),
+      setPointOfContact: jest.fn(),
+      setShowPointOfContact: jest.fn(),
+      setExtractedData: jest.fn(),
+    };
+
+    const result = applyRestoredSessionState(
+      {
+        job_text: "Engineer role",
+        vendors: {
+          openai: { draft_letter: "Dear hiring manager" },
+          anthropic: { draft_letter: "Sehr geehrte", final_letter: "Sehr geehrte refined" },
+          gemini: { draft_letter: "same", final_letter: "same" },
+        },
+      },
+      setters
+    );
+
+    expect(result.vendor.vendorStage).toBe("phases");
+    expect(result.vendor.assemblyVisible).toBe(false);
+    expect(result.vendor.letters).toEqual({ anthropic: "Sehr geehrte refined" });
+    expect(result.vendor.suppressPlanAutoApprove).toBe(true);
   });
 
   it("returns agentic restore descriptor when agentic status present", () => {

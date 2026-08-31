@@ -21,6 +21,7 @@ jest.mock("react-markdown", () => ({ __esModule: true, default: ({ children }) =
 jest.mock("../components/PersonalDataPage", () => ({ __esModule: true, default: () => null }));
 jest.mock("../components/DocumentsPage", () => ({ __esModule: true, default: () => null }));
 jest.mock("../components/SettingsPage", () => ({ __esModule: true, default: () => null }));
+jest.mock("../components/SessionBackupsPage", () => ({ __esModule: true, default: () => null }));
 jest.mock("../components/CostsPage", () => ({ __esModule: true, default: () => null }));
 jest.mock("../components/PhaseFlow", () => ({ __esModule: true, default: () => null }));
 jest.mock("../components/AgenticFlow", () => ({ __esModule: true, default: () => null }));

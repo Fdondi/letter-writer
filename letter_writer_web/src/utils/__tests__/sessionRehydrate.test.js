@@ -3,6 +3,7 @@ import {
   extractVendorShelfEntries,
   inferVendorStageFromVendors,
   extractLettersFromVendors,
+  vendorHasCompletedFinal,
 } from "../sessionRehydrate.js";
 
 describe("sessionRehydrate", () => {
@@ -47,12 +48,31 @@ describe("sessionRehydrate", () => {
       },
     });
     const phases = entries.map((e) => e.phaseName);
-    expect(phases).toEqual(["background", "plan", "draft", "refine"]);
+    expect(phases).toEqual(["background", "plan", "draft"]);
     expect(inferVendorStageFromVendors({ openai: { final_letter: "x" } })).toBe("assembly");
     expect(inferVendorStageFromVendors({ openai: { draft_letter: "x" } })).toBe("phases");
     expect(inferVendorStageFromVendors({})).toBe("input");
     expect(extractLettersFromVendors({ openai: { final_letter: "F" } })).toEqual({
       openai: "F",
     });
+  });
+
+  it("does not treat drafts or draft-copies as assembled finals", () => {
+    expect(vendorHasCompletedFinal({ draft_letter: "D", final_letter: "D" })).toBe(false);
+    expect(vendorHasCompletedFinal({ draft_letter: "D", final_letter: "F" })).toBe(true);
+    expect(extractLettersFromVendors({ openai: { draft_letter: "D" } })).toEqual({});
+    expect(
+      extractLettersFromVendors({
+        openai: { draft_letter: "D" },
+        anthropic: { draft_letter: "D", final_letter: "F" },
+        gemini: { draft_letter: "same", final_letter: "same" },
+      })
+    ).toEqual({ anthropic: "F" });
+    expect(
+      inferVendorStageFromVendors({
+        openai: { draft_letter: "D" },
+        anthropic: { draft_letter: "D", final_letter: "F" },
+      })
+    ).toBe("phases");
   });
 });

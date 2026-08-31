@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { fetchWithHeartbeat, initializeCsrfToken } from "../utils/apiHelpers";
+import { rotateWorkSession } from "../utils/beginFreshWorkSession";
 import { getScaleConfig, buildCompetenceRatingsForProfile } from "../utils/competenceScales";
 import { useLanguages } from "./LanguageContext";
 import { translateText } from "../utils/translate";
@@ -501,6 +502,22 @@ export function JobSessionProvider({ children }) {
     });
     return sessionId;
   }, [phaseSessionId, buildJobSessionPayload]);
+
+  const beginFreshWorkSession = useCallback(async () => {
+    const newId = await rotateWorkSession({
+      fetchWithHeartbeat,
+      buildJobSessionPayload,
+    });
+    setPhaseSessionId(newId);
+    setDocumentId(null);
+    setDocumentSaveNotice(null);
+    setVendorFeedback({});
+    setPendingVendorRestore(null);
+    setPendingAgenticRestore(null);
+    setCompetenceHighlightTerm(null);
+    setAssemblyHighlightCtx({ competenceCounts: {}, finalAssemblyTextNormalized: "" });
+    return newId;
+  }, [buildJobSessionPayload]);
 
   const handleJobTextLanguageChange = useCallback(async (code) => {
     if (code === "source") {
@@ -1118,6 +1135,7 @@ export function JobSessionProvider({ children }) {
     // Callbacks
     buildJobSessionPayload,
     ensurePhaseSessionReady,
+    beginFreshWorkSession,
     handleJobTextLanguageChange,
     handleAssemblyHighlightCtx,
     handleCompetenceTermClick,

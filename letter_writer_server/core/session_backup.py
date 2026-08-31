@@ -164,6 +164,17 @@ def _job_title_display(data: Dict[str, Any]) -> str:
     return ""
 
 
+def _vendor_has_completed_final(vdata: Dict[str, Any]) -> bool:
+    """True when final_letter is a real refine, not an unrefined copy of the draft."""
+    final = str(vdata.get("final_letter") or "").strip()
+    if not final:
+        return False
+    draft = str(vdata.get("draft_letter") or "").strip()
+    if draft and final == draft:
+        return False
+    return True
+
+
 def _infer_backup_stage(data: Dict[str, Any]) -> str:
     """Rough Compose stage for backup list labels: empty | input | phases | assembly | agentic."""
     if not has_reconstructable_work(data):
@@ -174,6 +185,7 @@ def _infer_backup_stage(data: Dict[str, Any]) -> str:
     vendors = data.get("vendors")
     if isinstance(vendors, dict):
         has_final = False
+        has_draft_without_final = False
         has_any = False
         for vdata in vendors.values():
             if not isinstance(vdata, dict):
@@ -186,9 +198,11 @@ def _infer_backup_stage(data: Dict[str, Any]) -> str:
                 or (isinstance(vdata.get("top_docs"), list) and vdata.get("top_docs"))
             ):
                 has_any = True
-            if vdata.get("final_letter"):
+            if _vendor_has_completed_final(vdata):
                 has_final = True
-        if has_final:
+            elif str(vdata.get("draft_letter") or "").strip():
+                has_draft_without_final = True
+        if has_final and not has_draft_without_final:
             return "assembly"
         if has_any:
             return "phases"

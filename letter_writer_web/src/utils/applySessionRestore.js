@@ -78,6 +78,7 @@ export function applyRestoredSessionState(sessionState, setters, { sessionId = n
       vendorStage: vendorStageHint === "input" ? "phases" : vendorStageHint,
       assemblyVisible: vendorStageHint === "assembly",
       letters: lettersFromVendors,
+      suppressPlanAutoApprove: true,
     };
     restored = true;
   }

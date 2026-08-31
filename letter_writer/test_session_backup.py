@@ -173,6 +173,38 @@ def test_company_fallback_from_job_text(backup_dir):
     assert listed[0]["empty"] is False
 
 
+def test_mixed_draft_and_final_is_phases_not_assembly(backup_dir):
+    data = {
+        "job_text": "Acme\nEngineer\nBerlin",
+        "user": {"id": "u1"},
+        "metadata": {"common": {"company_name": "Acme", "job_title": "Engineer"}},
+        "vendors": {
+            "openai": {"draft_letter": "Dear team"},
+            "anthropic": {"draft_letter": "Draft", "final_letter": "Refined"},
+            "gemini": {"draft_letter": "Same", "final_letter": "Same"},
+        },
+    }
+    path = sb.maybe_write_session_backup("sessMix1234567890", data)
+    assert path is not None
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    assert envelope["stage"] == "phases"
+    assert envelope["empty"] is False
+
+
+def test_all_drafts_refined_is_assembly(backup_dir):
+    data = {
+        "job_text": "Acme\nEngineer\nBerlin",
+        "user": {"id": "u1"},
+        "metadata": {"common": {"company_name": "Acme"}},
+        "vendors": {
+            "openai": {"draft_letter": "D", "final_letter": "F"},
+        },
+    }
+    path = sb.maybe_write_session_backup("sessAllFinal12345", data)
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    assert envelope["stage"] == "assembly"
+
+
 def test_list_marks_legacy_empty_backups(backup_dir):
     empty_envelope = {
         "format_version": 1,

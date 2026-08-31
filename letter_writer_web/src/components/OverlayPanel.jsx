@@ -2,10 +2,10 @@ import React from "react";
 
 /**
  * Overlay panel that floats over the main flow.
- * AI Instructions, CV, Previous Examples, Settings, and Costs use this pattern:
+ * AI Instructions, CV, Previous Examples, Restore, Settings, and Costs use this pattern:
  * they are overlays, not pages. Closing returns to where the user was.
  *
- * NOTE: Keep AI Instructions, CV, Previous Examples, and Settings as overlays.
+ * NOTE: Keep AI Instructions, CV, Previous Examples, Restore, and Settings as overlays.
  * Compose / Agentic flow / Vendor flow are the main flow, not navigable destinations.
  */
 export default function OverlayPanel({ title, isOpen, onClose, children }) {

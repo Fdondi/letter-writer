@@ -5,6 +5,7 @@ import OverlayPanel from "../components/OverlayPanel";
 import PersonalDataPage from "../components/PersonalDataPage";
 import DocumentsPage from "../components/DocumentsPage";
 import SettingsPage from "../components/SettingsPage";
+import SessionBackupsPage from "../components/SessionBackupsPage";
 import CostsPage from "../components/CostsPage";
 import AuthButton from "../components/AuthButton";
 import AppVersionLabel from "../components/AppVersionLabel";
@@ -33,6 +34,7 @@ export default function AppLayout() {
   const [showCvOverlay, setShowCvOverlay] = useState(false);
   const [showDocumentsOverlay, setShowDocumentsOverlay] = useState(false);
   const [showSettingsOverlay, setShowSettingsOverlay] = useState(false);
+  const [showRestoreOverlay, setShowRestoreOverlay] = useState(false);
   const [showCostsOverlay, setShowCostsOverlay] = useState(false);
   const [costTrackingError, setCostTrackingError] = useState(null);
 
@@ -127,6 +129,7 @@ export default function AppLayout() {
             </button>
             <button onClick={() => setShowCvOverlay(true)} style={{ padding: "8px 12px", border: "1px solid var(--border-color)", borderRadius: "4px", backgroundColor: showCvOverlay ? "#3b82f6" : "var(--button-bg)", color: showCvOverlay ? "white" : "var(--button-text)", cursor: "pointer", fontSize: "14px" }}>Your CV</button>
             <button onClick={() => setShowDocumentsOverlay(true)} style={{ padding: "8px 12px", border: "1px solid var(--border-color)", borderRadius: "4px", backgroundColor: showDocumentsOverlay ? "#3b82f6" : "var(--button-bg)", color: showDocumentsOverlay ? "white" : "var(--button-text)", cursor: "pointer", fontSize: "14px" }}>Previous Examples</button>
+            <button onClick={() => setShowRestoreOverlay(true)} style={{ padding: "8px 12px", border: "1px solid var(--border-color)", borderRadius: "4px", backgroundColor: showRestoreOverlay ? "#3b82f6" : "var(--button-bg)", color: showRestoreOverlay ? "white" : "var(--button-text)", cursor: "pointer", fontSize: "14px" }}>Restore</button>
             <button onClick={() => setShowSettingsOverlay(true)} style={{ padding: "8px 12px", border: "1px solid var(--border-color)", borderRadius: "4px", backgroundColor: showSettingsOverlay ? "#3b82f6" : "var(--button-bg)", color: showSettingsOverlay ? "white" : "var(--button-text)", cursor: "pointer", fontSize: "14px" }}>Settings</button>
             <CostDisplay onNavigate={() => setShowCostsOverlay(true)} />
             <AuthButton />
@@ -146,6 +149,10 @@ export default function AppLayout() {
           setBackgroundModels={session.setBackgroundModels}
           onCompetenceScalesChange={() => session.setCompetenceScaleConfig(getScaleConfig())}
           guardBeforeEnablingLocal={session.guardBeforeEnablingLocal}
+        />
+      </OverlayPanel>
+      <OverlayPanel title="Restore" isOpen={showRestoreOverlay} onClose={() => setShowRestoreOverlay(false)}>
+        <SessionBackupsPage
           onSessionRestored={(sessionState, sessionId) => {
             const result = session.applyBackupRestore(sessionState, sessionId);
             if (result.vendor) {
@@ -153,12 +160,11 @@ export default function AppLayout() {
             } else if (result.agentic) {
               navigate("/flows/agentic", { state: { rehydrated: true } });
             } else if (result.restored) {
-              // Intake-only backups must leave phase UI, not keep stale vendor cards.
               navigate("/", { replace: true });
             }
             if (result.restored) {
               showNotification("Session restored from host backup");
-              setShowSettingsOverlay(false);
+              setShowRestoreOverlay(false);
             }
           }}
         />

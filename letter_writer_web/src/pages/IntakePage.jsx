@@ -33,7 +33,7 @@ export default function IntakePage() {
     }
     session.setError(null);
     try {
-      await session.ensurePhaseSessionReady();
+      await session.beginFreshWorkSession();
       navigate("/flows/autocomplete");
     } catch (e) {
       console.error("Failed to prepare autocomplete session:", e);
@@ -66,7 +66,7 @@ export default function IntakePage() {
     session.setDocumentId(null);
 
     try {
-      await session.ensurePhaseSessionReady();
+      await session.beginFreshWorkSession();
     } catch (e) {
       console.error("Failed to update session data:", e);
       session.setError("Failed to update session data. Please try again.");
@@ -86,7 +86,7 @@ export default function IntakePage() {
     }
 
     try {
-      await session.ensurePhaseSessionReady();
+      await session.beginFreshWorkSession();
     } catch (e) {
       console.error("Failed to update session:", e);
       session.setError("Failed to update session. Please try again.");

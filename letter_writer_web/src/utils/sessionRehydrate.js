@@ -7,6 +7,23 @@ function safeString(value) {
   return value == null ? "" : String(value);
 }
 
+function nonEmptyText(value) {
+  return value != null && String(value).trim() !== "";
+}
+
+/**
+ * True when final_letter is a real refine result, not a copy of the draft.
+ * Restore must not treat an unrefined draft as an assembled final.
+ */
+export function vendorHasCompletedFinal(vdata) {
+  if (!vdata || typeof vdata !== "object") return false;
+  if (!nonEmptyText(vdata.final_letter)) return false;
+  if (nonEmptyText(vdata.draft_letter) && String(vdata.final_letter) === String(vdata.draft_letter)) {
+    return false;
+  }
+  return true;
+}
+
 function normalizeRequirements(value) {
   if (Array.isArray(value)) return value.filter(Boolean);
   if (typeof value === "string" && value.trim()) return [value.trim()];
@@ -89,12 +106,7 @@ export function extractVendorShelfEntries(vendors) {
       if (vdata.cost != null) data.cost = vdata.cost;
       entries.push({ phaseName: "draft", vendor, data });
     }
-
-    if (vdata.final_letter != null && vdata.final_letter !== "") {
-      const data = { final_letter: vdata.final_letter };
-      if (vdata.cost != null) data.cost = vdata.cost;
-      entries.push({ phaseName: "refine", vendor, data });
-    }
+    // PhaseFlow has plan + draft only. Completed finals belong in the letters map, not a fake "refine" shelf.
   });
 
   return entries;
@@ -108,6 +120,7 @@ export function inferVendorStageFromVendors(vendors) {
   if (!vendors || typeof vendors !== "object") return "input";
   let hasAny = false;
   let hasFinal = false;
+  let hasDraftWithoutFinal = false;
   Object.values(vendors).forEach((vdata) => {
     if (!vdata || typeof vdata !== "object") return;
     if (
@@ -119,24 +132,27 @@ export function inferVendorStageFromVendors(vendors) {
     ) {
       hasAny = true;
     }
-    if (vdata.final_letter) hasFinal = true;
+    if (vendorHasCompletedFinal(vdata)) {
+      hasFinal = true;
+    } else if (nonEmptyText(vdata.draft_letter)) {
+      hasDraftWithoutFinal = true;
+    }
   });
-  if (hasFinal) return "assembly";
+  // Live flow only opens assembly when every drafted vendor has a real final.
+  if (hasFinal && !hasDraftWithoutFinal) return "assembly";
   if (hasAny) return "phases";
   return "input";
 }
 
 /**
- * Letters map from vendor final_letter fields.
+ * Letters map from vendor final_letter fields (never drafts).
  */
 export function extractLettersFromVendors(vendors) {
   const letters = {};
   if (!vendors || typeof vendors !== "object") return letters;
   Object.entries(vendors).forEach(([vendor, vdata]) => {
-    if (vdata && typeof vdata === "object" && vdata.final_letter) {
+    if (vendorHasCompletedFinal(vdata)) {
       letters[vendor] = vdata.final_letter;
-    } else if (vdata && typeof vdata === "object" && vdata.draft_letter) {
-      letters[vendor] = vdata.draft_letter;
     }
   });
   return letters;
