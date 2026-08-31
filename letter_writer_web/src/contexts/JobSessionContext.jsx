@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { fetchWithHeartbeat, initializeCsrfToken } from "../utils/apiHelpers";
-import { getScaleConfig, getEffectiveRating, getEffectiveImportance, buildCompetenceRatingsForProfile } from "../utils/competenceScales";
+import { getScaleConfig, buildCompetenceRatingsForProfile } from "../utils/competenceScales";
 import { useLanguages } from "./LanguageContext";
 import { translateText } from "../utils/translate";
 import { getLanguageTranslateParams } from "../utils/languageLevels";
@@ -15,7 +15,9 @@ import {
 import { scheduleGoogleOAuthRedirect, clearOAuthRedirectCooldown } from "../utils/googleOAuthRedirect";
 import { syncStateToServer } from "../utils/localState.js";
 import { useSessionRehydration } from "../hooks/useSessionRehydration";
+import { useJobCapture } from "../hooks/useJobCapture";
 import { applyRestoredSessionState } from "../utils/applySessionRestore";
+import { applyExtractionPayload } from "../utils/applyExtractionPayload";
 
 function generateColors(vendors) {
   const step = 360 / vendors.length;
@@ -128,6 +130,7 @@ export function JobSessionProvider({ children }) {
   const [structureInstructions, setStructureInstructions] = useState("");
   const [showAdditionalInfo, setShowAdditionalInfo] = useState(false);
   const [extracting, setExtracting] = useState(false);
+  const [captureImporting, setCaptureImporting] = useState(false);
   const [extractionError, setExtractionError] = useState(null);
   const [extractedData, setExtractedData] = useState(null);
 
@@ -380,6 +383,44 @@ export function JobSessionProvider({ children }) {
     sessionSetters,
     setPendingVendorRestore,
     setPendingAgenticRestore,
+  });
+
+  const applyCapturePayload = useCallback((payload) => {
+    applyExtractionPayload(
+      payload,
+      {
+        setPhaseSessionId,
+        setJobText,
+        setCompanyName,
+        setJobTitle,
+        setLocation,
+        setLanguage,
+        setSalary,
+        setPointOfContact,
+        setShowPointOfContact,
+        setTriggerPocResearch,
+        setCompetences,
+        setCompetenceOverrides,
+        setRequirements,
+        setHireProblem,
+        setExtractedData,
+        setCompanyExtractionResult,
+        setCompanyResearchCountdown,
+        setAllSearchResults,
+        setSelectedTopDocs,
+        setSelectedDocIds,
+      },
+      { applyJobText: true, overwriteCompany: true, applySessionId: true }
+    );
+  }, []);
+
+  useJobCapture({
+    checkingAuth,
+    isAuthenticated,
+    applyCapturePayload,
+    setExtracting,
+    setCaptureImporting,
+    setExtractionError,
   });
 
   useEffect(() => {
@@ -638,58 +679,37 @@ export function JobSessionProvider({ children }) {
         }),
       });
       const data = result.data;
-      const extracted = data.extraction || {};
-      const comp = extracted.competences;
-      const cfg = getScaleConfig();
-      if (comp && typeof comp === "object" && Object.keys(comp).length > 0) {
-        setCompetences(comp);
-        setCompetenceOverrides({});
-        const keys = Object.keys(comp).sort((a, b) => {
-          const numA = getEffectiveRating(a, comp, cfg, {});
-          const numB = getEffectiveRating(b, comp, cfg, {});
-          const impA = getEffectiveImportance(a, comp, cfg, {});
-          const impB = getEffectiveImportance(b, comp, cfg, {});
-          if (numA.presence == null || impA == null) return 1;
-          if (numB.presence == null || impB == null) return -1;
-          const scoreA = impA * (numA.presence - 2.5);
-          const scoreB = impB * (numB.presence - 2.5);
-          const absA = Math.abs(scoreA);
-          const absB = Math.abs(scoreB);
-          if (Math.abs(absB - absA) < 0.01) return scoreB - scoreA;
-          return absB - absA;
-        });
-        setRequirements(keys);
-      } else if (extracted.requirements) {
-        const reqs = Array.isArray(extracted.requirements)
-          ? extracted.requirements
-          : [extracted.requirements];
-        setRequirements(reqs.filter(Boolean));
-        setCompetences({});
-        setCompetenceOverrides({});
-      }
-      setExtractedData((prev) => ({
-        ...(prev || {}),
-        requirements: extracted.requirements || requirements,
-        competences: extracted.competences ?? {},
-        hire_problem: extracted.hire_problem ?? prev?.hire_problem ?? "",
-        job_text: jobText,
-        additional_user_info: additionalUserInfo,
-        additional_company_info: additionalCompanyInfo,
-      }));
-      if (extracted.hire_problem != null && String(extracted.hire_problem).trim()) {
-        setHireProblem(String(extracted.hire_problem).trim());
-      }
-
-      const similarDocs = data.similar_documents || [];
-      const topDocs = data.top_docs || [];
-      if (similarDocs.length > 0) {
-        setAllSearchResults(similarDocs);
-      }
-      if (topDocs.length > 0) {
-        setSelectedTopDocs(topDocs);
-        const llmIds = new Set(topDocs.map((d) => d.id || d.company_name).filter(Boolean));
-        setSelectedDocIds(llmIds);
-      }
+      applyExtractionPayload(
+        data,
+        {
+          setPhaseSessionId,
+          setJobText,
+          setCompanyName,
+          setJobTitle,
+          setLocation,
+          setLanguage,
+          setSalary,
+          setPointOfContact,
+          setShowPointOfContact,
+          setTriggerPocResearch,
+          setCompetences,
+          setCompetenceOverrides,
+          setRequirements,
+          setHireProblem,
+          setExtractedData,
+          setAllSearchResults,
+          setSelectedTopDocs,
+          setSelectedDocIds,
+        },
+        {
+          applyJobText: false,
+          overwriteCompany: false,
+          applySessionId: false,
+          additionalUserInfo,
+          additionalCompanyInfo,
+          currentJobText: jobText,
+        }
+      );
     } catch (e) {
       console.error("Extract error", e);
       setExtractionError(e?.message || String(e));
@@ -699,7 +719,7 @@ export function JobSessionProvider({ children }) {
     } finally {
       setExtracting(false);
     }
-  }, [jobText, requirements, additionalUserInfo, additionalCompanyInfo]);
+  }, [jobText, additionalUserInfo, additionalCompanyInfo]);
 
   const guardBeforeEnablingLocal = useCallback(
     (fn) => {
@@ -1034,6 +1054,7 @@ export function JobSessionProvider({ children }) {
     structureInstructions, setStructureInstructions,
     showAdditionalInfo, setShowAdditionalInfo,
     extracting, setExtracting,
+    captureImporting,
     extractionError, setExtractionError,
     extractedData, setExtractedData,
     documentId, setDocumentId,

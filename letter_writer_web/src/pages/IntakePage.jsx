@@ -145,7 +145,7 @@ export default function IntakePage() {
             padding: 8,
             opacity: session.jobTextViewLanguage === "source" ? 1 : 0.9,
           }}
-          placeholder="Paste job description here"
+            placeholder="Paste job description here, or send a posting from the browser extension"
           value={session.displayedJobText}
           onChange={(e) => {
             if (session.jobTextViewLanguage === "source") {
@@ -240,6 +240,11 @@ export default function IntakePage() {
         >
           {session.extracting ? "Extracting..." : "Extract data"}
         </button>
+        {session.captureImporting && (
+          <div style={{ color: "var(--secondary-text-color)", padding: "10px 0", fontSize: "14px" }}>
+            Importing job from browser…
+          </div>
+        )}
         {session.extractionError && (
           <div style={{ color: "var(--error-text)", padding: "10px 0", fontSize: "14px" }}>
             {session.extractionError}

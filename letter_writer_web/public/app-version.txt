@@ -1,3 +1,4 @@
+0.63.0 - Browser extension captures a job page; extractor cleans the posting and fills intake
 0.62.0 - Port session-backup labels, restore-to-intake, viewport fill, one-shot plan auto-approve, and draft billing fail-fast onto the refactor split
 0.61.8 - Re-export KNOWN_WEAKNESSES_FEEDBACK_RULES from generation shim after split
 0.61.7 - Split LetterTabs into letter-tabs modules

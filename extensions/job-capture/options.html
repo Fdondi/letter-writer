@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Letter Writer Capture</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 40rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        line-height: 1.45;
+      }
+      label {
+        display: block;
+        font-weight: 600;
+        margin-bottom: 0.35rem;
+      }
+      input {
+        width: 100%;
+        padding: 0.5rem;
+        box-sizing: border-box;
+      }
+      button {
+        margin-top: 0.75rem;
+        padding: 0.45rem 0.9rem;
+      }
+      .status {
+        margin-top: 0.75rem;
+        font-size: 0.9rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Letter Writer Capture</h1>
+    <p>
+      Captured pages are sent to this origin, then Letter Writer opens with
+      <code>?capture=</code> so extraction can run in your logged-in session.
+    </p>
+    <form id="options-form">
+      <label for="app-origin">App origin</label>
+      <input
+        id="app-origin"
+        type="url"
+        required
+        placeholder="https://localhost:8443"
+      />
+      <button type="submit">Save</button>
+    </form>
+    <p class="status" id="status" hidden></p>
+    <script src="options.js"></script>
+  </body>
+</html>

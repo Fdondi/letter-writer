@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Letter Writer Capture",
+  "version": "1.0.0",
+  "description": "Send the current job posting to Letter Writer (cleaned description and extracted fields).",
+  "permissions": ["activeTab", "scripting", "storage", "contextMenus"],
+  "host_permissions": ["https://localhost:8443/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Send job to Letter Writer"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "job-capture@letter-writer.local",
+      "strict_min_version": "121.0"
+    }
+  }
+}

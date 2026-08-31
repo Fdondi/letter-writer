@@ -89,3 +89,39 @@ def test_generate_letter_fails_fast_on_billing_error(tmp_path):
             max_retries=3,
         )
     assert client.call.call_count == 1
+
+
+def test_strip_page_html_drops_script_and_caps():
+    from letter_writer.job_extraction import strip_page_html
+
+    html = "<html><script>alert(1)</script><p>Hello</p><style>x{}</style></html>"
+    out = strip_page_html(html)
+    assert "alert" not in out
+    assert "Hello" in out
+    assert "x{}" not in out
+
+
+def test_extract_job_page_metadata_parses_cleaned_job_text(tmp_path):
+    from letter_writer.job_extraction import extract_job_page_metadata
+
+    client = MagicMock()
+    client.call.return_value = (
+        '{"job_text":"Zürich sucht eine Entwicklerin für das Zahlungs-Team.",'
+        '"company_name":"Acme","job_title":"Engineerin","location":"Zürich",'
+        '"language":"German","salary":null,"point_of_contact":null}'
+    )
+    result = extract_job_page_metadata(
+        "Cookie accept\nRelated jobs\nZürich sucht eine Entwicklerin\nApply now",
+        client,
+        html="<html><nav>Menu</nav><main>Zürich sucht eine Entwicklerin</main></html>",
+        source_url="https://jobs.example/acme",
+        trace_dir=tmp_path,
+    )
+    assert result["job_text"].startswith("Zürich")
+    assert result["company_name"] == "Acme"
+    assert result["job_title"] == "Engineerin"
+    assert "Cookie" not in result["job_text"]
+    prompt_sent = client.call.call_args.kwargs.get("system_cache_prefix") or ""
+    if not prompt_sent:
+        prompt_sent = str(client.call.call_args)
+    assert "ä" in result["job_text"] or "Zürich" in result["job_text"]

@@ -52,7 +52,7 @@ from starlette.middleware.sessions import SessionMiddleware as StarletteSessionM
 from letter_writer_server.core.session import SessionMiddleware
 from letter_writer_server.core.config import settings
 
-from letter_writer_server.api import admin_event_log, auth, phases, personal_data, research, documents, costs, misc, phase_feedback, autocomplete, agentic
+from letter_writer_server.api import admin_event_log, auth, phases, personal_data, research, documents, costs, misc, phase_feedback, autocomplete, agentic, job_capture
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -105,6 +105,7 @@ app.include_router(documents.router, prefix="/api/documents", tags=["documents"]
 app.include_router(phase_feedback.router, prefix="/api/phase-feedback", tags=["phase_feedback"])
 app.include_router(costs.router, prefix="/api/costs", tags=["costs"])
 app.include_router(misc.router, prefix="/api", tags=["misc"])
+app.include_router(job_capture.router, prefix="/api/job-capture", tags=["job_capture"])
 app.include_router(admin_event_log.router, prefix="/api/admin/event-log", tags=["admin_event_log"])
 
 @app.get("/health")

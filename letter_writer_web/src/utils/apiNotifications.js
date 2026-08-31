@@ -29,6 +29,9 @@ const shouldNotify = (url) => {
   if (url.includes("/api/extract/")) {
     return true;
   }
+  if (url.includes("/api/job-capture/") && url.includes("/process/")) {
+    return true;
+  }
 
   // Phase card completions only — not session metadata syncs (those spam "Session started").
   if (/\/api\/phases\/(plan|draft|refine)\/[^/]+\//.test(url)) {
@@ -63,7 +66,7 @@ const formatNotificationMessage = (url, status) => {
   }
   
   // Extract endpoint
-  if (url.includes("/api/extract/")) {
+  if (url.includes("/api/extract/") || (url.includes("/api/job-capture/") && url.includes("/process/"))) {
     return isSuccess ? "Extraction completed" : "Extraction failed";
   }
   

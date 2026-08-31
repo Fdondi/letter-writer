@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -33,6 +34,45 @@ def _clean_metadata_val(val: Any) -> str:
     if isinstance(val, list):
         return ", ".join(str(x).strip() for x in val if str(x).strip())
     return str(val).strip()
+
+
+def _parse_point_of_contact(poc_data: Any) -> Optional[Dict[str, str]]:
+    if not poc_data or not isinstance(poc_data, dict):
+        return None
+    point_of_contact = {
+        "name": _clean_metadata_val(poc_data.get("name")),
+        "role": _clean_metadata_val(poc_data.get("role")),
+        "contact_details": _clean_metadata_val(poc_data.get("contact_details")),
+        "notes": _clean_metadata_val(poc_data.get("notes")),
+    }
+    if not point_of_contact["name"] and not point_of_contact["contact_details"]:
+        return None
+    return point_of_contact
+
+
+def _loads_extraction_json(raw: str) -> Dict[str, Any]:
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    if text.startswith("```"):
+        lines = text.split("\n")
+        inner = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
+        text = inner.strip()
+        if text.lower().startswith("json"):
+            text = text[4:].lstrip()
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(text[start : end + 1])
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                return {}
+        return {}
 
 
 def _write_trace(trace_dir: Path | None, system: str, prompt: str, raw: str) -> None:
@@ -91,23 +131,9 @@ def extract_job_metadata_no_requirements(
     )
     _write_trace(trace_dir, cache_block, prompt, raw)
 
-    try:
-        data = json.loads(raw)
-    except Exception as e:
-        logger.warning("extract_job_metadata JSON parse failed: %s", e)
-        data = {}
-
-    poc_data = data.get("point_of_contact")
-    point_of_contact = None
-    if poc_data and isinstance(poc_data, dict):
-        point_of_contact = {
-            "name": _clean_metadata_val(poc_data.get("name")),
-            "role": _clean_metadata_val(poc_data.get("role")),
-            "contact_details": _clean_metadata_val(poc_data.get("contact_details")),
-            "notes": _clean_metadata_val(poc_data.get("notes")),
-        }
-        if not point_of_contact["name"] and not point_of_contact["contact_details"]:
-            point_of_contact = None
+    data = _loads_extraction_json(raw)
+    if not data:
+        logger.warning("extract_job_metadata JSON parse failed")
 
     return {
         "company_name": _clean_metadata_val(data.get("company_name")),
@@ -115,7 +141,114 @@ def extract_job_metadata_no_requirements(
         "location": _clean_metadata_val(data.get("location")),
         "language": _clean_metadata_val(data.get("language")),
         "salary": _clean_metadata_val(data.get("salary")),
-        "point_of_contact": point_of_contact,
+        "point_of_contact": _parse_point_of_contact(data.get("point_of_contact")),
+    }
+
+
+# Page-dump extraction (browser extension): raw HTML + visible text, not a pasted job ad.
+PAGE_EXTRACTION_SYSTEM = (
+    "You extract structured data from a raw job-posting webpage. "
+    "Ignore navigation, cookie banners, related jobs, recommended jobs, footers, ads, "
+    "login walls, and apply-button chrome. "
+    "Keep German umlauts (ä, ö, ü, ß) and other native spelling; never replace them with ASCII "
+    "(ae/oe/ue/ss). "
+    "Respond with JSON only. Do not add any other keys or prose."
+)
+
+MAX_PAGE_VISIBLE_CHARS = 80_000
+MAX_PAGE_HTML_CHARS = 40_000
+
+_SKIP_HTML_BLOCK_RE = re.compile(
+    r"<(script|style|svg|noscript)\b[^>]*>.*?</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def strip_page_html(html: str, max_chars: int = MAX_PAGE_HTML_CHARS) -> str:
+    """Drop script/style/svg/noscript and comments, then cap length for the LLM excerpt."""
+    text = str(html or "")
+    if not text:
+        return ""
+    text = _HTML_COMMENT_RE.sub("", text)
+    text = _SKIP_HTML_BLOCK_RE.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if max_chars > 0 and len(text) > max_chars:
+        return text[:max_chars]
+    return text
+
+
+def _page_extraction_cache_prefix(visible_text: str, html_excerpt: str, source_url: str) -> str:
+    from .clients.prompt_cache import combine_cache_parts
+
+    parts: List[str] = []
+    url = str(source_url or "").strip()
+    if url:
+        parts.append(f"Source URL: {url}")
+    parts.append(f"Visible text:\n{visible_text}")
+    if html_excerpt:
+        parts.append(f"HTML excerpt:\n{html_excerpt}")
+    return combine_cache_parts(PAGE_EXTRACTION_SYSTEM, "\n\n".join(parts))
+
+
+@traceable(run_type="chain", name="extract_job_page_metadata")
+def extract_job_page_metadata(
+    visible_text: str,
+    client: BaseClient,
+    html: str = "",
+    source_url: str = "",
+    trace_dir: Path | None = None,
+) -> Dict[str, Any]:
+    """Extract a cleaned job_text plus company/title fields from a raw job-page dump.
+
+    Competences are extracted separately from the original visible text.
+    """
+    visible = str(visible_text or "").strip()
+    if MAX_PAGE_VISIBLE_CHARS > 0 and len(visible) > MAX_PAGE_VISIBLE_CHARS:
+        visible = visible[:MAX_PAGE_VISIBLE_CHARS]
+    html_excerpt = strip_page_html(html)
+    task = (
+        "Task: Extract the following fields as JSON: job_text, company_name, job_title, "
+        "location, language, salary, point_of_contact. "
+        "job_text is the cleaned job posting only (role summary, responsibilities, requirements, "
+        "offer details) in the posting's own language — not a translation and not page chrome. "
+        "Stick to one language unless it is really mixed. Use null for unknown values. "
+        "For point_of_contact, extract if present: name, role (their role in the company), "
+        "contact_details (email, phone, etc.), and notes. "
+        "If no point of contact is found, set point_of_contact to null."
+    )
+    example = (
+        '{"job_text":"Acme sucht eine Senior Engineerin…","company_name":"Acme",'
+        '"job_title":"Senior Engineer","location":"Zürich","language":"German",'
+        '"salary":"€80-100k","point_of_contact":{"name":"John Doe","role":"HR Manager",'
+        '"contact_details":"john.doe@acme.com","notes":"Please contact via email"}}'
+    )
+    prompt = f"{task}\n\nRespond with JSON only. Example format:\n{example}"
+    cache_block = _page_extraction_cache_prefix(visible, html_excerpt, source_url)
+    raw = client.call(
+        ModelRole.EXTRACTION,
+        "",
+        [prompt],
+        system_cache_prefix=cache_block,
+    )
+    _write_trace(trace_dir, cache_block, prompt, raw)
+
+    data = _loads_extraction_json(raw)
+    if not data:
+        logger.warning("extract_job_page_metadata JSON parse failed")
+
+    job_text = _clean_metadata_val(data.get("job_text"))
+    if not job_text:
+        job_text = visible
+
+    return {
+        "job_text": job_text,
+        "company_name": _clean_metadata_val(data.get("company_name")),
+        "job_title": _clean_metadata_val(data.get("job_title")),
+        "location": _clean_metadata_val(data.get("location")),
+        "language": _clean_metadata_val(data.get("language")),
+        "salary": _clean_metadata_val(data.get("salary")),
+        "point_of_contact": _parse_point_of_contact(data.get("point_of_contact")),
     }
 
 
@@ -480,16 +613,7 @@ def extract_job_metadata(
         req_list = []
 
     poc_data = data.get("point_of_contact")
-    point_of_contact = None
-    if poc_data and isinstance(poc_data, dict):
-        point_of_contact = {
-            "name": _clean_metadata_val(poc_data.get("name")),
-            "role": _clean_metadata_val(poc_data.get("role")),
-            "contact_details": _clean_metadata_val(poc_data.get("contact_details")),
-            "notes": _clean_metadata_val(poc_data.get("notes")),
-        }
-        if not point_of_contact["name"] and not point_of_contact["contact_details"]:
-            point_of_contact = None
+    point_of_contact = _parse_point_of_contact(poc_data)
 
     return {
         "company_name": _clean_metadata_val(data.get("company_name")),

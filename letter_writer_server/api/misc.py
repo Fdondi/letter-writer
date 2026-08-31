@@ -1,53 +1,26 @@
 import logging
 from fastapi import APIRouter, Request, HTTPException, Depends
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 from pydantic import BaseModel
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from letter_writer_server.core.session import Session, get_session
 from letter_writer.client import get_client, ModelVendor
 from letter_writer.generation import (
-    extract_key_competences,
-    grade_competence_cv_match,
-    MissingCVError,
     get_style_instructions,
-    LEVEL_LABELS,
-    DEFAULT_NEED_SEMANTICS,
 )
 from letter_writer.service import write_cover_letter, refresh_repository
-from letter_writer.firestore_store import get_collection, upsert_document, get_user_data
-from letter_writer.retrieval import embed, retrieve_similar_job_offers, select_top_documents, sanitize_search_results
-from letter_writer.personal_data_sections import get_competence_ratings, get_models, cv_text_with_extra_info
+from letter_writer.firestore_store import get_user_data
+from letter_writer.personal_data_sections import get_models
+from letter_writer_server.api.extract_pipeline import resolve_cv_for_extract, run_extract_pipeline
 from letter_writer.spam_prevention import get_in_flight_requests, clear_in_flight_requests
 from letter_writer_server.api.cost_utils import with_user_monthly_cost, check_spending_limits
 from letter_writer_server.core.session import require_auth
-from openai import OpenAI
 from letter_writer.cost_tracker import track_api_cost
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
-def _level_label_for_rating(level_labels: tuple[str, ...], level_cfg: Dict[str, Any], rating: int) -> str:
-    """Map numeric rating (1..5) to the closest configured level label."""
-    if not level_labels:
-        return "Brief experience"
-    target = max(1, min(5, int(rating)))
-    if isinstance(level_cfg, dict) and level_cfg:
-        best_label = level_labels[0]
-        best_delta = float("inf")
-        for label in level_labels:
-            raw = level_cfg.get(label)
-            if isinstance(raw, (int, float)):
-                delta = abs(float(raw) - float(target))
-                if delta < best_delta:
-                    best_delta = delta
-                    best_label = label
-        if best_delta != float("inf"):
-            return best_label
-    idx = max(0, min(target - 1, len(level_labels) - 1))
-    return level_labels[idx]
 
 class ExtractRequest(BaseModel):
     job_text: str
@@ -122,219 +95,33 @@ async def refresh(request: Request, data: RefreshRequest, _user: dict = Depends(
 @router.post("/extract/")
 async def extract_job(request: Request, data: ExtractRequest, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     """User-bound extraction: skills + CV match + similar past jobs, all in parallel."""
-    user = session.get('user')
     try:
         ai_client = get_client(ModelVendor.OPENAI)
-        trace_dir = Path("trace", "extraction.openai")
-
-        user_id = (user or {}).get("id") or None
-        if not user_id:
-            user_id = "anonymous"
-
-        # Ensure extraction is tracked as its own phase (avoid mixing with earlier calls).
         _reset_client_counters(ai_client)
-
-        cv_text = session.get('cv_text', "")
-        user_data = {}
-        if not cv_text and user:
-            user_data = get_user_data(user['id'], use_cache=True)
-            cv_revisions = user_data.get('cv_revisions', [])
-            if cv_revisions:
-                sorted_revs = sorted(cv_revisions, key=lambda x: x.get('created_at', ''), reverse=True)
-                base_cv = sorted_revs[0].get('content', '')
-                session['cv_text'] = cv_text_with_extra_info(base_cv, user_data)
-        elif user:
-            user_data = get_user_data(user['id'], use_cache=True)
-
-        cv_text = session.get("cv_text", "")
-
-        if not cv_text:
-            raise HTTPException(status_code=400, detail="CV text is missing")
-
-        collection = get_collection()
-        openai_client = OpenAI()
-
+        cv_text, user_data, user_id = resolve_cv_for_extract(session)
         logger.info("[EXTRACT] Start: job_text length=%s", len(data.job_text))
-
-        # --- Phase 1: extract competences (LLM call) --------------------------------
-        scale_cfg = data.scale_config or {}
-        need_semantics = {**DEFAULT_NEED_SEMANTICS, **(scale_cfg.get("needSemantics") or {})}
-        need_labels = tuple(need_semantics.keys())
-        level_cfg = scale_cfg.get("level") or {}
-        level_labels = tuple(level_cfg.keys()) if level_cfg else LEVEL_LABELS
-        default_lvl = "Brief experience" if "Brief experience" in level_labels else level_labels[len(level_labels) // 2]
-
-        def _phase1_extract_competences():
-            return extract_key_competences(
-                data.job_text,
-                ai_client,
-                Path(trace_dir, "competences"),
-                need_categories=need_labels,
-                need_semantics=need_semantics,
-            )
-
-        # --- Phase 2: grade unmatched skills against CV (LLM call) -----------------
-        def _phase2_grade(flat_pairs, unmatched):
-            if not unmatched:
-                return {}
-            return grade_competence_cv_match(
-                unmatched,
-                cv_text,
-                data.job_text,
-                ai_client,
-                Path(trace_dir, "grade_cv_match"),
-                level_labels=level_labels,
-            )
-
-        # --- Process competences into matched/unmatched (pure CPU, fast) ------------
-        def _process_competences(competences_by_cat):
-            flat_pairs = []
-            seen = set()
-            for cat in need_labels:
-                for skill in competences_by_cat.get(cat, []):
-                    if skill and skill not in seen:
-                        seen.add(skill)
-                        flat_pairs.append((skill, cat))
-            for cat, skills in competences_by_cat.items():
-                if cat in need_labels:
-                    continue
-                for skill in skills:
-                    if skill and skill not in seen:
-                        seen.add(skill)
-                        flat_pairs.append((skill, cat))
-
-            # Read from current wrapped "competences" field, with legacy fallback.
-            existing = get_competence_ratings(user_data) or user_data.get("competence_ratings") or {}
-            existing_lookup = {}
-            for k, v in existing.items():
-                if isinstance(v, (int, float)) and 1 <= v <= 5:
-                    norm = " ".join((k or "").strip().lower().split())
-                    if norm:
-                        existing_lookup[norm] = int(round(v))
-
-            matched_levels = {}
-            unmatched = []
-            for skill, _need in flat_pairs:
-                norm_skill = " ".join((skill or "").strip().lower().split())
-                if norm_skill in existing_lookup:
-                    matched_levels[skill] = _level_label_for_rating(level_labels, level_cfg, existing_lookup[norm_skill])
-                else:
-                    unmatched.append(skill)
-            return flat_pairs, matched_levels, unmatched
-
-        # --- Orchestrate: use as_completed so grading & reranking overlap ----------
-        # Four I/O-bound tasks, two dependency chains:
-        #   Chain A: extract_competences → grade_cv_match
-        #   Chain B: embed+vector_search → rerank
-        # as_completed dispatches the second step of each chain the moment its
-        # dependency resolves, so both LLM calls (grade + rerank) run in parallel.
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            competences_future = executor.submit(_phase1_extract_competences)
-            rag_future = executor.submit(
-                retrieve_similar_job_offers,
-                data.job_text,
-                collection,
-                openai_client,
-                user_id,
-            )
-
-            similar_documents = []
-            top_docs = []
-            grade_future = None
-            rerank_future = None
-            flat_pairs = []
-            matched_levels = {}
-            hire_problem = ""
-
-            initial_futures = {competences_future: "competences", rag_future: "rag"}
-            for done in as_completed(initial_futures):
-                tag = initial_futures[done]
-                if tag == "competences":
-                    competences_by_cat, hire_problem = done.result()
-                    logger.info("[EXTRACT] Competences extracted, submitting grading")
-                    flat_pairs, matched_levels, unmatched = _process_competences(competences_by_cat)
-                    grade_future = executor.submit(_phase2_grade, flat_pairs, unmatched)
-                elif tag == "rag":
-                    try:
-                        raw_similar = done.result()
-                        logger.info("[EXTRACT] RAG search returned %s raw results", len(raw_similar))
-                        similar_documents = sanitize_search_results(raw_similar)
-                        if raw_similar:
-                            rerank_trace = Path("trace", "extraction.rerank")
-                            rerank_trace.mkdir(parents=True, exist_ok=True)
-                            rerank_future = executor.submit(
-                                select_top_documents,
-                                raw_similar,
-                                data.job_text,
-                                ai_client,
-                                rerank_trace,
-                            )
-                    except Exception as rag_err:
-                        logger.exception("[EXTRACT] RAG search failed: %s: %s", type(rag_err).__name__, rag_err)
-
-            # Collect grading results
-            levels = dict(matched_levels)
-            if grade_future:
-                llm_levels = grade_future.result()
-                logger.info("[EXTRACT] CV grading complete")
-                for skill in [s for s, _ in flat_pairs]:
-                    if skill not in levels:
-                        levels[skill] = llm_levels.get(skill, default_lvl)
-
-            extraction = {
-                "competences": {
-                    skill: {"need": need, "level": levels.get(skill, default_lvl)}
-                    for skill, need in flat_pairs
-                },
-                "requirements": [s for s, _ in flat_pairs],
-                "hire_problem": hire_problem or "",
-            }
-            logger.info("[EXTRACT] Extraction complete")
-
-            # Collect reranking results
-            all_scores = {}
-            all_briefs = {}
-            if rerank_future:
-                try:
-                    result = rerank_future.result()
-                    top_docs = result["top_docs"]
-                    all_scores = result.get("all_scores", {})
-                    all_briefs = result.get("all_briefs", {})
-                    logger.info("[EXTRACT] LLM reranking selected %s top docs", len(top_docs))
-                except Exception as rerank_err:
-                    logger.warning("[EXTRACT] LLM reranking failed: %s", rerank_err)
-
-            for doc in similar_documents:
-                company = (doc.get("company_name_original") or doc.get("company_name") or "").strip()
-                if company and company in all_scores:
-                    doc["score"] = all_scores[company]
-                if company and company in all_briefs:
-                    brief = all_briefs[company] or {}
-                    doc["similarities"] = brief.get("similarities", [])
-                    doc["differences"] = brief.get("differences", [])
-
-        if extraction:
-            if "metadata" not in session:
-                session["metadata"] = {}
-            if "common" not in session["metadata"]:
-                session["metadata"]["common"] = {}
-            session["metadata"]["common"].update(extraction)
-            session["job_text"] = data.job_text
-
-        logger.info(
-            "[EXTRACT] Returning %s similar_documents, %s top_docs",
-            len(similar_documents),
-            len(top_docs),
+        result = run_extract_pipeline(
+            competence_source_text=data.job_text,
+            similar_job_text=data.job_text,
+            session=session,
+            scale_cfg=data.scale_config,
+            user_data=user_data,
+            cv_text=cv_text,
+            user_id=user_id,
+            ai_client=ai_client,
         )
-        # Track all LLM usage in this endpoint as extraction.
-        _track_and_reset_client_cost(user_id=user_id, phase="extract", vendor=ModelVendor.OPENAI.value, client=ai_client)
+        _track_and_reset_client_cost(
+            user_id=user_id, phase="extract", vendor=ModelVendor.OPENAI.value, client=ai_client
+        )
         return with_user_monthly_cost({
             "status": "ok",
-            "extraction": extraction,
-            "similar_documents": similar_documents,
-            "top_docs": top_docs,
-            "session_id": session.session_key
+            "extraction": result["extraction"],
+            "similar_documents": result["similar_documents"],
+            "top_docs": result["top_docs"],
+            "session_id": result["session_id"],
         }, session)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
