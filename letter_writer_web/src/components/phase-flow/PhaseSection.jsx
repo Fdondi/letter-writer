@@ -19,10 +19,31 @@ export default function PhaseSection({
     : "Approve all";
 
   return (
-    <details open={!collapsed} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
-      <summary
-        style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", listStyle: "none" }}
+    <div
+      style={{
+        border: "1px solid #e5e7eb",
+        borderRadius: 8,
+        padding: 8,
+        flex: collapsed ? "0 0 auto" : "1 1 0",
+        minHeight: collapsed ? undefined : 0,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        boxSizing: "border-box",
+      }}
+    >
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", flexShrink: 0 }}
         onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggle?.();
+          }
+        }}
       >
         <h3 style={{ margin: 0 }}>{title}</h3>
         {showApproveAll && (
@@ -39,20 +60,24 @@ export default function PhaseSection({
             {approveButtonText}
           </button>
         )}
-      </summary>
-      <div
-        style={{
-          display: "grid",
-          gridAutoFlow: "column",
-          gridAutoColumns,
-          gap: 12,
-          marginTop: 8,
-          overflowX: "auto",
-          alignItems: "start",
-        }}
-      >
-        {children}
       </div>
-    </details>
+      {!collapsed && (
+        <div
+          style={{
+            display: "grid",
+            gridAutoFlow: "column",
+            gridAutoColumns,
+            gap: 12,
+            marginTop: 8,
+            overflowX: "auto",
+            alignItems: "stretch",
+            flex: 1,
+            minHeight: 0,
+          }}
+        >
+          {children}
+        </div>
+      )}
+    </div>
   );
 }

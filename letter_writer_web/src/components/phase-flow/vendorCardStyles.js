@@ -1,6 +1,4 @@
 export const VENDOR_COLUMN_WIDTH = 340;
-/** Fixed viewport height per column — independent of sibling columns. */
-export const VENDOR_COLUMN_HEIGHT = "calc(100dvh - 80px)";
 
 export const cardStyle = {
   border: "1px solid #e5e7eb",
@@ -16,9 +14,10 @@ export const cardStyle = {
   width: VENDOR_COLUMN_WIDTH,
   minWidth: VENDOR_COLUMN_WIDTH,
   maxWidth: VENDOR_COLUMN_WIDTH,
-  height: VENDOR_COLUMN_HEIGHT,
-  minHeight: VENDOR_COLUMN_HEIGHT,
-  maxHeight: VENDOR_COLUMN_HEIGHT,
+  // Fill the phase section height (parent flex chain), scroll inside the card.
+  height: "100%",
+  minHeight: 0,
+  maxHeight: "100%",
   position: "relative",
   boxSizing: "border-box",
   overflow: "hidden",

@@ -112,14 +112,100 @@ def work_content_fingerprint(data: Dict[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _company_display_name(data: Dict[str, Any]) -> str:
+def has_reconstructable_work(data: Dict[str, Any]) -> bool:
+    """True when a backup would restore something useful to Compose."""
+    if not isinstance(data, dict):
+        return False
+    if str(data.get("job_text") or "").strip():
+        return True
+    vendors = data.get("vendors")
+    if isinstance(vendors, dict) and any(vendors.values()):
+        return True
+    agentic = data.get("agentic")
+    if isinstance(agentic, dict) and agentic.get("status"):
+        return True
+    return False
+
+
+def _first_job_text_line(data: Dict[str, Any]) -> str:
+    for line in str(data.get("job_text") or "").splitlines():
+        text = line.strip()
+        if text:
+            return text[:120]
+    return ""
+
+
+def _common_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
     metadata = data.get("metadata") or {}
     common = metadata.get("common") if isinstance(metadata, dict) else {}
-    if isinstance(common, dict):
-        name = str(common.get("company_name") or "").strip()
-        if name:
-            return name
+    return common if isinstance(common, dict) else {}
+
+
+def _company_display_name(data: Dict[str, Any]) -> str:
+    common = _common_metadata(data)
+    name = str(common.get("company_name") or "").strip()
+    if name:
+        return name
+    # Job ads often lead with the company when extraction never wrote company_name.
+    fallback = _first_job_text_line(data)
+    if fallback:
+        return fallback
     return "Unknown Company"
+
+
+def _job_title_display(data: Dict[str, Any]) -> str:
+    common = _common_metadata(data)
+    title = str(common.get("job_title") or "").strip()
+    if title:
+        return title
+    lines = [ln.strip() for ln in str(data.get("job_text") or "").splitlines() if ln.strip()]
+    if len(lines) >= 2:
+        return lines[1][:120]
+    return ""
+
+
+def _infer_backup_stage(data: Dict[str, Any]) -> str:
+    """Rough Compose stage for backup list labels: empty | input | phases | assembly | agentic."""
+    if not has_reconstructable_work(data):
+        return "empty"
+    agentic = data.get("agentic")
+    if isinstance(agentic, dict) and agentic.get("status"):
+        return "agentic" if agentic.get("status") != "done" else "assembly"
+    vendors = data.get("vendors")
+    if isinstance(vendors, dict):
+        has_final = False
+        has_any = False
+        for vdata in vendors.values():
+            if not isinstance(vdata, dict):
+                continue
+            if (
+                vdata.get("company_report")
+                or vdata.get("letter_plan")
+                or vdata.get("draft_letter")
+                or vdata.get("final_letter")
+                or (isinstance(vdata.get("top_docs"), list) and vdata.get("top_docs"))
+            ):
+                has_any = True
+            if vdata.get("final_letter"):
+                has_final = True
+        if has_final:
+            return "assembly"
+        if has_any:
+            return "phases"
+    return "input"
+
+
+def summarize_session_backup(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Compact labels for backup list / confirm dialogs."""
+    vendors = data.get("vendors") if isinstance(data.get("vendors"), dict) else {}
+    return {
+        "company_name": _company_display_name(data),
+        "job_title": _job_title_display(data),
+        "stage": _infer_backup_stage(data),
+        "vendor_count": len(vendors),
+        "has_job_text": bool(str(data.get("job_text") or "").strip()),
+        "empty": not has_reconstructable_work(data),
+    }
 
 
 def _safe_company_slug(data: Dict[str, Any]) -> str:
@@ -136,12 +222,17 @@ def _user_id_from_session(data: Dict[str, Any]) -> Optional[str]:
 
 
 def build_backup_envelope(session_key: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    summary = summarize_session_backup(data)
     return {
         "format_version": FORMAT_VERSION,
         "saved_at": datetime.now(timezone.utc).isoformat(),
         "session_key": session_key,
         "user_id": _user_id_from_session(data),
-        "company_name": _company_display_name(data),
+        "company_name": summary["company_name"],
+        "job_title": summary["job_title"],
+        "stage": summary["stage"],
+        "vendor_count": summary["vendor_count"],
+        "empty": summary["empty"],
         "session": _json_safe(dict(data)),
     }
 
@@ -162,7 +253,11 @@ def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def maybe_write_session_backup(session_key: str, data: Dict[str, Any]) -> Optional[Path]:
-    """Write host backup if work content changed. Returns latest path or None."""
+    """Write host backup if work content changed. Returns latest path or None.
+
+    Empty sessions (no job text / vendor / agentic work) are not written — they only
+    clutter the restore list (often looking non-empty because of CV blob size).
+    """
     if not session_key or not isinstance(data, dict):
         return None
     try:
@@ -171,6 +266,9 @@ def maybe_write_session_backup(session_key: str, data: Dict[str, Any]) -> Option
             if _FINGERPRINT_CACHE.get(session_key) == fingerprint:
                 return None
             _FINGERPRINT_CACHE[session_key] = fingerprint
+
+        if not has_reconstructable_work(data):
+            return None
 
         backup_dir = get_backup_dir()
         envelope = build_backup_envelope(session_key, data)
@@ -224,18 +322,37 @@ def list_session_backups(limit: int = 100) -> List[Dict[str, Any]]:
                 "session_key": None,
                 "user_id": None,
                 "company_name": None,
+                "job_title": None,
+                "stage": None,
+                "vendor_count": 0,
+                "empty": True,
                 "saved_at": None,
                 "is_latest": path.name.endswith(".latest.json"),
             }
-            # Best-effort peek at envelope headers without loading huge session blobs fully
-            # when possible — for correctness we load JSON (sessions are already on disk).
+            # Load envelope JSON (needed for labels; sessions already live on disk).
             with open(path, "r", encoding="utf-8") as f:
                 envelope = json.load(f)
             if isinstance(envelope, dict):
                 meta["session_key"] = envelope.get("session_key")
                 meta["user_id"] = envelope.get("user_id")
-                meta["company_name"] = envelope.get("company_name")
                 meta["saved_at"] = envelope.get("saved_at")
+                session_payload = envelope.get("session")
+                summary = (
+                    summarize_session_backup(session_payload)
+                    if isinstance(session_payload, dict)
+                    else {
+                        "company_name": envelope.get("company_name") or "Unknown Company",
+                        "job_title": envelope.get("job_title") or "",
+                        "stage": envelope.get("stage") or "empty",
+                        "vendor_count": int(envelope.get("vendor_count") or 0),
+                        "empty": bool(envelope.get("empty", True)),
+                    }
+                )
+                meta["company_name"] = summary["company_name"]
+                meta["job_title"] = summary["job_title"]
+                meta["stage"] = summary["stage"]
+                meta["vendor_count"] = summary["vendor_count"]
+                meta["empty"] = summary["empty"]
             entries.append((stat.st_mtime, meta))
         except Exception as e:
             logger.warning("skip unreadable backup %s: %s", path, e)

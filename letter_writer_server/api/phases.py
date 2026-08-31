@@ -171,7 +171,9 @@ def restore_from_backup(
     """Load a host backup file into the current cookie session and return full state."""
     from letter_writer_server.core.session_backup import (
         apply_backup_to_session_dict,
+        has_reconstructable_work,
         load_backup_envelope,
+        summarize_session_backup,
     )
 
     set_current_request(request)
@@ -189,6 +191,17 @@ def restore_from_backup(
     except Exception as e:
         logger.error("Failed to load backup %s: %s", data.filename, e)
         raise HTTPException(status_code=400, detail=f"Failed to read backup: {e}")
+
+    session_payload = envelope.get("session") if isinstance(envelope, dict) else None
+    if not isinstance(session_payload, dict) or not has_reconstructable_work(session_payload):
+        summary = summarize_session_backup(session_payload if isinstance(session_payload, dict) else {})
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This backup has no job text or generated letters to restore "
+                f"(stage={summary.get('stage')}). Pick a larger backup that lists a company/title."
+            ),
+        )
 
     try:
         # Session is a dict subclass; apply mutates it in place.

@@ -276,10 +276,25 @@ export default function SettingsPage({
     loadBackups();
   }, []);
 
-  const handleRestoreBackup = async (filename) => {
+  const handleRestoreBackup = async (backup) => {
+    const filename = typeof backup === "string" ? backup : backup?.filename;
     if (!filename) return;
+    if (backup && typeof backup === "object" && backup.empty) {
+      setBackupsError(
+        "That backup is empty (no job text or letters). Choose one that shows a company/title and a non-empty stage."
+      );
+      return;
+    }
+    const labelParts = [];
+    if (backup && typeof backup === "object") {
+      if (backup.company_name) labelParts.push(backup.company_name);
+      if (backup.job_title) labelParts.push(backup.job_title);
+      if (backup.stage) labelParts.push(`stage: ${backup.stage}`);
+      if (backup.size != null) labelParts.push(`${Math.round(backup.size / 1024)} KB`);
+    }
+    const label = labelParts.length ? labelParts.join(" · ") : filename;
     const confirmed = window.confirm(
-      `Restore session from backup?\n\n${filename}\n\nThis replaces the current working session on the server with the backup contents.`
+      `Restore session from backup?\n\n${label}\n${filename}\n\nThis replaces the current working session on the server with the backup contents.`
     );
     if (!confirmed) return;
     try {
@@ -929,7 +944,8 @@ export default function SettingsPage({
           Automatic silent copies of your working session are written to the host
           folder <code>session_backups/</code>. Restore replaces the current
           server session with a chosen backup so you can continue where you left
-          off.
+          off. Prefer rows with a company/title and stage (input / phases /
+          assembly); empty login/CV-only snapshots cannot restore work.
         </p>
         {backupsError && (
           <div
@@ -967,6 +983,7 @@ export default function SettingsPage({
                   border: "1px solid var(--border-color)",
                   borderRadius: "6px",
                   backgroundColor: "var(--input-bg)",
+                  opacity: backup.empty ? 0.55 : 1,
                 }}
               >
                 <div style={{ minWidth: 0, flex: 1 }}>
@@ -975,11 +992,13 @@ export default function SettingsPage({
                       fontSize: "13px",
                       fontWeight: 600,
                       color: "var(--text-color)",
-                      wordBreak: "break-all",
+                      wordBreak: "break-word",
                     }}
                   >
                     {backup.company_name || "Unknown company"}
+                    {backup.job_title ? ` — ${backup.job_title}` : ""}
                     {backup.is_latest ? " (latest)" : ""}
+                    {backup.empty ? " (empty)" : ""}
                   </div>
                   <div
                     style={{
@@ -989,6 +1008,8 @@ export default function SettingsPage({
                     }}
                   >
                     {formatBackupTime(backup)}
+                    {backup.stage ? ` · ${backup.stage}` : ""}
+                    {backup.vendor_count ? ` · ${backup.vendor_count} vendors` : ""}
                     {backup.size != null ? ` · ${Math.round(backup.size / 1024)} KB` : ""}
                   </div>
                   <div
@@ -1004,15 +1025,20 @@ export default function SettingsPage({
                 </div>
                 <button
                   type="button"
-                  onClick={() => handleRestoreBackup(backup.filename)}
-                  disabled={!!restoringFilename}
+                  onClick={() => handleRestoreBackup(backup)}
+                  disabled={!!restoringFilename || !!backup.empty}
+                  title={backup.empty ? "Empty backup — nothing to restore" : "Restore this backup"}
                   style={{
                     padding: "6px 12px",
-                    backgroundColor: restoringFilename === backup.filename ? "#9ca3af" : "#059669",
+                    backgroundColor:
+                      restoringFilename === backup.filename || backup.empty
+                        ? "#9ca3af"
+                        : "#059669",
                     color: "white",
                     border: "none",
                     borderRadius: "4px",
-                    cursor: restoringFilename ? "not-allowed" : "pointer",
+                    cursor:
+                      restoringFilename || backup.empty ? "not-allowed" : "pointer",
                     fontSize: "13px",
                     whiteSpace: "nowrap",
                   }}

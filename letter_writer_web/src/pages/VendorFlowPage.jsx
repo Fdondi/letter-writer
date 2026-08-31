@@ -13,11 +13,9 @@ import { mergeAgentContextFromFeedback, mergeExtraInfoFromFeedback } from "../co
 import { persistLetterDocument, buildVendorAiLetters } from "../utils/persistLetterDocument";
 
 const REFERENCE_SIDEBAR_VIEWPORT_STYLE = {
-  alignSelf: "flex-start",
-  position: "sticky",
-  top: 20,
-  height: "calc(100vh - 40px)",
-  maxHeight: "calc(100vh - 40px)",
+  alignSelf: "stretch",
+  minHeight: 0,
+  height: "100%",
   boxSizing: "border-box",
 };
 
@@ -414,9 +412,9 @@ export default function VendorFlowPage() {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-start", gap: 12, width: "100%", flex: 1, boxSizing: "border-box", overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "row", alignItems: "stretch", gap: 12, width: "100%", flex: 1, minHeight: 0, boxSizing: "border-box", overflow: "hidden" }}>
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10, position: "relative", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10, position: "relative", flexWrap: "wrap", flexShrink: 0 }}>
           <button onClick={goBackToJobIntake} style={{ padding: "8px 16px", backgroundColor: "var(--button-bg)", color: "var(--button-text)", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer" }}>← Back to job details</button>
           <button type="button" onClick={handleCloseSessionAndRestart} style={{ padding: "8px 16px", backgroundColor: "#b91c1c", color: "white", border: "1px solid #991b1b", borderRadius: "4px", cursor: "pointer" }} title="Clear current session and restart with a blank input form">Close session and restart</button>
           {vendorStage === "assembly" && assemblyVisible && (
@@ -430,7 +428,7 @@ export default function VendorFlowPage() {
         {session.documentSaveNotice && (
           <p role="status" style={{ color: "var(--secondary-text-color)", background: "var(--warning-bg)", border: "1px solid var(--warning-border)", padding: "10px 12px", borderRadius: 4 }}>{session.documentSaveNotice}</p>
         )}
-        <div style={{ display: (vendorStage === "assembly" && assemblyVisible) ? "none" : "flex", flex: 1, minHeight: 0, flexDirection: "column", overflow: "auto" }}>
+        <div style={{ display: (vendorStage === "assembly" && assemblyVisible) ? "none" : "flex", flex: 1, minHeight: 0, flexDirection: "column", overflow: "hidden" }}>
           <PhaseFlow
             vendorsList={vendorsList}
             flowResetKey={phaseFlowResetKey}
@@ -452,7 +450,7 @@ export default function VendorFlowPage() {
         </div>
 
         {vendorStage === "assembly" && (
-          <div style={{ position: "relative", paddingTop: 4, display: assemblyVisible ? "block" : "none" }}>
+          <div style={{ position: "relative", paddingTop: 4, flex: 1, minHeight: 0, overflow: "hidden", display: assemblyVisible ? "flex" : "none", flexDirection: "column" }}>
             <LetterTabs
               vendorsList={vendorsList}
               vendorParagraphs={vendorParagraphs}

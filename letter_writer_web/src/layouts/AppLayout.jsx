@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import StyleInstructionsBlade from "../components/StyleInstructionsBlade";
 import OverlayPanel from "../components/OverlayPanel";
 import PersonalDataPage from "../components/PersonalDataPage";
@@ -20,7 +20,11 @@ import { getScaleConfig } from "../utils/competenceScales";
 
 export default function AppLayout() {
   const navigate = useNavigate();
+  const location = useLocation();
   const session = useJobSession();
+  const fillViewport =
+    location.pathname.startsWith("/flows/vendors") ||
+    location.pathname.startsWith("/flows/agentic");
   const { isAuthenticated, checkingAuth, showSessionExpiredModal } = session;
 
   // Overlay flags (layout-local, dies with AppLayout)
@@ -88,15 +92,27 @@ export default function AppLayout() {
   }
 
   return (
-    <div style={{ padding: 20, backgroundColor: "var(--bg-color)", color: "var(--text-color)", minHeight: "100vh", display: "flex", flexDirection: "column", boxSizing: "border-box" }}>
+    <div
+      style={{
+        padding: 20,
+        backgroundColor: "var(--bg-color)",
+        color: "var(--text-color)",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
+        ...(fillViewport
+          ? { height: "100dvh", maxHeight: "100dvh", overflow: "hidden" }
+          : { minHeight: "100vh" }),
+      }}
+    >
       {costTrackingError && (
-        <div role="alert" style={{ marginBottom: 12, padding: "10px 14px", backgroundColor: "var(--error-bg, #fef2f2)", border: "1px solid var(--error-border, #fecaca)", borderRadius: 6, color: "var(--error-text, #b91c1c)", fontSize: 13, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+        <div role="alert" style={{ marginBottom: 12, padding: "10px 14px", backgroundColor: "var(--error-bg, #fef2f2)", border: "1px solid var(--error-border, #fecaca)", borderRadius: 6, color: "var(--error-text, #b91c1c)", fontSize: 13, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexShrink: 0 }}>
           <span><strong>Cost tracking unavailable:</strong> {costTrackingError}</span>
           <button type="button" onClick={() => setCostTrackingError(null)} style={{ flexShrink: 0, border: "none", background: "transparent", color: "inherit", cursor: "pointer", fontSize: 16, lineHeight: 1 }} aria-label="Dismiss cost tracking warning">×</button>
         </div>
       )}
 
-      <div style={{ position: "relative", marginBottom: 12 }}>
+      <div style={{ position: "relative", marginBottom: 12, flexShrink: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
             <h1 style={{ margin: 0, color: "var(--text-color)" }}>Letter Writer</h1>
@@ -118,7 +134,7 @@ export default function AppLayout() {
         </div>
       </div>
 
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}><Outlet /></div>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}><Outlet /></div>
 
       <OverlayPanel title="Your CV" isOpen={showCvOverlay} onClose={() => setShowCvOverlay(false)}><PersonalDataPage /></OverlayPanel>
       <OverlayPanel title="Previous Examples" isOpen={showDocumentsOverlay} onClose={() => setShowDocumentsOverlay(false)}><DocumentsPage /></OverlayPanel>
@@ -136,6 +152,9 @@ export default function AppLayout() {
               navigate("/flows/vendors", { state: { rehydrated: true } });
             } else if (result.agentic) {
               navigate("/flows/agentic", { state: { rehydrated: true } });
+            } else if (result.restored) {
+              // Intake-only backups must leave phase UI, not keep stale vendor cards.
+              navigate("/", { replace: true });
             }
             if (result.restored) {
               showNotification("Session restored from host backup");

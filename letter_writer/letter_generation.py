@@ -311,6 +311,7 @@ def generate_letter(
     (trace_dir / "prompt.txt").write_text(context, encoding="utf-8")
 
     last_raw = ""
+    last_error = ""
     for attempt in range(1, max_retries + 1):
         try:
             last_raw = client.call(
@@ -323,6 +324,7 @@ def generate_letter(
             data = _extract_json_value(last_raw)
             return parse_draft_letter_output(data)
         except (json.JSONDecodeError, TypeError, ValueError) as e:
+            last_error = str(e)
             logger.warning(
                 "Draft letter JSON parse failed (attempt %s/%s): %s",
                 attempt,
@@ -330,13 +332,34 @@ def generate_letter(
                 e,
             )
         except Exception as e:
+            last_error = str(e)
             logger.warning(
                 "Draft letter LLM call failed (attempt %s/%s): %s",
                 attempt,
                 max_retries,
                 e,
             )
-    raise RuntimeError(f"Draft letter generation failed after {max_retries} attempts: {last_raw[:500]}")
+            # Permanent provider failures (billing, auth) will not succeed on retry.
+            err_l = last_error.lower()
+            if any(
+                marker in err_l
+                for marker in (
+                    "credit balance",
+                    "insufficient_quota",
+                    "insufficient credits",
+                    "invalid_api_key",
+                    "authentication",
+                    "permission denied",
+                    "unauthorized",
+                )
+            ):
+                raise RuntimeError(f"Draft letter generation failed: {last_error}") from e
+    detail = (last_raw or last_error or "").strip()
+    raise RuntimeError(
+        f"Draft letter generation failed after {max_retries} attempts: {detail[:500]}"
+    )
+
+
 def fancy_letter(letter: str, client: BaseClient) -> str:
     """Fancy up the letter with a fancy style."""
     system = (

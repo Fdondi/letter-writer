@@ -584,6 +584,42 @@ export function JobSessionProvider({ children }) {
         salary: ext.salary || prev?.salary || "",
         point_of_contact: ext.point_of_contact || prev?.point_of_contact || null,
       }));
+      // Write extracted labels into the server session immediately so backups
+      // are not stuck as "Unknown Company" if the user starts phases before the
+      // debounced intake sync runs (or never edits the fields again).
+      const snap = latestFormSnapshotRef.current || {};
+      const extractedSessionPatch = { session_id: sessionId };
+      if (ext.company_name && !String(snap.companyName || "").trim()) {
+        extractedSessionPatch.company_name = ext.company_name;
+      }
+      if (ext.job_title && !String(snap.jobTitle || "").trim()) {
+        extractedSessionPatch.job_title = ext.job_title;
+      }
+      if (ext.location && !String(snap.location || "").trim()) {
+        extractedSessionPatch.location = ext.location;
+      }
+      if (ext.language && !String(snap.language || "").trim()) {
+        extractedSessionPatch.language = ext.language;
+      }
+      if (ext.salary && !String(snap.salary || "").trim()) {
+        extractedSessionPatch.salary = ext.salary;
+      }
+      const snapPoc = snap.pointOfContact || {};
+      const hasManualPoc =
+        String(snapPoc.name || "").trim() ||
+        String(snapPoc.role || "").trim() ||
+        String(snapPoc.contact_details || "").trim() ||
+        String(snapPoc.notes || "").trim() ||
+        String(snapPoc.company || "").trim();
+      if (ext.point_of_contact && !hasManualPoc) {
+        extractedSessionPatch.point_of_contact = ext.point_of_contact;
+      }
+      if (Object.keys(extractedSessionPatch).length > 1) {
+        fetchWithHeartbeat("/api/phases/session/", {
+          method: "POST",
+          body: JSON.stringify(extractedSessionPatch),
+        }).catch((e) => console.warn("Failed to persist extracted company fields:", e));
+      }
       // Start 15-second countdown before auto-launching background research
       setCompanyResearchCountdown(15);
     });
@@ -854,22 +890,34 @@ export function JobSessionProvider({ children }) {
     return () => clearTimeout(t);
   }, [phaseSessionId, allSearchResults.length, effectiveTopDocs]);
 
-  // Persist additional_user_info/additional_company_info/hire_problem to session
+  // Persist job-intake fields into session metadata so host backups get real
+  // company/title labels (extraction used to update React only).
   useEffect(() => {
     if (!phaseSessionId) return undefined;
     const t = setTimeout(() => {
       fetchWithHeartbeat("/api/phases/session/", {
         method: "POST",
-        body: JSON.stringify({
-          session_id: phaseSessionId,
-          additional_user_info: additionalUserInfo || "",
-          additional_company_info: additionalCompanyInfo || "",
-          hire_problem: hireProblem || "",
-        }),
-      }).catch((e) => console.warn("Failed to persist additional job notes to session:", e));
+        body: JSON.stringify(buildJobSessionPayload(phaseSessionId)),
+      }).catch((e) => console.warn("Failed to persist job intake fields to session:", e));
     }, 400);
     return () => clearTimeout(t);
-  }, [phaseSessionId, additionalUserInfo, additionalCompanyInfo, hireProblem]);
+  }, [
+    phaseSessionId,
+    buildJobSessionPayload,
+    companyName,
+    jobTitle,
+    location,
+    language,
+    salary,
+    jobText,
+    additionalUserInfo,
+    additionalCompanyInfo,
+    hireProblem,
+    requirements,
+    competences,
+    pointOfContact,
+    structureInstructions,
+  ]);
 
   // Company research countdown timer: tick every second
   useEffect(() => {

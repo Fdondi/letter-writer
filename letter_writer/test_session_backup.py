@@ -113,7 +113,10 @@ def test_list_session_backups_newest_first(backup_dir):
         "session_key": "a",
         "user_id": "u",
         "company_name": "Old Co",
-        "session": {"job_text": "old"},
+        "session": {
+            "job_text": "old",
+            "metadata": {"common": {"company_name": "Old Co"}},
+        },
     }
     newer = {
         "format_version": 1,
@@ -121,7 +124,10 @@ def test_list_session_backups_newest_first(backup_dir):
         "session_key": "b",
         "user_id": "u",
         "company_name": "New Co",
-        "session": {"job_text": "new"},
+        "session": {
+            "job_text": "new",
+            "metadata": {"common": {"company_name": "New Co"}},
+        },
     }
     old_path = backup_dir / "old.latest.json"
     new_path = backup_dir / "new.latest.json"
@@ -134,6 +140,53 @@ def test_list_session_backups_newest_first(backup_dir):
     assert listed[0]["filename"] == "new.latest.json"
     assert listed[1]["filename"] == "old.latest.json"
     assert listed[0]["company_name"] == "New Co"
+
+
+def test_maybe_write_skips_empty_sessions(backup_dir):
+    empty = {
+        "user": {"id": "u1"},
+        "cv_text": "long cv " * 100,
+        "metadata": {"common": {"selected_vendors": ["openai"]}},
+    }
+    assert sb.maybe_write_session_backup("sessEmpty123456", empty) is None
+    assert list(backup_dir.glob("*.json")) == []
+
+
+def test_company_fallback_from_job_text(backup_dir):
+    data = {
+        "job_text": "Eka Finance\nJunior Quantitative Researcher\nGeneva",
+        "user": {"id": "u1"},
+        "metadata": {"common": {}},
+        "vendors": {"openai": {"draft_letter": "Hi"}},
+    }
+    path = sb.maybe_write_session_backup("sessEka123456789", data)
+    assert path is not None
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    assert envelope["company_name"] == "Eka Finance"
+    assert envelope["job_title"] == "Junior Quantitative Researcher"
+    assert envelope["stage"] == "phases"
+    assert envelope["empty"] is False
+
+    listed = sb.list_session_backups()
+    assert listed[0]["company_name"] == "Eka Finance"
+    assert listed[0]["job_title"] == "Junior Quantitative Researcher"
+    assert listed[0]["empty"] is False
+
+
+def test_list_marks_legacy_empty_backups(backup_dir):
+    empty_envelope = {
+        "format_version": 1,
+        "saved_at": "2024-01-01T00:00:00+00:00",
+        "session_key": "x",
+        "user_id": "u",
+        "company_name": "Unknown Company",
+        "session": {"cv_text": "cv only", "metadata": {"common": {}}},
+    }
+    path = backup_dir / "empty.latest.json"
+    path.write_text(json.dumps(empty_envelope), encoding="utf-8")
+    listed = sb.list_session_backups()
+    assert listed[0]["empty"] is True
+    assert listed[0]["stage"] == "empty"
 
 
 def test_load_backup_envelope_roundtrip(backup_dir):

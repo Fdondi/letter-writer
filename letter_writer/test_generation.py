@@ -1,4 +1,6 @@
 """Tests for generation helpers (e.g. core skill normalization)."""
+from unittest.mock import MagicMock
+
 import pytest
 from letter_writer.skill_utils import core_skill_name
 from letter_writer.generation import (
@@ -7,6 +9,7 @@ from letter_writer.generation import (
     _letter_generation_context,
     EXTRACTION_SYSTEM,
 )
+from letter_writer.letter_generation import generate_letter
 
 
 @pytest.mark.parametrize(
@@ -67,3 +70,22 @@ def test_letter_generation_context_omits_hire_goal_when_empty():
         hire_problem="",
     )
     assert "Hire goal" not in ctx
+
+
+def test_generate_letter_fails_fast_on_billing_error(tmp_path):
+    client = MagicMock()
+    client.call.side_effect = RuntimeError(
+        "Your credit balance is too low to access the Anthropic API"
+    )
+    with pytest.raises(RuntimeError, match="Draft letter generation failed:"):
+        generate_letter(
+            cv_text="CV body",
+            examples=[],
+            company_report="Co",
+            job_text="Job",
+            client=client,
+            trace_dir=tmp_path,
+            style_instructions="Be concise.",
+            max_retries=3,
+        )
+    assert client.call.call_count == 1

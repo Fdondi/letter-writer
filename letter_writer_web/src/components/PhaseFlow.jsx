@@ -148,12 +148,16 @@ export default function PhaseFlow({
   const planVendorSettledAtRef = useRef({});
   const prevPlanVendorSettledRef = useRef({});
   const planAutoApproveTimerRef = useRef(null);
+  /** True after auto-approve has been attempted for the current settled plan set (prevents re-fire loops on draft failure). */
+  const planAutoApproveFiredRef = useRef(false);
+  /** Once Draft appears, collapse Plan so Draft columns can use a full screen height. */
   const autoCollapsedPlanForDraftRef = useRef(false);
 
   useEffect(() => {
     setCollapsedPhases({ plan: false, draft: false });
     planVendorSettledAtRef.current = {};
     prevPlanVendorSettledRef.current = {};
+    planAutoApproveFiredRef.current = false;
     autoCollapsedPlanForDraftRef.current = false;
     if (planAutoApproveTimerRef.current) {
       clearTimeout(planAutoApproveTimerRef.current);
@@ -180,6 +184,15 @@ export default function PhaseFlow({
     };
   }, []);
 
+  /**
+   * When every vendor's plan model has returned (plan text or plan error), wait PLAN_AUTO_APPROVE_MS
+   * from the last return, then run the same approve path as the Approve button for each vendor that
+   * still has a non-empty plan and is not approved.
+   *
+   * Fires at most once per settled plan set. Failed draft advances must not re-arm the timer:
+   * approve failure clears approvedVendors and bumps phaseUpdateTrigger, which would otherwise
+   * schedule another immediate auto-approve (delay 0 once the wait window has elapsed).
+   */
   useEffect(() => {
     const phases = phasesRef.current;
     const planPhase = phases?.find((p) => p.phase === "plan");
@@ -228,7 +241,12 @@ export default function PhaseFlow({
       planAutoApproveTimerRef.current = null;
     }
 
-    if (!allSettled) return;
+    if (!allSettled) {
+      planAutoApproveFiredRef.current = false;
+      return;
+    }
+
+    if (planAutoApproveFiredRef.current) return;
 
     const times = vendorsList.map((v) => planVendorSettledAtRef.current[v]).filter(Boolean);
     const lastReturn = times.length ? Math.max(...times) : 0;
@@ -238,6 +256,8 @@ export default function PhaseFlow({
 
     planAutoApproveTimerRef.current = setTimeout(() => {
       planAutoApproveTimerRef.current = null;
+      if (planAutoApproveFiredRef.current) return;
+      planAutoApproveFiredRef.current = true;
       const phasesNow = phasesRef.current;
       const planNow = phasesNow?.find((p) => p.phase === "plan");
       const runners = planNow?.planApproveRunners;
@@ -527,7 +547,17 @@ export default function PhaseFlow({
         </div>,
         document.body
       )}
-      <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          overflow: "hidden",
+        }}
+      >
       {phases.filter((phase) => phase.visible).map((phase) => (
         <PhaseSection
           key={phase.phase}

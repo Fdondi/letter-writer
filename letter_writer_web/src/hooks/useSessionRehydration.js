@@ -83,6 +83,10 @@ export function useSessionRehydration({
           }
         }
 
+        if (result.restored && !result.vendor && !result.agentic && location.pathname !== "/") {
+          navigate("/", { replace: true });
+        }
+
         showNotification("Recovered previous session after browser reload");
       } catch (e) {
         console.warn("Reload rehydration skipped:", e);

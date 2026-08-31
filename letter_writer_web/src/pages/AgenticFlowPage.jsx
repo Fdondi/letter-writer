@@ -14,11 +14,9 @@ import { AGENTIC_TOPICS } from "../constants/feedbackTopics.js";
 import { normalizeAgenticThreads, stripAgenticThreadFields } from "../utils/agenticThreads";
 
 const REFERENCE_SIDEBAR_VIEWPORT_STYLE = {
-  alignSelf: "flex-start",
-  position: "sticky",
-  top: 20,
-  height: "calc(100vh - 40px)",
-  maxHeight: "calc(100vh - 40px)",
+  alignSelf: "stretch",
+  minHeight: 0,
+  height: "100%",
   boxSizing: "border-box",
 };
 
@@ -276,9 +274,9 @@ export default function AgenticFlowPage() {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-start", gap: 12, width: "100%", flex: 1, boxSizing: "border-box", overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "row", alignItems: "stretch", gap: 12, width: "100%", flex: 1, minHeight: 0, boxSizing: "border-box", overflow: "hidden" }}>
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10, position: "relative", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10, position: "relative", flexWrap: "wrap", flexShrink: 0 }}>
           <button onClick={goBackToJobIntake} style={{ padding: "8px 16px", backgroundColor: "var(--button-bg)", color: "var(--button-text)", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer" }}>← Back to job details</button>
           <button type="button" onClick={handleCloseSessionAndRestart} style={{ padding: "8px 16px", backgroundColor: "#b91c1c", color: "white", border: "1px solid #991b1b", borderRadius: "4px", cursor: "pointer" }} title="Clear current session and restart with a blank input form">Close session and restart</button>
           {agenticStage === "assembly" && (
@@ -293,7 +291,7 @@ export default function AgenticFlowPage() {
           <p role="status" style={{ color: "var(--secondary-text-color)", background: "var(--warning-bg)", border: "1px solid var(--warning-border)", padding: "10px 12px", borderRadius: 4 }}>{session.documentSaveNotice}</p>
         )}
 
-        <div ref={agenticPhasesRef}>
+        <div ref={agenticPhasesRef} style={{ flex: agenticStage === "assembly" ? "0 0 auto" : 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
           <AgenticFlow
             agenticState={agenticState}
             onFeedbackStart={handleAgenticFeedbackStart}
@@ -312,7 +310,7 @@ export default function AgenticFlowPage() {
         </div>
 
         {agenticStage === "assembly" && (
-          <div style={{ position: "relative", paddingTop: 4 }}>
+          <div style={{ position: "relative", paddingTop: 4, flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <LetterTabs
               vendorsList={Object.keys(agenticState?.final_letters || {}).filter(Boolean)}
               vendorParagraphs={agenticState?.final_letters ? Object.fromEntries(Object.entries(agenticState.final_letters).map(([v, text]) => [v, splitIntoParagraphs(text || "", v)])) : {}}

@@ -85,4 +85,40 @@ describe("applyRestoredSessionState", () => {
     });
     expect(result.agentic.state.status).toBe("feedback");
   });
+
+  it("does not return a vendor descriptor for intake-only backups", () => {
+    const setters = {
+      setPhaseSessionId: jest.fn(),
+      setJobText: jest.fn(),
+      setCompanyName: jest.fn(),
+      setJobTitle: jest.fn(),
+      setLocation: jest.fn(),
+      setLanguage: jest.fn(),
+      setSalary: jest.fn(),
+      setAdditionalUserInfo: jest.fn(),
+      setAdditionalCompanyInfo: jest.fn(),
+      setShowAdditionalInfo: jest.fn(),
+      setHireProblem: jest.fn(),
+      setRequirements: jest.fn(),
+      setCompetences: jest.fn(),
+      setPointOfContact: jest.fn(),
+      setShowPointOfContact: jest.fn(),
+      setExtractedData: jest.fn(),
+    };
+
+    const result = applyRestoredSessionState(
+      {
+        job_text: "Early draft posting",
+        metadata: { common: { company_name: "Acme", job_title: "Engineer" } },
+      },
+      setters,
+      { sessionId: "sess-intake" }
+    );
+
+    expect(result.restored).toBe(true);
+    expect(result.vendor).toBeNull();
+    expect(result.agentic).toBeNull();
+    expect(setters.setCompanyName).toHaveBeenCalledWith("Acme");
+    expect(setters.setJobTitle).toHaveBeenCalledWith("Engineer");
+  });
 });
