@@ -571,6 +571,14 @@ export default function IntakePage() {
           />
           Include plan step
         </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-color)" }} title="Skip approvals and generate final letter directly">
+          <input
+            type="checkbox"
+            checked={session.expressMode}
+            onChange={(e) => session.setExpressMode(e.target.checked)}
+          />
+          Express mode (auto-approve)
+        </label>
         <button
           onClick={handleSubmit}
           disabled={session.loading || !session.jobText || !session.jobTitle.trim() || session.selectedVendors.size === 0}
