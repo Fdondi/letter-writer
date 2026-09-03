@@ -194,6 +194,8 @@ def generate_letter_plan(
         "company research, and the target job, produce a **strategic plan** for a cover letter.\n"
         "Do NOT write the cover letter. Output only the plan (~10 lines max, telegraphic).\n"
         "Use the language of the target job description where it matters for clarity.\n\n"
+        "**Focus on authentic differentiation:** Identify this applicant's unique strengths and the specific "
+        "aspects of the role/company that create compelling fit. Avoid generic strategies or template approaches.\n\n"
         "--- Structure / planning instructions (from the user or defaults) ---\n"
         + si
         + additional_context
@@ -279,9 +281,13 @@ def generate_letter(
         (
         "You are an expert cover letter writer. Using the user's CV, relevant examples of job descriptions "
         "and their corresponding cover letters, the company report, and the target job description, "
-        "produce a personalized cover letter in the same style as the examples. Keep it concise (max 1 page).\n"
-        "Remember to use the language of THE TARGET JOB DESCRIPTION, even if some or all of the examples might be in a different language. "
-        "Use the examples at a higher level: look at style, structure, what is paid attention to, etc.\n"
+        "produce a personalized, distinctive cover letter. Keep it concise (max 1 page).\n"
+        "Remember to use the language of THE TARGET JOB DESCRIPTION, even if some or all of the examples might be in a different language.\n\n"
+        "**Use the examples as inspiration for voice, structure, and priorities — NOT as templates to copy.** "
+        "Focus on crafting an authentic, specific narrative about THIS applicant's fit for THIS role. "
+        "Avoid generic phrases, clichés, and overused patterns (e.g., 'I am writing to express my interest', "
+        "'excited by the opportunity', 'strong team player'). Instead, lead with concrete achievements, "
+        "specific motivations, or a unique insight about the company or role.\n"
         + style_instructions
         + plan_block
         + additional_context

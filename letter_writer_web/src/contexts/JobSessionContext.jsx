@@ -144,7 +144,8 @@ export function JobSessionProvider({ children }) {
   const [error, setError] = useState(null);
   const [documentSaveNotice, setDocumentSaveNotice] = useState(null);
   const [savingFinal, setSavingFinal] = useState(false);
-  const [includePlanStep, setIncludePlanStep] = useState(true);
+  const [includePlanStep, setIncludePlanStep] = useState(false);
+  const [expressMode, setExpressMode] = useState(false);
   const [loading, setLoading] = useState(false);
   const [backgroundModels, setBackgroundModels] = useState(new Set());
 
@@ -1001,6 +1002,7 @@ export function JobSessionProvider({ children }) {
     documentSaveNotice, setDocumentSaveNotice,
     savingFinal, setSavingFinal,
     includePlanStep, setIncludePlanStep,
+    expressMode, setExpressMode,
     loading, setLoading,
     backgroundModels, setBackgroundModels,
     // Research

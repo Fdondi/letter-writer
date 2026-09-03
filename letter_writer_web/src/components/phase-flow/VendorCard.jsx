@@ -563,7 +563,9 @@ export default function VendorCard({
 
       {isLoadingWithoutData && (
         <div style={{ padding: 6, color: "#6b7280", fontSize: 12 }}>
-          Loading...
+          {cardPhase === "plan" ? "Generating strategic plan..." : 
+           cardPhase === "draft" ? "Writing draft letter and running feedback checks..." :
+           "Processing..."}
         </div>
       )}
 

@@ -403,6 +403,34 @@ export default function VendorFlowPage() {
     });
   }, [navLocation.state?.start]);
 
+  // Express mode: auto-approve draft phases as soon as they're ready
+  useEffect(() => {
+    if (!session.expressMode) return;
+    if (!phaseRegistryRef.current) return;
+    
+    const draftPhase = phaseRegistryRef.current.find(p => p.phase === "draft");
+    if (!draftPhase) return;
+
+    // Find vendors with draft ready but not yet approved
+    const readyDrafts = vendorsList.filter(vendor => {
+      if (draftPhase.approvedVendors?.has(vendor)) return false; // Already approved
+      const data = draftPhase.cardData[vendor];
+      const hasDraft = data && typeof data.draft_letter === "string" && data.draft_letter.trim().length > 0;
+      return hasDraft;
+    });
+
+    if (readyDrafts.length === 0) return;
+
+    // Auto-approve each ready draft with a small delay to avoid overwhelming the backend
+    readyDrafts.forEach((vendor, index) => {
+      setTimeout(() => {
+        approvePhase("draft", vendor, {}).catch(e => {
+          console.error(`Express mode auto-approve failed for ${vendor}:`, e);
+        });
+      }, index * 500); // Stagger by 500ms
+    });
+  }, [session.expressMode, vendorsList, approvePhase]); // Intentionally not including phaseRegistry to avoid tight loops
+
   if (
     !navLocation.state?.start &&
     !navLocation.state?.rehydrated &&
