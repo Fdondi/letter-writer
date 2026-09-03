@@ -1,3 +1,4 @@
+0.62.0 - UX improvements: skip plan by default, express mode auto-approval, anti-formulaic prompts
 0.61.8 - Re-export KNOWN_WEAKNESSES_FEEDBACK_RULES from generation shim after split
 0.61.7 - Split LetterTabs into letter-tabs modules
 0.61.6 - Split FeedbackItemsPanel row components
