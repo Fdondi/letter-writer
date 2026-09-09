@@ -11,6 +11,7 @@ from langsmith import traceable
 
 from . import prompts
 from .clients.base import BaseClient, ModelRole
+from .clients.llm_errors import reraise_if_insufficient_credits
 from .instructions import (
     _prepend_language_prefix,
     get_structure_instructions,
@@ -260,6 +261,7 @@ def generate_letter(
                 e,
             )
         except Exception as e:
+            reraise_if_insufficient_credits(e)
             last_error = str(e)
             logger.warning(
                 "Draft letter LLM call failed (attempt %s/%s): %s",

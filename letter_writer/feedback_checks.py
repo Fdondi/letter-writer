@@ -10,6 +10,7 @@ from langsmith import traceable
 
 from . import prompts
 from .clients.base import BaseClient, ModelRole
+from .clients.llm_errors import reraise_if_insufficient_credits
 from .feedback_topics import AGENTIC_TOPIC_KEYS, get_agentic_topic_context_from_registry
 from .instructions import get_style_instructions
 from .laya_judge import annotate_feedback_validity
@@ -287,6 +288,7 @@ def _call_vendor_feedback_items(
                 e,
             )
         except Exception as e:
+            reraise_if_insufficient_credits(e)
             logger.warning(
                 "Vendor feedback LLM call failed (attempt %s/%s): %s",
                 attempt,

@@ -1,3 +1,4 @@
+0.83.0 - Do not auto-retry insufficient API credits; show clear 402 and allow manual Retry
 0.82.0 - Opportunity pipeline: the desktop wakes every 3h, fit-rates new jobs (Rated queue with an editable rating), drafts only the best up to a rolling 24h cap (default 5), and archives jobs that wait over 3 days (re-enable from the web)
 0.81.1 - Android Final tab: a vendor letter's paragraphs are shown straight away on its tab; the "Review paragraphs" toggle and the "Use whole letter" button are gone
 0.81.0 - Android Final tab: swipeable pages (Letters / Your letter / Info); the vendor letters are swipeable tabs side by side instead of a vertical list; the Info page has sub-tabs for every part of the job (original offer, company research, deduced goal, competences, examples, notes)

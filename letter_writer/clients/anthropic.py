@@ -1,6 +1,7 @@
 import json
 
 from .base import BaseClient, ModelRole, vendor_model_field
+from .llm_errors import reraise_if_insufficient_credits
 from .prompt_cache import merge_cache_prefixes, prepare_cache_block
 from .model_override import apply_model_override_thinking
 from anthropic import Anthropic
@@ -355,6 +356,7 @@ class ClaudeClient(BaseClient):
                     response_format=response_format,
                     error=str(e),
                 )
+                reraise_if_insufficient_credits(e, vendor="anthropic")
                 raise
             if response.usage:
                 cr, cw = self._extract_cache_metrics(response.usage)
@@ -418,6 +420,7 @@ class ClaudeClient(BaseClient):
                 response_format=response_format,
                 error=str(e),
             )
+            reraise_if_insufficient_credits(e, vendor="anthropic")
             raise
 
         # Track usage from first response
@@ -504,6 +507,7 @@ class ClaudeClient(BaseClient):
                             response_format=response_format,
                             error=str(e),
                         )
+                        reraise_if_insufficient_credits(e, vendor="anthropic")
                         raise
 
                     # Track usage from continuation

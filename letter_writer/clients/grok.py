@@ -1,5 +1,6 @@
 from .base import BaseClient, ModelRole, merge_system_cache_prefix_into_system
 from .model_override import apply_model_override_thinking
+from .llm_errors import reraise_if_insufficient_credits
 from typing import List, Dict, Any, Optional, Union
 import json
 import os
@@ -102,6 +103,7 @@ class GrokClient(BaseClient):
                 response_format=response_format,
                 error=str(e),
             )
+            reraise_if_insufficient_credits(e, vendor="grok")
             raise
         
         # Track cost using usage info from the response

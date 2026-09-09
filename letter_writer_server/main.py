@@ -61,6 +61,7 @@ from letter_writer_server.core.harness import (
 )
 
 from letter_writer_server.api import admin_event_log, auth, phases, personal_data, research, documents, costs, misc, phase_feedback, autocomplete, agentic, paragraph, job_capture, harness, opportunities
+from letter_writer.clients.llm_errors import InsufficientCreditsError
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -75,7 +76,13 @@ def rate_limit_exceeded_handler(request: Request, exc: Exception) -> Response:
     return _rate_limit_exceeded_handler(request, exc)
 
 
+def insufficient_credits_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, InsufficientCreditsError)
+    return JSONResponse(status_code=402, content={"detail": str(exc)})
+
+
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+app.add_exception_handler(InsufficientCreditsError, insufficient_credits_handler)
 
 # CORS
 app.add_middleware(

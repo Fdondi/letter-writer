@@ -1,17 +1,38 @@
 from .base import BaseClient, ModelRole, matching_model_entry, merge_system_cache_prefix_into_system
+from .llm_errors import response_indicates_insufficient_credits, reraise_if_insufficient_credits
 from .model_override import apply_model_override_thinking
 from .openai_prompt_cache import build_openai_messages, supports_explicit_prompt_cache
 from .prompt_cache import merge_cache_prefixes
 from openai import OpenAI
 from typing import List, Dict, Any, Optional
+import json
 import typer
 from langsmith import traceable
+
+
+class _OpenAINoQuotaRetry(OpenAI):
+    """OpenAI client that does not retry billing/quota exhaustion (still 429)."""
+
+    def _should_retry(self, response) -> bool:
+        if getattr(response, "status_code", None) == 429:
+            body: Any = None
+            try:
+                body = response.json()
+            except Exception:
+                try:
+                    raw = getattr(response, "text", None) or ""
+                    body = json.loads(raw) if raw else raw
+                except Exception:
+                    body = getattr(response, "text", None) or ""
+            if response_indicates_insufficient_credits(429, body):
+                return False
+        return super()._should_retry(response)
 
 
 class OpenAIClient(BaseClient):
     def __init__(self):
         super().__init__()
-        self.client = OpenAI()
+        self.client = _OpenAINoQuotaRetry()
 
     def track_cost(
         self,
@@ -132,6 +153,7 @@ class OpenAIClient(BaseClient):
                 response_format=response_format,
                 error=str(e),
             )
+            reraise_if_insufficient_credits(e, vendor="openai")
             raise
 
         if response.usage:

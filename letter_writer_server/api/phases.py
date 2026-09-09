@@ -19,6 +19,7 @@ from letter_writer.feedback_checks import (
 from letter_writer.instructions import get_structure_instructions as get_default_structure_instructions
 from letter_writer.headless import latest_cv_text
 from letter_writer.clients.base import ModelVendor
+from letter_writer.clients.llm_errors import InsufficientCreditsError, is_insufficient_credits_error, insufficient_credits_error_from_exception
 from letter_writer_server.api.cost_utils import with_user_monthly_cost
 from letter_writer.phased_service import (
     _run_background_phase,
@@ -42,6 +43,18 @@ from letter_writer.typed_shapes import TopDocument
 
 router = APIRouter(dependencies=[Depends(require_auth)])
 logger = logging.getLogger(__name__)
+
+
+def _reraise_phase_http(exc: Exception, *, vendor: str) -> None:
+    """Map LLM/provider failures to HTTP errors; never returns."""
+    if isinstance(exc, HTTPException):
+        raise exc
+    if isinstance(exc, InsufficientCreditsError):
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+    if is_insufficient_credits_error(exc):
+        mapped = insufficient_credits_error_from_exception(exc, vendor=vendor)
+        raise HTTPException(status_code=402, detail=str(mapped)) from exc
+    raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 class InitSessionRequest(BaseModel):
@@ -403,7 +416,7 @@ def plan_phase(vendor: str, data: PlanPhaseRequest, request: Request, session: S
         )
     except Exception as e:
         logger.exception("phases.plan failed (vendor=%s)", vendor)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        _reraise_phase_http(e, vendor=vendor)
 
 
 @router.post("/draft/{vendor}/")
@@ -440,7 +453,7 @@ def draft_phase(vendor: str, data: DraftPhaseRequest, request: Request, session:
             raise HTTPException(status_code=400, detail=msg) from e
         raise HTTPException(status_code=500, detail=msg) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        _reraise_phase_http(e, vendor=vendor)
 
 @router.post("/refine/{vendor}/")
 def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
@@ -469,7 +482,7 @@ def refine_phase(vendor: str, data: RefinePhaseRequest, request: Request, sessio
             "cost": state.cost
         }, session)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        _reraise_phase_http(e, vendor=vendor)
 
 
 @router.post("/feedback/request-context/{vendor}/")

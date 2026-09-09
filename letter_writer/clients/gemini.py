@@ -6,6 +6,7 @@ import typer
 from langsmith import traceable
 
 from .base import BaseClient, ModelRole, merge_system_cache_prefix_into_system
+from .llm_errors import reraise_if_insufficient_credits
 from .model_override import apply_model_override_thinking
 
 genai: Any = None
@@ -233,6 +234,7 @@ class GeminiClient(BaseClient):
                 response_format=response_format,
                 error=str(exc),
             )
+            reraise_if_insufficient_credits(exc, vendor="gemini")
             raise RuntimeError(f"Gemini generate_content failed: {exc}") from exc
 
         # Track cost from usage metadata

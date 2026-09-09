@@ -22,6 +22,24 @@ const REFERENCE_SIDEBAR_VIEWPORT_STYLE = {
   boxSizing: "border-box",
 };
 
+function formatCreditsHint(message) {
+  const msg = (message || "").trim();
+  if (!msg) return "Unknown error";
+  const lower = msg.toLowerCase();
+  const alreadyClear = lower.includes("not enough api credits") || lower.includes("click retry");
+  const isCredits =
+    lower.includes("no credits remaining") ||
+    lower.includes("insufficient_quota") ||
+    lower.includes("credit_balance_exhausted") ||
+    lower.includes("exceeded your current quota") ||
+    lower.includes("credit balance is too low") ||
+    lower.includes("insufficient credits");
+  if (isCredits && !alreadyClear) {
+    return `Not enough API credits: ${msg}. Add credits, then click Retry.`;
+  }
+  return msg;
+}
+
 export default function VendorFlowPage() {
   const navigate = useNavigate();
   const navLocation = useLocation();
@@ -58,22 +76,22 @@ export default function VendorFlowPage() {
       return "Network error: Unable to connect to server. Please check your connection.";
     }
     const providerMessageMatch = errorStr.match(/(?:'message'|"message")\s*:\s*'((?:[^'\\]|\\.)*)'/);
-    if (providerMessageMatch) return providerMessageMatch[1].replace(/\\'/g, "'").trim() || errorStr;
+    if (providerMessageMatch) return formatCreditsHint(providerMessageMatch[1].replace(/\\'/g, "'").trim() || errorStr);
     const providerMessageDouble = errorStr.match(/(?:'message'|"message")\s*:\s*"((?:[^"\\]|\\.)*)"/);
-    if (providerMessageDouble) return providerMessageDouble[1].replace(/\\"/g, '"').trim() || errorStr;
+    if (providerMessageDouble) return formatCreditsHint(providerMessageDouble[1].replace(/\\"/g, '"').trim() || errorStr);
     try {
       if (errorStr.includes("API error occurred:")) {
         const bodyMatch = errorStr.match(/Body:\s*({[\s\S]*})/);
-        if (bodyMatch) { const body = JSON.parse(bodyMatch[1]); return body.detail || body.message || errorStr; }
+        if (bodyMatch) { const body = JSON.parse(bodyMatch[1]); return formatCreditsHint(body.detail || body.message || errorStr); }
         const detailMatch = errorStr.match(/"detail"\s*:\s*"([^"]+)"/);
-        if (detailMatch) return detailMatch[1];
+        if (detailMatch) return formatCreditsHint(detailMatch[1]);
       }
       const parsed = JSON.parse(errorStr);
-      if (parsed.detail) return parsed.detail;
-      if (parsed.message) return parsed.message;
-      if (parsed.error?.message) return parsed.error.message;
+      if (parsed.detail) return formatCreditsHint(parsed.detail);
+      if (parsed.message) return formatCreditsHint(parsed.message);
+      if (parsed.error?.message) return formatCreditsHint(parsed.error.message);
     } catch (_) { /* not JSON */ }
-    return errorStr.replace(/^Error:\s*/, "").trim() || "Unknown error";
+    return formatCreditsHint(errorStr.replace(/^Error:\s*/, "").trim() || "Unknown error");
   }, []);
 
   const getStateForRestore = useCallback(() => ({

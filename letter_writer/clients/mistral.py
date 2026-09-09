@@ -8,6 +8,7 @@ from mistralai.client.errors import SDKError
 
 from .base import BaseClient, ModelRole, merge_system_cache_prefix_into_system
 from .model_override import apply_model_override_thinking
+from .llm_errors import reraise_if_insufficient_credits
 from langsmith import traceable
 
 class MistralClient(BaseClient):
@@ -60,6 +61,7 @@ class MistralClient(BaseClient):
             )
 
     def _reraise_sdk_error(self, e: Exception) -> NoReturn:
+        reraise_if_insufficient_credits(e, vendor="mistral")
         if isinstance(e, SDKError):
             status = getattr(e, "status_code", None)
             body = str(e)

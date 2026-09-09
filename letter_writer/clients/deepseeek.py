@@ -1,6 +1,7 @@
 from .base import BaseClient, ModelRole, merge_system_cache_prefix_into_system
 from .model_override import apply_model_override_thinking
-from openai import OpenAI
+from .llm_errors import reraise_if_insufficient_credits
+from .openai import _OpenAINoQuotaRetry
 from typing import List, Dict, Any, Optional
 import os
 import typer
@@ -10,7 +11,7 @@ from langsmith import traceable
 class DeepSeekClient(BaseClient):
     def __init__(self):
         super().__init__()
-        self.client = OpenAI(
+        self.client = _OpenAINoQuotaRetry(
             api_key=os.getenv("DEEPSEEK_API_KEY"),
             base_url="https://api.deepseek.com"
         )
@@ -82,6 +83,7 @@ class DeepSeekClient(BaseClient):
                 response_format=response_format,
                 error=str(e),
             )
+            reraise_if_insufficient_credits(e, vendor="deepseek")
             raise
         
         if response.usage:
