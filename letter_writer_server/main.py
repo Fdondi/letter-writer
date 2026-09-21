@@ -5,7 +5,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from starlette.responses import Response
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse, Response
 
 from letter_writer_server.core.rate_limit import limiter
 
@@ -51,8 +52,15 @@ from starlette.middleware.sessions import SessionMiddleware as StarletteSessionM
 # Use our custom session middleware instead
 from letter_writer_server.core.session import SessionMiddleware
 from letter_writer_server.core.config import settings
+from letter_writer_server.core.harness import (
+    assert_harness_environment,
+    harness_zero_costs,
+    is_harness_mode,
+    is_llm_blocked_path,
+    llm_disabled_body,
+)
 
-from letter_writer_server.api import admin_event_log, auth, phases, personal_data, research, documents, costs, misc, phase_feedback, autocomplete, agentic, job_capture
+from letter_writer_server.api import admin_event_log, auth, phases, personal_data, research, documents, costs, misc, phase_feedback, autocomplete, agentic, job_capture, harness
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -73,6 +81,7 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    allow_origin_regex=settings.EXTENSION_CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Admin-Event-Log-Key"],
@@ -84,6 +93,23 @@ app.add_middleware(
     cookie_name=settings.SESSION_COOKIE_NAME,
     max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
 )
+
+
+class HarnessGuardMiddleware(BaseHTTPMiddleware):
+    """Block LLM/embed POSTs and stub cost reads when HARNESS_MODE is on."""
+
+    async def dispatch(self, request: Request, call_next):
+        if not is_harness_mode():
+            return await call_next(request)
+        path = request.url.path
+        if is_llm_blocked_path(request.method, path):
+            return JSONResponse(llm_disabled_body(), status_code=503)
+        if path.startswith("/api/costs/"):
+            return JSONResponse(harness_zero_costs())
+        return await call_next(request)
+
+
+app.add_middleware(HarnessGuardMiddleware)
 
 # Trust Proxy Headers (for HTTPS/Host behind load balancer).
 # In production set TRUSTED_PROXY_HOSTS to your load balancer IP/CIDR.
@@ -107,6 +133,7 @@ app.include_router(costs.router, prefix="/api/costs", tags=["costs"])
 app.include_router(misc.router, prefix="/api", tags=["misc"])
 app.include_router(job_capture.router, prefix="/api/job-capture", tags=["job_capture"])
 app.include_router(admin_event_log.router, prefix="/api/admin/event-log", tags=["admin_event_log"])
+app.include_router(harness.router, prefix="/api/harness", tags=["harness"])
 
 @app.get("/health")
 async def health_check():
@@ -115,6 +142,11 @@ async def health_check():
 
 @app.on_event("startup")
 def _log_langsmith_status():
+    if is_harness_mode():
+        assert_harness_environment()
+        logging.getLogger("letter_writer_server.main").warning(
+            "HARNESS_MODE is on: synthetic data, LLM disabled, no Google/Firestore"
+        )
     tracing = (os.environ.get("LANGSMITH_TRACING") or "").strip().lower() == "true"
     project = os.environ.get("LANGSMITH_PROJECT", "")
     endpoint = os.environ.get("LANGSMITH_ENDPOINT", "")

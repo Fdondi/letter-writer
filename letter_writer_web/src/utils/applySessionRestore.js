@@ -30,6 +30,7 @@ export function applyRestoredSessionState(sessionState, setters, { sessionId = n
     if (fields.location !== undefined) setters.setLocation(fields.location);
     if (fields.language !== undefined) setters.setLanguage(fields.language);
     if (fields.salary !== undefined) setters.setSalary(fields.salary);
+    if (fields.sourceUrl !== undefined) setters.setSourceUrl?.(fields.sourceUrl);
     if (fields.additionalUserInfo !== undefined) setters.setAdditionalUserInfo(fields.additionalUserInfo);
     if (fields.additionalCompanyInfo !== undefined) setters.setAdditionalCompanyInfo(fields.additionalCompanyInfo);
     if (

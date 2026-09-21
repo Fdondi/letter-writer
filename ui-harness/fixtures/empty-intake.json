@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "synthetic": true,
+  "saved_at": "2026-01-01T00:00:00+00:00",
+  "session_key": "harness-empty-intake",
+  "user_id": "harness-local",
+  "company_name": "",
+  "job_title": "",
+  "stage": "input",
+  "vendor_count": 0,
+  "empty": true,
+  "session": {
+    "cv_text": "Alex Harness is a synthetic résumé used only in the Letter Writer UI harness. Experience: payments in Zürich.",
+    "job_text": "",
+    "metadata": {
+      "common": {
+        "selected_vendors": ["openai"]
+      }
+    }
+  }
+}

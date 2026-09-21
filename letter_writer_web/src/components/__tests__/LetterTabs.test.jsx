@@ -69,11 +69,10 @@ describe('LetterTabs Component', () => {
       expect(screen.getByText('Drag paragraphs here to build your final letter')).toBeInTheDocument();
     });
 
-    test('renders job description with original text', () => {
+    test('does not render inline job offer column', () => {
       render(<TestWrapper {...defaultProps} />);
 
-      expect(screen.getByRole('tab', { name: /Job offer/i })).toBeInTheDocument();
-      expect(screen.getByText('Original letter text here...')).toBeInTheDocument();
+      expect(screen.queryByRole('tab', { name: /Job offer/i })).not.toBeInTheDocument();
     });
 
     test('renders bottom drop zone', () => {
@@ -280,9 +279,8 @@ describe('LetterTabs Component', () => {
     test('calculates column width correctly', () => {
       render(<TestWrapper {...defaultProps} />);
       
-      // With 3 vendors + final + original = 5 columns total
-      // Each should be 20% width (100% / 5)
-      const columns = screen.getAllByText(/openai|anthropic|gemini|Final Letter|Original Letter/);
+      // With 3 vendors + final = 4 columns total
+      const columns = screen.getAllByText(/openai|anthropic|gemini|Final Letter/);
       expect(columns.length).toBeGreaterThan(0);
     });
   });

@@ -1,0 +1,28 @@
+{
+  "format_version": 1,
+  "synthetic": true,
+  "saved_at": "2026-01-01T00:00:00+00:00",
+  "session_key": "harness-intake-filled",
+  "user_id": "harness-local",
+  "company_name": "Harness Co",
+  "job_title": "Synthetic Engineer",
+  "stage": "input",
+  "vendor_count": 0,
+  "empty": false,
+  "session": {
+    "cv_text": "Alex Harness is a synthetic résumé used only in the Letter Writer UI harness. Experience: payments in Zürich.",
+    "job_text": "Harness Co\nSynthetic Engineer\nZürich\n\nZürich sucht eine Entwicklerin für das Zahlungs-Team. This posting is synthetic harness data, not a real job.",
+    "metadata": {
+      "common": {
+        "company_name": "Harness Co",
+        "job_title": "Synthetic Engineer",
+        "location": "Zürich",
+        "language": "German",
+        "salary": "",
+        "selected_vendors": ["openai"],
+        "requirements": ["Python", "Careful reviews"],
+        "hire_problem": "Ship reliable payments without slowing the team."
+      }
+    }
+  }
+}

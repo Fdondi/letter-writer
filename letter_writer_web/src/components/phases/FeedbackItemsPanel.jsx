@@ -24,6 +24,9 @@ export function FeedbackItemsPanel({
   onInputClusterBroadcast = undefined,
   vendor = undefined,
   knownWeaknesses = undefined,
+  hideAddButton = false,
+  hideEmptyFixPlaceholder = false,
+  itemPredicate = null,
 }) {
   const approvals = useFeedbackItemApprovals({
     categoryKey,
@@ -52,19 +55,24 @@ export function FeedbackItemsPanel({
     maybeAdvanceTab: approvals.maybeAdvanceTab,
   });
 
+  const visibleItems = useMemo(
+    () => (typeof itemPredicate === "function" ? items.filter(itemPredicate) : items),
+    [items, itemPredicate],
+  );
+
   const fixItems = useMemo(() => {
-    const raw = items.filter((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX);
+    const raw = visibleItems.filter((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX);
     return [...raw].sort((a, b) => {
       const ap = feedbackItemApprovals[a.id] === true;
       const bp = feedbackItemApprovals[b.id] === true;
       if (ap !== bp) return ap ? 1 : -1;
       return 0;
     });
-  }, [items, feedbackItemApprovals]);
+  }, [visibleItems, feedbackItemApprovals]);
 
   const goodItems = useMemo(
-    () => items.filter((it) => it.type === FEEDBACK_TYPES.ALREADY_GOOD),
-    [items],
+    () => visibleItems.filter((it) => it.type === FEEDBACK_TYPES.ALREADY_GOOD),
+    [visibleItems],
   );
 
   const filteredFeedbackDetails = useMemo(() => {
@@ -116,20 +124,24 @@ export function FeedbackItemsPanel({
             AI observations. Approve, edit, or reject them, then approve the vendor for final letter generation.
           </div>
         </div>
-        <button
-          type="button"
-          onClick={editing.onAdd}
-          disabled={disabled}
-          style={{ fontSize: 12, padding: "4px 10px", cursor: disabled ? "not-allowed" : "pointer" }}
-        >
-          Add critique
-        </button>
+        {!hideAddButton && (
+          <button
+            type="button"
+            onClick={editing.onAdd}
+            disabled={disabled}
+            style={{ fontSize: 12, padding: "4px 10px", cursor: disabled ? "not-allowed" : "pointer" }}
+          >
+            Add critique
+          </button>
+        )}
       </div>
 
       {fixItems.length === 0 ? (
-        <div style={{ fontSize: 13, color: "#059669", padding: "10px 0", fontWeight: 500 }}>
-          No open critiques in this category.
-        </div>
+        hideEmptyFixPlaceholder ? null : (
+          <div style={{ fontSize: 13, color: "#059669", padding: "10px 0", fontWeight: 500 }}>
+            No open critiques in this category.
+          </div>
+        )
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 10 }}>
           {fixItems.map((it) => (

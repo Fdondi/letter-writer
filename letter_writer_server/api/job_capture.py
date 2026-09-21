@@ -11,9 +11,11 @@ from pydantic import BaseModel
 
 from letter_writer.client import ModelVendor, get_client
 from letter_writer.generation import extract_job_page_metadata
+from letter_writer.page_templates import attach_jobs_ch_company_about, extract_from_captured_page
 from letter_writer_server.api.cost_utils import check_spending_limits, with_user_monthly_cost
 from letter_writer_server.api.extract_pipeline import resolve_cv_for_extract, run_extract_pipeline
 from letter_writer_server.api.misc import _reset_client_counters, _track_and_reset_client_cost
+from letter_writer_server.core.harness import apply_harness_job_capture, is_harness_mode
 from letter_writer_server.core.job_capture_stash import (
     delete_capture,
     load_capture,
@@ -56,6 +58,32 @@ async def ingest_job_capture(request: Request, data: IngestRequest):
     return {"status": "ok", "capture_id": capture_id}
 
 
+@router.get("/{capture_id}/")
+@limiter.limit("40/minute")
+async def peek_job_capture(
+    request: Request,
+    capture_id: str,
+    session: Session = Depends(get_session),
+    _user: dict = Depends(require_auth),
+):
+    """Return captured URL/title immediately; does not run extraction or consume the stash."""
+    payload = load_capture(capture_id)
+    if not payload:
+        raise HTTPException(
+            status_code=400,
+            detail="Capture not found or expired. Send the page from the extension again.",
+        )
+    url = str(payload.get("url") or "").strip()
+    title = str(payload.get("title") or "").strip()
+    if url:
+        metadata = dict(session.get("metadata") or {})
+        common = dict(metadata.get("common") or {})
+        common["source_url"] = url
+        metadata["common"] = common
+        session["metadata"] = metadata
+    return {"status": "ok", "url": url, "title": title, "source_url": url}
+
+
 @router.post("/{capture_id}/process/")
 async def process_job_capture(
     capture_id: str,
@@ -79,6 +107,17 @@ async def process_job_capture(
         delete_capture(capture_id)
         raise HTTPException(status_code=400, detail="Capture had no text or HTML")
 
+    if is_harness_mode():
+        result = apply_harness_job_capture(session, payload)
+        delete_capture(capture_id)
+        return result
+
+    parsed_page = extract_from_captured_page(html, source_url)
+    attach_jobs_ch_company_about(parsed_page)
+    focused_text = str(parsed_page.get("job_text") or "").strip()
+    competence_source_text = focused_text or visible_text or html
+    canonical_url = str(parsed_page.get("source_url") or "").strip() or source_url
+
     cv_text, user_data, user_id = resolve_cv_for_extract(session)
     ai_client = get_client(ModelVendor.OPENAI)
     _reset_client_counters(ai_client)
@@ -91,14 +130,15 @@ async def process_job_capture(
             html=html,
             source_url=source_url,
             trace_dir=trace_dir,
+            parsed_page=parsed_page,
         )
-        if source_url:
-            meta["source_url"] = source_url
+        if canonical_url:
+            meta["source_url"] = str(meta.get("source_url") or "").strip() or canonical_url
         return meta
 
     try:
         result = run_extract_pipeline(
-            competence_source_text=visible_text or html,
+            competence_source_text=competence_source_text,
             similar_job_text=None,
             page_metadata_fn=_page_metadata,
             session=session,
@@ -130,7 +170,9 @@ async def process_job_capture(
             "similar_documents": result["similar_documents"],
             "top_docs": result["top_docs"],
             "session_id": result["session_id"],
-            "source_url": source_url,
+            "source_url": str(
+                (result.get("extraction") or {}).get("source_url") or canonical_url
+            ),
         },
         session,
     )

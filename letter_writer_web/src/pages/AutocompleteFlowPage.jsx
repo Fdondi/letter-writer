@@ -25,6 +25,7 @@ export default function AutocompleteFlowPage() {
           location: session.location,
           language: session.language,
           salary: session.salary,
+          sourceUrl: session.sourceUrl,
           requirements: session.requirements,
           jobText: session.jobText,
         },

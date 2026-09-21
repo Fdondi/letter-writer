@@ -2,11 +2,13 @@
  * Per-topic agentic flow UI: draft, topic columns (threads), status. Server drives feedback;
  * a loading bar fills over the poll interval and when full we fire one poll (no overlapping requests).
  */
-import React, { useEffect, useRef, useState } from "react";
-import AgenticThread from "./AgenticThread";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import AgenticThread, { AgenticCommentBlock } from "./AgenticThread";
+import AnnotatedDraft from "./AnnotatedDraft";
 import { useTranslation } from "../utils/useTranslation";
 import LanguageSelector from "./LanguageSelector";
-import { AGENTIC_TOPICS } from "../constants/feedbackTopics.js";
+import { AGENTIC_TOPICS, FEEDBACK_TOPIC_LABELS, TOPIC_NOTE_COLORS } from "../constants/feedbackTopics.js";
+import { resolveQuoteSpan } from "../utils/resolveQuoteSpan";
 
 const FEEDBACK_DESCRIPTIONS = {
   instruction: "Style and tone vs instructions.",
@@ -42,7 +44,40 @@ function hasAnyThreadComments(threadMap) {
   });
 }
 
-function DraftWithTranslation({ draftText, translation }) {
+function collectAgenticNotes(threads, letter, draftVendor) {
+  const notes = [];
+  for (const topic of AGENTIC_TOPICS) {
+    const list = threads?.[topic] || [];
+    list.forEach((comment, index) => {
+      if (comment?.carried || comment?.removed) return;
+      const owner = String(comment.draft_vendor || "").trim();
+      if (owner && draftVendor && owner !== draftVendor) return;
+      const span = resolveQuoteSpan(letter || "", comment.quote, comment.matched_text);
+      notes.push({
+        id: comment.id || `${topic}-${index}`,
+        topic,
+        commentIndex: index,
+        comment,
+        title: FEEDBACK_TOPIC_LABELS[topic] || topic,
+        color: TOPIC_NOTE_COLORS[topic] || "#6b7280",
+        start: span?.start,
+        end: span?.end,
+        unanchored: !span,
+        body: comment.text,
+      });
+    });
+  }
+  return notes;
+}
+
+function DraftWithTranslation({
+  draftText,
+  translation,
+  notes = [],
+  expandedId,
+  onToggle,
+  renderExpanded,
+}) {
   useEffect(() => {
     if (translation) translation.resetFieldTranslation(DRAFT_FIELD_ID, draftText);
   }, [draftText, translation]);
@@ -51,6 +86,7 @@ function DraftWithTranslation({ draftText, translation }) {
     ? translation.getTranslatedText(DRAFT_FIELD_ID, draftText)
     : draftText;
   const viewLanguage = translation ? translation.getFieldViewLanguage(DRAFT_FIELD_ID) : "source";
+  const viewingTranslation = Boolean(translation && viewLanguage && viewLanguage !== "source");
 
   const handleLanguageChange = async (code) => {
     if (!translation) return;
@@ -58,6 +94,10 @@ function DraftWithTranslation({ draftText, translation }) {
     if (code === "source") return;
     if (draftText) await translation.translateField(DRAFT_FIELD_ID, draftText, code);
   };
+
+  const displayNotes = viewingTranslation
+    ? notes.map((n) => ({ ...n, unanchored: true, start: undefined, end: undefined }))
+    : notes;
 
   return (
     <div style={{ position: "relative", padding: "0 16px 16px" }}>
@@ -86,18 +126,20 @@ function DraftWithTranslation({ draftText, translation }) {
           />
         </div>
       )}
-      <div
-        style={{
-          paddingTop: translation ? 32 : 0,
-          fontSize: 13,
-          color: "var(--text-color)",
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-          maxHeight: 200,
-          overflowY: "auto",
-        }}
-      >
-        {displayedText}
+      <div style={{ paddingTop: translation ? 32 : 0 }}>
+        <AnnotatedDraft
+          text={displayedText}
+          notes={displayNotes}
+          expandedId={expandedId}
+          onToggle={onToggle}
+          renderExpanded={renderExpanded}
+          minHeight={160}
+          translationNotice={
+            viewingTranslation
+              ? "Notes attach to the source letter. Switch back to the original language to see highlights."
+              : null
+          }
+        />
       </div>
     </div>
   );
@@ -124,6 +166,7 @@ export default function AgenticFlow({
   const [draftCollapsed, setDraftCollapsed] = useState(false);
   const [feedbackCollapsed, setFeedbackCollapsed] = useState(false);
   const [draftTab, setDraftTab] = useState(null); // selected draft vendor tab
+  const [expandedNoteId, setExpandedNoteId] = useState(null);
   const [voteCountdown, setVoteCountdown] = useState(null);
   const startRef = useRef(Date.now());
   const pollInFlightRef = useRef(false);
@@ -335,6 +378,13 @@ export default function AgenticFlow({
     if (draftVendorList.length > 0 && draftTab && !draftVendorList.includes(draftTab)) setDraftTab(draftVendorList[0]);
   }, [draftVendorList, draftTab]);
 
+  const currentDraftVendor = draftVendorList.length > 1 ? draftTab : (draftVendorList[0] || agenticState?.draft_vendor || "");
+  const currentDraftText = (draftVendorList.length > 1 ? draftLetters[draftTab] : draftLetter) ?? "";
+  const agenticNotes = useMemo(
+    () => collectAgenticNotes(threads, currentDraftText, currentDraftVendor),
+    [threads, currentDraftText, currentDraftVendor],
+  );
+
   const handleRemoveComment = (topic, commentIndex) => {
     setEditedThreads((prev) => {
       const base = prev ?? threadsFromState;
@@ -467,7 +517,7 @@ export default function AgenticFlow({
   }
 
   return (
-    <div style={{ padding: 16, overflowAnchor: "none" }}>
+    <div data-testid="agentic-flow" style={{ padding: 16, overflowAnchor: "none" }}>
       {error && (
         <div
           style={{
@@ -596,8 +646,35 @@ export default function AgenticFlow({
                 </div>
               )}
               <DraftWithTranslation
-                draftText={(draftVendorList.length > 1 ? draftLetters[draftTab] : draftLetter) ?? ""}
+                draftText={currentDraftText}
                 translation={translation}
+                notes={agenticNotes}
+                expandedId={expandedNoteId}
+                onToggle={setExpandedNoteId}
+                renderExpanded={(note) => (
+                  <AgenticCommentBlock
+                    comment={note.comment}
+                    commentIndex={note.commentIndex}
+                    topic={note.topic}
+                    fieldId={translation ? `agentic_${note.topic}_${note.commentIndex}` : null}
+                    vendorColors={vendorColors}
+                    translation={translation}
+                    canEdit={canEditThreads}
+                    onRemove={() => handleRemoveComment(note.topic, note.commentIndex)}
+                    onReinstate={() => handleReinstateComment(note.topic, note.commentIndex)}
+                    onEdit={(newText) => handleEditComment(note.topic, note.commentIndex, newText)}
+                    onRemoveAddendum={
+                      handleRemoveAddendum
+                        ? (addendumIndex) => handleRemoveAddendum(note.topic, note.commentIndex, addendumIndex)
+                        : undefined
+                    }
+                    onEditAddendum={
+                      handleEditAddendum
+                        ? (addendumIndex, newText) => handleEditAddendum(note.topic, note.commentIndex, addendumIndex, newText)
+                        : undefined
+                    }
+                  />
+                )}
               />
             </>
           )}
@@ -633,7 +710,7 @@ export default function AgenticFlow({
             }}
           >
             <span style={{ fontSize: 10 }}>{feedbackCollapsed ? "▶" : "▼"}</span>
-            Agent feedback
+            Agent feedback summary
           </button>
           {!feedbackCollapsed && (
             <>
@@ -733,7 +810,7 @@ export default function AgenticFlow({
                       onReinstateComment={handleReinstateComment}
                       onEditComment={handleEditComment}
                       onRemoveAddendum={handleRemoveAddendum}
-                      onEditAddendum={handleEditAddendum}
+                      hideComments
                     />
                     {idx < AGENTIC_TOPICS.length - 1 && (
                       <div

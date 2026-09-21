@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { Outlet, useNavigate, useLocation } from "react-router-dom";
+import React, { useState, useEffect, useRef } from "react";
+import { Outlet, useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import StyleInstructionsBlade from "../components/StyleInstructionsBlade";
 import OverlayPanel from "../components/OverlayPanel";
 import PersonalDataPage from "../components/PersonalDataPage";
@@ -9,6 +9,7 @@ import SessionBackupsPage from "../components/SessionBackupsPage";
 import CostsPage from "../components/CostsPage";
 import AuthButton from "../components/AuthButton";
 import AppVersionLabel from "../components/AppVersionLabel";
+import HarnessBanner from "../components/HarnessBanner";
 import CostDisplay from "../components/CostDisplay";
 import LocalPricingWarningModal from "../components/LocalPricingWarningModal.jsx";
 import SessionExpiredModal from "../components/SessionExpiredModal.jsx";
@@ -18,15 +19,18 @@ import { scheduleGoogleOAuthRedirect } from "../utils/googleOAuthRedirect";
 import { showNotification } from "../utils/apiNotifications";
 import { useJobSession } from "../contexts/JobSessionContext";
 import { getScaleConfig } from "../utils/competenceScales";
+import { harnessRestorePath, loadHarnessFixture } from "../utils/harnessFixtureBoot";
 
 export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const session = useJobSession();
   const fillViewport =
     location.pathname.startsWith("/flows/vendors") ||
     location.pathname.startsWith("/flows/agentic");
   const { isAuthenticated, checkingAuth, showSessionExpiredModal } = session;
+  const harnessFixtureBootRef = useRef(false);
 
   // Overlay flags (layout-local, dies with AppLayout)
   const [showStyleBlade, setShowStyleBlade] = useState(false);
@@ -48,6 +52,32 @@ export default function AppLayout() {
     window.addEventListener(COST_TRACKING_ERROR_EVENT, onCostErr);
     return () => window.removeEventListener(COST_TRACKING_ERROR_EVENT, onCostErr);
   }, []);
+
+  const applyBackupRestore = session.applyBackupRestore;
+  const fixtureId = searchParams.get("fixture");
+
+  useEffect(() => {
+    if (!isAuthenticated) return undefined;
+    if (!fixtureId || harnessFixtureBootRef.current) return undefined;
+    harnessFixtureBootRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        const payload = await loadHarnessFixture(fixtureId);
+        if (cancelled) return;
+        const result = applyBackupRestore(payload.session_state || {}, payload.session_id || null);
+        setSearchParams({}, { replace: true });
+        const path = harnessRestorePath(result);
+        navigate(path, { replace: true, state: path === "/" ? {} : { rehydrated: true } });
+      } catch (e) {
+        console.warn("Harness fixture load failed:", e);
+        harnessFixtureBootRef.current = false;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, fixtureId, applyBackupRestore, setSearchParams, navigate]);
 
   // Warn on unload when unsaved work exists
   useEffect(() => {
@@ -113,6 +143,7 @@ export default function AppLayout() {
           <button type="button" onClick={() => setCostTrackingError(null)} style={{ flexShrink: 0, border: "none", background: "transparent", color: "inherit", cursor: "pointer", fontSize: 16, lineHeight: 1 }} aria-label="Dismiss cost tracking warning">×</button>
         </div>
       )}
+      <HarnessBanner />
 
       <div style={{ position: "relative", marginBottom: 12, flexShrink: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>

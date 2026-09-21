@@ -11,14 +11,23 @@ from .config import EMBED_MODEL
 logger = logging.getLogger(__name__)
 
 
+def embed_batch(texts: List[str], client: OpenAI) -> List[List[float]]:
+    """Embed many strings in one OpenAI call. Empty input returns []."""
+    if not texts:
+        return []
+    cleaned = [t if (t or "").strip() else " " for t in texts]
+    response = client.embeddings.create(model=EMBED_MODEL, input=cleaned)
+    by_index = sorted(response.data, key=lambda d: d.index)
+    return [list(d.embedding) for d in by_index]
+
+
 def embed(text: str, client: OpenAI) -> Vector:
     """Get embedding vector for text using OpenAI.
     
     Returns a Firestore Vector object so that find_nearest can use the field.
     Plain Python lists are stored as Firestore arrays, which the vector index ignores.
     """
-    response = client.embeddings.create(model=EMBED_MODEL, input=text)
-    return Vector(response.data[0].embedding)
+    return Vector(embed_batch([text], client)[0])
 
 
 def ensure_vector_index(collection, vector_field: str = "vector", vector_size: int = 1536) -> None:

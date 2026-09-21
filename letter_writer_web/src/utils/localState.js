@@ -32,6 +32,7 @@ export function getFullState(state) {
     location: state.location || "",
     language: state.language || "",
     salary: state.salary || "",
+    sourceUrl: state.sourceUrl || "",
     requirements: state.requirements || [],
     competences: state.competences || {},
     hireProblem: state.hireProblem || "",
@@ -151,6 +152,7 @@ export function restoreStateFromLocal(stateSetters) {
   if (savedState.location !== undefined) stateSetters.setLocation(savedState.location);
   if (savedState.language !== undefined) stateSetters.setLanguage(savedState.language);
   if (savedState.salary !== undefined) stateSetters.setSalary(savedState.salary);
+  if (savedState.sourceUrl !== undefined && stateSetters.setSourceUrl) stateSetters.setSourceUrl(savedState.sourceUrl);
   if (savedState.requirements !== undefined) stateSetters.setRequirements(savedState.requirements);
   if (savedState.competences !== undefined) stateSetters.setCompetences(savedState.competences || {});
   if (savedState.hireProblem !== undefined && stateSetters.setHireProblem) stateSetters.setHireProblem(savedState.hireProblem || "");

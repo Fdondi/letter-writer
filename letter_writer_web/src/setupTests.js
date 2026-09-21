@@ -22,6 +22,13 @@ global.fetch = jest.fn((input, init) => {
         }),
     });
   }
+  if (String(url).includes('/api/harness/')) {
+    return Promise.resolve({
+      ok: false,
+      status: 404,
+      json: () => Promise.resolve({ detail: 'Not found' }),
+    });
+  }
   if (typeof __origFetch === 'function') {
     return __origFetch(input, init);
   }

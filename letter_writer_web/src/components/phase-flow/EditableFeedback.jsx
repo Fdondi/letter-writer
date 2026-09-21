@@ -127,6 +127,7 @@ export default function EditableFeedback({
             ) : (
               <button
                 type="button"
+                data-testid="phase-approve"
                 onClick={onApprove}
                 style={{
                   fontSize: 11,

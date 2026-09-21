@@ -12,7 +12,7 @@ from fastapi import Request, Response, HTTPException, Depends
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from letter_writer_server.core.config import settings
+from letter_writer_server.core.harness import HARNESS_USER, is_harness_mode
 
 logger = logging.getLogger(__name__)
 
@@ -319,6 +319,9 @@ class SessionMiddleware(BaseHTTPMiddleware):
         
         request.state.session = Session(session_data, session_key)
         request.scope["session"] = request.state.session
+        if is_harness_mode() and not request.state.session.get("user"):
+            request.state.session["user"] = dict(HARNESS_USER)
+            request.state.session["auth_time"] = time.time()
         
         response = await call_next(request)
         
@@ -378,7 +381,8 @@ class SessionMiddleware(BaseHTTPMiddleware):
                     max_age=self.max_age,
                     httponly=True,
                     samesite="lax",
-                    secure=True # Always secure for now, maybe config?
+                    path="/",
+                    secure=not is_harness_mode(),
                 )
         
         return response

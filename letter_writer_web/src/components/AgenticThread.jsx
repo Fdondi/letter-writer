@@ -258,6 +258,7 @@ export default function AgenticThread({
   onEditComment,
   onRemoveAddendum,
   onEditAddendum,
+  hideComments = false,
 }) {
   const label = topicLabels[topic] || topic;
   const meta = topicMeta || {};
@@ -407,12 +408,13 @@ export default function AgenticThread({
           style={{
             fontSize: 11,
             color: "var(--secondary-text-color)",
-            marginBottom: 8,
+            marginBottom: hideComments ? 0 : 8,
           }}
         >
           {description}
         </div>
       )}
+      {!hideComments && (
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {visibleThreadEntries.length === 0 ? (
           <div
@@ -444,8 +446,13 @@ export default function AgenticThread({
           ))
         )}
       </div>
+      )}
     </div>
   );
+}
+
+export function AgenticCommentBlock(props) {
+  return <CommentBlock {...props} />;
 }
 
 function CommentBlock({ comment, commentIndex, topic, fieldId, vendorColors, translation, canEdit, onRemove, onReinstate, onEdit, onRemoveAddendum, onEditAddendum }) {

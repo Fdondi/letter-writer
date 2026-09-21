@@ -32,11 +32,20 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:5173",
         "http://localhost:3000",
+        "http://localhost:3010",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
+        "http://127.0.0.1:3010",
         "https://localhost:8443",
         "https://localhost",
     ]
+
+    # Extension ingest POSTs from moz-extension:// / chrome-extension://.
+    # Firefox reports a missing Access-Control-Allow-Origin as
+    # "NetworkError when attempting to fetch resource." Host UUIDs are per-install.
+    EXTENSION_CORS_ORIGIN_REGEX: str = (
+        r"^(moz-extension://[0-9a-fA-F-]+|chrome-extension://[a-z]+)$"
+    )
 
     @property
     def cors_origins(self) -> List[str]:

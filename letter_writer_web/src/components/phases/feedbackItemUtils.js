@@ -139,6 +139,14 @@ export function normalizeCategoryItems(raw, categoryKey = "") {
           persist_user_context_to_cv: persistUserContextToCv,
           persist_user_context_for_agents: persistUserContextForAgents,
           input_declined: inputDeclined,
+          quote: String(it.quote ?? "").trim(),
+          matched_text: String(it.matched_text ?? "").trim(),
+          ...(it.span_start != null && it.span_end != null
+            ? { span_start: Number(it.span_start), span_end: Number(it.span_end) }
+            : {}),
+          ...(String(it.draft_vendor ?? "").trim()
+            ? { draft_vendor: String(it.draft_vendor).trim() }
+            : {}),
         };
       })
       .filter(Boolean);
@@ -224,11 +232,15 @@ export function firstFeedbackKeyWithItems(feedbackKeys, feedback, overrides = {}
   return null;
 }
 
-export function categoryHasPleaseFix(items) {
-  return items.some((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX);
+export function pleaseFixItems(items) {
+  return (Array.isArray(items) ? items : []).filter((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX);
 }
 
-function itemIsApproved(it, itemApprovals) {
+export function categoryHasPleaseFix(items) {
+  return pleaseFixItems(items).length > 0;
+}
+
+export function itemIsApproved(it, itemApprovals) {
   if (!it || it.type !== FEEDBACK_TYPES.PLEASE_FIX) return true;
   const status = String(it.status || "").toUpperCase();
   if (status === "INPUT_NEEDED") {

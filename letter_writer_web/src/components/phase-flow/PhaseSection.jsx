@@ -20,6 +20,7 @@ export default function PhaseSection({
 
   return (
     <div
+      data-testid={`phase-${String(title || "section").toLowerCase().replace(/\s+/g, "-")}`}
       style={{
         border: "1px solid #e5e7eb",
         borderRadius: 8,

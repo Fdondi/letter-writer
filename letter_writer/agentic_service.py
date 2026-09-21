@@ -30,6 +30,7 @@ from .feedback_checks import (
 from .feedback_topics import AGENTIC_TOPIC_KEYS
 from .instructions import get_style_instructions
 from .letter_generation import generate_letter
+from .quote_span import apply_span_to_item, resolve_quote_span_multi
 from .rewrite import rewrite_letter
 from .phased_service import get_effective_additional_user_info, get_metadata_field, language_prefix_for_session
 from .cost_tracker import track_api_cost
@@ -133,8 +134,9 @@ SCHEMA_A1 = {
     "additionalProperties": False,
     "properties": {
         "new_comment": {"type": "string"},
+        "quote": {"type": "string"},
     },
-    "required": ["new_comment"],
+    "required": ["new_comment", "quote"],
 }
 
 SCHEMA_A2 = {
@@ -1016,9 +1018,9 @@ def _agentic_feedback_prompt_first_agent(topic: str, context: str, topic_label: 
         "RULES:\n"
         "- Do NOT pick a 'best' draft or declare any single proposal the winner.\n"
         "- Discuss specific strengths and weaknesses of each proposal.\n"
-        "- When praising or criticizing a passage, you MUST quote the exact words from the draft "
-        "(use quotation marks) so your comment is fully understandable on its own, even without "
-        "the original drafts.\n"
+        "- When praising or criticizing a passage, put a short verbatim excerpt from the draft "
+        "in the quote field so the note can be attached to that span. Leave quote empty only when "
+        "the point is about the letter as a whole (rare).\n"
         "- Suggest concrete changes where appropriate.\n\n"
         "If you have substantive feedback (issues or suggestions for the draft), write it in a single comment. "
         "If you have nothing to add, output exactly: NO COMMENT (or SKIP). "
@@ -1030,7 +1032,8 @@ def _agentic_feedback_prompt_first_agent(topic: str, context: str, topic_label: 
     prompt = (
         context + "\n\n"
         "Discuss the strengths and weaknesses of each draft for this dimension. "
-        "Quote exact phrases when praising or criticizing. Do NOT pick a best draft. "
+        "Set quote to a short verbatim excerpt when praising or criticizing a passage."
+        "Do NOT pick a best draft. "
         "Reply with your comment, or with NO COMMENT (or SKIP) if you have nothing to add."
     )
     return system, prompt
@@ -1045,8 +1048,9 @@ def _agentic_feedback_prompt_subsequent(
         "You see the draft, context, and the current thread. Comments marked [OPEN] require your action; [FINALIZED] comments are closed (all bots have already acted); [REMOVED] comments are visible for audit but must never be used downstream.\n\n"
         "RULES:\n"
         "- Do NOT pick a 'best' draft or declare any single proposal the winner.\n"
-        "- When praising or criticizing a passage, you MUST quote the exact words from the draft "
-        "(use quotation marks) so your comment is fully understandable on its own.\n"
+        "- When praising or criticizing a passage, put a short verbatim excerpt from the draft "
+        "in the quote field so the note can be attached to that span. Leave quote empty only when "
+        "the point is about the letter as a whole (rare).\n"
         "- Suggest concrete changes where appropriate.\n"
         "Base factual claims only on the labeled sections in the context above; do not say something is absent "
         "from materials you were not given in this prompt.\n\n"
@@ -1208,12 +1212,16 @@ def _phase_prompt(
         system = (
             f"You are a feedback agent for '{topic_label}'. "
             "Use only the provided response tool/schema. "
-            "Return one optional top-level comment or null."
+            "Return one optional top-level comment (new_comment) and a quote. "
+            "quote is a short verbatim excerpt from one of the drafts that the comment applies to. "
+            "Leave quote as an empty string only when the point is about the letter as a whole (rare). "
+            "If nothing substantive, return new_comment as an empty string and quote as \"\"."
         )
         prompt = (
             context
             + "\n\nOnly propose one substantive top-level comment for this topic. "
-            "If nothing substantive, return an empty string \"\"."
+            "Set quote to a short verbatim excerpt from a draft when the comment targets a passage. "
+            "If nothing substantive, return an empty string \"\" for new_comment and quote."
         )
         return system, prompt
     if phase in PHASES_SUBCOMMENT_ADD:
@@ -1332,7 +1340,11 @@ def call_agentic_phase_action(
     data = _parse_structured_json(raw)
     if phase == PHASE_A1:
         val = data.get("new_comment")
-        return {"new_comment": val if isinstance(val, str) and val.strip() else None}
+        quote = data.get("quote")
+        return {
+            "new_comment": val if isinstance(val, str) and val.strip() else None,
+            "quote": quote.strip() if isinstance(quote, str) else "",
+        }
     if phase in PHASES_SUBCOMMENT_ADD:
         out = []
         for s in data.get("subcomments") or []:
@@ -1449,23 +1461,35 @@ def apply_phase_a1_comment(
     new_comment: Optional[str],
     *,
     round_num: int,
+    quote: str = "",
+    draft_letters: Optional[Dict[str, str]] = None,
+    embed_fn=None,
 ) -> bool:
     text = (new_comment or "").strip()
     if not text or is_agentic_skip(text):
         return False
-    thread.append(
-        {
-            "id": str(uuid.uuid4())[:8],
-            "vendor": vendor,
-            "text": text,
-            "addendums": [],
-            "votes": {"up": [], "down": [], "abstain": []},
-            "votes_by_round": {},
-            "subcomments": [],
-            "removed": False,
-            "created_round": int(round_num or 1),
-        }
-    )
+    quote_text = (quote or "").strip()
+    comment: Dict[str, Any] = {
+        "id": str(uuid.uuid4())[:8],
+        "vendor": vendor,
+        "text": text,
+        "quote": quote_text,
+        "matched_text": "",
+        "addendums": [],
+        "votes": {"up": [], "down": [], "abstain": []},
+        "votes_by_round": {},
+        "subcomments": [],
+        "removed": False,
+        "created_round": int(round_num or 1),
+    }
+    if quote_text:
+        try:
+            letters = draft_letters or {}
+            span = resolve_quote_span_multi(letters, quote_text, embed_fn=embed_fn)
+            apply_span_to_item(comment, span)
+        except Exception:
+            logger.exception("attaching quote span to agentic comment failed")
+    thread.append(comment)
     return True
 
 
@@ -1841,23 +1865,19 @@ def _apply_agent_response(
                 # Removal is decided by majority vote state (down > up); do not force-remove here.
     new_comment = response.get("new_comment")
     if new_comment and isinstance(new_comment, str) and new_comment.strip():
-        new_comment_id = str(uuid.uuid4())[:8]
-        thread.append({
-            "id": new_comment_id,
-            "vendor": vendor,
-            "text": new_comment.strip(),
-            "addendums": [],
-            "votes": {"up": [], "down": [], "abstain": []},
-            "votes_by_round": {},
-            "subcomments": [],
-            "removed": False,
-            "created_round": int(round_num or 1),
-        })
-        # Voting is handled exclusively by Phase B cross-topic passes.
-        # No implicit self-vote here.
-        if new_comment_ids is not None:
-            new_comment_ids.append(new_comment_id)
-        changed = True
+        if apply_phase_a1_comment(
+            thread,
+            vendor,
+            new_comment,
+            round_num=int(round_num or 1),
+            quote=str(response.get("quote") or ""),
+        ):
+            if new_comment_ids is not None:
+                last = thread[-1]
+                cid = last.get("id")
+                if cid:
+                    new_comment_ids.append(cid)
+            changed = True
     return changed
 
 

@@ -34,7 +34,7 @@ import { CardStatus } from "./phase-flow/cardStatus";
  * PhaseFlow only rebuilt `phasesRef` when the vendor *count* changed, so HMR / same-count
  * navigations kept a stale single-phase tree (wrong section titles and shelf keys).
  */
-const PHASE_FLOW_SCHEMA_VERSION = 3;
+const PHASE_FLOW_SCHEMA_VERSION = 4;
 
 /** After all plan models have returned (success or error), auto-run plan approval for ready cards. */
 const PLAN_AUTO_APPROVE_MS = 30000;
@@ -68,6 +68,7 @@ function transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCoun
       cardData: {},
       cardErrors: {},
       approvedVendors: new Set(),
+      approveRunners: new Map(),
       registerStatus: (vendor, status) => {
         switch (status) {
           case CardStatus.PENDING:
@@ -101,7 +102,7 @@ function transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCoun
     };
 
     if (phaseName === "plan") {
-      phaseObj.planApproveRunners = new Map();
+      phaseObj.planApproveRunners = phaseObj.approveRunners;
     }
 
     return phaseObj;
@@ -578,17 +579,15 @@ export default function PhaseFlow({
           readyCount={phase.readyCount || 0}
           totalCount={phase.pendingCount || 0}
           onApproveAll={() => {
-            if (onApproveAll) {
+            const runners = phase.approveRunners;
+            if (runners && runners.size) {
+              for (const run of runners.values()) {
+                void run();
+              }
+            } else if (onApproveAll) {
               onApproveAll(phase.phase);
             }
-
-            vendorsList.forEach(vendor => {
-              if (phase.approvedVendors) {
-                phase.approvedVendors.add(vendor);
-              }
-            });
-
-            setPhaseUpdateTrigger(prev => prev + 1);
+            setPhaseUpdateTrigger((prev) => prev + 1);
           }}
         >
           {vendorsList

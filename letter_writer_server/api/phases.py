@@ -291,7 +291,7 @@ def update_session_common_data(request: Request, data: Dict[str, Any], session: 
     common = session['metadata']['common']
     # Merge fields from request body into common metadata
     # The frontend sends fields like company_name, job_title directly in body
-    fields = ["company_name", "job_title", "location", "language", "salary", "requirements", "competences", "hire_problem", "point_of_contact", "additional_user_info", "additional_company_info"]
+    fields = ["company_name", "job_title", "location", "language", "salary", "requirements", "competences", "hire_problem", "point_of_contact", "additional_user_info", "additional_company_info", "source_url"]
     for field in fields:
         if field in data:
             common[field] = data[field]

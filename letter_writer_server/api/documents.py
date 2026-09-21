@@ -140,6 +140,7 @@ class DocumentRequest(BaseModel):
     location: Optional[str] = None
     language: Optional[str] = None
     salary: Optional[str] = None
+    source_url: Optional[str] = None
     requirements: Optional[List[Any]] = None
     job_text: Optional[str] = None
     ai_letters: Optional[List[Dict[str, Any]]] = None

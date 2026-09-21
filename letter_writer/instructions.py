@@ -36,7 +36,10 @@ def get_style_instructions() -> str:
             "Mentions of companies should mostly emerge naturally, not be the main structure (At X this, at Y that, etc).\n"
             "Follow the structure: 1. You are great 2. I am great 3. We'll be even greater together 4. Call to action. "
             "Of course, keep that structure implicit, and don't use paragraph titles.\n"
-            "Whenever possible, use characters supported by LaTeX. In particular, to the extent that it's reasonable, avoid symbols like & or em-dashes. Do not double-space. "
+            "Return the letter as distinct paragraphs separated by a blank line (a real empty line between paragraphs). "
+            "We need those paragraph breaks — do not collapse the letter into one block of text.\n"
+            "Whenever possible, use characters supported by LaTeX. In particular, to the extent that it's reasonable, avoid symbols like & or em-dashes. "
+            "Do not double-space within a line (no two spaces between words or after periods); that is unrelated to the blank lines between paragraphs. "
             "If in doubt, use the version of the character that would be typed by a keyboard. For example ' and not ', or 11th and not 11ᵗʰ.\n"
         )
 

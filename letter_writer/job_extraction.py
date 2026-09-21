@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from langsmith import traceable
 
 from .clients.base import BaseClient, ModelRole
+from .page_templates import extract_from_captured_page
 from .skill_utils import core_skill_name as _core_skill_name
 
 logger = logging.getLogger(__name__)
@@ -191,6 +192,13 @@ def _page_extraction_cache_prefix(visible_text: str, html_excerpt: str, source_u
     return combine_cache_parts(PAGE_EXTRACTION_SYSTEM, "\n\n".join(parts))
 
 
+def _coalesce_str(preferred: Any, fallback: Any) -> str:
+    text = _clean_metadata_val(preferred)
+    if text:
+        return text
+    return _clean_metadata_val(fallback)
+
+
 @traceable(run_type="chain", name="extract_job_page_metadata")
 def extract_job_page_metadata(
     visible_text: str,
@@ -198,15 +206,37 @@ def extract_job_page_metadata(
     html: str = "",
     source_url: str = "",
     trace_dir: Path | None = None,
+    parsed_page: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Extract a cleaned job_text plus company/title fields from a raw job-page dump.
 
-    Competences are extracted separately from the original visible text.
+    When a hostname template matches and yields a posting, that text is used (and the
+    model is skipped if title is also present). Competences should use the same focused
+    ``job_text``, not the raw tab dump.
     """
-    visible = str(visible_text or "").strip()
+    parsed = parsed_page if parsed_page is not None else extract_from_captured_page(html, source_url)
+    focused = _clean_metadata_val(parsed.get("job_text"))
+    visible = focused or str(visible_text or "").strip()
     if MAX_PAGE_VISIBLE_CHARS > 0 and len(visible) > MAX_PAGE_VISIBLE_CHARS:
         visible = visible[:MAX_PAGE_VISIBLE_CHARS]
-    html_excerpt = strip_page_html(html)
+
+    skip_llm = bool(focused and _clean_metadata_val(parsed.get("job_title")))
+    if parsed.get("template") == "jobs.ch_company":
+        skip_llm = True
+    if skip_llm:
+        return {
+            "job_text": focused,
+            "company_name": _clean_metadata_val(parsed.get("company_name")),
+            "job_title": _clean_metadata_val(parsed.get("job_title")),
+            "location": _clean_metadata_val(parsed.get("location")),
+            "language": _clean_metadata_val(parsed.get("language")),
+            "salary": _clean_metadata_val(parsed.get("salary")),
+            "point_of_contact": parsed.get("point_of_contact"),
+            "source_url": _clean_metadata_val(parsed.get("source_url")),
+            "additional_company_info": _clean_metadata_val(parsed.get("additional_company_info")),
+        }
+
+    html_excerpt = "" if focused else strip_page_html(html)
     task = (
         "Task: Extract the following fields as JSON: job_text, company_name, job_title, "
         "location, language, salary, point_of_contact. "
@@ -237,18 +267,18 @@ def extract_job_page_metadata(
     if not data:
         logger.warning("extract_job_page_metadata JSON parse failed")
 
-    job_text = _clean_metadata_val(data.get("job_text"))
-    if not job_text:
-        job_text = visible
-
+    job_text = _coalesce_str(focused, data.get("job_text")) or visible
+    poc = parsed.get("point_of_contact") or _parse_point_of_contact(data.get("point_of_contact"))
     return {
         "job_text": job_text,
-        "company_name": _clean_metadata_val(data.get("company_name")),
-        "job_title": _clean_metadata_val(data.get("job_title")),
-        "location": _clean_metadata_val(data.get("location")),
-        "language": _clean_metadata_val(data.get("language")),
-        "salary": _clean_metadata_val(data.get("salary")),
-        "point_of_contact": _parse_point_of_contact(data.get("point_of_contact")),
+        "company_name": _coalesce_str(parsed.get("company_name"), data.get("company_name")),
+        "job_title": _coalesce_str(parsed.get("job_title"), data.get("job_title")),
+        "location": _coalesce_str(parsed.get("location"), data.get("location")),
+        "language": _coalesce_str(parsed.get("language"), data.get("language")),
+        "salary": _coalesce_str(parsed.get("salary"), data.get("salary")),
+        "point_of_contact": poc,
+        "source_url": _coalesce_str(parsed.get("source_url"), data.get("source_url")),
+        "additional_company_info": _clean_metadata_val(parsed.get("additional_company_info")),
     }
 
 

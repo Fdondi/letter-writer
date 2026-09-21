@@ -1,11 +1,19 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+const EXTENSION_AND_LOCAL_ORIGIN =
+  /^(https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?|moz-extension:\/\/[0-9a-fA-F-]+|chrome-extension:\/\/[a-z]+)$/;
+
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
     host: true, // Allow external connections (needed for Docker)
+    allowedHosts: ["frontend", "localhost", "127.0.0.1"],
+    cors: {
+      origin: EXTENSION_AND_LOCAL_ORIGIN,
+      credentials: true,
+    },
     proxy: {
       // Proxy API requests to the backend during development
       // In Docker, this will proxy to the backend service

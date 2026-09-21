@@ -113,6 +113,7 @@ export function JobSessionProvider({ children }) {
   const [location, setLocation] = useState("");
   const [language, setLanguage] = useState("");
   const [salary, setSalary] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
   const [requirements, setRequirements] = useState([]);
   const [competences, setCompetences] = useState({});
   const [hireProblem, setHireProblem] = useState("");
@@ -311,6 +312,7 @@ export function JobSessionProvider({ children }) {
       !String(snapshot.location || "").trim() &&
       !String(snapshot.language || "").trim() &&
       !String(snapshot.salary || "").trim() &&
+      !String(snapshot.sourceUrl || "").trim() &&
       (!Array.isArray(snapshot.requirements) || snapshot.requirements.length === 0) &&
       (!snapshot.competences || Object.keys(snapshot.competences).length === 0) &&
       emptyPoc &&
@@ -329,6 +331,7 @@ export function JobSessionProvider({ children }) {
         location,
         language,
         salary,
+        sourceUrl,
         requirements,
         competences,
         pointOfContact,
@@ -345,6 +348,7 @@ export function JobSessionProvider({ children }) {
       location,
       language,
       salary,
+      sourceUrl,
       requirements,
       competences,
       pointOfContact,
@@ -363,6 +367,7 @@ export function JobSessionProvider({ children }) {
       setLocation,
       setLanguage,
       setSalary,
+      setSourceUrl,
       setAdditionalUserInfo,
       setAdditionalCompanyInfo,
       setShowAdditionalInfo,
@@ -397,6 +402,9 @@ export function JobSessionProvider({ children }) {
         setLocation,
         setLanguage,
         setSalary,
+        setSourceUrl,
+        setAdditionalCompanyInfo,
+        setShowAdditionalInfo,
         setPointOfContact,
         setShowPointOfContact,
         setTriggerPocResearch,
@@ -422,6 +430,7 @@ export function JobSessionProvider({ children }) {
     setExtracting,
     setCaptureImporting,
     setExtractionError,
+    setSourceUrl,
   });
 
   useEffect(() => {
@@ -453,6 +462,7 @@ export function JobSessionProvider({ children }) {
         location: location,
         language: language,
         salary: salary,
+        source_url: sourceUrl,
         requirements: (Array.isArray(requirements) ? requirements : requirements ? [requirements] : []).filter(Boolean),
         point_of_contact: hasPointOfContactData ? pointOfContact : null,
         additional_user_info: additionalUserInfo || "",
@@ -471,6 +481,7 @@ export function JobSessionProvider({ children }) {
       location,
       language,
       salary,
+      sourceUrl,
       requirements,
       hasPointOfContactData,
       pointOfContact,
@@ -810,6 +821,7 @@ export function JobSessionProvider({ children }) {
     setLocation("");
     setLanguage("");
     setSalary("");
+    setSourceUrl("");
     setRequirements([]);
     setCompetences({});
     setHireProblem("");
@@ -946,6 +958,7 @@ export function JobSessionProvider({ children }) {
     location,
     language,
     salary,
+    sourceUrl,
     jobText,
     additionalUserInfo,
     additionalCompanyInfo,
@@ -982,6 +995,7 @@ export function JobSessionProvider({ children }) {
       location,
       language,
       salary,
+      sourceUrl,
       requirements,
       competences,
       pointOfContact,
@@ -996,6 +1010,7 @@ export function JobSessionProvider({ children }) {
     location,
     language,
     salary,
+    sourceUrl,
     requirements,
     competences,
     pointOfContact,
@@ -1059,6 +1074,7 @@ export function JobSessionProvider({ children }) {
     location, setLocation,
     language, setLanguage,
     salary, setSalary,
+    sourceUrl, setSourceUrl,
     requirements, setRequirements,
     competences, setCompetences,
     hireProblem, setHireProblem,

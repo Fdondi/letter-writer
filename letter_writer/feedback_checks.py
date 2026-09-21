@@ -11,6 +11,7 @@ from langsmith import traceable
 from .clients.base import BaseClient, ModelRole
 from .feedback_topics import AGENTIC_TOPIC_KEYS, get_agentic_topic_context_from_registry
 from .instructions import get_style_instructions
+from .quote_span import attach_quote_spans_to_feedback
 from .typed_shapes import TopDocument
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,7 @@ VENDOR_FEEDBACK_JSON_SCHEMA: Dict[str, Any] = {
                         "type": "object",
                         "properties": {
                             "observation": {"type": "string"},
+                            "quote": {"type": "string"},
                             "type": {
                                 "type": "string",
                                 "enum": ["ALREADY_GOOD", "PLEASE_FIX"],
@@ -241,6 +243,7 @@ def normalize_parsed_feedback_items(
         user_instructions = str(it.get("user_instructions") or "").strip()
         if status != "INPUT_NEEDED":
             user_instructions = ""
+        quote = str(it.get("quote") or "").strip()
 
         out.append(
             {
@@ -251,6 +254,8 @@ def normalize_parsed_feedback_items(
                 "context_field": {"items": context_items},
                 "user_context": user_context,
                 "user_instructions": user_instructions,
+                "quote": quote,
+                "matched_text": "",
             }
         )
     return out
@@ -322,7 +327,9 @@ def _call_vendor_feedback_items(
     response_schema = vendor_feedback_json_schema_for_allowed_sources(allowed)
     common_instructions = (
         " Reply with JSON only. The answer must be an object with key \"items\" whose value is an array. "
-        "Each array element must be {\"observation\": string, \"type\": either \"ALREADY_GOOD\" or \"PLEASE_FIX\"}. "
+        "Each array element must be {\"observation\": string, \"type\": either \"ALREADY_GOOD\" or \"PLEASE_FIX\", \"quote\": string}. "
+        "quote is a short verbatim excerpt from Cover Letter to Check that the observation applies to. "
+        "Leave quote as \"\" only when the point is about the letter as a whole (rare). "
         "Emit one element per distinct observation, each item should be logically a bullet point. "
         "ALREADY_GOOD is meant as an escape hatch for when you realize after writing that the observation does not actually demand an action. "
         "Prefer marking as ALREADY_GOOD to producing irrelevant PLEASE_FIX, but do not aim to write ALREADY_GOOD points. "
@@ -972,7 +979,18 @@ def normalize_feedback_value(
                 "input_declined": input_declined,
                 "persist_user_context_to_cv": persist_uc,
                 "persist_user_context_for_agents": persist_ua,
+                "quote": str(it.get("quote") or "").strip(),
+                "matched_text": str(it.get("matched_text") or "").strip(),
             }
+            if it.get("span_start") is not None:
+                try:
+                    row["span_start"] = int(it.get("span_start"))
+                    row["span_end"] = int(it.get("span_end"))
+                except (TypeError, ValueError):
+                    pass
+            dv = str(it.get("draft_vendor") or "").strip()
+            if dv:
+                row["draft_vendor"] = dv
             dg = str(it.get("duplicate_group_id") or "").strip()
             if dg:
                 row["duplicate_group_id"] = dg
@@ -1293,7 +1311,7 @@ def run_phased_feedback_checks(
     ]
 
     results = run_cache_grouped_tasks(tasks, max_parallel_groups=7)
-    return {
+    out = {
         "instruction": results.get("instruction") or [],
         "accuracy": results.get("accuracy") or [],
         "precision": results.get("precision") or [],
@@ -1302,6 +1320,11 @@ def run_phased_feedback_checks(
         "user_fit": results.get("user_fit") or [],
         "human": results.get("human") or [],
     }
+    try:
+        attach_quote_spans_to_feedback(out, draft_letter)
+    except Exception:
+        logger.exception("attaching quote spans to vendor feedback failed")
+    return out
 
 
 @traceable(run_type="chain", name="human_check")

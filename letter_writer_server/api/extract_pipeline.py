@@ -64,6 +64,8 @@ def run_extract_pipeline(
 
     When ``page_metadata_fn`` is set it runs in parallel with competence extraction and
     supplies cleaned ``job_text`` plus company/title fields. RAG waits for that job_text.
+    Job-capture passes template-focused posting text as competence_source_text when a
+    hostname template matched.
     """
     collection = get_collection()
     openai_client = OpenAI()
@@ -238,7 +240,15 @@ def run_extract_pipeline(
         "requirements": [s for s, _ in flat_pairs],
         "hire_problem": hire_problem or "",
     }
-    for key in ("company_name", "job_title", "location", "language", "salary", "point_of_contact"):
+    for key in (
+        "company_name",
+        "job_title",
+        "location",
+        "language",
+        "salary",
+        "point_of_contact",
+        "additional_company_info",
+    ):
         if page_meta.get(key) not in (None, ""):
             extraction[key] = page_meta[key]
     source_url = str(page_meta.get("source_url") or "").strip()
@@ -256,11 +266,11 @@ def run_extract_pipeline(
             doc["similarities"] = brief.get("similarities", [])
             doc["differences"] = brief.get("differences", [])
 
-    if "metadata" not in session:
-        session["metadata"] = {}
-    if "common" not in session["metadata"]:
-        session["metadata"]["common"] = {}
-    session["metadata"]["common"].update(extraction)
+    metadata = dict(session.get("metadata") or {})
+    common = dict(metadata.get("common") or {})
+    common.update(extraction)
+    metadata["common"] = common
+    session["metadata"] = metadata
     session["job_text"] = cleaned_job_text
 
     logger.info(

@@ -98,6 +98,7 @@ from .letter_generation import (
     _format_letter_examples,
     _letter_generation_context,
 )
+from .page_templates import extract_from_captured_page
 from .rewrite import rewrite_letter
 
 __all__ = [
@@ -121,6 +122,7 @@ __all__ = [
     "allowed_feedback_context_sources_for_category",
     "company_fit_check",
     "company_research",
+    "extract_from_captured_page",
     "extract_job_metadata",
     "extract_job_metadata_no_requirements",
     "extract_job_page_metadata",

@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import Depends, HTTPException
 
 from letter_writer.cost_tracker import get_cost_summary, get_user_monthly_cost, get_user_today_cost
+from letter_writer_server.core.harness import is_harness_mode
 from letter_writer_server.core.session import Session, get_session, require_auth
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,8 @@ async def check_spending_limits(
     session: Session = Depends(get_session),
 ) -> None:
     """FastAPI dependency: raises HTTP 402 if the user has exceeded their daily or monthly limit."""
+    if is_harness_mode():
+        return None
     user_id = user["id"]
     try:
         monthly, cost_error = _get_user_monthly_cost_with_pending(user_id, session)

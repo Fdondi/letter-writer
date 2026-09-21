@@ -1,0 +1,65 @@
+{
+  "format_version": 1,
+  "synthetic": true,
+  "saved_at": "2026-01-01T00:00:00+00:00",
+  "session_key": "harness-vendor-draft-notes",
+  "user_id": "harness-local",
+  "company_name": "Harness Co",
+  "job_title": "Synthetic Engineer",
+  "stage": "phases",
+  "vendor_count": 1,
+  "empty": false,
+  "session": {
+    "cv_text": "Alex Harness is a synthetic résumé used only in the Letter Writer UI harness. Experience: payments in Zürich.",
+    "job_text": "Harness Co\nSynthetic Engineer\nZürich\n\nZürich sucht eine Entwicklerin für das Zahlungs-Team. This posting is synthetic harness data, not a real job.",
+    "metadata": {
+      "common": {
+        "company_name": "Harness Co",
+        "job_title": "Synthetic Engineer",
+        "location": "Zürich",
+        "language": "German",
+        "selected_vendors": ["openai"]
+      }
+    },
+    "vendors": {
+      "openai": {
+        "company_report": "Harness Co is a fictional company used only in the UI harness.",
+        "letter_plan": "1. Open with the Zürich payments work.\n2. Close by asking for a conversation.",
+        "draft_letter": "Dear Hiring Team,\n\nI am writing to apply for the Engineer role at Harness Co. I have built payment systems in Zürich and enjoy careful code review.\n\nI would welcome a conversation.\n\nKind regards,\nAlex Harness\n",
+        "feedback": {
+          "instruction": [],
+          "company_fit": [],
+          "goal_fit": [],
+          "precision": [
+            {
+              "id": "fix1",
+              "observation": "Name the stack instead of the generic phrase.",
+              "type": "PLEASE_FIX",
+              "quote": "payment systems in Zürich",
+              "matched_text": "payment systems in Zürich"
+            }
+          ],
+          "user_fit": [],
+          "human": [
+            {
+              "id": "good1",
+              "observation": "This clause sounds like a person, not a template.",
+              "type": "ALREADY_GOOD",
+              "quote": "careful code review",
+              "matched_text": "careful code review"
+            }
+          ],
+          "accuracy": [
+            {
+              "id": "whole1",
+              "observation": "The letter as a whole stays short enough for this synthetic posting.",
+              "type": "PLEASE_FIX",
+              "quote": "",
+              "matched_text": ""
+            }
+          ]
+        }
+      }
+    }
+  }
+}

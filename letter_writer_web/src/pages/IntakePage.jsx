@@ -104,7 +104,7 @@ export default function IntakePage() {
   };
 
   return (
-    <>
+    <div data-testid="intake-page">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
         <VendorSelector
           vendors={session.vendors}
@@ -114,6 +114,29 @@ export default function IntakePage() {
         />
         <LanguageConfig />
       </div>
+      {session.captureImporting && (
+        <div
+          data-testid="capture-extracting-banner"
+          role="status"
+          aria-live="polite"
+          style={{
+            marginTop: 12,
+            padding: "12px 14px",
+            borderRadius: 8,
+            border: "1px solid #5b9bd5",
+            backgroundColor: "rgba(91, 155, 213, 0.15)",
+            color: "var(--text-color)",
+            fontSize: 14,
+            lineHeight: 1.45,
+          }}
+        >
+          <strong>Extracting the job posting from the captured page…</strong>
+          <div style={{ marginTop: 4, opacity: 0.9 }}>
+            This can take a minute. Title, company, and description fill in when
+            extraction finishes. The original URL is saved immediately.
+          </div>
+        </div>
+      )}
       <div style={{ marginTop: 10 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
           <label style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-color)" }}>
@@ -135,24 +158,29 @@ export default function IntakePage() {
           </div>
         )}
         <textarea
+          aria-busy={session.captureImporting ? "true" : undefined}
           style={{
             width: "100%",
             height: 150,
             backgroundColor: session.jobTextViewLanguage === "source" ? "var(--input-bg)" : "var(--panel-bg)",
             color: "var(--text-color)",
-            border: "1px solid var(--border-color)",
+            border: session.captureImporting ? "1px solid #5b9bd5" : "1px solid var(--border-color)",
             borderRadius: "4px",
             padding: 8,
             opacity: session.jobTextViewLanguage === "source" ? 1 : 0.9,
           }}
-            placeholder="Paste job description here, or send a posting from the browser extension"
+          placeholder={
+            session.captureImporting
+              ? "Extracting the job posting from the captured page…"
+              : "Paste job description here, or send a posting from the browser extension"
+          }
           value={session.displayedJobText}
           onChange={(e) => {
-            if (session.jobTextViewLanguage === "source") {
+            if (session.jobTextViewLanguage === "source" && !session.captureImporting) {
               session.setJobText(e.target.value);
             }
           }}
-          readOnly={session.jobTextViewLanguage !== "source"}
+          readOnly={session.jobTextViewLanguage !== "source" || session.captureImporting}
         />
       </div>
 
@@ -228,23 +256,18 @@ export default function IntakePage() {
       <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
         <button
           onClick={session.extractData}
-          disabled={session.extracting || !session.jobText.trim()}
+          disabled={session.extracting || session.captureImporting || !session.jobText.trim()}
           style={{
             padding: "10px 20px",
-            backgroundColor: session.extracting || !session.jobText.trim() ? "var(--header-bg)" : "#10b981",
+            backgroundColor: session.extracting || session.captureImporting || !session.jobText.trim() ? "var(--header-bg)" : "#10b981",
             color: "white",
             border: "none",
             borderRadius: "4px",
-            cursor: session.extracting || !session.jobText.trim() ? "not-allowed" : "pointer",
+            cursor: session.extracting || session.captureImporting || !session.jobText.trim() ? "not-allowed" : "pointer",
           }}
         >
-          {session.extracting ? "Extracting..." : "Extract data"}
+          {session.extracting || session.captureImporting ? "Extracting..." : "Extract data"}
         </button>
-        {session.captureImporting && (
-          <div style={{ color: "var(--secondary-text-color)", padding: "10px 0", fontSize: "14px" }}>
-            Importing job from browser…
-          </div>
-        )}
         {session.extractionError && (
           <div style={{ color: "var(--error-text)", padding: "10px 0", fontSize: "14px" }}>
             {session.extractionError}
@@ -254,6 +277,17 @@ export default function IntakePage() {
 
       <div style={{ marginTop: 20, padding: 15, border: "1px solid var(--border-color)", borderRadius: 8, backgroundColor: "var(--input-bg)" }}>
          <h3 style={{ marginTop: 0, fontSize: "16px", fontWeight: 600 }}>Company & Job Details</h3>
+         <div style={{ marginBottom: 12 }}>
+            <label htmlFor="source-url" style={{ display: "block", marginBottom: 4, fontSize: "14px", fontWeight: 600 }}>Original URL</label>
+            <input
+              id="source-url"
+              type="url"
+              value={session.sourceUrl}
+              onChange={(e) => session.setSourceUrl(e.target.value)}
+              style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }}
+              placeholder="https://jobs.example/posting"
+            />
+         </div>
          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <div>
@@ -555,7 +589,7 @@ export default function IntakePage() {
         <button
           type="button"
           onClick={handleStartAutocomplete}
-          disabled={!session.jobText || !session.jobTitle.trim()}
+          disabled={session.captureImporting || !session.jobText || !session.jobTitle.trim()}
           style={{
             padding: "10px 20px",
             backgroundColor: !session.jobText || !session.jobTitle.trim() ? "var(--header-bg)" : "#0d9488",
@@ -578,7 +612,7 @@ export default function IntakePage() {
         </label>
         <button
           onClick={handleSubmit}
-          disabled={session.loading || !session.jobText || !session.jobTitle.trim() || session.selectedVendors.size === 0}
+          disabled={session.captureImporting || session.loading || !session.jobText || !session.jobTitle.trim() || session.selectedVendors.size === 0}
           style={{
             padding: "10px 20px",
             backgroundColor: session.loading || !session.jobText || !session.jobTitle.trim() || session.selectedVendors.size === 0 ? "var(--header-bg)" : "#3b82f6",
@@ -602,7 +636,7 @@ export default function IntakePage() {
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <button
             onClick={handleSubmitAgentic}
-            disabled={!session.jobText || !session.jobTitle.trim() || session.selectedVendors.size === 0}
+            disabled={session.captureImporting || !session.jobText || !session.jobTitle.trim() || session.selectedVendors.size === 0}
             style={{
               padding: "10px 20px",
               backgroundColor: !session.jobText || !session.jobTitle.trim() || session.selectedVendors.size === 0 ? "var(--header-bg)" : "#7c3aed",
@@ -638,6 +672,6 @@ export default function IntakePage() {
           </label>
         </div>
       </div>
-    </>
+    </div>
   );
 }

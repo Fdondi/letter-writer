@@ -1,0 +1,64 @@
+name: letter-writer-harness
+
+services:
+  backend:
+    image: python:3.13-slim
+    working_dir: /app
+    volumes:
+      - ..:/app:z
+    environment:
+      APP_SECRET_KEY: harness-not-a-secret
+      HARNESS_MODE: "1"
+      ENVIRONMENT: harness
+      HARNESS_FIXTURES_DIR: /app/ui-harness/fixtures
+      SESSION_STORAGE_DIR: /tmp/harness_sessions
+      SESSION_BACKUP_DIR: /tmp/harness_backups
+      PYTHONUNBUFFERED: "1"
+      DEBIAN_FRONTEND: noninteractive
+    command: sh -c "apt-get update -qq && apt-get install -y -qq gcc >/dev/null && pip install -q -r requirements.txt && python -m uvicorn letter_writer_server.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "3011:8000"
+
+  frontend:
+    image: node:22-alpine
+    working_dir: /web
+    volumes:
+      - ../letter_writer_web:/web:z
+      - harness_node_modules:/web/node_modules
+    environment:
+      VITE_API_URL: http://backend:8000
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    ports:
+      - "3010:5173"
+    depends_on:
+      - backend
+
+  browser:
+    build:
+      context: ..
+      dockerfile: ui-harness/Dockerfile.browser
+    ports:
+      - "9222:9222"
+      - "7900:7900"
+    environment:
+      HARNESS_START_URL: http://frontend:5173
+    shm_size: 2gb
+    depends_on:
+      - frontend
+
+  smoke:
+    image: mcr.microsoft.com/playwright:v1.51.1-noble
+    working_dir: /harness
+    volumes:
+      - .:/harness:z
+    environment:
+      PLAYWRIGHT_BASE_URL: http://frontend:5173
+    command: npx playwright test --config=/harness/playwright.config.js
+    depends_on:
+      - frontend
+      - backend
+    profiles:
+      - smoke
+
+volumes:
+  harness_node_modules:

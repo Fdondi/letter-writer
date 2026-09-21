@@ -1,0 +1,75 @@
+{
+  "format_version": 1,
+  "synthetic": true,
+  "saved_at": "2026-01-01T00:00:00+00:00",
+  "session_key": "harness-agentic-mid-loop",
+  "user_id": "harness-local",
+  "company_name": "Harness Co",
+  "job_title": "Synthetic Engineer",
+  "stage": "agentic",
+  "vendor_count": 1,
+  "empty": false,
+  "session": {
+    "cv_text": "Alex Harness is a synthetic résumé used only in the Letter Writer UI harness. Experience: payments in Zürich.",
+    "job_text": "Harness Co\nSynthetic Engineer\nZürich\n\nZürich sucht eine Entwicklerin für das Zahlungs-Team. This posting is synthetic harness data, not a real job.",
+    "metadata": {
+      "common": {
+        "company_name": "Harness Co",
+        "job_title": "Synthetic Engineer",
+        "location": "Zürich",
+        "language": "German",
+        "selected_vendors": ["openai"]
+      }
+    },
+    "agentic": {
+      "status": "feedback",
+      "round": 1,
+      "max_rounds": 3,
+      "sub_comment_rounds": 0,
+      "feedback_ongoing": false,
+      "draft_vendor": "openai",
+      "draft_letter": "Dear Hiring Team,\n\nI am writing to apply for the Engineer role at Harness Co. I have built payment systems in Zürich and enjoy careful code review.\n\nI would welcome a conversation.\n\nKind regards,\nAlex Harness\n",
+      "draft_letters": {
+        "openai": "Dear Hiring Team,\n\nI am writing to apply for the Engineer role at Harness Co. I have built payment systems in Zürich and enjoy careful code review.\n\nI would welcome a conversation.\n\nKind regards,\nAlex Harness\n"
+      },
+      "threads": {
+        "instruction": [],
+        "company_fit": [],
+        "goal_fit": [],
+        "precision": [
+          {
+            "id": "ag1",
+            "vendor": "openai",
+            "text": "Name the payment stack instead of the generic phrase.",
+            "quote": "payment systems in Zürich",
+            "matched_text": "payment systems in Zürich",
+            "draft_vendor": "openai",
+            "addendums": [],
+            "votes": {"up": [], "down": [], "abstain": []},
+            "votes_by_round": {},
+            "subcomments": [],
+            "removed": false,
+            "created_round": 1
+          }
+        ],
+        "user_fit": [],
+        "human": [
+          {
+            "id": "ag2",
+            "vendor": "openai",
+            "text": "The closing is about the letter as a whole.",
+            "quote": "",
+            "matched_text": "",
+            "addendums": [],
+            "votes": {"up": [], "down": [], "abstain": []},
+            "votes_by_round": {},
+            "subcomments": [],
+            "removed": false,
+            "created_round": 1
+          }
+        ],
+        "accuracy": []
+      }
+    }
+  }
+}

@@ -40,6 +40,6 @@ form.addEventListener("submit", async (event) => {
     }
   }
 
-  await api.storage.local.set({ appOrigin: origin });
+  await api.storage.local.set({ appOrigin: origin, appOriginExplicit: true });
   showStatus("Saved.");
 });

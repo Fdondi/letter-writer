@@ -1,5 +1,6 @@
 import React from "react";
 import { CONTEXT_USER_SOURCE } from "../feedbackItemUtils";
+import { feedbackTopicLabel } from "../../../constants/feedbackTopics";
 import { LanguageSelectorTiny } from "./LanguageSelectorTiny";
 import { MachineRow } from "./MachineRow";
 import { UserContextRow, computePersistScope } from "./UserContextRow";
@@ -41,6 +42,7 @@ export function FixRow({
   requestMoreMachineContext,
   saveUserContextRow,
   clearUserContext,
+  pinActions = false,
 }) {
   const fieldId = `feedback_${categoryKey}_${it.id}`;
   const status = String(it.status || "NOT_NEEDED").toUpperCase();
@@ -56,6 +58,7 @@ export function FixRow({
       ? it.persist_user_context_for_agents !== false
       : persistUserContextToCv;
   const persistScope = computePersistScope(persistUserContextToCv, persistUserContextForAgents);
+  const topicLabel = feedbackTopicLabel(categoryKey);
   const showInputEditor = needsInput && !userContextFilled && !inputDeclined;
   const clusterPre = it.input_cluster_key && inputClusterText[it.input_cluster_key];
   const inputDraftEffective =
@@ -233,6 +236,285 @@ export function FixRow({
     </>
   );
 
+  const kindLabel = needsInput ? "Input needed" : "Critique";
+  const kindColor = approved ? "#9ca3af" : needsInput ? "#b91c1c" : "#92400e";
+
+  const header = (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+      <span style={{ fontSize: 11, fontWeight: 700, color: kindColor, letterSpacing: "0.04em" }}>
+        <span style={{ textTransform: "uppercase" }}>{kindLabel}</span>
+        {topicLabel ? ` · ${topicLabel}` : ""}
+      </span>
+      {it.duplicate_group_id ? (
+        <span
+          style={{ fontSize: 10, color: "#9ca3af" }}
+          title="Linked to the same issue in another category; approve once to approve all."
+        >
+          Linked
+        </span>
+      ) : null}
+      {translation && (
+        <div style={{ marginLeft: "auto" }}>
+          <LanguageSelectorTiny fieldId={fieldId} observation={it.observation || ""} translation={translation} disabled={disabled} />
+        </div>
+      )}
+    </div>
+  );
+
+  const editBody = (
+    <>
+      <textarea
+        style={{ width: "100%", minHeight: 88, padding: 8, fontSize: 13 }}
+        value={draftObservation}
+        onChange={(e) => setDraftObservation(e.target.value)}
+        disabled={disabled}
+      />
+      {needsInput && showInputEditor ? (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#b91c1c", marginBottom: 6 }}>
+            Provide missing context before approving
+          </div>
+          {renderInputNeededBlock()}
+        </div>
+      ) : null}
+      <div style={{ marginTop: 10, fontSize: 12, color: "#374151" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={addContextItem}
+            disabled={disabled}
+            style={{ fontSize: 11, padding: "2px 8px" }}
+            title="Add your own facts or notes (same as required input — not tied to CV / job labels). Choose whether to save to your profile."
+          >
+            Add context
+          </button>
+          {vendor ? (
+            <button
+              type="button"
+              onClick={handleRequestMoreMachineContext}
+              disabled={
+                disabled ||
+                requestContextLoadingId === it.id ||
+                !String(it.observation || "").trim()
+              }
+              style={{ fontSize: 11, padding: "2px 8px" }}
+              title="Run the checker context again to suggest snippets the first pass may have missed"
+            >
+              {requestContextLoadingId === it.id ? "…" : "Request context"}
+            </button>
+          ) : null}
+          {status === "INPUT_NEEDED" ? (
+            <span style={{ fontSize: 11, color: "#b91c1c" }}>
+              Use Save, or the blue &quot;No input needed&quot; button above.
+            </span>
+          ) : null}
+        </div>
+        {contextItems.map((row, idx) => (
+          <MachineRow
+            key={`${it.id}-ctx-${idx}`}
+            itemId={it.id}
+            idx={idx}
+            raw={row}
+            isRowEditing={editingContextRow?.itemId === it.id && editingContextRow?.index === idx}
+            isEditing={isEditing}
+            disabled={disabled}
+            draftContextLine={draftContextLine}
+            setDraftContextLine={setDraftContextLine}
+            onSave={saveContextRowInline}
+            onCancel={cancelContextRowInline}
+            onStartEdit={startEditContextRow}
+            onRemove={removeContextItem}
+            onUpdateSource={(i, source) => updateContextItem(it, contextItems, i, { source })}
+            onUpdatePersistScope={(i, patch) => updateContextItem(it, contextItems, i, patch)}
+          />
+        ))}
+        <UserContextRow
+          itemId={it.id}
+          showInputEditor={showInputEditor}
+          inputDeclined={inputDeclined}
+          userContextFilled={userContextFilled}
+          userContext={userContext}
+          userContextPlaceholder={userContextPlaceholder}
+          needsInput={needsInput}
+          isEditingUser={editingUserContextId === it.id}
+          disabled={disabled}
+          draftUserContext={draftUserContext}
+          setDraftUserContext={setDraftUserContext}
+          persistScope={persistScope}
+          onPersistScopeChange={(cv, agent) => {
+            const scope = cv && agent ? "both" : !cv && agent ? "agent" : "none";
+            setPersistScope(it, scope);
+          }}
+          onSave={saveUserContextRowInline}
+          onCancel={cancelUserContextRowInline}
+          onStartEdit={startEditUserContextRow}
+          onClear={() => {
+            clearUserContext(it);
+            setEditingUserContextId(null);
+            setDraftUserContext("");
+            setInputNeededDraftById((prev) => {
+              if (!(it.id in prev)) return prev;
+              const n = { ...prev };
+              delete n[it.id];
+              return n;
+            });
+          }}
+        />
+      </div>
+    </>
+  );
+
+  const viewBody = (
+    <>
+      {needsInput && showInputEditor ? (
+        <div
+          style={{
+            border: "1px solid #fca5a5",
+            background: "#fef2f2",
+            borderRadius: 6,
+            padding: 8,
+            marginBottom: 8,
+          }}
+        >
+          {renderInputNeededBlock()}
+        </div>
+      ) : null}
+      <div style={{ fontSize: 13, whiteSpace: "pre-wrap", color: "#111827" }}>{displayedObservation || "(empty)"}</div>
+      {hasDisplayContext ? (
+        <div style={{ marginTop: 8, fontSize: 12, color: "#374151" }}>
+          {contextItems.map((row, idx) => (
+            <MachineRow
+              key={`${it.id}-ctx-${idx}`}
+              itemId={it.id}
+              idx={idx}
+              raw={row}
+              isRowEditing={editingContextRow?.itemId === it.id && editingContextRow?.index === idx}
+              isEditing={isEditing}
+              disabled={disabled}
+              draftContextLine={draftContextLine}
+              setDraftContextLine={setDraftContextLine}
+              onSave={saveContextRowInline}
+              onCancel={cancelContextRowInline}
+              onStartEdit={startEditContextRow}
+              onRemove={removeContextItem}
+              onUpdateSource={(i, source) => updateContextItem(it, contextItems, i, { source })}
+              onUpdatePersistScope={(i, patch) => updateContextItem(it, contextItems, i, patch)}
+            />
+          ))}
+          <UserContextRow
+            itemId={it.id}
+            showInputEditor={showInputEditor}
+            inputDeclined={inputDeclined}
+            userContextFilled={userContextFilled}
+            userContext={userContext}
+            userContextPlaceholder={userContextPlaceholder}
+            needsInput={needsInput}
+            isEditingUser={editingUserContextId === it.id}
+            disabled={disabled}
+            draftUserContext={draftUserContext}
+            setDraftUserContext={setDraftUserContext}
+            persistScope={persistScope}
+            onPersistScopeChange={(cv, agent) => {
+              const scope = cv && agent ? "both" : !cv && agent ? "agent" : "none";
+              setPersistScope(it, scope);
+            }}
+            onSave={saveUserContextRowInline}
+            onCancel={cancelUserContextRowInline}
+            onStartEdit={startEditUserContextRow}
+            onClear={() => {
+              clearUserContext(it);
+              setEditingUserContextId(null);
+              setDraftUserContext("");
+              setInputNeededDraftById((prev) => {
+                if (!(it.id in prev)) return prev;
+                const n = { ...prev };
+                delete n[it.id];
+                return n;
+              });
+            }}
+          />
+        </div>
+      ) : null}
+    </>
+  );
+
+  const actionBar = isEditing ? (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+        marginTop: pinActions ? 0 : 8,
+        paddingTop: pinActions ? 8 : 0,
+        borderTop: pinActions ? "1px solid #fde68a" : undefined,
+        flexShrink: 0,
+        background: pinActions ? (approved ? "#f3f4f6" : "#fffbeb") : undefined,
+      }}
+    >
+      <button type="button" onClick={saveEdit} disabled={disabled} style={{ fontSize: 12 }}>
+        Save
+      </button>
+      {needsInputOrDeclineChoice ? renderApproveWithoutInputButton() : null}
+      <button type="button" onClick={cancelEdit} style={{ fontSize: 12 }}>
+        Cancel
+      </button>
+    </div>
+  ) : (
+    <div
+      style={{
+        display: "flex",
+        gap: 6,
+        flexWrap: "wrap",
+        marginTop: pinActions ? 0 : 8,
+        paddingTop: pinActions ? 8 : 0,
+        borderTop: pinActions ? "1px solid #fde68a" : undefined,
+        alignItems: "center",
+        flexShrink: 0,
+        background: pinActions ? (approved ? "#f3f4f6" : "#fffbeb") : undefined,
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => onApprovePleaseFix(it.id)}
+        disabled={
+          disabled ||
+          approved ||
+          (needsInput && !String(userContext || "").trim() && !inputDeclined)
+        }
+        style={{ fontSize: 11 }}
+        title={
+          needsInputOrDeclineChoice && !approved
+            ? "Add facts above and Save, or use No input needed to keep the critique without new data"
+            : undefined
+        }
+      >
+        {approved ? "Approved" : rowGateBlocksApprove ? "Check feedback" : "Approve"}
+      </button>
+      <button type="button" onClick={() => startEdit(it)} disabled={disabled} style={{ fontSize: 11 }}>
+        Edit
+      </button>
+      {vendor ? (
+        <button
+          type="button"
+          onClick={handleRequestMoreMachineContext}
+          disabled={
+            disabled ||
+            requestContextLoadingId === it.id ||
+            !String(it.observation || "").trim()
+          }
+          style={{ fontSize: 11 }}
+          title="Run the checker context again to suggest snippets the first pass may have missed"
+        >
+          {requestContextLoadingId === it.id ? "…" : "Request context"}
+        </button>
+      ) : null}
+      <button type="button" onClick={() => onRemove(it.id)} disabled={disabled} style={{ fontSize: 11, color: "#b91c1c" }}>
+        Remove
+      </button>
+    </div>
+  );
+
   return (
     <li
       key={it.id}
@@ -242,255 +524,26 @@ export function FixRow({
         padding: 10,
         background: approved ? "#f3f4f6" : "#fffbeb",
         color: approved ? "#6b7280" : undefined,
+        display: pinActions ? "flex" : undefined,
+        flexDirection: pinActions ? "column" : undefined,
+        minHeight: pinActions ? 0 : undefined,
+        maxHeight: pinActions ? "100%" : undefined,
+        overflow: pinActions ? "hidden" : undefined,
+        flex: pinActions ? 1 : undefined,
+        boxSizing: "border-box",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: approved ? "#9ca3af" : "#92400e", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-          Critique
-        </span>
-        {it.duplicate_group_id ? (
-          <span
-            style={{ fontSize: 10, color: "#9ca3af" }}
-            title="Linked to the same issue in another category; approve once to approve all."
-          >
-            Linked
-          </span>
-        ) : null}
-        {needsInput ? (
-          <span style={{ fontSize: 11, fontWeight: 700, color: "#b91c1c", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-            INPUT NEEDED
-          </span>
-        ) : null}
-        {translation && (
-          <div style={{ marginLeft: "auto" }}>
-            <LanguageSelectorTiny fieldId={fieldId} observation={it.observation || ""} translation={translation} disabled={disabled} />
-          </div>
-        )}
+      <div
+        style={
+          pinActions
+            ? { flex: 1, minHeight: 0, overflowY: "auto" }
+            : undefined
+        }
+      >
+        {header}
+        {isEditing ? editBody : viewBody}
       </div>
-      {isEditing ? (
-        <>
-          <textarea
-            style={{ width: "100%", minHeight: 88, padding: 8, fontSize: 13 }}
-            value={draftObservation}
-            onChange={(e) => setDraftObservation(e.target.value)}
-            disabled={disabled}
-          />
-          {needsInput && showInputEditor ? (
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#b91c1c", marginBottom: 6 }}>
-                Provide missing context before approving
-              </div>
-              {renderInputNeededBlock()}
-            </div>
-          ) : null}
-          <div style={{ marginTop: 10, fontSize: 12, color: "#374151" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                onClick={addContextItem}
-                disabled={disabled}
-                style={{ fontSize: 11, padding: "2px 8px" }}
-                title="Add your own facts or notes (same as required input — not tied to CV / job labels). Choose whether to save to your profile."
-              >
-                Add context
-              </button>
-              {vendor ? (
-                <button
-                  type="button"
-                  onClick={handleRequestMoreMachineContext}
-                  disabled={
-                    disabled ||
-                    requestContextLoadingId === it.id ||
-                    !String(it.observation || "").trim()
-                  }
-                  style={{ fontSize: 11, padding: "2px 8px" }}
-                  title="Run the checker context again to suggest snippets the first pass may have missed"
-                >
-                  {requestContextLoadingId === it.id ? "…" : "Request context"}
-                </button>
-              ) : null}
-              {status === "INPUT_NEEDED" ? (
-                <span style={{ fontSize: 11, color: "#b91c1c" }}>
-                  Use Save, or the blue &quot;No input needed&quot; button above.
-                </span>
-              ) : null}
-            </div>
-            {contextItems.map((row, idx) => (
-              <MachineRow
-                key={`${it.id}-ctx-${idx}`}
-                itemId={it.id}
-                idx={idx}
-                raw={row}
-                isRowEditing={editingContextRow?.itemId === it.id && editingContextRow?.index === idx}
-                isEditing={isEditing}
-                disabled={disabled}
-                draftContextLine={draftContextLine}
-                setDraftContextLine={setDraftContextLine}
-                onSave={saveContextRowInline}
-                onCancel={cancelContextRowInline}
-                onStartEdit={startEditContextRow}
-                onRemove={removeContextItem}
-                onUpdateSource={(i, source) => updateContextItem(it, contextItems, i, { source })}
-                onUpdatePersistScope={(i, patch) => updateContextItem(it, contextItems, i, patch)}
-              />
-            ))}
-            <UserContextRow
-              itemId={it.id}
-              showInputEditor={showInputEditor}
-              inputDeclined={inputDeclined}
-              userContextFilled={userContextFilled}
-              userContext={userContext}
-              userContextPlaceholder={userContextPlaceholder}
-              needsInput={needsInput}
-              isEditingUser={editingUserContextId === it.id}
-              disabled={disabled}
-              draftUserContext={draftUserContext}
-              setDraftUserContext={setDraftUserContext}
-              persistScope={persistScope}
-              onPersistScopeChange={(cv, agent) => {
-                const scope = cv && agent ? "both" : !cv && agent ? "agent" : "none";
-                setPersistScope(it, scope);
-              }}
-              onSave={saveUserContextRowInline}
-              onCancel={cancelUserContextRowInline}
-              onStartEdit={startEditUserContextRow}
-              onClear={() => {
-                clearUserContext(it);
-                setEditingUserContextId(null);
-                setDraftUserContext("");
-                setInputNeededDraftById((prev) => {
-                  if (!(it.id in prev)) return prev;
-                  const n = { ...prev };
-                  delete n[it.id];
-                  return n;
-                });
-              }}
-            />
-          </div>
-          <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <button type="button" onClick={saveEdit} disabled={disabled} style={{ fontSize: 12 }}>
-              Save
-            </button>
-            {needsInputOrDeclineChoice ? renderApproveWithoutInputButton() : null}
-            <button type="button" onClick={cancelEdit} style={{ fontSize: 12 }}>
-              Cancel
-            </button>
-          </div>
-        </>
-      ) : (
-        <>
-          {needsInput && showInputEditor ? (
-            <div
-              style={{
-                border: "1px solid #fca5a5",
-                background: "#fef2f2",
-                borderRadius: 6,
-                padding: 8,
-                marginBottom: 8,
-              }}
-            >
-              <div style={{ fontSize: 12, fontWeight: 800, color: "#b91c1c" }}>Input needed</div>
-              {renderInputNeededBlock()}
-            </div>
-          ) : null}
-          <div style={{ fontSize: 13, whiteSpace: "pre-wrap", color: "#111827" }}>{displayedObservation || "(empty)"}</div>
-          {hasDisplayContext ? (
-            <div style={{ marginTop: 8, fontSize: 12, color: "#374151" }}>
-              {contextItems.map((row, idx) => (
-                <MachineRow
-                  key={`${it.id}-ctx-${idx}`}
-                  itemId={it.id}
-                  idx={idx}
-                  raw={row}
-                  isRowEditing={editingContextRow?.itemId === it.id && editingContextRow?.index === idx}
-                  isEditing={isEditing}
-                  disabled={disabled}
-                  draftContextLine={draftContextLine}
-                  setDraftContextLine={setDraftContextLine}
-                  onSave={saveContextRowInline}
-                  onCancel={cancelContextRowInline}
-                  onStartEdit={startEditContextRow}
-                  onRemove={removeContextItem}
-                  onUpdateSource={(i, source) => updateContextItem(it, contextItems, i, { source })}
-                  onUpdatePersistScope={(i, patch) => updateContextItem(it, contextItems, i, patch)}
-                />
-              ))}
-              <UserContextRow
-                itemId={it.id}
-                showInputEditor={showInputEditor}
-                inputDeclined={inputDeclined}
-                userContextFilled={userContextFilled}
-                userContext={userContext}
-                userContextPlaceholder={userContextPlaceholder}
-                needsInput={needsInput}
-                isEditingUser={editingUserContextId === it.id}
-                disabled={disabled}
-                draftUserContext={draftUserContext}
-                setDraftUserContext={setDraftUserContext}
-                persistScope={persistScope}
-                onPersistScopeChange={(cv, agent) => {
-                  const scope = cv && agent ? "both" : !cv && agent ? "agent" : "none";
-                  setPersistScope(it, scope);
-                }}
-                onSave={saveUserContextRowInline}
-                onCancel={cancelUserContextRowInline}
-                onStartEdit={startEditUserContextRow}
-                onClear={() => {
-                  clearUserContext(it);
-                  setEditingUserContextId(null);
-                  setDraftUserContext("");
-                  setInputNeededDraftById((prev) => {
-                    if (!(it.id in prev)) return prev;
-                    const n = { ...prev };
-                    delete n[it.id];
-                    return n;
-                  });
-                }}
-              />
-            </div>
-          ) : null}
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8, alignItems: "center" }}>
-            <button
-              type="button"
-              onClick={() => onApprovePleaseFix(it.id)}
-              disabled={
-                disabled ||
-                approved ||
-                (needsInput && !String(userContext || "").trim() && !inputDeclined)
-              }
-              style={{ fontSize: 11 }}
-              title={
-                needsInputOrDeclineChoice && !approved
-                  ? "Add facts above and Save, or use No input needed to keep the critique without new data"
-                  : undefined
-              }
-            >
-              {approved ? "Approved" : rowGateBlocksApprove ? "Check feedback" : "Approve"}
-            </button>
-            <button type="button" onClick={() => startEdit(it)} disabled={disabled} style={{ fontSize: 11 }}>
-              Edit
-            </button>
-            {vendor ? (
-              <button
-                type="button"
-                onClick={handleRequestMoreMachineContext}
-                disabled={
-                  disabled ||
-                  requestContextLoadingId === it.id ||
-                  !String(it.observation || "").trim()
-                }
-                style={{ fontSize: 11 }}
-                title="Run the checker context again to suggest snippets the first pass may have missed"
-              >
-                {requestContextLoadingId === it.id ? "…" : "Request context"}
-              </button>
-            ) : null}
-            <button type="button" onClick={() => onRemove(it.id)} disabled={disabled} style={{ fontSize: 11, color: "#b91c1c" }}>
-              Remove
-            </button>
-          </div>
-        </>
-      )}
+      {actionBar}
     </li>
   );
 }

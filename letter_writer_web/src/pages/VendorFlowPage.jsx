@@ -348,7 +348,7 @@ export default function VendorFlowPage() {
         letterText: finalText,
         jobFields: {
           companyName: session.companyName, jobTitle: session.jobTitle, location: session.location,
-          language: session.language, salary: session.salary, requirements: session.requirements, jobText: session.jobText,
+          language: session.language, salary: session.salary, sourceUrl: session.sourceUrl, requirements: session.requirements, jobText: session.jobText,
         },
         documentId: session.documentId,
         aiLetters,
@@ -423,7 +423,7 @@ export default function VendorFlowPage() {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "row", alignItems: "stretch", gap: 12, width: "100%", flex: 1, minHeight: 0, boxSizing: "border-box", overflow: "hidden" }}>
+    <div data-testid="vendor-flow" style={{ display: "flex", flexDirection: "row", alignItems: "stretch", gap: 12, width: "100%", flex: 1, minHeight: 0, boxSizing: "border-box", overflow: "hidden" }}>
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10, position: "relative", flexWrap: "wrap", flexShrink: 0 }}>
           <button onClick={goBackToJobIntake} style={{ padding: "8px 16px", backgroundColor: "var(--button-bg)", color: "var(--button-text)", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer" }}>← Back to job details</button>
@@ -462,7 +462,7 @@ export default function VendorFlowPage() {
         </div>
 
         {vendorStage === "assembly" && (
-          <div style={{ position: "relative", paddingTop: 4, flex: 1, minHeight: 0, overflow: "hidden", display: assemblyVisible ? "flex" : "none", flexDirection: "column" }}>
+          <div data-testid="vendor-assembly" style={{ position: "relative", paddingTop: 4, flex: 1, minHeight: 0, overflow: "hidden", display: assemblyVisible ? "flex" : "none", flexDirection: "column" }}>
             <LetterTabs
               vendorsList={vendorsList}
               vendorParagraphs={vendorParagraphs}
@@ -470,11 +470,7 @@ export default function VendorFlowPage() {
               vendorRefineCosts={vendorRefineCosts}
               finalParagraphs={finalParagraphs}
               setFinalParagraphs={setFinalParagraphs}
-              originalText={session.jobText}
               requirements={session.requirements}
-              competences={session.competences}
-              competenceScaleConfig={session.competenceScaleConfig}
-              competenceOverrides={session.competenceOverrides}
               vendorColors={session.vendorColors}
               failedVendors={failedVendors}
               onRetry={async (vendor) => {

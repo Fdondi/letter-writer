@@ -52,6 +52,26 @@ export function applyExtractionPayload(payload, setters, options = {}) {
   fillCompany("language", setters.setLanguage, extracted.language);
   fillCompany("salary", setters.setSalary, extracted.salary);
 
+  const capturedAbout = String(extracted.additional_company_info || "").trim();
+  if (overwriteCompany && setters.setAdditionalCompanyInfo) {
+    setters.setAdditionalCompanyInfo(capturedAbout);
+    if (capturedAbout) setters.setShowAdditionalInfo?.(true);
+  } else {
+    fillCompany("additional_company_info", setters.setAdditionalCompanyInfo, capturedAbout);
+    if (capturedAbout) setters.setShowAdditionalInfo?.(true);
+  }
+
+  if (setters.setSourceUrl) {
+    const sourceUrl = String(payload.source_url || extracted.source_url || "").trim();
+    if (sourceUrl) {
+      if (overwriteCompany) {
+        setters.setSourceUrl(sourceUrl);
+      } else {
+        setters.setSourceUrl((prev) => (String(prev || "").trim() ? prev : sourceUrl));
+      }
+    }
+  }
+
   if (extracted.point_of_contact && setters.setPointOfContact) {
     const poc = extracted.point_of_contact;
     const next = {
@@ -100,6 +120,12 @@ export function applyExtractionPayload(payload, setters, options = {}) {
     ? String(payload.job_text || "")
     : currentJobText;
 
+  const fromExtractAbout = String(extracted.additional_company_info || "").trim();
+  const fromOptionsAbout = String(additionalCompanyInfo || "").trim();
+  const aboutCompany = overwriteCompany
+    ? fromExtractAbout || fromOptionsAbout
+    : fromOptionsAbout || fromExtractAbout;
+
   setters.setExtractedData?.((prev) => ({
     ...(prev || {}),
     requirements: extracted.requirements || prev?.requirements,
@@ -107,14 +133,14 @@ export function applyExtractionPayload(payload, setters, options = {}) {
     hire_problem: extracted.hire_problem ?? prev?.hire_problem ?? "",
     job_text: jobTextForExtracted || prev?.job_text,
     additional_user_info: additionalUserInfo,
-    additional_company_info: additionalCompanyInfo,
+    additional_company_info: aboutCompany || prev?.additional_company_info || "",
     company_name: extracted.company_name || prev?.company_name || "",
     job_title: extracted.job_title || prev?.job_title || "",
     location: extracted.location || prev?.location || "",
     language: extracted.language || prev?.language || "",
     salary: extracted.salary || prev?.salary || "",
-    point_of_contact: extracted.point_of_contact || prev?.point_of_contact || null,
     source_url: payload.source_url || extracted.source_url || prev?.source_url || "",
+    point_of_contact: extracted.point_of_contact || prev?.point_of_contact || null,
   }));
 
   if (overwriteCompany && (extracted.company_name || extracted.job_title)) {

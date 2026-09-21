@@ -23,6 +23,18 @@ describe("sessionRehydrate", () => {
     expect(fields.requirements).toEqual(["Python", "FastAPI"]);
   });
 
+  it("extracts original source URL", () => {
+    const fields = extractFormFieldsFromSessionState({
+      job_text: "Job",
+      metadata: {
+        common: {
+          source_url: "https://jobs.example/role",
+        },
+      },
+    });
+    expect(fields.sourceUrl).toBe("https://jobs.example/role");
+  });
+
   it("extracts About You / About Company additional notes", () => {
     const fields = extractFormFieldsFromSessionState({
       job_text: "Job",

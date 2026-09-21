@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { HoverProvider } from "../../contexts/HoverContext";
 import { useLanguages } from "../../contexts/LanguageContext";
 import LetterAssemblyPane from "./LetterAssemblyPane";
-import JobColumnPane from "./JobColumnPane";
 import VendorColumnPane from "./VendorColumnPane";
 import ExpandedVendorColumn from "./ExpandedVendorColumn";
 import { countCompetenceOccurrences } from "./countCompetenceOccurrences";
@@ -15,12 +14,7 @@ export default function LetterTabs({
   vendorRefineCosts = {},
   finalParagraphs,
   setFinalParagraphs,
-  originalText,
-  companyReport = null,
   requirements = [],
-  competences = {},
-  competenceScaleConfig,
-  competenceOverrides,
   failedVendors,
   onRetry,
   vendorColors,
@@ -31,16 +25,23 @@ export default function LetterTabs({
   setVendorFeedback = () => {},
   refineSamples = {},
   vendorDraftParagraphs,
+  selectedKeyTerm: selectedKeyTermProp,
+  onTermClick: onTermClickProp,
+  onHighlightContextChange,
 }) {
   const [collapsed, setCollapsed] = useState([]);
   const [swapDraftForFinal, setSwapDraftForFinal] = useState({});
-  const [selectedKeyTerm, setSelectedKeyTerm] = useState(null);
-  const [originalLetter, setOriginalLetter] = useState(originalText || "");
+  const [selectedKeyTermLocal, setSelectedKeyTermLocal] = useState(null);
   const [expandedColumn, setExpandedColumn] = useState(null);
   const [finalAssemblyTextNormalized, setFinalAssemblyTextNormalized] = useState("");
   const expandedDialogRef = useRef(null);
 
-  const handleTermClick = (term) => setSelectedKeyTerm((prev) => (prev === term ? null : term));
+  const selectedKeyTerm =
+    selectedKeyTermProp !== undefined ? selectedKeyTermProp : selectedKeyTermLocal;
+  const handleTermClick =
+    onTermClickProp ||
+    ((term) => setSelectedKeyTermLocal((prev) => (prev === term ? null : term)));
+
   const toggleExpand = (id) => setExpandedColumn((prev) => (prev === id ? null : id));
   const closeExpand = () => setExpandedColumn(null);
 
@@ -60,10 +61,12 @@ export default function LetterTabs({
   );
 
   useEffect(() => {
-    if (originalText !== originalLetter) {
-      setOriginalLetter(originalText || "");
-    }
-  }, [originalText, originalLetter]);
+    if (!onHighlightContextChange) return;
+    onHighlightContextChange({
+      competenceCounts,
+      finalAssemblyTextNormalized,
+    });
+  }, [competenceCounts, finalAssemblyTextNormalized, onHighlightContextChange]);
 
   const { enabledLanguages: languageOptions } = useLanguages();
 
@@ -120,7 +123,7 @@ export default function LetterTabs({
     ? visibleVendors.filter((v) => `vendor:${v}` !== expandedColumn)
     : visibleVendors;
   const totalVisible =
-    visibleInRowVendors.length + (expandedColumn === "final" ? 0 : 1) + (expandedColumn === "job-description" ? 0 : 1);
+    visibleInRowVendors.length + (expandedColumn === "final" ? 0 : 1);
   const columnWidth = totalVisible > 0 ? `${100 / totalVisible}%` : "100%";
 
   const minColumnWidth = parseInt(localStorage.getItem("minColumnWidth") || "200", 10);
@@ -149,26 +152,13 @@ export default function LetterTabs({
     onAssemblyTextChange: handleAssemblyTextChange,
   };
 
-  const jobColumnProps = {
-    jobText: originalLetter,
-    companyReport,
-    requirements,
-    competences,
-    scaleConfig: competenceScaleConfig,
-    overrides: competenceOverrides,
-    languages: languageOptions,
-    selectedKeyTerm,
-    onTermClick: handleTermClick,
-    competenceCounts,
-    finalAssemblyText: finalAssemblyTextNormalized,
-  };
-
   return (
     <HoverProvider>
       <div
         style={{
-          height: "calc(100vh - 20px)",
-          marginTop: 20,
+          flex: 1,
+          minHeight: 0,
+          height: "100%",
           display: "flex",
           flexDirection: "column",
           color: "var(--text-color)",
@@ -216,9 +206,6 @@ export default function LetterTabs({
               >
                 {expandedColumn === "final" && (
                   <LetterAssemblyPane {...assemblyPaneProps} isExpanded onClose={closeExpand} useOverlayWidth />
-                )}
-                {expandedColumn === "job-description" && (
-                  <JobColumnPane {...jobColumnProps} width="100%" minWidth="0" isExpanded onClose={closeExpand} />
                 )}
                 {expandedVendor && (
                   <ExpandedVendorColumn
@@ -315,17 +302,6 @@ export default function LetterTabs({
               {...assemblyPaneProps}
               onHeaderClick={() => toggleExpand("final")}
               useOverlayWidth={false}
-            />
-          )}
-
-          {expandedColumn !== "job-description" && (
-            <JobColumnPane
-              {...jobColumnProps}
-              width={columnWidth}
-              minWidth={`${minColumnWidth}px`}
-              onHeaderClick={() => toggleExpand("job-description")}
-              isExpanded={expandedColumn === "job-description"}
-              onClose={closeExpand}
             />
           )}
         </div>

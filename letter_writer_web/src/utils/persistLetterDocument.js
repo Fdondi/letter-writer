@@ -8,7 +8,7 @@ import { buildAutocompletePlanAiLetter, sectionsToProposalText } from "./autocom
  *
  * @param {object} opts
  * @param {string} opts.letterText - The final letter text
- * @param {object} opts.jobFields - { companyName, jobTitle, location, language, salary, requirements, jobText }
+ * @param {object} opts.jobFields - { companyName, jobTitle, location, language, salary, sourceUrl, requirements, jobText }
  * @param {string|null} opts.documentId - Existing document ID for updates
  * @param {Array} [opts.aiLetters] - AI letter entries for vendor/agentic flows
  * @param {object} [opts.feedbackExtras] - { feedback_extra_info, feedback_agent_context } for vendor flow
@@ -34,6 +34,7 @@ export async function persistLetterDocument({
     location: jobFields.location || "",
     language: jobFields.language || "",
     salary: jobFields.salary || "",
+    source_url: jobFields.sourceUrl || "",
     requirements: Array.isArray(jobFields.requirements) ? jobFields.requirements : jobFields.requirements ? [jobFields.requirements] : [],
     job_text: jobFields.jobText || "",
     letter_text: trimmed,

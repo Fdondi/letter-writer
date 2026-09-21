@@ -9,6 +9,9 @@ function makeSetters() {
     setLocation: jest.fn(),
     setLanguage: jest.fn(),
     setSalary: jest.fn(),
+    setSourceUrl: jest.fn(),
+    setAdditionalCompanyInfo: jest.fn(),
+    setShowAdditionalInfo: jest.fn(),
     setPointOfContact: jest.fn(),
     setShowPointOfContact: jest.fn(),
     setTriggerPocResearch: jest.fn(),
@@ -32,12 +35,14 @@ describe("applyExtractionPayload", () => {
       {
         session_id: "sess-cap",
         job_text: "Cleaned posting about Zürich",
+        source_url: "https://jobs.example/acme",
         extraction: {
           company_name: "Acme",
           job_title: "Engineerin",
           location: "Zürich",
           language: "German",
           hire_problem: "Scale payments",
+          additional_company_info: "Die UBS Card Center AG is the leading processor.",
           competences: {
             Python: { need: "critical", level: "Professional" },
           },
@@ -56,6 +61,11 @@ describe("applyExtractionPayload", () => {
     expect(setters.setCompanyName).toHaveBeenCalledWith("Acme");
     expect(setters.setJobTitle).toHaveBeenCalledWith("Engineerin");
     expect(setters.setHireProblem).toHaveBeenCalledWith("Scale payments");
+    expect(setters.setSourceUrl).toHaveBeenCalledWith("https://jobs.example/acme");
+    expect(setters.setAdditionalCompanyInfo).toHaveBeenCalledWith(
+      "Die UBS Card Center AG is the leading processor."
+    );
+    expect(setters.setShowAdditionalInfo).toHaveBeenCalledWith(true);
     expect(setters.setCompetences).toHaveBeenCalled();
     expect(setters.setAllSearchResults).toHaveBeenCalled();
     expect(setters.setSelectedTopDocs).toHaveBeenCalled();

@@ -252,7 +252,7 @@ export default function AgenticFlowPage() {
     try {
       setAgenticSaveError(null); setAgenticSavingFinal(true); session.setDocumentSaveNotice(null);
       const result = await persistLetterDocument({
-        letterText, jobFields: { companyName: session.companyName, jobTitle: session.jobTitle, location: session.location, language: session.language, salary: session.salary, requirements: session.requirements, jobText: session.jobText },
+        letterText, jobFields: { companyName: session.companyName, jobTitle: session.jobTitle, location: session.location, language: session.language, salary: session.salary, sourceUrl: session.sourceUrl, requirements: session.requirements, jobText: session.jobText },
         documentId: session.documentId, aiLetters,
       });
       if (result.warnings.length > 0) session.setDocumentSaveNotice(result.warnings.join(" "));
@@ -310,7 +310,7 @@ export default function AgenticFlowPage() {
         </div>
 
         {agenticStage === "assembly" && (
-          <div style={{ position: "relative", paddingTop: 4, flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div data-testid="agentic-assembly" style={{ position: "relative", paddingTop: 4, flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <LetterTabs
               vendorsList={Object.keys(agenticState?.final_letters || {}).filter(Boolean)}
               vendorParagraphs={agenticState?.final_letters ? Object.fromEntries(Object.entries(agenticState.final_letters).map(([v, text]) => [v, splitIntoParagraphs(text || "", v)])) : {}}
@@ -318,11 +318,7 @@ export default function AgenticFlowPage() {
               vendorRefineCosts={Object.keys(agenticState?.final_letters || {}).reduce((acc, v) => ({ ...acc, [v]: agenticState?.cost ?? 0 }), {})}
               finalParagraphs={agenticFinalParagraphs}
               setFinalParagraphs={setAgenticFinalParagraphs}
-              originalText={session.jobText}
               requirements={session.requirements}
-              competences={session.competences}
-              competenceScaleConfig={session.competenceScaleConfig}
-              competenceOverrides={session.competenceOverrides}
               vendorColors={session.vendorColors}
               failedVendors={{}}
               onRetry={async () => {}}

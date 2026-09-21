@@ -1,0 +1,33 @@
+{
+  "synthetic": true,
+  "cv_revisions": [
+    {
+      "content": "Alex Harness is a synthetic résumé used only in the Letter Writer UI harness. Experience: payments in Zürich.",
+      "source": "harness",
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "revision_number": 1
+    }
+  ],
+  "default_languages": [
+    {
+      "code": "de",
+      "label": "DE",
+      "color": "#3b82f6",
+      "enabled": true,
+      "level": "B2",
+      "instructions": "Verwende echte Umlaute (ä, ö, ü, ß) — niemals ae, oe, ue oder ss als Ersatz."
+    },
+    {
+      "code": "en",
+      "label": "EN",
+      "color": "#6366f1",
+      "enabled": true,
+      "level": "C2",
+      "instructions": ""
+    }
+  ],
+  "translation_provider": "google",
+  "models": ["openai"],
+  "background_models": [],
+  "min_column_width": 200
+}

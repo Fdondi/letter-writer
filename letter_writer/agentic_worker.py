@@ -313,7 +313,14 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
                     thread = threads.get(topic) or []
                     for vendor, payload in vendor_results:
                         if phase_key == PHASE_A1:
-                            apply_phase_a1_comment(thread, vendor, payload.get("new_comment"), round_num=round_num)
+                            apply_phase_a1_comment(
+                                thread,
+                                vendor,
+                                payload.get("new_comment"),
+                                round_num=round_num,
+                                quote=payload.get("quote") or "",
+                                draft_letters=draft_letters_multi if draft_letters_multi else {draft_vendor: draft_letter},
+                            )
                         elif phase_key in PHASES_SUBCOMMENT_ADD:
                             apply_phase_subcomments(thread, vendor, payload.get("subcomments") or [])
                         elif phase_key in PHASES_SUBCOMMENT_VOTE:

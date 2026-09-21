@@ -1,0 +1,10 @@
+FROM mcr.microsoft.com/playwright:v1.51.1-noble
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends xvfb x11vnc novnc websockify fluxbox python3 && rm -rf /var/lib/apt/lists/*
+
+COPY ui-harness/scripts/start-browser.sh /usr/local/bin/start-browser.sh
+RUN chmod +x /usr/local/bin/start-browser.sh
+
+EXPOSE 9222 7900
+CMD ["/usr/local/bin/start-browser.sh"]

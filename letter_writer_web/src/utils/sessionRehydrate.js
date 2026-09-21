@@ -45,6 +45,7 @@ export function extractFormFieldsFromSessionState(state) {
   if (common.location != null) fields.location = safeString(common.location);
   if (common.language != null) fields.language = safeString(common.language);
   if (common.salary != null) fields.salary = safeString(common.salary);
+  if (common.source_url != null) fields.sourceUrl = safeString(common.source_url);
   if (common.additional_user_info != null) {
     fields.additionalUserInfo = safeString(common.additional_user_info);
   }

@@ -1,0 +1,49 @@
+{
+  "format_version": 1,
+  "synthetic": true,
+  "saved_at": "2026-01-01T00:00:00+00:00",
+  "session_key": "harness-error-generate",
+  "user_id": "harness-local",
+  "company_name": "Harness Co",
+  "job_title": "Synthetic Engineer",
+  "stage": "phases",
+  "vendor_count": 1,
+  "empty": false,
+  "session": {
+    "cv_text": "Alex Harness is a synthetic résumé used only in the Letter Writer UI harness. Experience: payments in Zürich.",
+    "job_text": "Harness Co\nSynthetic Engineer\nZürich\n\nZürich sucht eine Entwicklerin für das Zahlungs-Team. This posting is synthetic harness data, not a real job.",
+    "metadata": {
+      "common": {
+        "company_name": "Harness Co",
+        "job_title": "Synthetic Engineer",
+        "location": "Zürich",
+        "language": "German",
+        "selected_vendors": ["openai"]
+      }
+    },
+    "vendors": {
+      "openai": {
+        "company_report": "Harness Co is a fictional company used only in the UI harness.",
+        "letter_plan": "1. Open with the Zürich payments work.",
+        "draft_letter": "Dear Hiring Team,\n\nI am writing to apply for the Engineer role at Harness Co. I have built payment systems in Zürich and enjoy careful code review.\n\nI would welcome a conversation.\n\nKind regards,\nAlex Harness\n",
+        "feedback": {
+          "instruction": [],
+          "company_fit": [],
+          "goal_fit": [],
+          "precision": [
+            {
+              "id": "ok1",
+              "observation": "The greeting is fine for this synthetic letter.",
+              "type": "ALREADY_GOOD",
+              "quote": "Dear Hiring Team",
+              "matched_text": "Dear Hiring Team"
+            }
+          ],
+          "user_fit": [],
+          "human": [],
+          "accuracy": []
+        }
+      }
+    }
+  }
+}

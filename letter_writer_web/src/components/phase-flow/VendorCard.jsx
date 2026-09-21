@@ -88,28 +88,6 @@ export default function VendorCard({
   const lastSuccessDataRef = useRef(null);
   const registeredStatusRef = useRef(null);
 
-  React.useEffect(() => {
-    if (!cardPhase || !onStatusChange) return;
-
-    const hasData = data !== null && Object.keys(data).length > 0;
-
-    let newStatus = null;
-    if (approved) {
-      newStatus = CardStatus.APPROVED;
-    } else if (status === "loading") {
-      newStatus = CardStatus.PENDING;
-    } else if (status === "error") {
-      newStatus = CardStatus.PENDING;
-    } else if (status === "success" && hasData) {
-      newStatus = CardStatus.READY;
-    }
-
-    if (newStatus && newStatus !== registeredStatusRef.current) {
-      registeredStatusRef.current = newStatus;
-      onStatusChange(newStatus);
-    }
-  }, [status, data, approved, cardPhase, onStatusChange]);
-
   const phaseModule = phaseModules[cardPhase];
 
   React.useEffect(() => {
@@ -330,6 +308,29 @@ export default function VendorCard({
     });
   }, [isLoading, approved, thisPhaseDirty, cardPhase, previousPhaseApproved, feedbackKeys, feedbackItemApprovals, feedbackOverrides, feedback, phaseModule, cardPhaseEdits, cardPhaseData]);
 
+  React.useEffect(() => {
+    if (!cardPhase || !onStatusChange) return;
+
+    const hasData = data !== null && Object.keys(data).length > 0;
+    const notesGate = cardPhase === "draft" || cardPhase === "refine";
+
+    let newStatus = null;
+    if (approved) {
+      newStatus = CardStatus.APPROVED;
+    } else if (status === "loading") {
+      newStatus = CardStatus.PENDING;
+    } else if (status === "error") {
+      newStatus = CardStatus.PENDING;
+    } else if (status === "success" && hasData) {
+      newStatus = notesGate && !readyForApproval ? CardStatus.PENDING : CardStatus.READY;
+    }
+
+    if (newStatus && newStatus !== registeredStatusRef.current) {
+      registeredStatusRef.current = newStatus;
+      onStatusChange(newStatus);
+    }
+  }, [status, data, approved, cardPhase, onStatusChange, readyForApproval]);
+
   const executePrimaryApprove = useCallback(async () => {
     if (approved && !thisPhaseDirty) return;
     if (!readyForApproval) return;
@@ -392,11 +393,11 @@ export default function VendorCard({
   const planApproveRunnerRef = useRef(executePrimaryApprove);
   planApproveRunnerRef.current = executePrimaryApprove;
   useEffect(() => {
-    if (cardPhase !== "plan" || !phaseObj?.planApproveRunners) return undefined;
+    if (!phaseObj?.approveRunners) return undefined;
     const wrapped = () => planApproveRunnerRef.current();
-    phaseObj.planApproveRunners.set(vendor, wrapped);
+    phaseObj.approveRunners.set(vendor, wrapped);
     return () => {
-      phaseObj.planApproveRunners.delete(vendor);
+      phaseObj.approveRunners.delete(vendor);
     };
   }, [cardPhase, vendor, phaseObj, executePrimaryApprove]);
 

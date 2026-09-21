@@ -41,6 +41,7 @@ export function useJobCapture({
   setExtracting,
   setCaptureImporting,
   setExtractionError,
+  setSourceUrl,
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -61,6 +62,17 @@ export function useJobCapture({
 
     (async () => {
       try {
+        try {
+          const meta = await fetchWithHeartbeat(`/api/job-capture/${encodeURIComponent(captureId)}/`);
+          const url = String(meta.data?.source_url || meta.data?.url || "").trim();
+          if (!cancelled && url) {
+            setSourceUrl?.(url);
+          }
+        } catch (peekErr) {
+          console.warn("Job capture URL peek failed:", peekErr);
+        }
+        if (cancelled) return;
+
         const scaleConfig = getScaleConfig();
         const result = await fetchWithHeartbeat(`/api/job-capture/${encodeURIComponent(captureId)}/process/`, {
           method: "POST",
@@ -78,7 +90,11 @@ export function useJobCapture({
         if (location.search.includes("capture=")) {
           navigate("/", { replace: true });
         }
-        showNotification("Imported job from browser");
+        showNotification(
+          result.data?.synthetic
+            ? "Imported captured page text (harness, no LLM extract)"
+            : "Imported job from browser"
+        );
       } catch (e) {
         console.error("Job capture import failed:", e);
         if (!cancelled) {
@@ -104,6 +120,7 @@ export function useJobCapture({
     setExtracting,
     setCaptureImporting,
     setExtractionError,
+    setSourceUrl,
     navigate,
   ]);
 }

@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 from typing import Any, Dict, Iterable, List, Optional, Union, cast
 from uuid import uuid4
 
@@ -18,6 +19,10 @@ from .config import env_default
 from .vector_store import embed, query_vector_similarity
 
 logger = logging.getLogger(__name__)
+
+
+def _harness_mode() -> bool:
+    return (os.environ.get("HARNESS_MODE") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 # Internal-only fields that should never be exposed via /api/documents responses.
@@ -113,6 +118,8 @@ def firestore_safe_for_write(value: Any) -> Any:
 
 def get_firestore_client() -> firestore.Client:
     """Return a Firestore client using env defaults."""
+    if _harness_mode():
+        raise RuntimeError("Harness: Firestore disabled")
     project_id = env_default("GOOGLE_CLOUD_PROJECT") or env_default("FIRESTORE_PROJECT_ID")
     database_id = env_default("FIRESTORE_DATABASE")
     # Firestore client will use Application Default Credentials
@@ -122,6 +129,8 @@ def get_firestore_client() -> firestore.Client:
 
 def get_collection():
     """Return the Firestore collection reference."""
+    if _harness_mode():
+        return None
     client = get_firestore_client()
     collection_name = env_default("FIRESTORE_COLLECTION", "documents")
     return client.collection(collection_name)
@@ -156,6 +165,11 @@ def get_personal_data_document(user_id: str):
     """
     if not user_id:
         raise ValueError("user_id is required for Firestore personal_data operations")
+    if _harness_mode():
+        # Lazy import: letter_writer_server is not a dependency of letter_writer at module load.
+        from letter_writer_server.core.harness import HarnessPersonalDataRef
+
+        return HarnessPersonalDataRef()
     return get_personal_data_collection().document(str(user_id))
 
 
@@ -178,7 +192,13 @@ def get_user_data(user_id: str, use_cache: bool = True) -> dict:
     """
     if not user_id:
         raise ValueError("user_id is required for Firestore personal_data operations")
-    
+
+    if _harness_mode():
+        # Lazy import: letter_writer_server is not a dependency of letter_writer at module load.
+        from letter_writer_server.core.harness import get_harness_user_data
+
+        return get_harness_user_data(user_id)
+
     # Request-scoped cache (thread-local would be better, but simple dict works for single-threaded requests)
     # In production, consider using request-local storage or a proper cache
     cache_key = f"user_data_{user_id}"
@@ -210,6 +230,12 @@ def update_user_data_cache(user_id: str, updates: dict) -> None:
     sees the new values without reading from Firestore. Call this after writing to Firestore.
     """
     if not user_id:
+        return
+    if _harness_mode():
+        # Lazy import: letter_writer_server is not a dependency of letter_writer at module load.
+        from letter_writer_server.core.harness import update_harness_user_data
+
+        update_harness_user_data(updates)
         return
     cache_key = f"user_data_{user_id}"
     if not hasattr(get_user_data, "_cache"):
@@ -524,6 +550,7 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
         "location": data.get("location"),
         "language": data.get("language"),
         "salary": data.get("salary"),
+        "source_url": data.get("source_url"),
         "requirements": requirements_value,
         "date_applied": data.get("date_applied"),
         "job_text": job_text_normalized,
@@ -650,7 +677,10 @@ def list_documents(
     """
     if not user_id:
         raise ValueError("user_id is required for Firestore document operations")
-    
+
+    if _harness_mode():
+        return []
+
     # Always filter by user_id first (required for security)
     query = collection.where(filter=FieldFilter("user_id", "==", user_id))
     
