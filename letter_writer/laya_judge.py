@@ -1,9 +1,8 @@
-"""Local Laya judgments for RAG similarity and feedback comments.
+"""Laya judgments for RAG similarity and feedback comments.
 
-Laya (https://huggingface.co/convaiinnovations/laya) returns calibrated
-probabilities. It does not write the similarity bullets; the language model
-still does that. The numeric RAG score and the valid/invalid comment judgment
-come from Laya when the package is installed.
+Scores come from an Ollaya server (https://github.com/ollaya-dev/ollaya),
+the container in docker-compose.yml. Laya returns calibrated probabilities.
+It does not write the similarity bullets; the language model still does that.
 """
 
 from __future__ import annotations
@@ -13,19 +12,15 @@ import os
 import threading
 from typing import Any, Callable, Dict, Mapping, MutableMapping, Optional
 
-from .laya_device import resolve_laya_device, torch, torch_directml
+import httpx
 
 logger = logging.getLogger(__name__)
 
-# Optional. A missing install must not stop the server from importing.
-try:
-    from laya import Router
-except (ImportError, OSError):
-    Router = None  # type: ignore[assignment,misc]
-
-os.environ.setdefault("USE_TF", "0")
-
 PredictFn = Callable[[Any, Dict[str, Any]], Dict[str, Any]]
+
+_DEFAULT_OLLAYA_URL = "http://ollaya:11435"
+_DECIDE_TIMEOUT_S = 360.0
+_CONNECT_TIMEOUT_S = 5.0
 
 RAG_SIMILARITY_QUESTION: Dict[str, Any] = {
     "similarity": {
@@ -55,12 +50,11 @@ FEEDBACK_GROUNDED_QUESTION: Dict[str, Any] = {
 }
 
 _RUNTIME_LOCK = threading.Lock()
-_RUNTIME: Optional["_LayaRuntime"] = None
-_UNAVAILABLE: Optional[str] = None
+_RUNTIME: Optional["_OllayaClient"] = None
 
 
 class LayaUnavailable(RuntimeError):
-    """Laya cannot run in this process. The message is safe to show in the UI."""
+    """Ollaya could not score this request. The message is safe to show in the UI."""
 
 
 def comment_is_laya_hidden(item: Mapping[str, Any]) -> bool:
@@ -222,26 +216,69 @@ def annotate_feedback_validity(
     return status
 
 
-class _LayaRuntime:
-    def __init__(self) -> None:
-        if Router is None:
+def ollaya_base_url() -> str:
+    raw = (os.environ.get("OLLAYA_BASE_URL") or _DEFAULT_OLLAYA_URL).strip().rstrip("/")
+    return raw or _DEFAULT_OLLAYA_URL
+
+
+def ollaya_model_name(raw: Optional[str] = None) -> str:
+    """Model name sent to Ollaya. Older local names map onto Ollaya tags."""
+    if raw is None:
+        raw = os.environ.get("LAYA_MODEL") or ""
+    name = raw.strip() or "laya"
+    return {
+        "english": "laya:en",
+        "multilingual": "laya:multilingual",
+        "typed-decisions": "laya:typed-decisions",
+    }.get(name, name)
+
+
+def decide_payload(state: Any, questions: Mapping[str, Any], model: str) -> Dict[str, Any]:
+    return {
+        "model": model,
+        "state": state,
+        "questions": dict(questions),
+        "extras": ["laya"],
+    }
+
+
+class _OllayaClient:
+    """Talks to the Ollaya container. The model stays loaded there, not in this process."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        api_key: str,
+        http_client: Optional[httpx.Client] = None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.detail = f"Ollaya at {self.base_url}, model {self.model}"
+        self.device_label = ""
+        self._api_key = api_key
+        self._owns_client = http_client is None
+        self._http = http_client or httpx.Client(
+            timeout=httpx.Timeout(_DECIDE_TIMEOUT_S, connect=_CONNECT_TIMEOUT_S),
+        )
+        self._lock = threading.Lock()
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._http.close()
+
+    def probe(self) -> None:
+        try:
+            response = self._http.get(f"{self.base_url}/", headers=self._headers())
+        except httpx.HTTPError as exc:
             raise LayaUnavailable(
-                "laya is not installed. See docs/LAYA_LOCAL.md for Windows and Linux installs."
-            )
-        kind, detail = resolve_laya_device()
-        self.device_kind = kind
-        self.detail = detail
-        self.device_label = detail
-        if kind != (os.environ.get("LAYA_DEVICE") or "auto").strip().lower() and (
-            os.environ.get("LAYA_DEVICE") or "auto"
-        ).strip().lower() not in ("", "auto"):
-            logger.warning("Laya device: %s", detail)
-        router_device = "cpu" if kind == "directml" else kind
-        self._router = Router(device=router_device, max_loaded=1)
-        self._moved: set[str] = set()
-        self._directml_error = ""
-        self._infer_lock = threading.Lock()
-        logger.info("Laya runtime ready on %s (%s)", kind, detail)
+                f"Ollaya is not reachable at {self.base_url}. "
+                f"Start the ollaya container ({type(exc).__name__}: {exc})."
+            ) from exc
+        if response.status_code >= 400:
+            raise LayaUnavailable(_http_error(response))
+        logger.info("Ollaya reachable at %s", self.base_url)
 
     def predict(
         self,
@@ -249,79 +286,80 @@ class _LayaRuntime:
         questions: Dict[str, Any],
         model: Optional[str] = None,
     ) -> Dict[str, Any]:
-        with self._infer_lock:
-            decision = self._router.route(state, questions, model=model)
-            agent = self._router.load(decision["model"])
-            self._place(agent, decision["model"])
+        chosen = ollaya_model_name(model) if model else self.model
+        payload = decide_payload(state, questions, chosen)
+        with self._lock:
             try:
-                result = agent.system_one(state, questions)
-            except Exception as exc:
-                if self.device_kind != "directml":
-                    raise
-                self._directml_error = f"{type(exc).__name__}: {exc}"
-                self.device_kind = "cpu"
-                self.device_label = f"cpu (DirectML inference failed: {self._directml_error})"
-                logger.warning("Laya left DirectML for CPU: %s", self._directml_error)
-                self._move_agent_to_cpu(agent)
-                result = agent.system_one(state, questions)
-            result["routing"] = dict(decision)
-            result["laya_device"] = self.device_label
+                response = self._http.post(
+                    f"{self.base_url}/api/decide",
+                    json=payload,
+                    headers=self._headers(),
+                )
+            except httpx.HTTPError as exc:
+                raise LayaUnavailable(
+                    f"Ollaya request to {self.base_url} failed ({type(exc).__name__}: {exc})."
+                ) from exc
+            if response.status_code >= 400:
+                raise LayaUnavailable(_http_error(response))
+            try:
+                result = response.json()
+            except ValueError as exc:
+                raise LayaUnavailable(f"Ollaya returned a non-JSON decision: {exc}") from exc
+            if not isinstance(result, dict):
+                raise LayaUnavailable("Ollaya decision response was not a JSON object.")
+            result["laya_device"] = self._device_label()
             return result
 
-    def _move_agent_to_cpu(self, agent: Any) -> None:
-        if torch is None:
-            return
-        agent.dtype = torch.float32
-        agent.device = torch.device("cpu")
-        agent.model.to(agent.device).eval()
+    def _headers(self) -> Dict[str, str]:
+        if not self._api_key:
+            return {}
+        return {"Authorization": f"Bearer {self._api_key}"}
 
-    def _place(self, agent: Any, key: str) -> None:
-        if self.device_kind != "directml" or key in self._moved or self._directml_error:
-            return
-        if torch is None or torch_directml is None:
-            self._directml_error = "torch-directml is not importable"
-            self.device_kind = "cpu"
-            self.device_label = f"cpu ({self._directml_error})"
-            logger.warning("Laya DirectML move skipped: %s", self._directml_error)
-            return
+    def _device_label(self) -> str:
+        if self.device_label:
+            return self.device_label
         try:
-            device = torch_directml.device()
-            agent.dtype = torch.float32
-            agent.model.to(device).eval()
-            agent.device = device
-        except Exception as exc:
-            self._directml_error = f"{type(exc).__name__}: {exc}"
-            self.device_kind = "cpu"
-            self.device_label = f"cpu (DirectML failed: {self._directml_error})"
-            logger.warning("Laya stayed on CPU after DirectML failed: %s", self._directml_error)
-            return
-        self._moved.add(key)
-        name = self.detail
-        self.device_label = f"directml:{name}" if name else "directml"
+            response = self._http.get(f"{self.base_url}/api/ps", headers=self._headers())
+            payload = response.json() if response.status_code < 400 else {}
+        except (httpx.HTTPError, ValueError):
+            return "ollaya"
+        models = payload.get("models") if isinstance(payload, dict) else None
+        if isinstance(models, list):
+            for item in models:
+                if isinstance(item, dict) and item.get("device"):
+                    self.device_label = str(item["device"])
+                    return self.device_label
+        return "ollaya"
 
 
-def _runtime() -> _LayaRuntime:
+def _runtime() -> _OllayaClient:
     global _RUNTIME
     with _RUNTIME_LOCK:
         if _RUNTIME is None:
-            _RUNTIME = _LayaRuntime()
+            client = _OllayaClient(
+                base_url=ollaya_base_url(),
+                model=ollaya_model_name(),
+                api_key=(os.environ.get("OLLAYA_API_KEY") or "").strip(),
+            )
+            try:
+                client.probe()
+            except LayaUnavailable:
+                client.close()
+                raise
+            _RUNTIME = client
         return _RUNTIME
 
 
 def _runtime_status(predict: Optional[PredictFn]) -> Dict[str, Any]:
-    global _UNAVAILABLE
     if predict is not None:
         return {"available": True, "device": "test", "detail": "injected predictor"}
-    if _UNAVAILABLE is not None:
-        return {"available": False, "device": "", "detail": _UNAVAILABLE}
     try:
         runtime = _runtime()
     except LayaUnavailable as exc:
-        _UNAVAILABLE = str(exc)
-        return {"available": False, "device": "", "detail": _UNAVAILABLE}
+        return {"available": False, "device": "", "detail": str(exc)}
     return {
         "available": True,
-        "device": runtime.device_label,
+        "device": runtime.device_label or "ollaya",
         "detail": runtime.detail,
     }
 
@@ -335,7 +373,9 @@ def _call_predict(runner: PredictFn, state: Any, questions: Dict[str, Any]) -> D
 
 def _model_override() -> Optional[str]:
     raw = (os.environ.get("LAYA_MODEL") or "").strip()
-    return raw or None
+    if not raw:
+        return None
+    return ollaya_model_name(raw)
 
 
 def _stamp_rag_failure(reranked: MutableMapping[str, dict], status: Mapping[str, Any]) -> None:
@@ -363,16 +403,44 @@ def _score_answer(result: Mapping[str, Any]) -> tuple[float, float, str]:
     answer = (result.get("answers") or {}).get("similarity") or {}
     if "score" not in answer:
         raise LayaUnavailable(f"Laya similarity answer missing score: {answer!r}")
-    routed = str(((result.get("routing") or {}).get("model")) or "")
-    return float(answer["score"]), float(answer.get("confidence") or 0.0), routed
+    routed = str(((result.get("routing") or {}).get("model")) or result.get("model") or "")
+    return float(answer["score"]), _answer_confidence(answer), routed
 
 
 def _noul_answer(result: Mapping[str, Any]) -> tuple[float, float, str]:
     answer = (result.get("answers") or {}).get("grounded") or {}
     if "noul" not in answer:
         raise LayaUnavailable(f"Laya grounded answer missing noul: {answer!r}")
-    routed = str(((result.get("routing") or {}).get("model")) or "")
-    return float(answer["noul"]), float(answer.get("confidence") or 0.0), routed
+    routed = str(((result.get("routing") or {}).get("model")) or result.get("model") or "")
+    return float(answer["noul"]), _answer_confidence(answer), routed
+
+
+def _answer_confidence(answer: Mapping[str, Any]) -> float:
+    """Prefer Laya's own confidence from ``extras: ["laya"]``.
+
+    Ollaya's noul answers have no top-level confidence. Score answers do, but that
+    number is TypeSafe's spread across options, not the confidence the thresholds use.
+    """
+    extra = answer.get("laya")
+    if isinstance(extra, Mapping) and extra.get("confidence") is not None:
+        return float(extra["confidence"])
+    if answer.get("confidence") is not None:
+        return float(answer["confidence"])
+    return 0.0
+
+
+def _http_error(response: httpx.Response) -> str:
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict):
+        message = str(body.get("error") or f"HTTP {response.status_code}")
+        code = str(body.get("code") or "").strip()
+        if code:
+            return f"{code}: {message}"
+        return message
+    return f"Ollaya HTTP {response.status_code}"
 
 
 def _letter_window(letter: str, quote: str) -> str:

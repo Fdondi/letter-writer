@@ -63,12 +63,19 @@ services:
       # Local energy-based cost (optional; cost stays 0 if unset)
       - LOCAL_GPU_WATTS_AT_100=${LOCAL_GPU_WATTS_AT_100:-}
       - LOCAL_ENERGY_PRICE_PER_KWH=${LOCAL_ENERGY_PRICE_PER_KWH:-}
+      # Ollaya container (ghcr.io/ollaya-dev/ollaya) scores RAG hits and feedback comments
+      - OLLAYA_BASE_URL=${OLLAYA_BASE_URL:-http://ollaya:11435}
+      - OLLAYA_API_KEY=${OLLAYA_API_KEY:-}
+      - LAYA_MODEL=${LAYA_MODEL:-laya}
     env_file:
       - .env
     # NOTE: On Linux/Podman add: extra_hosts: ["host.docker.internal:host-gateway"]
     # Docker Desktop for Windows/Mac injects host.docker.internal automatically; the override breaks it.
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      ollaya:
+        condition: service_healthy
 
   redis:
     image: docker.io/redis:alpine
@@ -76,6 +83,29 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+
+  ollaya:
+    image: ${OLLAYA_IMAGE:-ghcr.io/ollaya-dev/ollaya:latest}
+    container_name: letter-writer-ollaya
+    restart: unless-stopped
+    # The image serves immediately and does not download weights. scripts/ollaya-serve.sh
+    # starts the server, then pulls the laya router. Interrupted pulls resume.
+    # The CPU image is the package default; set OLLAYA_IMAGE to
+    # ghcr.io/ollaya-dev/ollaya:cuda when the host has the NVIDIA Container Toolkit.
+    entrypoint: ["/bin/bash", "/usr/local/bin/ollaya-serve.sh"]
+    command: []
+    environment:
+      - OLLAYA_HOST=0.0.0.0:11435
+      - OLLAYA_DEVICE=${OLLAYA_DEVICE:-auto}
+    volumes:
+      - ollaya-models:/home/ollaya/.ollaya
+      - ./scripts/ollaya-serve.sh:/usr/local/bin/ollaya-serve.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "ollaya list | grep -q laya"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 900s
 
   frontend:
     build:
@@ -103,6 +133,6 @@ services:
     depends_on:
       - backend
 
-# Volumes removed - no longer using Qdrant or MongoDB
-# Firestore is a managed service, no local volumes needed
+volumes:
+  ollaya-models:
 

@@ -1,50 +1,99 @@
-"""Laya scoring decisions without downloading the checkpoint."""
+"""Laya scoring decisions against the Ollaya HTTP API, without a live server."""
+
+import json
+
+import httpx
 
 from letter_writer.feedback_checks import normalize_feedback_value
-from letter_writer.laya_device import choose_laya_device
 from letter_writer.laya_judge import (
+    LayaUnavailable,
+    _OllayaClient,
+    _answer_confidence,
     apply_laya_rag_scores,
     annotate_feedback_validity,
     comment_is_laya_hidden,
+    decide_payload,
     map_similarity_score,
+    ollaya_model_name,
     verdict_from_noul,
 )
 from letter_writer.rewrite import _rewrite_dimension_text
 
 
-def test_device_priority_cuda_then_directml_then_cpu():
-    kind, detail = choose_laya_device(
-        "auto",
-        cuda_available=True,
-        cuda_name="NVIDIA",
-        directml_available=True,
-        directml_name="Radeon",
+def test_ollaya_model_names():
+    assert ollaya_model_name("") == "laya"
+    assert ollaya_model_name("laya") == "laya"
+    assert ollaya_model_name("english") == "laya:en"
+    assert ollaya_model_name("multilingual") == "laya:multilingual"
+    assert ollaya_model_name("typed-decisions") == "laya:typed-decisions"
+    assert ollaya_model_name("laya:en") == "laya:en"
+
+
+def test_noul_confidence_comes_from_laya_extra():
+    assert _answer_confidence({"noul": 0.1, "confidence": 0.8}) == 0.8
+    assert _answer_confidence({"noul": 0.1, "laya": {"confidence": 0.66}}) == 0.66
+    assert _answer_confidence({"score": 1.0, "confidence": 0.98, "laya": {"confidence": 0.4}}) == 0.4
+    assert _answer_confidence({"noul": 0.1}) == 0.0
+
+
+def test_ollaya_decide_sends_laya_extra_and_reads_device():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/decide":
+            seen["body"] = json.loads(request.content.decode())
+            return httpx.Response(
+                200,
+                json={
+                    "model": "laya:en",
+                    "answers": {"similarity": {"score": 2.0, "confidence": 0.4}},
+                    "routing": {"model": "laya:en", "route": "english"},
+                },
+            )
+        if request.url.path == "/api/ps":
+            return httpx.Response(200, json={"models": [{"name": "laya:en", "device": "cpu"}]})
+        return httpx.Response(404, json={"error": "missing", "code": "NOT_FOUND"})
+
+    client = _OllayaClient(
+        base_url="http://ollaya:11435",
+        model="laya",
+        api_key="",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
-    assert kind == "cuda"
-    assert detail == "NVIDIA"
-
-    kind, detail = choose_laya_device(
-        "auto",
-        cuda_available=False,
-        directml_available=True,
-        directml_name="AMD Radeon Graphics",
+    result = client.predict("a job opening", {"similarity": {"type": "score", "criteria": ["a", "b"]}})
+    assert seen["body"] == decide_payload(
+        "a job opening",
+        {"similarity": {"type": "score", "criteria": ["a", "b"]}},
+        "laya",
     )
-    assert kind == "directml"
-    assert "Radeon" in detail
+    assert result["laya_device"] == "cpu"
+    assert result["routing"]["model"] == "laya:en"
 
-    kind, detail = choose_laya_device(
-        "auto",
-        cuda_available=False,
-        directml_available=False,
+
+def test_ollaya_missing_model_is_an_error_not_a_fallback():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={
+                "error": 'model "laya" not found, try pulling it first',
+                "code": "MODEL_NOT_FOUND",
+            },
+        )
+
+    client = _OllayaClient(
+        base_url="http://ollaya:11435",
+        model="laya",
+        api_key="",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
-    assert kind == "cpu"
-    assert "7735HS" in detail
-
-
-def test_requested_cuda_without_a_device_says_so():
-    kind, detail = choose_laya_device("cuda", cuda_available=False, directml_available=False)
-    assert kind == "cpu"
-    assert "LAYA_DEVICE=cuda" in detail
+    try:
+        client.predict("state", {"similarity": {"type": "score"}})
+    except LayaUnavailable as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("missing model should fail")
+    assert "MODEL_NOT_FOUND" in message
+    assert "try pulling it first" in message
 
 
 def test_similarity_rubric_mapping():

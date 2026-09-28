@@ -1,3 +1,4 @@
+0.69.4 - Score RAG matches and feedback with the Ollaya container instead of a host Laya install
 0.69.3 - Remove deprecated Claude Haiku 3.5 from the Anthropic catalog
 0.69.2 - Models with structured output always request JSON via output_config.format
 0.69.1 - Anthropic JSON uses output_config.format; cache minimums come from the model config
