@@ -6,6 +6,8 @@ import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from .base import vendor_model_field
+
 # Visible marker so padded bytes are auditable in traces (not silent filler).
 _PAD_HEADER = (
     "\n\n---\n"
@@ -48,21 +50,8 @@ def merge_cache_prefixes(
 
 
 def anthropic_min_cache_tokens(model: str) -> int:
-    """Minimum cacheable prefix length per Anthropic model family."""
-    m = (model or "").lower()
-    if "haiku-4-5" in m:
-        return 4096
-    if "opus-4-6" in m or "opus-4-5" in m:
-        return 4096
-    if "opus-4-7" in m:
-        return 2048
-    if "sonnet-4-6" in m or "sonnet-4-5" in m or "sonnet-5" in m:
-        return 1024
-    if "opus-4-8" in m or "fable-5" in m:
-        return 1024
-    if "haiku-3" in m:
-        return 2048
-    return 2048
+    """Minimum cacheable prefix length from the model entry in ``anthropic.json``."""
+    return int(vendor_model_field("anthropic", model, "min_cache_tokens", 2048))
 
 
 def openai_min_cache_tokens(_model: str) -> int:

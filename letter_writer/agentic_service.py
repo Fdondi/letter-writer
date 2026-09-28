@@ -159,26 +159,6 @@ SCHEMA_A2 = {
     "required": ["subcomments"],
 }
 
-SCHEMA_A2_SUB_VOTE = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "subcomment_votes": {
-            "type": "object",
-            "additionalProperties": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "action": {"type": "string", "enum": ["upvote", "downvote", "abstain"]},
-                    "reason": {"type": "string"},
-                },
-                "required": ["action", "reason"],
-            },
-        },
-    },
-    "required": ["subcomment_votes"],
-}
-
 SCHEMA_A3 = {
     "type": "object",
     "additionalProperties": False,
@@ -204,15 +184,16 @@ SCHEMA_B = {
     "additionalProperties": False,
     "properties": {
         "votes": {
-            "type": "object",
-            "additionalProperties": {
+            "type": "array",
+            "items": {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
+                    "key": {"type": "string"},
                     "action": {"type": "string", "enum": ["upvote", "downvote", "abstain"]},
                     "reason": {"type": "string"},
                 },
-                "required": ["action", "reason"],
+                "required": ["key", "action", "reason"],
             },
         },
     },
@@ -1249,7 +1230,8 @@ def _phase_prompt(
                 context
                 + "\n\n========== Current topic thread ==========\n"
                 + thread_str
-                + "\n\nThere are no subcomments to vote on. Return subcomment_votes as an empty object {}."
+                + "\n\nThere are no subcomments to vote on. Return subcomment_votes as an empty object {} "
+                "or an empty array []."
             )
         else:
             prompt = (
@@ -1280,15 +1262,15 @@ def _phase_prompt(
         system = (
             "You are a cross-topic voting agent. "
             "Use only the provided response tool/schema. "
-            "The votes object has one key per comment and per addendum. "
-            "You MUST fill every key — omitting any is not allowed."
+            "Return one vote for every comment and every addendum the schema lists. "
+            "Omitting any is not allowed."
         )
         prompt = (
             context
             + "\n\n========== Comments to vote on ==========\n"
             + global_threads_str
-            + "\n\nIMPORTANT: Fill every key in the votes object with an action (upvote/downvote/abstain) "
-            "and a non-empty reason. Every item must be covered — do not skip any."
+            + "\n\nIMPORTANT: Cover every comment and every addendum with an action (upvote/downvote/abstain) "
+            "and a non-empty reason. Do not skip any."
         )
         return system, prompt
     return ("Use only the provided response tool/schema.", context)
@@ -1312,7 +1294,7 @@ def call_agentic_phase_action(
     elif phase in PHASES_SUBCOMMENT_ADD:
         schema = SCHEMA_A2
     elif phase in PHASES_SUBCOMMENT_VOTE:
-        schema = SCHEMA_A2_SUB_VOTE
+        schema = build_phase_subcomment_vote_schema(thread or [])
     elif phase == PHASE_A3:
         schema = SCHEMA_A3
     else:
@@ -1360,6 +1342,16 @@ def call_agentic_phase_action(
         expected_set = set(expected)
         by_pair: Dict[Tuple[str, str], Dict[str, Any]] = {}
         raw_votes = data.get("subcomment_votes") or {}
+        if isinstance(raw_votes, list):
+            keyed: Dict[str, Any] = {}
+            for item in raw_votes:
+                if not isinstance(item, dict):
+                    continue
+                cid = item.get("comment_id")
+                sid = item.get("subcomment_id")
+                if isinstance(cid, str) and cid and isinstance(sid, str) and sid:
+                    keyed[f"{cid}::{sid}"] = item
+            raw_votes = keyed
         if not isinstance(raw_votes, dict):
             logger.warning(
                 "AGENTIC unexpected subcomment_votes type vendor=%s topic=%s type=%s",
@@ -1409,6 +1401,15 @@ def call_agentic_phase_action(
     # Keys: "c::{comment_id}" for comments, "a::{comment_id}::{addendum_id}" for addendums.
     # topic is injected from call context (this function's `topic` param = target_topic).
     raw_votes = data.get("votes") or {}
+    if isinstance(raw_votes, list):
+        keyed_votes: Dict[str, Any] = {}
+        for item in raw_votes:
+            if not isinstance(item, dict):
+                continue
+            item_key = item.get("key")
+            if isinstance(item_key, str) and item_key:
+                keyed_votes[item_key] = item
+        raw_votes = keyed_votes
     if not isinstance(raw_votes, dict):
         logger.warning(
             "AGENTIC unexpected votes type vendor=%s topic=%s type=%s",

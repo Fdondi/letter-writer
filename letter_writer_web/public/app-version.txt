@@ -1,3 +1,7 @@
+0.69.3 - Remove deprecated Claude Haiku 3.5 from the Anthropic catalog
+0.69.2 - Models with structured output always request JSON via output_config.format
+0.69.1 - Anthropic JSON uses output_config.format; cache minimums come from the model config
+0.69.0 - Autocomplete plan uses Claude Opus 5.5 at $4 / $20 per million tokens (cache reads 5%)
 0.68.0 - Local Laya scores RAG matches and parks ungrounded feedback under already-good notes, with restore
 0.67.10 - Feedback summary counts only Please fix / Input needed, not Already good
 0.67.9 - INPUT NEEDED replaces CRITIQUE on notes; approve/remove stay visible below the scroll

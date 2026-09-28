@@ -63,6 +63,56 @@ def normalize_config_vendor_key(stem_or_key: str) -> str:
     return _CONFIG_VENDOR_STEM_ALIASES.get(k, k)
 
 
+def load_vendor_config(vendor: str) -> Dict[str, Any]:
+    """Load ``clients/<vendor>.json``. Returns {} when the file is missing."""
+    key = normalize_config_vendor_key(vendor)
+    path = Path(__file__).resolve().parent / f"{key}.json"
+    if not path.is_file():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to load vendor config %s: %s", path, exc)
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def matching_model_entry(models: Dict[str, Any], model: str) -> Dict[str, Any]:
+    """Exact model id, otherwise the longest configured id contained in *model*.
+
+    Dated snapshots such as ``claude-opus-4-7-20250514`` match ``claude-opus-4-7``.
+    """
+    if not isinstance(models, dict) or not model:
+        return {}
+    exact = models.get(model)
+    if isinstance(exact, dict):
+        return exact
+    needle = model.lower()
+    best_key = ""
+    best: Dict[str, Any] = {}
+    for key, entry in models.items():
+        if not isinstance(entry, dict):
+            continue
+        token = str(key).lower()
+        if token and token in needle and len(token) > len(best_key):
+            best_key = token
+            best = entry
+    return best
+
+
+def vendor_model_field(vendor: str, model: str, key: str, default: Any = None) -> Any:
+    """Read one field from a model entry, then vendor defaults, then *default*."""
+    cfg = load_vendor_config(vendor)
+    models = cfg.get("models")
+    entry = matching_model_entry(models if isinstance(models, dict) else {}, model)
+    if key in entry and entry[key] is not None:
+        return entry[key]
+    defaults = cfg.get("defaults")
+    if isinstance(defaults, dict) and key in defaults and defaults[key] is not None:
+        return defaults[key]
+    return default
+
+
 class ModelRole(Enum):
     """Named LLM roles — each vendor maps roles to a concrete model in ``*.json``."""
 

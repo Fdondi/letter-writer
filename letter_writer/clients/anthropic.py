@@ -1,6 +1,6 @@
 import json
 
-from .base import BaseClient, ModelRole
+from .base import BaseClient, ModelRole, vendor_model_field
 from .prompt_cache import merge_cache_prefixes, prepare_cache_block
 from .model_override import apply_model_override_thinking
 from anthropic import Anthropic
@@ -12,7 +12,7 @@ from langsmith import traceable
 # families; use adaptive thinking + ``output_config.effort`` instead. See:
 # https://platform.claude.com/docs/en/about-claude/models/migration-guide
 _ADAPTIVE_THINKING_MODEL_MARKERS: FrozenSet[str] = frozenset(
-    ("fable-5", "opus-4-8", "opus-4-7", "opus-4-6", "sonnet-5", "sonnet-4-6")
+    ("fable-5", "opus-5-5", "opus-4-8", "opus-4-7", "opus-4-6", "sonnet-5", "sonnet-4-6")
 )
 _VALID_THINKING_EFFORTS: FrozenSet[str] = frozenset(
     ("low", "medium", "high", "max", "xhigh")
@@ -22,6 +22,84 @@ _VALID_THINKING_EFFORTS: FrozenSet[str] = frozenset(
 def _anthropic_model_requires_adaptive_thinking(model: str) -> bool:
     m = (model or "").lower()
     return any(marker in m for marker in _ADAPTIVE_THINKING_MODEL_MARKERS)
+
+
+def _schema_blocks_json_output(node: Any) -> Optional[str]:
+    """Return why *node* cannot be sent as ``output_config.format``.
+
+    Anthropic JSON outputs require ``additionalProperties: false`` on objects.
+    A map schema (``additionalProperties`` set to a schema) is rejected.
+    """
+    if isinstance(node, dict):
+        if node.get("type") == "object" and "additionalProperties" in node and node["additionalProperties"] is not False:
+            return "additionalProperties must be false on every object"
+        for value in node.values():
+            reason = _schema_blocks_json_output(value)
+            if reason:
+                return reason
+    elif isinstance(node, list):
+        for value in node:
+            reason = _schema_blocks_json_output(value)
+            if reason:
+                return reason
+    return None
+
+
+def _schema_for_json_output(node: Any) -> Any:
+    """Copy *node* and close objects that omit ``additionalProperties``."""
+    if isinstance(node, list):
+        return [_schema_for_json_output(value) for value in node]
+    if not isinstance(node, dict):
+        return node
+    copied = {key: _schema_for_json_output(value) for key, value in node.items()}
+    if copied.get("type") == "object" and "additionalProperties" not in copied:
+        copied["additionalProperties"] = False
+    return copied
+
+
+def anthropic_json_request_kwargs(
+    model: str,
+    schema: Dict[str, Any],
+    tool_name: str,
+) -> Dict[str, Any]:
+    """Build the Messages API fields that request a JSON schema.
+
+    Models with ``structured_output`` always use ``output_config.format``.
+    A schema Anthropic will not accept that way is an error on those models.
+    Older models keep a single forced tool.
+    """
+    if bool(vendor_model_field("anthropic", model, "structured_output", False)):
+        reason = _schema_blocks_json_output(schema)
+        if reason:
+            raise ValueError(
+                f"Model {model} requests JSON via output_config.format, "
+                f"but this schema is not valid for that API ({reason})."
+            )
+        return {
+            "output_config": {
+                "format": {
+                    "type": "json_schema",
+                    "schema": _schema_for_json_output(schema),
+                }
+            }
+        }
+    return {
+        "tools": [{
+            "name": tool_name,
+            "description": "Return structured JSON response for the current phase.",
+            "input_schema": schema,
+        }],
+        "tool_choice": {"type": "tool", "name": tool_name},
+    }
+
+
+def _json_text_from_response(response: Any) -> str:
+    """Join text blocks. Thinking blocks are skipped."""
+    parts: List[str] = []
+    for block in getattr(response, "content", None) or []:
+        if getattr(block, "type", None) == "text" and getattr(block, "text", None):
+            parts.append(block.text)
+    return "".join(parts).strip()
 
 
 class ClaudeClient(BaseClient):
@@ -38,8 +116,9 @@ class ClaudeClient(BaseClient):
     ) -> Dict[str, Any]:
         """Build ``thinking`` / ``output_config`` for :meth:`messages.create`.
 
-        Newer models (Fable 5, Opus 4.8+, Sonnet 5, Sonnet 4.6, Mythos) require
-        ``thinking.type`` ``adaptive`` and reject ``enabled`` + ``budget_tokens``.
+        Newer models (Fable 5, Opus 5.5, Opus 4.6+, Sonnet 5, Sonnet 4.6, Mythos)
+        require ``thinking.type`` ``adaptive`` and reject ``enabled`` + ``budget_tokens``.
+        Opus 5.5 also rejects ``thinking.type`` ``disabled``; omit the field or send adaptive.
         Older models still need manual extended thinking with ``budget_tokens``.
         See https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
         """
@@ -49,6 +128,7 @@ class ClaudeClient(BaseClient):
         # Substrings match dated IDs (e.g. claude-opus-4-7-20250514).
         adaptive_markers = (
             "claude-fable-5",
+            "claude-opus-5-5",
             "claude-opus-4-8",
             "claude-opus-4-7",
             "claude-opus-4-6",
@@ -112,8 +192,8 @@ class ClaudeClient(BaseClient):
     # ------------------------------------------------------------------
     # Cost tracking – Anthropic cache pricing
     # ------------------------------------------------------------------
-    # Cache read  = 10 % of input price
-    # Cache write = 125 % of input price (25 % premium)
+    # Cache read  = input_cached_mult × input (10% on most Claude models; 5% on Opus 5.5)
+    # Cache write = 125 % of input price (5-minute ephemeral)
     # Regular     = 100 %
     # ------------------------------------------------------------------
     def track_cost(
@@ -129,11 +209,12 @@ class ClaudeClient(BaseClient):
     ):
         costs = self.get_model_cost(model_name)
         input_price = costs["input"]
+        cache_read_mult = float(costs.get("input_cached_mult", 0.10))
 
         regular = max(0, input_tokens - cache_read_tokens - cache_write_tokens)
         input_cost = (
             (regular / 1_000_000) * input_price
-            + (cache_read_tokens / 1_000_000) * input_price * 0.10
+            + (cache_read_tokens / 1_000_000) * input_price * cache_read_mult
             + (cache_write_tokens / 1_000_000) * input_price * 1.25
         )
         output_cost = (output_tokens / 1_000_000) * costs["output"]
@@ -230,18 +311,14 @@ class ClaudeClient(BaseClient):
         if response_format and isinstance(response_format, dict):
             schema = ((response_format.get("json_schema") or {}).get("schema") or {})
             tool_name = ((response_format.get("json_schema") or {}).get("name") or "phase_output")
+            json_kwargs = anthropic_json_request_kwargs(model, schema, tool_name)
             try:
                 response = self.client.messages.create(
                     model=model,
                     system=cached_system,
                     messages=messages,
-                    tools=[{
-                        "name": tool_name,
-                        "description": "Return structured JSON response for the current phase.",
-                        "input_schema": schema,
-                    }],
-                    tool_choice={"type": "tool", "name": tool_name},
                     max_tokens=4000,
+                    **json_kwargs,
                 )
             except Exception as e:
                 self._record_llm_io(
@@ -267,6 +344,9 @@ class ClaudeClient(BaseClient):
                     typer.echo(f"[INFO] Anthropic cache read: {cr} tokens")
                 if cw:
                     typer.echo(f"[INFO] Anthropic cache write: {cw} tokens")
+            if "output_config" in json_kwargs:
+                text = _json_text_from_response(response)
+                return _return_with_audit(text or "{}")
             if response.content:
                 for block in response.content:
                     if getattr(block, "type", None) == "tool_use":
