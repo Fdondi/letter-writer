@@ -11,6 +11,7 @@ from langsmith import traceable
 from .clients.base import BaseClient, ModelRole
 from .feedback_topics import AGENTIC_TOPIC_KEYS, get_agentic_topic_context_from_registry
 from .instructions import get_style_instructions
+from .laya_judge import annotate_feedback_validity
 from .quote_span import attach_quote_spans_to_feedback
 from .typed_shapes import TopDocument
 
@@ -869,6 +870,23 @@ def _run_suggest_additional_feedback_context(
     )
 
 
+def _copy_laya_feedback_fields(src: Dict[str, Any], row: Dict[str, Any]) -> None:
+    """Keep Laya validity on the item through normalize, including a user restore."""
+    verdict = str(src.get("laya_verdict") or "").strip().lower()
+    if verdict in ("valid", "invalid", "unscored"):
+        row["laya_verdict"] = verdict
+    for key in ("laya_valid_probability", "laya_confidence"):
+        raw = src.get(key)
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            row[key] = float(raw)
+    for key in ("laya_model", "laya_device", "laya_error"):
+        text = str(src.get(key) or "").strip()
+        if text:
+            row[key] = text
+    if src.get("laya_restored") is True:
+        row["laya_restored"] = True
+
+
 def _legacy_feedback_string_to_items(val: str) -> List[Dict[str, Any]]:
     """Convert legacy suffix-style feedback strings to structured items."""
     t = (val or "").strip()
@@ -991,6 +1009,7 @@ def normalize_feedback_value(
             dv = str(it.get("draft_vendor") or "").strip()
             if dv:
                 row["draft_vendor"] = dv
+            _copy_laya_feedback_fields(it, row)
             dg = str(it.get("duplicate_group_id") or "").strip()
             if dg:
                 row["duplicate_group_id"] = dg
@@ -1324,6 +1343,10 @@ def run_phased_feedback_checks(
         attach_quote_spans_to_feedback(out, draft_letter)
     except Exception:
         logger.exception("attaching quote spans to vendor feedback failed")
+    try:
+        annotate_feedback_validity(out, draft_letter)
+    except Exception:
+        logger.exception("Laya feedback scoring failed")
     return out
 
 

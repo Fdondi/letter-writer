@@ -1,8 +1,8 @@
 import React, { useMemo } from "react";
-import { FEEDBACK_TYPES, filteredFeedbackDetailsFromRaw } from "./feedbackItemUtils";
+import { FEEDBACK_TYPES, filteredFeedbackDetailsFromRaw, isLayaHidden } from "./feedbackItemUtils";
 import { KnownWeaknessesPanel } from "./KnownWeaknessesPanel";
 import { FixRow } from "./feedback-rows/FixRow";
-import { FilteredFeedbackSection, GoodItemsSection } from "./feedback-rows/FeedbackSections";
+import { FilteredFeedbackSection, GoodItemsSection, InvalidItemsSection } from "./feedback-rows/FeedbackSections";
 import { useFeedbackItemApprovals } from "../../hooks/useFeedbackItemApprovals";
 import { useFeedbackItemEditing } from "../../hooks/useFeedbackItemEditing";
 
@@ -61,7 +61,7 @@ export function FeedbackItemsPanel({
   );
 
   const fixItems = useMemo(() => {
-    const raw = visibleItems.filter((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX);
+    const raw = visibleItems.filter((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX && !isLayaHidden(it));
     return [...raw].sort((a, b) => {
       const ap = feedbackItemApprovals[a.id] === true;
       const bp = feedbackItemApprovals[b.id] === true;
@@ -74,6 +74,15 @@ export function FeedbackItemsPanel({
     () => visibleItems.filter((it) => it.type === FEEDBACK_TYPES.ALREADY_GOOD),
     [visibleItems],
   );
+
+  const invalidItems = useMemo(
+    () => visibleItems.filter((it) => isLayaHidden(it)),
+    [visibleItems],
+  );
+
+  const restoreLayaItem = (it) => {
+    approvals.persistItems(items.map((row) => (row.id === it.id ? { ...row, laya_restored: true } : row)));
+  };
 
   const filteredFeedbackDetails = useMemo(() => {
     const raw = feedbackOverrides[categoryKey] !== undefined ? feedbackOverrides[categoryKey] : feedback[categoryKey];
@@ -173,6 +182,8 @@ export function FeedbackItemsPanel({
         onStartEdit={editing.startEdit}
         onRemove={editing.onRemove}
       />
+
+      <InvalidItemsSection items={invalidItems} disabled={disabled} onRestore={restoreLayaItem} />
 
       <KnownWeaknessesPanel items={knownWeaknesses} />
     </div>

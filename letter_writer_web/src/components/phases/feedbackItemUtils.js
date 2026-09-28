@@ -141,6 +141,7 @@ export function normalizeCategoryItems(raw, categoryKey = "") {
           input_declined: inputDeclined,
           quote: String(it.quote ?? "").trim(),
           matched_text: String(it.matched_text ?? "").trim(),
+          ...layaFieldsFromItem(it),
           ...(it.span_start != null && it.span_end != null
             ? { span_start: Number(it.span_start), span_end: Number(it.span_end) }
             : {}),
@@ -232,8 +233,33 @@ export function firstFeedbackKeyWithItems(feedbackKeys, feedback, overrides = {}
   return null;
 }
 
+export function isLayaHidden(it) {
+  if (!it || it.laya_restored === true) return false;
+  return String(it.laya_verdict || "").toLowerCase() === "invalid";
+}
+
+function layaFieldsFromItem(it) {
+  const verdict = String(it.laya_verdict || "").toLowerCase();
+  const fields = {};
+  if (verdict === "valid" || verdict === "invalid" || verdict === "unscored") {
+    fields.laya_verdict = verdict;
+  }
+  for (const key of ["laya_valid_probability", "laya_confidence"]) {
+    const raw = it[key];
+    if (typeof raw === "number" && Number.isFinite(raw)) fields[key] = raw;
+  }
+  for (const key of ["laya_model", "laya_device", "laya_error"]) {
+    const text = String(it[key] || "").trim();
+    if (text) fields[key] = text;
+  }
+  if (it.laya_restored === true) fields.laya_restored = true;
+  return fields;
+}
+
 export function pleaseFixItems(items) {
-  return (Array.isArray(items) ? items : []).filter((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX);
+  return (Array.isArray(items) ? items : []).filter(
+    (it) => it.type === FEEDBACK_TYPES.PLEASE_FIX && !isLayaHidden(it),
+  );
 }
 
 export function categoryHasPleaseFix(items) {
@@ -254,8 +280,9 @@ export function itemIsApproved(it, itemApprovals) {
 
 /** Only PLEASE_FIX items must be explicitly approved; ALREADY_GOOD is informational. */
 export function categoryAllItemsApproved(items, itemApprovals) {
-  if (items.length === 0) return true;
-  return items.every((it) => itemIsApproved(it, itemApprovals));
+  const active = (items || []).filter((it) => !isLayaHidden(it));
+  if (active.length === 0) return true;
+  return active.every((it) => itemIsApproved(it, itemApprovals));
 }
 
 export function findNextUnseenCategory(currentKey, feedbackKeys, feedback, overrides, itemApprovals) {
@@ -265,7 +292,7 @@ export function findNextUnseenCategory(currentKey, feedbackKeys, feedback, overr
   for (let i = 1; i <= feedbackKeys.length; i++) {
     const k = feedbackKeys[(base + i) % feedbackKeys.length];
     const items = mergeCategoryItems(feedback, overrides, k);
-    const fixItems = items.filter((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX);
+    const fixItems = pleaseFixItems(items);
     if (fixItems.length === 0) continue;
     if (fixItems.some((it) => !itemIsApproved(it, itemApprovals))) return k;
   }
@@ -289,7 +316,7 @@ export function selectNextTabIfCategoryDone(
 ) {
   const nextOverrides = { ...feedbackOverrides, [categoryKey]: nextItems };
   const merged = mergeCategoryItems(feedback, nextOverrides, categoryKey);
-  const fixItems = merged.filter((it) => it.type === FEEDBACK_TYPES.PLEASE_FIX);
+  const fixItems = pleaseFixItems(merged);
   const hasPending =
     fixItems.length > 0 && fixItems.some((it) => !itemIsApproved(it, itemApprovals));
   if (hasPending) return null;

@@ -145,6 +145,7 @@ def run_extract_pipeline(
     hire_problem = ""
     all_scores: Dict[str, Any] = {}
     all_briefs: Dict[str, Any] = {}
+    score_details: Dict[str, Any] = {}
 
     with ThreadPoolExecutor(max_workers=5) as executor:
         pending: Dict[Any, str] = {}
@@ -227,6 +228,7 @@ def run_extract_pipeline(
                         top_docs = result["top_docs"]
                         all_scores = result.get("all_scores", {})
                         all_briefs = result.get("all_briefs", {})
+                        score_details = result.get("score_details", {}) or {}
                         logger.info("[EXTRACT] LLM reranking selected %s top docs", len(top_docs))
                     except Exception as rerank_err:
                         logger.warning("[EXTRACT] LLM reranking failed: %s", rerank_err)
@@ -261,6 +263,9 @@ def run_extract_pipeline(
         company = (doc.get("company_name_original") or doc.get("company_name") or "").strip()
         if company and company in all_scores:
             doc["score"] = all_scores[company]
+        if company and company in score_details:
+            for key, value in (score_details[company] or {}).items():
+                doc[key] = value
         if company and company in all_briefs:
             brief = all_briefs[company] or {}
             doc["similarities"] = brief.get("similarities", [])

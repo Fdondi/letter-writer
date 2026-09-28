@@ -1,5 +1,21 @@
 import React, { useState, useMemo } from "react";
 
+function scoreLabel(doc, score) {
+  if (score == null) return "";
+  if (doc.score_source === "laya" && doc.laya_score != null) {
+    const model = doc.llm_score != null ? ` · model ${doc.llm_score}/10` : "";
+    return `Laya ${doc.laya_score}/10${model}`;
+  }
+  return `${score}/10`;
+}
+
+function scoreBadge(doc, score, isSelected) {
+  const body = scoreLabel(doc, score);
+  if (isSelected && doc.score_source !== "laya") return `LLM pick: ${body}`;
+  if (isSelected) return body;
+  return `score: ${body}`;
+}
+
 /**
  * Carousel showing RAG-found similar previous job offers.
  * Highlights LLM-selected docs, allows user to add/remove from selection.
@@ -89,6 +105,9 @@ export default function SimilarOffersCarousel({
   const isLlmSelected = llmSelectedIds.has(docId);
   const score = getScore(doc);
   const isUserSelected = selectedDocIds.has(docId);
+  const layaErrors = [...new Set((allSearchResults || []).map((d) => d.laya_error).filter(Boolean))];
+  const anyLayaScore = (allSearchResults || []).some((d) => d.score_source === "laya");
+  const layaDevice = (allSearchResults || []).find((d) => d.laya_device)?.laya_device;
   const brief = getBrief(doc);
 
   const goLeft = () => setCurrentIndex((prev) => (prev - 1 + total) % total);
@@ -119,6 +138,16 @@ export default function SimilarOffersCarousel({
       flexDirection: "column",
       height: "100%",
     }}>
+      {anyLayaScore && (
+        <div style={{ fontSize: 11, color: "var(--secondary-text-color)", padding: "6px 10px 0" }}>
+          Similarity scores are from local Laya{layaDevice ? ` (${layaDevice})` : ""}. The language-model score is shown beside them.
+        </div>
+      )}
+      {!anyLayaScore && layaErrors.length > 0 && (
+        <div style={{ fontSize: 11, color: "#92400e", padding: "6px 10px 0" }}>
+          Laya did not score these offers: {layaErrors[0]} Scores are from the language model.
+        </div>
+      )}
       {/* Header: title + navigation + selection status */}
       <div style={{
         display: "flex",
@@ -191,7 +220,7 @@ export default function SimilarOffersCarousel({
               fontWeight: 600,
               whiteSpace: "nowrap",
             }}>
-              {isLlmSelected ? "LLM pick" : "score"}: {score}/10
+              {scoreBadge(doc, score, isLlmSelected)}
             </span>
           )}
         </div>

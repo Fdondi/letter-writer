@@ -11,6 +11,7 @@ from .clients.base import BaseClient, ModelRole
 
 from .vector_store import embed, query_vector_similarity
 from .firestore_store import get_collection
+from .laya_judge import apply_laya_rag_scores
 from .typed_shapes import DocBrief, RerankDetail, SelectTopDocumentsResult, TopDocument
 
 import pandas as pd
@@ -180,7 +181,12 @@ def select_top_documents(
         (trace_dir / "error_mismatch.txt").write_text(error_log, encoding="utf-8")
         raise ValueError(error_msg)
 
-    # top_docs: top 3 for LLM picks; all_scores: company_name -> score for display
+    laya_status = apply_laya_rag_scores(job_text, retrieved_docs, reranked_docs)
+    reranked_docs = dict(
+        sorted(reranked_docs.items(), key=lambda kv: int(kv[1]["score"]), reverse=True)
+    )
+
+    # top_docs: top 3 after Laya rescoring when it ran; all_scores: company_name -> score
     top3_items = list(reranked_docs.items())[:3]
     top_docs_list: List[TopDocument] = [
         {
@@ -193,6 +199,7 @@ def select_top_documents(
             # Required for letter generation (generate_letter); rerank output does not include these.
             "job_text": (retrieved_docs[name].get("job_text") or ""),
             "letter_text": (retrieved_docs[name].get("letter_text") or ""),
+            **_laya_score_fields(details),
         }
         for name, details in top3_items
     ]
@@ -205,11 +212,33 @@ def select_top_documents(
         }
         for name, details in reranked_docs.items()
     }
+    score_details = {name: _laya_score_fields(details) for name, details in reranked_docs.items()}
     return {
         "top_docs": top_docs_list,
         "all_scores": all_scores,
         "all_briefs": all_briefs,
+        "score_details": score_details,
+        "laya": laya_status,
     }
+
+
+_LAYA_SCORE_KEYS = (
+    "llm_score",
+    "laya_score",
+    "laya_confidence",
+    "score_source",
+    "laya_device",
+    "laya_error",
+    "laya_model",
+)
+
+
+def _laya_score_fields(details: dict) -> dict:
+    out: dict = {}
+    for key in _LAYA_SCORE_KEYS:
+        if key in details and details[key] is not None:
+            out[key] = details[key]
+    return out
 
 @traceable(run_type="chain", name="rerank_documents")
 def rerank_documents(

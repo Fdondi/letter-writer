@@ -34,6 +34,55 @@ export function FilteredFeedbackSection({ entries }) {
   );
 }
 
+export function InvalidItemsSection({ items, disabled, onRestore }) {
+  if (!items.length) return null;
+  return (
+    <details open style={{ marginTop: 12, borderTop: "1px solid #e5e7eb", paddingTop: 12 }}>
+      <summary style={{ cursor: "pointer", fontSize: 13, color: "#6b7280", fontWeight: 500 }}>
+        Laya marked invalid ({items.length}) — not treated as critiques
+      </summary>
+      <p style={{ fontSize: 12, color: "#9ca3af", margin: "8px 0 10px" }}>
+        Local Laya judged these comments as ungrounded. They stay out of the letter until you restore one.
+      </p>
+      <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+        {items.map((it) => {
+          const probability = typeof it.laya_valid_probability === "number" ? it.laya_valid_probability : null;
+          return (
+            <li
+              key={it.id}
+              style={{
+                border: "1px solid #e5e7eb",
+                borderRadius: 6,
+                padding: 8,
+                background: "#fafafa",
+                fontSize: 13,
+                color: "#4b5563",
+              }}
+            >
+              <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{it.observation}</div>
+              <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                {probability != null && (
+                  <span style={{ fontSize: 11, color: "#9ca3af" }}>
+                    {Math.round(probability * 100)}% grounded
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onRestore(it)}
+                  disabled={disabled}
+                  style={{ fontSize: 12, padding: "2px 8px", cursor: disabled ? "not-allowed" : "pointer" }}
+                >
+                  Restore
+                </button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </details>
+  );
+}
+
 export function GoodItemsSection({
   goodItems,
   categoryKey,

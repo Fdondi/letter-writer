@@ -24,12 +24,23 @@ from typing import Any, Dict, List, NotRequired, TypedDict
 
 
 class RerankDetail(TypedDict):
-    """Per-company output from LLM reranking (before merging Firestore job/letter text)."""
+    """Per-company output from LLM reranking (before merging Firestore job/letter text).
+
+    When Laya scores the pair, ``score`` is the Laya score and ``llm_score`` keeps
+    the language-model score. ``score_source`` is ``laya`` or ``llm``.
+    """
 
     score: int
     comment: str
     similarities: List[str]
     differences: List[str]
+    llm_score: NotRequired[int]
+    laya_score: NotRequired[int]
+    laya_confidence: NotRequired[float]
+    score_source: NotRequired[str]
+    laya_device: NotRequired[str]
+    laya_error: NotRequired[str]
+    laya_model: NotRequired[str]
 
 
 class TopDocument(TypedDict):
@@ -51,6 +62,13 @@ class TopDocument(TypedDict):
     job_text: str
     letter_text: str
     ai_letters: NotRequired[List[Dict[str, Any]]]
+    llm_score: NotRequired[int]
+    laya_score: NotRequired[int]
+    laya_confidence: NotRequired[float]
+    score_source: NotRequired[str]
+    laya_device: NotRequired[str]
+    laya_error: NotRequired[str]
+    laya_model: NotRequired[str]
 
 
 class DocBrief(TypedDict):
@@ -67,3 +85,5 @@ class SelectTopDocumentsResult(TypedDict):
     top_docs: List[TopDocument]
     all_scores: dict[str, int]
     all_briefs: dict[str, DocBrief]
+    score_details: dict[str, Dict[str, Any]]
+    laya: Dict[str, Any]

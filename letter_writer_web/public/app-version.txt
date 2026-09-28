@@ -1,3 +1,4 @@
+0.68.0 - Local Laya scores RAG matches and parks ungrounded feedback under already-good notes, with restore
 0.67.10 - Feedback summary counts only Please fix / Input needed, not Already good
 0.67.9 - INPUT NEEDED replaces CRITIQUE on notes; approve/remove stay visible below the scroll
 0.67.8 - Draft note popups drop “Please fix” and show CRITIQUE · topic in the body

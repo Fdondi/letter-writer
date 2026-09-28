@@ -1,10 +1,11 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { DraftFeedbackView } from "../phases/DraftFeedbackView";
 
 const letter = "Hello world from Zürich.";
 
-function renderView() {
+function renderView(extra = {}) {
+  const onSave = extra.onSave || (() => {});
   return render(
     <DraftFeedbackView
       cardPhaseEdits={{ draft_letter: letter }}
@@ -21,6 +22,15 @@ function renderView() {
             type: "PLEASE_FIX",
             quote: "world",
             matched_text: "world",
+          },
+          {
+            id: "hall1",
+            observation: "Claims a degree the letter never mentions.",
+            type: "PLEASE_FIX",
+            quote: "Hello",
+            matched_text: "Hello",
+            laya_verdict: "invalid",
+            laya_valid_probability: 0.08,
           },
         ],
         human: [
@@ -55,7 +65,7 @@ function renderView() {
       feedbackItemApprovals={{}}
       setFeedbackItemApprovals={() => {}}
       setSelectedFeedbackTab={() => {}}
-      handleSaveFeedbackOverride={() => {}}
+      handleSaveFeedbackOverride={onSave}
       translation={null}
       inputClusterText={{}}
       broadcastInputCluster={() => {}}
@@ -90,5 +100,20 @@ describe("DraftFeedbackView notes chrome", () => {
     expect(screen.getByTestId("feedback-count-precision")).toHaveTextContent("1");
     expect(screen.getByTestId("feedback-count-human")).toHaveTextContent("0");
     expect(screen.getByTestId("feedback-count-accuracy")).toHaveTextContent("1");
+  });
+
+  test("invalid comments sit under already-good notes and can be restored", () => {
+    const onSave = jest.fn();
+    renderView({ onSave });
+    expect(screen.queryByTestId("note-marker-hall1")).not.toBeInTheDocument();
+    expect(screen.getByText("Laya marked invalid (1) — not treated as critiques")).toBeInTheDocument();
+    expect(screen.getByText("Claims a degree the letter never mentions.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    expect(onSave).toHaveBeenCalledWith(
+      "precision",
+      expect.arrayContaining([
+        expect.objectContaining({ id: "hall1", laya_restored: true }),
+      ]),
+    );
   });
 });

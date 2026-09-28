@@ -13,6 +13,7 @@ from .feedback_checks import (
     _is_no_comment,
 )
 from .instructions import _prepend_language_prefix, get_style_instructions
+from .laya_judge import comment_is_laya_hidden
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,8 @@ def _rewrite_dimension_text(val: Any) -> str:
             if not isinstance(it, dict):
                 continue
             if it.get("type") != "PLEASE_FIX":
+                continue
+            if comment_is_laya_hidden(it):
                 continue
             o = (it.get("observation") or "").strip()
             if not o:

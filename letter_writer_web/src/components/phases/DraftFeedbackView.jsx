@@ -4,7 +4,8 @@ import { KnownWeaknessesPanel } from "./KnownWeaknessesPanel";
 import { FixRow } from "./feedback-rows/FixRow";
 import { GoodRow } from "./feedback-rows/GoodRow";
 import { FeedbackItemsPanel } from "./FeedbackItemsPanel";
-import { FEEDBACK_TYPES, mergeCategoryItems, newId, categoryHasPleaseFix, categoryAllItemsApproved, itemIsApproved, pleaseFixItems } from "./feedbackItemUtils";
+import { FEEDBACK_TYPES, mergeCategoryItems, newId, categoryHasPleaseFix, categoryAllItemsApproved, itemIsApproved, pleaseFixItems, isLayaHidden } from "./feedbackItemUtils";
+import { InvalidItemsSection } from "./feedback-rows/FeedbackSections";
 import { useFeedbackItemApprovals } from "../../hooks/useFeedbackItemApprovals";
 import { useFeedbackItemEditing } from "../../hooks/useFeedbackItemEditing";
 import { resolveQuoteSpan } from "../../utils/resolveQuoteSpan";
@@ -226,6 +227,7 @@ export function DraftFeedbackView({
     for (const key of feedbackKeys) {
       for (const it of itemsByCategory[key] || []) {
         if (viewingTranslation) continue;
+        if (isLayaHidden(it)) continue;
         const span = resolveQuoteSpan(letter, it.quote, it.matched_text);
         if (!span) continue;
         out.push({
@@ -266,6 +268,34 @@ export function DraftFeedbackView({
       setExpandedId(nextAnchoredNoteId(notes, expandedId));
     }
   }, [notes, expandedId]);
+
+  const layaUnscoredNotice = useMemo(() => {
+    for (const key of feedbackKeys) {
+      for (const it of itemsByCategory[key] || []) {
+        if (it.laya_verdict === "unscored" && it.laya_error) return String(it.laya_error);
+      }
+    }
+    return "";
+  }, [feedbackKeys, itemsByCategory]);
+
+  const hiddenAnchored = useMemo(() => {
+    const out = [];
+    for (const key of feedbackKeys) {
+      for (const it of itemsByCategory[key] || []) {
+        if (!isLayaHidden(it) || isWholeLetterItem(it)) continue;
+        out.push({ ...it, categoryKey: key });
+      }
+    }
+    return out;
+  }, [feedbackKeys, itemsByCategory, isWholeLetterItem]);
+
+  const restoreAnchored = (it) => {
+    const key = it.categoryKey;
+    const next = (itemsByCategory[key] || []).map((row) =>
+      row.id === it.id ? { ...row, laya_restored: true } : row,
+    );
+    handleSaveFeedbackOverride(key, next);
+  };
 
   const addCritique = (categoryKey) => {
     const id = newId();
@@ -433,6 +463,12 @@ export function DraftFeedbackView({
           ))}
         </div>
       )}
+      {layaUnscoredNotice && (
+        <div style={{ fontSize: 12, color: "#92400e", marginTop: 10 }}>
+          Laya did not score these comments: {layaUnscoredNotice}
+        </div>
+      )}
+      <InvalidItemsSection items={hiddenAnchored} disabled={isLoading} onRestore={restoreAnchored} />
       <KnownWeaknessesPanel items={cardPhaseData.known_weaknesses} />
       {feedbackKeys.length > 0 && (
         <div style={{ marginTop: 10 }}>
