@@ -10,34 +10,52 @@
     "feedback_review": "grok-4.3",
     "feedback_context": "grok-4.3",
     "rag_ranker": "grok-4.3",
-    "company_research": "grok-4.5",
-    "letter_plan": "grok-4.5",
-    "letter_draft": "grok-4.5",
-    "letter_refine": "grok-4.5",
+    "company_research": "grok-4.7",
+    "letter_plan": "grok-4.7",
+    "letter_draft": "grok-4.7",
+    "letter_refine": "grok-4.7",
     "agentic": "grok-4.3",
     "autocomplete": "grok-4.3",
-    "autocomplete_plan": "grok-4.5"
+    "autocomplete_plan": "grok-4.7"
   },
   "models": {
-    "grok-4.3": {
-      "input": { "low": 1.25, "high": 2.50 },
-      "output": { "low": 2.50, "high": 5.00 },
-      "input_cached_mult": 0.16
+    "grok-4.7": {
+      "input": { "low": 2.00, "high": 4.00 },
+      "output": { "low": 6.00, "high": 12.00 },
+      "input_cached_mult": 0.25,
+      "reasoning_efforts": ["low", "medium", "high", "xhigh"]
+    },
+    "grok-4.6": {
+      "input": { "low": 2.00, "high": 4.00 },
+      "output": { "low": 6.00, "high": 12.00 },
+      "input_cached_mult": 0.25,
+      "reasoning_efforts": ["low", "medium", "high", "xhigh"],
+      "superseded_by": "grok-4.7"
     },
     "grok-4.5": {
       "input": { "low": 2.00, "high": 4.00 },
       "output": { "low": 6.00, "high": 12.00 },
-      "input_cached_mult": 0.15
+      "input_cached_mult": 0.15,
+      "reasoning_efforts": ["low", "medium", "high"],
+      "superseded_by": "grok-4.7"
+    },
+    "grok-4.3": {
+      "input": { "low": 1.25, "high": 2.50 },
+      "output": { "low": 2.50, "high": 5.00 },
+      "input_cached_mult": 0.16,
+      "reasoning_efforts": ["none", "low", "medium", "high"]
     },
     "grok-4.20-0309-non-reasoning": {
       "input": { "low": 1.25, "high": 2.50 },
       "output": { "low": 2.50, "high": 5.00 },
-      "input_cached_mult": 0.16
+      "input_cached_mult": 0.16,
+      "superseded_by": "grok-4.3"
     },
     "grok-4.20-0309-reasoning": {
       "input": { "low": 1.25, "high": 2.50 },
       "output": { "low": 2.50, "high": 5.00 },
-      "input_cached_mult": 0.16
+      "input_cached_mult": 0.16,
+      "superseded_by": "grok-4.3"
     },
     "grok-4.20-multi-agent-0309": {
       "input": { "low": 1.25, "high": 2.50 },
@@ -48,16 +66,6 @@
       "input": { "low": 1.00, "high": 2.00 },
       "output": { "low": 2.00, "high": 4.00 },
       "input_cached_mult": 0.20
-    },
-    "grok-4-1-fast-non-reasoning": {
-      "input": { "low": 1.25, "high": 2.50 },
-      "output": { "low": 2.50, "high": 5.00 },
-      "input_cached_mult": 0.16
-    },
-    "grok-4-1-fast-reasoning": {
-      "input": { "low": 1.25, "high": 2.50 },
-      "output": { "low": 2.50, "high": 5.00 },
-      "input_cached_mult": 0.16
     }
   }
 }

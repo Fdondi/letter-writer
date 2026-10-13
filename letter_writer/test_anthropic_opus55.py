@@ -70,9 +70,41 @@ def test_opus_55_json_uses_output_config_format():
     assert "tools" not in kwargs
 
 
+def test_fable_51_list_price_and_cache_read():
+    client = _client()
+    costs = client.get_model_cost("claude-fable-5-1")
+    assert costs["input"] == 10.0
+    assert costs["output"] == 50.0
+    assert costs["input_cached_mult"] == 0.025
+    client.track_cost(
+        "claude-fable-5-1",
+        input_tokens=1_000_000,
+        output_tokens=0,
+        cache_read_tokens=1_000_000,
+    )
+    assert client.total_cost == 0.25
+    assert anthropic_min_cache_tokens("claude-fable-5-1") == 512
+    assert anthropic_min_cache_tokens("claude-fable-5") == 512
+    kwargs = ClaudeClient._thinking_request_kwargs(
+        "claude-fable-5-1",
+        True,
+        8000,
+        {"effort": "high"},
+    )
+    assert kwargs["thinking"] == {"type": "adaptive"}
+    assert kwargs["output_config"] == {"effort": "high"}
+
+
 def test_supported_models_use_output_config_format():
     schema = {"type": "object", "properties": {"draft_letter": {"type": "string"}}}
-    for model in ("claude-opus-5-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5", "claude-fable-5"):
+    for model in (
+        "claude-opus-5-5",
+        "claude-opus-4-8",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+        "claude-fable-5",
+        "claude-fable-5-1",
+    ):
         kwargs = anthropic_json_request_kwargs(model, schema, "draft_letter_output")
         assert kwargs["output_config"]["format"]["type"] == "json_schema"
         assert "tools" not in kwargs

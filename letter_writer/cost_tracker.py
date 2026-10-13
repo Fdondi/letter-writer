@@ -133,7 +133,7 @@ def _model_reasoning_efforts(
     defaults: Dict[str, Any],
 ) -> List[str]:
     """Normalized reasoning/thinking options for the model picker UI."""
-    if vendor_key == "openai":
+    if vendor_key in ("openai", "grok", "deepseek"):
         raw = model_cfg.get("reasoning_efforts") or defaults.get("reasoning_efforts") or []
         return [str(x) for x in raw] if isinstance(raw, list) else []
     if vendor_key == "gemini":
@@ -167,6 +167,38 @@ def _supports_search(vendor_key: str, model_id: str, model_cfg: Dict[str, Any], 
     return default_search > 0.0
 
 
+def _validated_successor(
+    vendor_key: str,
+    model_id: str,
+    model_cfg: Dict[str, Any],
+    models_cfg: Dict[str, Any],
+) -> Optional[str]:
+    """``superseded_by`` when the later model costs the same or less on both rates.
+
+    Superseded models are grouped under "Other models". A successor that costs
+    more on either rate is logged and ignored, so that model stays top level.
+    An exact price match is kept: the catalog names the later, more powerful model.
+    """
+    successor = model_cfg.get("superseded_by")
+    if not successor:
+        return None
+    successor_cfg = models_cfg.get(successor)
+    if not isinstance(successor_cfg, dict):
+        logger.warning("%s/%s superseded_by unknown model %s", vendor_key, model_id, successor)
+        return None
+    old_in = _parse_price_field(model_cfg.get("input"))
+    old_out = _parse_price_field(model_cfg.get("output"))
+    new_in = _parse_price_field(successor_cfg.get("input"))
+    new_out = _parse_price_field(successor_cfg.get("output"))
+    if new_in > old_in or new_out > old_out:
+        logger.warning(
+            "%s/%s superseded_by %s, but %s costs more on input or output",
+            vendor_key, model_id, successor, successor,
+        )
+        return None
+    return str(successor)
+
+
 def get_all_model_pricing(search_only: bool = False) -> Dict[str, List[Dict[str, Any]]]:
     """Load model pricing from all client JSON files.
 
@@ -198,7 +230,8 @@ def get_all_model_pricing(search_only: bool = False) -> Dict[str, List[Dict[str,
                 continue
             input_price = _parse_price_field(model_cfg.get("input", 0.0))
             output_price = _parse_price_field(model_cfg.get("output", 0.0))
-            if input_price == 0 and output_price == 0 and vendor_key != "local":
+            free_tier_only = bool(model_cfg.get("free_tier_only", False))
+            if input_price == 0 and output_price == 0 and vendor_key != "local" and not free_tier_only:
                 continue
             supports_search = _supports_search(vendor_key, model_id, model_cfg, default_search)
             if search_only and not supports_search:
@@ -214,6 +247,8 @@ def get_all_model_pricing(search_only: bool = False) -> Dict[str, List[Dict[str,
                 "output": round(output_price, 2),
                 "supports_search": supports_search,
                 "reasoning_efforts": reasoning_efforts,
+                "superseded_by": _validated_successor(vendor_key, model_id, model_cfg, models_cfg),
+                "free_tier_only": free_tier_only,
             })
         if models:
             result[vendor_label] = models

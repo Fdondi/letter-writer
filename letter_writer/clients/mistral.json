@@ -1,42 +1,40 @@
 {
   "defaults": {
-    "search": 30.0
+    "search": 30.0,
+    "input_cached_mult": 0.10
   },
   "roles": {
-    "extraction": "mistral-small-2506",
+    "extraction": "mistral-small-latest",
     "feedback": "mistral-small-latest",
-    "feedback_review": "mistral-small-2506",
-    "feedback_context": "mistral-small-2506",
+    "feedback_review": "mistral-small-latest",
+    "feedback_context": "mistral-small-latest",
     "rag_ranker": "mistral-large-latest",
     "company_research": "mistral-large-latest",
     "letter_plan": "mistral-large-latest",
     "letter_draft": "mistral-large-latest",
     "letter_refine": "mistral-large-latest",
-    "agentic": "mistral-small-2506",
-    "autocomplete": "mistral-small-2506",
+    "agentic": "mistral-small-latest",
+    "autocomplete": "mistral-small-latest",
     "autocomplete_plan": "mistral-large-latest"
   },
   "models": {
-    "open-mixtral-8x7b": {
-      "input": 0.70,
-      "output": 0.70
-    },
-    "mistral-small-2506": {
-      "input": 0.10,
-      "output": 0.30
-    },
     "mistral-small-latest": {
       "input": 0.15,
-      "output": 0.60
+      "output": 0.60,
+      "input_cached_mult": 0.10,
+      "price_note": "Mistral Small 4 (mistral-small-2603). Cached input is 10% of input. mistral-small-2506 retired 2026-07-31."
     },
-    "mistral-medium-latest": {
-      "input": 0.40,
-      "output": 2.00
+    "mistral-medium-3-5": {
+      "input": 1.50,
+      "output": 7.50,
+      "input_cached_mult": 0.10,
+      "price_note": "Mistral Medium 3.5. More expensive than Large 3; kept at top level. Cached input is 10% of input."
     },
     "mistral-large-latest": {
       "input": 0.50,
-      "output": 1.50
+      "output": 1.50,
+      "input_cached_mult": 0.10,
+      "price_note": "Mistral Large 3 (mistral-large-2512). Cached input is 10% of input."
     }
   }
 }
-

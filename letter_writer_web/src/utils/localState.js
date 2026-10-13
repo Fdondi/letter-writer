@@ -196,32 +196,44 @@ export function restoreStateFromLocal(stateSetters) {
 export async function syncStateToServer(state) {
   try {
     // Extract vendor data first (handles cyclic references)
-    let vendors = {};
+    let vendors = null;
     if (state.phaseRegistry) {
       try {
         vendors = extractVendorDataFromRegistry(state.phaseRegistry);
         console.log("[RESTORE] Extracted vendor data:", Object.keys(vendors), vendors);
       } catch (e) {
         console.warn("Failed to extract vendor data from phaseRegistry (may contain cyclic refs):", e);
-        vendors = {};
+        vendors = null;
       }
     } else {
-      console.warn("[RESTORE] No phaseRegistry in state, cannot restore vendor data");
+      console.warn("[RESTORE] No phaseRegistry in state; leaving server vendors untouched");
+    }
+
+    const hasVendors = vendors && Object.keys(vendors).length > 0;
+    const hasJobText = Boolean(String(state.jobText || "").trim());
+    const hasMetadata = Boolean(
+      state.extractedData &&
+      typeof state.extractedData === "object" &&
+      Object.keys(state.extractedData).length > 0
+    );
+    if (!hasVendors && !hasJobText && !hasMetadata) {
+      console.warn("[RESTORE] Skipping server restore; client snapshot has no job text, metadata, or vendors");
+      return false;
     }
     
-    // Build the session data the server needs
+    // Omit empty vendors and metadata so a blank client cannot replace saved letters.
     const sessionData = {
       job_text: state.jobText || "",
       cv_text: state.cvText || "",
-      metadata: state.extractedData ? { common: state.extractedData } : {},
-      vendors: vendors,
     };
+    if (hasMetadata) sessionData.metadata = { common: state.extractedData };
+    if (hasVendors) sessionData.vendors = vendors;
     
     console.log("[RESTORE] Sending session data to server:", {
       has_job_text: !!sessionData.job_text,
-      has_metadata: !!sessionData.metadata.common,
-      vendor_count: Object.keys(sessionData.vendors).length,
-      vendors: Object.keys(sessionData.vendors),
+      has_metadata: !!sessionData.metadata?.common,
+      vendor_count: hasVendors ? Object.keys(sessionData.vendors).length : 0,
+      vendors: hasVendors ? Object.keys(sessionData.vendors) : [],
     });
     
     // Restore session on server
@@ -244,7 +256,16 @@ export async function syncStateToServer(state) {
  * Extract vendor data from phase registry for server session.
  * Handles cyclic references by only extracting serializable data.
  */
-function extractVendorDataFromRegistry(phaseRegistry) {
+export function countRestorableVendors(state) {
+  if (!state?.phaseRegistry) return 0;
+  try {
+    return Object.keys(extractVendorDataFromRegistry(state.phaseRegistry)).length;
+  } catch {
+    return 0;
+  }
+}
+
+export function extractVendorDataFromRegistry(phaseRegistry) {
   const vendors = {};
   
   // Phase registry structure: Array of phase objects with cardData

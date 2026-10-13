@@ -4,7 +4,9 @@ import { showNotification } from "../utils/apiNotifications";
 import {
   CONTEXT_SOURCES,
   CONTEXT_USER_SOURCE,
+  isLayaHidden,
   selectNextTabIfCategoryDone,
+  withLayaRestored,
 } from "../components/phases/feedbackItemUtils";
 
 /**
@@ -83,12 +85,15 @@ export function useFeedbackItemApprovals({
         const declined = it.input_declined === true;
         if (!filled && !declined) return;
       }
+      if (isLayaHidden(it)) {
+        persistItems(items.map((row) => (row.id === it.id ? withLayaRestored(row) : row)));
+      }
       const nextApr = { ...feedbackItemApprovals };
       applyLinkedApproval(it, nextApr, true);
       setFeedbackItemApprovals(nextApr);
       maybeAdvanceTab(items, nextApr);
     },
-    [items, feedbackItemApprovals, applyLinkedApproval, setFeedbackItemApprovals, maybeAdvanceTab],
+    [items, feedbackItemApprovals, applyLinkedApproval, setFeedbackItemApprovals, maybeAdvanceTab, persistItems],
   );
 
   const approveLinkedItems = useCallback(
@@ -117,7 +122,7 @@ export function useFeedbackItemApprovals({
   const approveWithoutInput = useCallback(
     (item) => {
       const nextItems = items.map((x) =>
-        x.id === item.id ? { ...x, input_declined: true } : x,
+        x.id === item.id ? withLayaRestored({ ...x, input_declined: true }) : x,
       );
       persistItems(nextItems);
       const nextApr = { ...feedbackItemApprovals };
@@ -175,13 +180,13 @@ export function useFeedbackItemApprovals({
       if (!String(raw ?? "").trim()) return null;
       const nextItems = items.map((x) =>
         x.id === item.id
-          ? {
+          ? withLayaRestored({
               ...x,
               user_context: raw,
               input_declined: false,
               persist_user_context_to_cv: persistUserContextToCv,
               persist_user_context_for_agents: persistUserContextForAgents,
-            }
+            })
           : x,
       );
       persistItems(nextItems);

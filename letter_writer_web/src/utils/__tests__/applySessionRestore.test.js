@@ -45,6 +45,7 @@ describe("applyRestoredSessionState", () => {
     });
     expect(result.vendor.shelfEntries.length).toBeGreaterThan(0);
     expect(result.vendor.letters.openai).toContain("refined");
+    expect(result.vendorNames).toEqual(["openai"]);
   });
 
   it("stays on phases when some vendors still have unrefined drafts", () => {

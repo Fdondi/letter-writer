@@ -356,6 +356,8 @@ export function buildGroupedModels(availableModels) {
       reasoningEfforts: Array.isArray(m.reasoning_efforts) ? m.reasoning_efforts : [],
       input: typeof m.input === "number" ? m.input : Number(m.input) || 0,
       output: typeof m.output === "number" ? m.output : Number(m.output) || 0,
+      supersededBy: m.superseded_by || null,
+      freeTierOnly: Boolean(m.free_tier_only),
     }));
   });
   return { grouped, vendors: [...vendors].sort() };

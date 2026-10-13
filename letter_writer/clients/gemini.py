@@ -20,11 +20,17 @@ except Exception:  # pragma: no cover
     pass
 
 
-_GEMINI_UNSUPPORTED_SCHEMA_KEYS = {"additionalProperties", "minLength", "maxLength"}
+# Not in the documented JSON Schema subset:
+# https://ai.google.dev/gemini-api/docs/generate-content/structured-output
+_GEMINI_UNSUPPORTED_SCHEMA_KEYS = {"minLength", "maxLength"}
+
+# UI/config level -> API ``thinking_level``. Gemini models accept Low/Medium/High;
+# Gemma 4 only accepts Minimal (off) / High. Each model lists its levels in gemini.json.
+_THINKING_LEVELS = {"Minimal": "MINIMAL", "Low": "LOW", "Medium": "MEDIUM", "High": "HIGH"}
 
 
 def _strip_unsupported_schema_keys(schema: Any) -> Any:
-    """Recursively remove JSON Schema keys that Gemini's API doesn't support."""
+    """Recursively remove JSON Schema keys outside Gemini's documented subset."""
     if isinstance(schema, dict):
         return {
             k: _strip_unsupported_schema_keys(v)
@@ -62,11 +68,13 @@ class GeminiClient(BaseClient):
                 "low_output": 0.0,
                 "high_output": 0.0,
                 "search": 0.0,
+                "cached_mult": 1.0,
             }
 
         defaults = cfg.get("defaults", {})
         default_search = float((defaults.get("search", 0.0) if isinstance(defaults, dict) else 0.0) or 0.0)
         default_threshold = int((defaults.get("threshold", 0) if isinstance(defaults, dict) else 0) or 0)
+        default_cached_mult = float((defaults.get("input_cached_mult", 1.0) if isinstance(defaults, dict) else 1.0) or 1.0)
 
         models = cfg.get("models", {})
         model_cfg = models.get(model_name, {}) if isinstance(models, dict) else {}
@@ -99,6 +107,7 @@ class GeminiClient(BaseClient):
             "low_output": output_low,
             "high_output": output_high,
             "search": float(model_cfg.get("search", default_search) or 0.0),
+            "cached_mult": float(model_cfg.get("input_cached_mult", default_cached_mult) or 1.0),
         }
 
     def track_cost(
@@ -109,20 +118,24 @@ class GeminiClient(BaseClient):
         search_queries: int = 0,
         cached_tokens: int = 0,
     ):
-        _ = cached_tokens  # Gemini path does not split cached vs uncached today; keep signature aligned with BaseClient.
         p = self._get_gemini_pricing(model_name)
 
         # Input/output measured against threshold independently.
         input_price = p["high_input"] if input_tokens > p["threshold_in"] else p["low_input"]
         output_price = p["high_output"] if output_tokens > p["threshold_out"] else p["low_output"]
 
-        input_cost = (input_tokens / 1_000_000) * input_price
+        # Implicit context-cache hits are billed at input_cached_mult of the input rate.
+        uncached = max(0, input_tokens - cached_tokens)
+        input_cost = (uncached / 1_000_000) * input_price + (
+            (cached_tokens / 1_000_000) * input_price * p["cached_mult"]
+        )
         output_cost = (output_tokens / 1_000_000) * output_price
         search_cost = (search_queries / 1_000) * p["search"]
 
         self.total_cost += input_cost + output_cost + search_cost
         self.total_input_tokens += input_tokens
         self.total_output_tokens += output_tokens
+        self.total_cached_tokens += cached_tokens
         self.total_search_queries += search_queries
         
         typer.echo(f"[DEBUG] track_cost called: in={input_tokens}, out={output_tokens}, totals: in={self.total_input_tokens}, out={self.total_output_tokens}")
@@ -153,6 +166,7 @@ class GeminiClient(BaseClient):
         else:
             tools = []
 
+        model_role = self.resolve_effective_model_role(model_role)
         if isinstance(model_role, str):
             model_name, thinking_cfg = apply_model_override_thinking("gemini", model_role)
         else:
@@ -168,7 +182,7 @@ class GeminiClient(BaseClient):
                 output_text=text,
             )
             return text
-        thinking_level = thinking_cfg.get("thinking_level")  # None | "Low" | "Medium" | "High"
+        thinking_level = thinking_cfg.get("thinking_level")  # None | "Minimal" | "Low" | "Medium" | "High"
         typer.echo(
             f"[INFO] using Gemini model {model_name}"
             + (f" thinking={thinking_level}" if thinking_level else "")
@@ -190,20 +204,21 @@ class GeminiClient(BaseClient):
         if not validated_messages:
             raise ValueError("No valid user messages provided to Gemini API (all were None or empty)")
 
-        _THINKING_BUDGETS = {"Low": 1024, "Medium": 8192, "High": -1}
         try:
             schema = ((response_format or {}).get("json_schema") or {}).get("schema")
             cfg: Dict[str, Any] = {
                 "system_instruction": system_prompt,
                 "tools": cast(Any, tools),
             }
-            if thinking_level and thinking_level in _THINKING_BUDGETS:
+            if thinking_level in _THINKING_LEVELS:
                 cfg["thinking_config"] = types.ThinkingConfig(
-                    thinking_budget=_THINKING_BUDGETS[thinking_level]
+                    thinking_level=_THINKING_LEVELS[thinking_level]
                 )
             if schema:
+                # response_schema (OpenAPI subset) rejects additionalProperties client-side
+                # on the Developer API; response_json_schema passes JSON Schema through.
                 cfg["response_mime_type"] = "application/json"
-                cfg["response_schema"] = cast(Any, _strip_unsupported_schema_keys(schema))
+                cfg["response_json_schema"] = _strip_unsupported_schema_keys(schema)
             response = self.client.models.generate_content(
                 model=model_name,
                 config=types.GenerateContentConfig(**cfg),
@@ -238,6 +253,9 @@ class GeminiClient(BaseClient):
             output_tokens = (getattr(usage, "candidates_token_count", None) or 0) + thinking_tokens
             if thinking_tokens:
                 typer.echo(f"[INFO] Gemini thinking tokens: {thinking_tokens}")
+            cached_tokens = int(getattr(usage, "cached_content_token_count", 0) or 0)
+            if cached_tokens:
+                typer.echo(f"[INFO] Gemini cache read: {cached_tokens} tokens")
             
             # Get actual search count from grounding metadata when available (Gemini 3 bills per query)
             search_queries = 0
@@ -257,6 +275,7 @@ class GeminiClient(BaseClient):
                 prompt_tokens if prompt_tokens is not None else 0,
                 output_tokens if output_tokens is not None else 0,
                 search_queries=search_queries,
+                cached_tokens=cached_tokens,
             )
         else:
             typer.echo(f"[WARNING] Gemini response has no usage_metadata - token tracking unavailable")

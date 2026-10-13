@@ -9,7 +9,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 from langsmith import traceable
 
+from .call_context import bind_vendor_role_overrides, submit_with_context
 from .client import get_client
+from .phase_model_settings import apply_stored_role_override
 from .clients.base import ModelVendor, ModelRole, BaseClient
 from .firestore_store import (
     get_company_info,
@@ -47,6 +49,16 @@ def _parse_model_str(model_str: str) -> Tuple[ModelVendor, str | ModelRole]:
     if len(parts) > 1:
         return vendor, parts[1]
     return vendor, ModelRole.COMPANY_RESEARCH
+
+
+def _model_for_company_research(vendor: ModelVendor, model_id, user_data: Optional[Dict[str, Any]]):
+    """Use the company-research role override when the caller asked for that role's config default."""
+    if not isinstance(model_id, str) or not user_data:
+        return model_id
+    resolved = apply_stored_role_override(f"{vendor.value}/{model_id}", "company_research", user_data)
+    if "/" in resolved:
+        return resolved.split("/", 1)[1]
+    return model_id
 
 
 def _norm_company(s: str) -> str:
@@ -99,6 +111,7 @@ def perform_company_research(
     job_text: str,
     additional_company_info: str = "",
     search_instructions: str = "",
+    user_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Perform company research using one or more models.
@@ -108,6 +121,8 @@ def perform_company_research(
         {"results": Dict[model_id, {...}], "source": "cache"|"similar"|"new",
          "resolved_name": str}
     """
+    if user_data is not None:
+        bind_vendor_role_overrides(user_data)
     if not company_name:
         return {"results": {}, "source": "new", "resolved_name": company_name}
 
@@ -257,6 +272,7 @@ def perform_company_research(
     def process_model(model_str: str):
         try:
             vendor, model_id = _parse_model_str(model_str)
+            model_id = _model_for_company_research(vendor, model_id, user_data)
             client = get_client(vendor)
             trace_dir = Path("trace", f"{company_name}.{vendor.value}.research")
             trace_dir.mkdir(parents=True, exist_ok=True)
@@ -290,7 +306,7 @@ def perform_company_research(
 
     # Run in parallel
     with ThreadPoolExecutor() as executor:
-        futures = [executor.submit(process_model, m) for m in models]
+        futures = [submit_with_context(executor, process_model, m) for m in models]
         for future in futures:
             m_str, data = future.result()
             results[m_str] = data
@@ -307,11 +323,14 @@ def perform_poc_research(
     models: List[str],
     company_name: str,
     job_text: str = "",
+    user_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, dict]:
     """
     Perform POC research using one or more models.
     Checks for cached data (< 6 months old) and reuses it if available.
     """
+    if user_data is not None:
+        bind_vendor_role_overrides(user_data)
     if not poc_name or not company_name:
         return {}
 
@@ -371,6 +390,7 @@ def perform_poc_research(
     def process_model(model_str):
         try:
             vendor, model_id = _parse_model_str(model_str)
+            model_id = _model_for_company_research(vendor, model_id, user_data)
             client = get_client(vendor)
             trace_dir = Path("trace", f"{poc_name}.{vendor.value}.research_poc")
             trace_dir.mkdir(parents=True, exist_ok=True)
@@ -401,7 +421,7 @@ def perform_poc_research(
             return model_str, {"error": str(e)}
 
     with ThreadPoolExecutor() as executor:
-        futures = [executor.submit(process_model, m) for m in models]
+        futures = [submit_with_context(executor, process_model, m) for m in models]
         for future in futures:
             m_str, data = future.result()
             results[m_str] = data

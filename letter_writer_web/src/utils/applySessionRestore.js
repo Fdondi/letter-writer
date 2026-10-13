@@ -12,7 +12,7 @@ import { normalizeAgenticThreads } from "./agenticThreads";
  */
 export function applyRestoredSessionState(sessionState, setters, { sessionId = null } = {}) {
   if (!sessionState || typeof sessionState !== "object") {
-    return { restored: false, vendor: null, agentic: null };
+    return { restored: false, vendor: null, agentic: null, vendorNames: [] };
   }
 
   let restored = false;
@@ -68,6 +68,8 @@ export function applyRestoredSessionState(sessionState, setters, { sessionId = n
   }
 
   const vendors = sessionState.vendors;
+  const vendorNames =
+    vendors && typeof vendors === "object" ? Object.keys(vendors) : [];
   const shelfEntries = extractVendorShelfEntries(vendors);
   const vendorStageHint = inferVendorStageFromVendors(vendors);
   const lettersFromVendors = extractLettersFromVendors(vendors);
@@ -101,5 +103,5 @@ export function applyRestoredSessionState(sessionState, setters, { sessionId = n
     restored = true;
   }
 
-  return { restored, vendor, agentic };
+  return { restored, vendor, agentic, vendorNames };
 }

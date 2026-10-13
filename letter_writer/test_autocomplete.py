@@ -85,7 +85,7 @@ def test_truncate_autocomplete_suggestion(raw, max_words, stop_on_period, expect
 
 def test_resolve_autocomplete_model_explicit():
     user_data = {"models": {"value": ["openai", "gemini"]}}
-    assert resolve_autocomplete_model(user_data, explicit_model="mistral") == "mistral/mistral-small-2506"
+    assert resolve_autocomplete_model(user_data, explicit_model="mistral") == "mistral/mistral-small-latest"
 
 
 def test_resolve_autocomplete_model_ctrl_letter():

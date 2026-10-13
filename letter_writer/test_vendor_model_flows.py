@@ -27,4 +27,4 @@ def test_get_vendor_model_flows_returns_role_defaults_from_json():
     assert compose["role_defaults"]["letter_plan"].get("openai", "").startswith("openai/")
     autocomplete = next(f for f in flows if f["id"] == "autocomplete")
     assert "autocomplete" in autocomplete["role_defaults"]
-    assert autocomplete["role_defaults"]["autocomplete"].get("deepseek") == "deepseek/deepseek-chat"
+    assert autocomplete["role_defaults"]["autocomplete"].get("deepseek") == "deepseek/deepseek-flash"

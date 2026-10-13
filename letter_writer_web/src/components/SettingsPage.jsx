@@ -2,13 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useLanguages } from "../contexts/LanguageContext";
 import LanguageConfig from "./LanguageConfig";
 import CompetenceScaleSettings from "./CompetenceScaleSettings";
-import VendorFlowModelSettings, {
-  buildVendorRoleOverridesFromModels,
-  flattenFlowRoleDefaults,
-  mergeVendorRoleModelsFromDefaults,
-} from "./VendorFlowModelSettings";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
-import { buildGroupedModels } from "../utils/modelPicker";
 
 export default function SettingsPage({
   vendors = [],
@@ -31,9 +25,6 @@ export default function SettingsPage({
   const [autocompleteStopOnPeriod, setAutocompleteStopOnPeriod] = useState(true);
   const [autocompleteModels, setAutocompleteModels] = useState(new Set());
   const [savingAutocomplete, setSavingAutocomplete] = useState(false);
-  const [vendorModelFlows, setVendorModelFlows] = useState([]);
-  const [vendorRoleModels, setVendorRoleModels] = useState({});
-  const [savingVendorRoleModels, setSavingVendorRoleModels] = useState(false);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -82,16 +73,6 @@ export default function SettingsPage({
             setMinColumnWidth(data.min_column_width);
           } else {
             setMinColumnWidth(200); // Default value shown in UI
-          }
-          if (data.vendor_model_flows && Array.isArray(data.vendor_model_flows)) {
-            setVendorModelFlows(data.vendor_model_flows);
-            const roleDefaults = flattenFlowRoleDefaults(data.vendor_model_flows);
-            setVendorRoleModels(
-              mergeVendorRoleModelsFromDefaults(
-                data.vendor_role_models || data.phase_models || {},
-                roleDefaults
-              )
-            );
           }
           if (data.autocomplete_max_words != null) {
             setAutocompleteMaxWords(data.autocomplete_max_words);
@@ -229,25 +210,6 @@ export default function SettingsPage({
     }
   };
 
-  const handleSaveVendorRoleModels = async () => {
-    try {
-      setSavingVendorRoleModels(true);
-      setError(null);
-      const roleDefaults = flattenFlowRoleDefaults(vendorModelFlows);
-      const overrides = buildVendorRoleOverridesFromModels(vendorRoleModels, roleDefaults);
-      await fetchWithHeartbeat("/api/personal-data/", {
-        method: "POST",
-        body: JSON.stringify({
-          vendor_role_model_overrides: overrides,
-        }),
-      });
-    } catch (e) {
-      setError("Failed to save vendor model overrides");
-    } finally {
-      setSavingVendorRoleModels(false);
-    }
-  };
-
   const toggleModel = (vendor) => {
     if (!defaultModels.has(vendor) && vendor === "local") {
       guardBeforeEnablingLocal(() => {
@@ -299,8 +261,7 @@ export default function SettingsPage({
     setDefaultModels(new Set(vendors));
   };
 
-  const { grouped, groupedModels, validModelIds } = useMemo(() => {
-    const { grouped: allGrouped } = buildGroupedModels(availableModels);
+  const { groupedModels, validModelIds } = useMemo(() => {
     const grouped = {};
     const valid = new Set();
     if (availableModels) {
@@ -316,7 +277,7 @@ export default function SettingsPage({
         });
       });
     }
-    return { grouped: allGrouped, groupedModels: grouped, validModelIds: valid };
+    return { groupedModels: grouped, validModelIds: valid };
   }, [availableModels]);
 
   // Clean up stale/broken background model IDs (e.g. "google/..." instead of "gemini/...")
@@ -525,39 +486,6 @@ export default function SettingsPage({
             </label>
           ))}
         </div>
-      </div>
-
-      {/* Vendor models by flow (defaults from clients/<vendor>.json) */}
-      <div
-        style={{
-          marginBottom: 30,
-          padding: 20,
-          backgroundColor: "var(--bg-color)",
-          border: "1px solid var(--border-color)",
-          borderRadius: "4px",
-        }}
-      >
-        <h3 style={{ margin: "0 0 8px", color: "var(--text-color)" }}>Vendor models by flow</h3>
-        <p
-          style={{
-            marginTop: 0,
-            marginBottom: 8,
-            fontSize: "14px",
-            color: "var(--secondary-text-color)",
-          }}
-        >
-          Each value is pre-filled from that vendor&apos;s <code>clients/&lt;vendor&gt;.json</code> roles.
-          The config default is labeled <strong>(default)</strong> in the model picker.
-        </p>
-        <VendorFlowModelSettings
-          flows={vendorModelFlows}
-          vendorRoleModels={vendorRoleModels}
-          onVendorRoleModelsChange={setVendorRoleModels}
-          grouped={grouped}
-          vendors={vendors}
-          onSave={handleSaveVendorRoleModels}
-          saving={savingVendorRoleModels}
-        />
       </div>
 
       {/* Autocomplete flow */}

@@ -51,7 +51,8 @@ export default function LetterAssemblyPane({
   languageOptions,
   onSave,
   savingFinal = false,
-  vendorColumnWidthPx,
+  columnWidth,
+  minColumnWidth,
   onHeaderClick,
   isExpanded = false,
   onClose,
@@ -452,10 +453,11 @@ export default function LetterAssemblyPane({
 
   return (
     <div
+      data-testid="final-letter-column"
       style={{
-        width: useOverlayWidth ? "100%" : vendorColumnWidthPx,
-        minWidth: useOverlayWidth ? 0 : vendorColumnWidthPx,
-        flexShrink: useOverlayWidth ? undefined : 0,
+        width: useOverlayWidth ? "100%" : columnWidth,
+        minWidth: useOverlayWidth ? 0 : minColumnWidth,
+        flex: useOverlayWidth ? undefined : "1 1 auto",
         borderRadius: 4,
         position: "relative",
         display: "flex",

@@ -1,4 +1,4 @@
-"""OpenAI prompt-cache helpers (GPT-5.6 explicit breakpoints + legacy prefix layout)."""
+"""OpenAI prompt-cache helpers (GPT-5.6+ explicit breakpoints + legacy prefix layout)."""
 
 from __future__ import annotations
 
@@ -11,10 +11,21 @@ from .prompt_cache import merge_cache_prefixes, prepare_cache_block
 _EXPLICIT_BREAKPOINT: Dict[str, str] = {"mode": "explicit"}
 
 
-def is_gpt_56_family(model: str) -> bool:
-    """True for ``gpt-5.6`` and ``gpt-5.6-{sol,terra,luna}``."""
+_EXPLICIT_CACHE_FAMILIES = ("gpt-5.6", "gpt-6")
+
+
+def supports_explicit_prompt_cache(model: str) -> bool:
+    """True for GPT-5.6 and later, including dotted minors such as ``gpt-6.1-sol``.
+
+    Those models take explicit cache breakpoints and bill cache writes at 1.25x.
+    """
     m = (model or "").lower().strip()
-    return m == "gpt-5.6" or m.startswith("gpt-5.6-")
+    for fam in _EXPLICIT_CACHE_FAMILIES:
+        if m == fam:
+            return True
+        if m.startswith(fam) and len(m) > len(fam) and m[len(fam)] in "-.":
+            return True
+    return False
 
 
 def prompt_cache_key(*parts: Optional[str]) -> str:
@@ -56,7 +67,7 @@ def build_openai_messages(
         prepare_cache_block(usr_prefix_raw, vendor="openai", model=model) if usr_prefix_raw else None
     )
 
-    if is_gpt_56_family(model) and (sys_prefix or usr_prefix):
+    if supports_explicit_prompt_cache(model) and (sys_prefix or usr_prefix):
         messages: List[Dict[str, Any]] = []
         if sys_prefix or system_body:
             sys_blocks: List[Dict[str, Any]] = []
@@ -79,7 +90,8 @@ def build_openai_messages(
         key = prompt_cache_key(sys_prefix_raw, usr_prefix_raw) if (sys_prefix_raw or usr_prefix_raw) else None
         return messages, key, True
 
-    # Pre-GPT-5.6: identical prefix at the start of the prompt enables automatic caching.
+    # Pre-GPT-5.6: identical prefix at the start of the prompt enables automatic caching;
+    # a stable prompt_cache_key routes requests sharing that prefix to the same cache.
     merged_prefix = sys_prefix or usr_prefix
     system_prompt = merge_system_cache_prefix_into_system(system, merged_prefix)
     messages = [{"role": "system", "content": system_prompt}]
@@ -87,4 +99,5 @@ def build_openai_messages(
         msg_text = (message or "").strip()
         if msg_text:
             messages.append({"role": "user", "content": msg_text})
-    return messages, None, False
+    key = prompt_cache_key(sys_prefix_raw, usr_prefix_raw) if (sys_prefix_raw or usr_prefix_raw) else None
+    return messages, key, False

@@ -80,10 +80,6 @@ export function FeedbackItemsPanel({
     [visibleItems],
   );
 
-  const restoreLayaItem = (it) => {
-    approvals.persistItems(items.map((row) => (row.id === it.id ? { ...row, laya_restored: true } : row)));
-  };
-
   const filteredFeedbackDetails = useMemo(() => {
     const raw = feedbackOverrides[categoryKey] !== undefined ? feedbackOverrides[categoryKey] : feedback[categoryKey];
     return filteredFeedbackDetailsFromRaw(raw);
@@ -183,7 +179,19 @@ export function FeedbackItemsPanel({
         onRemove={editing.onRemove}
       />
 
-      <InvalidItemsSection items={invalidItems} disabled={disabled} onRestore={restoreLayaItem} />
+      <InvalidItemsSection items={invalidItems}>
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+          {invalidItems.map((it) => (
+            <FixRow
+              key={it.id}
+              it={it}
+              approved={feedbackItemApprovals[it.id] === true}
+              isEditing={editing.editingId === it.id}
+              {...fixRowProps}
+            />
+          ))}
+        </ul>
+      </InvalidItemsSection>
 
       <KnownWeaknessesPanel items={knownWeaknesses} />
     </div>

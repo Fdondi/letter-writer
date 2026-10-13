@@ -2,6 +2,7 @@
   "defaults": {
     "search": 0.0,
     "threshold": 200000,
+    "input_cached_mult": 0.10,
     "thinking_levels": ["none", "Low", "Medium", "High"]
   },
   "roles": {
@@ -9,8 +10,8 @@
     "feedback":         { "model": "gemini-3.1-flash-lite",  "thinking_level": "Low" },
     "feedback_review":  { "model": "gemini-2.5-flash-lite", "thinking_level": null },
     "feedback_context": { "model": "gemini-2.5-flash-lite", "thinking_level": null },
-    "rag_ranker":       { "model": "gemini-3.5-flash",         "thinking_level": "Medium" },
-    "company_research": { "model": "gemini-3.5-flash",         "thinking_level": "Medium" },
+    "rag_ranker":       { "model": "gemini-3.8-flash",         "thinking_level": "Medium" },
+    "company_research": { "model": "gemini-3.8-flash",         "thinking_level": "Medium" },
     "letter_plan":      { "model": "gemini-3.1-pro-preview",   "thinking_level": "High" },
     "letter_draft":     { "model": "gemini-3.1-pro-preview",   "thinking_level": "High" },
     "letter_refine":    { "model": "gemini-3.1-pro-preview",   "thinking_level": "High" },
@@ -20,10 +21,17 @@
     "translation":          { "model": "gemini-2.5-flash-lite", "thinking_level": null }
   },
   "models":{
+    "gemini-3.8-flash": {
+      "input": 0.75,
+      "output": 3.75,
+      "search": 14.00,
+      "price_note": "Promotional through 2026-12-31; $1.50 input / $7.50 output from 2027-01-01"
+    },
     "gemini-3.5-flash": {
       "input": 1.50,
       "output": 9.00,
-      "search": 14.00
+      "search": 14.00,
+      "superseded_by": "gemini-3.8-flash"
     },
     "gemini-3.1-pro-preview": {
       "input": {
@@ -32,18 +40,9 @@
       },
       "output": {
         "low": 12.00,
-        "high": 14.00
-      }
-    },
-    "gemini-3-pro-preview": {
-      "input": {
-        "low": 2.00,
-        "high": 4.00
-      },
-      "output": {
-        "low": 12.00,
         "high": 18.00
-      }
+      },
+      "search": 14.00
     },
     "gemini-3-flash-preview": {
       "input": 0.50,
@@ -58,7 +57,7 @@
     "gemini-2.5-flash-lite": {
       "input": 0.10,
       "output": 0.40,
-      "search": 25.00
+      "search": 35.00
     },
     "gemini-2.5-flash": {
       "input": 0.30,
@@ -75,6 +74,22 @@
         "high": 15.00
       },
       "search": 35.00
+    },
+    "gemma-4-31b-it": {
+      "input": 0.0,
+      "output": 0.0,
+      "search": 0.0,
+      "free_tier_only": true,
+      "thinking_levels": ["Minimal", "High"],
+      "price_note": "Gemini API free tier only (paid tier: not available); free-tier prompts are used to improve Google products"
+    },
+    "gemma-4-26b-a4b-it": {
+      "input": 0.0,
+      "output": 0.0,
+      "search": 0.0,
+      "free_tier_only": true,
+      "thinking_levels": ["Minimal", "High"],
+      "price_note": "Gemini API free tier only (paid tier: not available); free-tier prompts are used to improve Google products"
     }
   }
 }

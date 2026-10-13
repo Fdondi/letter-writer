@@ -71,6 +71,7 @@ export default function PhaseSection({
             gap: 12,
             marginTop: 8,
             overflowX: "auto",
+            overscrollBehaviorX: "none",
             alignItems: "stretch",
             flex: 1,
             minHeight: 0,

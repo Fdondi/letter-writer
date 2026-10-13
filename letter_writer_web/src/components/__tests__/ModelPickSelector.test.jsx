@@ -134,4 +134,37 @@ describe("ModelPickSelector", () => {
     expect(el).toHaveTextContent("($1.00 in · $2.00 out / 1M)");
     expect(el.querySelector("span[style]")).toHaveStyle({ color: "#dc2626" });
   });
+
+  test("superseded models are grouped under Other models and never the fallback pick", () => {
+    const onChange = jest.fn();
+    const withOlder = {
+      anthropic: [
+        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4 6", supersededBy: "claude-sonnet-5-5", reasoningEfforts: [] },
+        { id: "claude-sonnet-5-5", name: "Claude Sonnet 5 5", supersededBy: null, reasoningEfforts: [] },
+      ],
+      gemini: [
+        { id: "gemma-4-31b-it", name: "Gemma 4 31B It", freeTierOnly: true, reasoningEfforts: [] },
+      ],
+    };
+    render(<ModelPickSelector value="gemini/gemma-4-31b-it" grouped={withOlder} onChange={onChange} />);
+    expect(screen.getByRole("option", { name: "Gemma 4 31B It (free tier only)" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Vendor"), { target: { value: "anthropic" } });
+    expect(onChange).toHaveBeenCalledWith("anthropic", "claude-sonnet-5-5", "", "anthropic/claude-sonnet-5-5");
+  });
+
+  test("renders an Other models optgroup holding only superseded entries", () => {
+    const withOlder = {
+      anthropic: [
+        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4 6", supersededBy: "claude-sonnet-5-5", reasoningEfforts: [] },
+        { id: "claude-sonnet-5-5", name: "Claude Sonnet 5 5", supersededBy: null, reasoningEfforts: [] },
+      ],
+    };
+    render(
+      <ModelPickSelector fixedVendor="anthropic" value="anthropic/claude-sonnet-5-5" grouped={withOlder} onChange={() => {}} />
+    );
+    const group = screen.getByRole("group", { name: /Other models/ });
+    const older = screen.getByRole("option", { name: "Claude Sonnet 4 6 (replaced by claude-sonnet-5-5)" });
+    expect(group).toContainElement(older);
+    expect(group).not.toContainElement(screen.getByRole("option", { name: "Claude Sonnet 5 5" }));
+  });
 });

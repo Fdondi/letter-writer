@@ -7,6 +7,7 @@ from mistralai.client import Mistral
 from mistralai.client.errors import SDKError
 
 from .base import BaseClient, ModelRole, merge_system_cache_prefix_into_system
+from .model_override import apply_model_override_thinking
 from langsmith import traceable
 
 class MistralClient(BaseClient):
@@ -187,8 +188,9 @@ class MistralClient(BaseClient):
     ) -> str:
         _ = cache_prefix, prompt_cache_key
         system_prompt = merge_system_cache_prefix_into_system(system, system_cache_prefix)
+        model_role = self.resolve_effective_model_role(model_role)
         if isinstance(model_role, str):
-            model = model_role
+            model, _thinking_cfg = apply_model_override_thinking("mistral", model_role)
         else:
             model = self.get_model_for_role(model_role)
         def _return_with_audit(text: str) -> str:

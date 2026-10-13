@@ -1,6 +1,6 @@
-from .base import BaseClient, ModelRole, merge_system_cache_prefix_into_system
+from .base import BaseClient, ModelRole, matching_model_entry, merge_system_cache_prefix_into_system
 from .model_override import apply_model_override_thinking
-from .openai_prompt_cache import build_openai_messages, is_gpt_56_family
+from .openai_prompt_cache import build_openai_messages, supports_explicit_prompt_cache
 from .prompt_cache import merge_cache_prefixes
 from openai import OpenAI
 from typing import List, Dict, Any, Optional
@@ -43,6 +43,17 @@ class OpenAIClient(BaseClient):
         self.total_cached_tokens += cached_tokens
         self.total_search_queries += search_queries
 
+    def _accepts_none_effort(self, model: str) -> bool:
+        """True when the model's own ``reasoning_efforts`` list includes ``none``.
+
+        Newer models default to ``medium`` when the parameter is omitted, so a role
+        configured with ``none`` must send it; non-reasoning models reject the field.
+        """
+        models = self.config.get("models")
+        entry = matching_model_entry(models if isinstance(models, dict) else {}, model)
+        efforts = entry.get("reasoning_efforts")
+        return isinstance(efforts, list) and "none" in efforts
+
     @staticmethod
     def _extract_cache_metrics(usage) -> tuple[int, int]:
         details = getattr(usage, "prompt_tokens_details", None)
@@ -62,6 +73,7 @@ class OpenAIClient(BaseClient):
         system_cache_prefix: Optional[str] = None,
         prompt_cache_key: Optional[str] = None,
     ) -> str:
+        model_role = self.resolve_effective_model_role(model_role)
         if isinstance(model_role, str):
             model, thinking_cfg = apply_model_override_thinking("openai", model_role)
         else:
@@ -98,16 +110,14 @@ class OpenAIClient(BaseClient):
         }
         if response_format:
             request_kwargs["response_format"] = response_format
-        if reasoning_effort and reasoning_effort != "none":
+        if reasoning_effort and (reasoning_effort != "none" or self._accepts_none_effort(model)):
             request_kwargs["reasoning_effort"] = reasoning_effort
-        if explicit_cache and (cache_key or prompt_cache_key):
+        routing_key = prompt_cache_key or cache_key
+        if explicit_cache and routing_key:
             request_kwargs["prompt_cache_options"] = {"mode": "explicit"}
-            request_kwargs["prompt_cache_key"] = prompt_cache_key or cache_key
-        elif is_gpt_56_family(model):
-            # GPT-5.6 benefits from a routing key even when relying on implicit caching.
-            stable = (system_cache_prefix or cache_prefix or "").strip()
-            if stable:
-                request_kwargs["prompt_cache_key"] = cache_key or stable[:256]
+            request_kwargs["prompt_cache_key"] = routing_key
+        elif routing_key and not supports_explicit_prompt_cache(model):
+            request_kwargs["prompt_cache_key"] = routing_key
 
         try:
             response = self.client.chat.completions.create(

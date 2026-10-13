@@ -5,7 +5,6 @@ import { FixRow } from "./feedback-rows/FixRow";
 import { GoodRow } from "./feedback-rows/GoodRow";
 import { FeedbackItemsPanel } from "./FeedbackItemsPanel";
 import { FEEDBACK_TYPES, mergeCategoryItems, newId, categoryHasPleaseFix, categoryAllItemsApproved, itemIsApproved, pleaseFixItems, isLayaHidden } from "./feedbackItemUtils";
-import { InvalidItemsSection } from "./feedback-rows/FeedbackSections";
 import { useFeedbackItemApprovals } from "../../hooks/useFeedbackItemApprovals";
 import { useFeedbackItemEditing } from "../../hooks/useFeedbackItemEditing";
 import { resolveQuoteSpan } from "../../utils/resolveQuoteSpan";
@@ -227,15 +226,16 @@ export function DraftFeedbackView({
     for (const key of feedbackKeys) {
       for (const it of itemsByCategory[key] || []) {
         if (viewingTranslation) continue;
-        if (isLayaHidden(it)) continue;
         const span = resolveQuoteSpan(letter, it.quote, it.matched_text);
         if (!span) continue;
+        const layaHidden = isLayaHidden(it);
         out.push({
           id: it.id,
           categoryKey: key,
           title: vendorNoteTitle(it.type, key),
           color: vendorNoteColor(key),
-          faint: itemIsApproved(it, feedbackItemApprovals),
+          faint: layaHidden || itemIsApproved(it, feedbackItemApprovals),
+          inactiveReason: layaHidden ? "laya" : undefined,
           start: span.start,
           end: span.end,
           unanchored: false,
@@ -277,25 +277,6 @@ export function DraftFeedbackView({
     }
     return "";
   }, [feedbackKeys, itemsByCategory]);
-
-  const hiddenAnchored = useMemo(() => {
-    const out = [];
-    for (const key of feedbackKeys) {
-      for (const it of itemsByCategory[key] || []) {
-        if (!isLayaHidden(it) || isWholeLetterItem(it)) continue;
-        out.push({ ...it, categoryKey: key });
-      }
-    }
-    return out;
-  }, [feedbackKeys, itemsByCategory, isWholeLetterItem]);
-
-  const restoreAnchored = (it) => {
-    const key = it.categoryKey;
-    const next = (itemsByCategory[key] || []).map((row) =>
-      row.id === it.id ? { ...row, laya_restored: true } : row,
-    );
-    handleSaveFeedbackOverride(key, next);
-  };
 
   const addCritique = (categoryKey) => {
     const id = newId();
@@ -468,7 +449,6 @@ export function DraftFeedbackView({
           Laya did not score these comments: {layaUnscoredNotice}
         </div>
       )}
-      <InvalidItemsSection items={hiddenAnchored} disabled={isLoading} onRestore={restoreAnchored} />
       <KnownWeaknessesPanel items={cardPhaseData.known_weaknesses} />
       {feedbackKeys.length > 0 && (
         <div style={{ marginTop: 10 }}>

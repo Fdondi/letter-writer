@@ -21,7 +21,9 @@ def _log(msg: str) -> None:
     """Log with timestamp so agentic flow is visible in uvicorn/server logs."""
     logger.info(msg)
 
+from .call_context import bind_vendor_role_overrides, submit_with_context
 from .client import get_client
+from .firestore_store import get_user_data
 from .clients.base import ModelVendor, ModelRole
 from .feedback_checks import (
     get_agentic_topic_context,
@@ -370,9 +372,12 @@ def build_phase_subcomment_vote_schema(thread: List[Dict[str, Any]]) -> Dict[str
 
 
 def _require_session(session) -> None:
-    """Raise if session is missing or invalid."""
+    """Raise if session is missing or invalid. Binds that user's model overrides for later client calls."""
     if not session:
         raise ValueError("Session is required")
+    uid = (session.get("user") or {}).get("id")
+    if uid:
+        bind_vendor_role_overrides(get_user_data(uid, use_cache=True) or {})
 
 
 def _user_id(session) -> str:
@@ -2108,7 +2113,7 @@ def run_agentic_voting(
         return (voter, top3, cost)
 
     with ThreadPoolExecutor(max_workers=min(len(voting_vendors), 4)) as executor:
-        futures = {executor.submit(_one_vote, v): v for v in voting_vendors}
+        futures = {submit_with_context(executor, _one_vote, v): v for v in voting_vendors}
         for fut in as_completed(futures):
             voter = futures[fut]
             try:
@@ -2211,8 +2216,6 @@ def run_agentic_draft(
             point_of_contact = metadata.get("common", {}).get("point_of_contact")
             additional_company_info = get_metadata_field(metadata, vendor_enum, "additional_company_info", "")
             from .instructions import resolve_search_instructions
-            from .firestore_store import get_user_data
-
             user_data = get_user_data(_user_id(session), use_cache=True) if _user_id(session) else {}
             search_instructions = resolve_search_instructions(
                 session.get("search_instructions", ""),
@@ -2313,8 +2316,6 @@ def run_agentic_draft_multi(
             point_of_contact = metadata.get("common", {}).get("point_of_contact")
             additional_company_info = get_metadata_field(metadata, vendor_enum, "additional_company_info", "")
             from .instructions import resolve_search_instructions
-            from .firestore_store import get_user_data
-
             user_data = get_user_data(_user_id(session), use_cache=True) if _user_id(session) else {}
             search_instructions = resolve_search_instructions(
                 session.get("search_instructions", ""),
@@ -2356,7 +2357,7 @@ def run_agentic_draft_multi(
         return (vendor, letter, cost)
 
     with ThreadPoolExecutor(max_workers=min(len(draft_vendors), 4)) as executor:
-        futures = {executor.submit(_one_draft, v): v for v in draft_vendors}
+        futures = {submit_with_context(executor, _one_draft, v): v for v in draft_vendors}
         for fut in as_completed(futures):
             vendor = futures[fut]
             try:
@@ -2837,7 +2838,7 @@ def run_agentic_refine(
         return vendor, letter, cost_inc
 
     with ThreadPoolExecutor(max_workers=len(refine_tasks) or 1) as executor:
-        futures = {executor.submit(_one_refine, v): v for v in refine_tasks}
+        futures = {submit_with_context(executor, _one_refine, v): v for v in refine_tasks}
         for fut in as_completed(futures):
             vendor = futures[fut]
             try:

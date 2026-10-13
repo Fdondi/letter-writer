@@ -73,6 +73,9 @@ describe("AnnotatedDraft", () => {
     const marker = screen.getByTestId("note-marker-n1");
     expect(marker.style.border).toMatch(/1px solid/);
     expect(marker.style.border).not.toMatch(/2px/);
+    const mark = screen.getByText("world").closest("mark");
+    expect(mark.getAttribute("data-active")).toBe("true");
+    expect(mark.style.boxShadow).toBe("0 0 0 1.5px #d97706");
   });
 
   test("positive and approved notes use a faint marker fill of the topic color", () => {
@@ -100,7 +103,49 @@ describe("AnnotatedDraft", () => {
     expect(marker.style.width).toBe("5px");
     expect(marker.style.top).toBe("3px");
     expect(marker.getAttribute("data-dealt")).toBe("true");
+    const mark = screen.getByText("world").closest("mark");
+    expect(mark.getAttribute("data-active")).toBe("false");
+    expect(mark.style.boxShadow).toBe("none");
     expect(screen.queryByTestId("inline-note")).not.toBeInTheDocument();
+  });
+
+  test("an active note keeps its frame where it overlaps a faint note", () => {
+    render(
+      <AnnotatedDraft
+        text={letter}
+        notes={[
+          {
+            id: "g1",
+            title: "Already good · Human",
+            color: "#db2777",
+            faint: true,
+            start: 0,
+            end: 11,
+            unanchored: false,
+            body: "Hello world is fine.",
+          },
+          {
+            id: "n1",
+            title: "Precision",
+            color: "#d97706",
+            faint: false,
+            start: 6,
+            end: 11,
+            unanchored: false,
+            body: "World is too casual.",
+          },
+        ]}
+        expandedId={null}
+        onToggle={() => {}}
+      />,
+    );
+    const world = screen.getByText("world").closest("mark");
+    expect(world.getAttribute("data-note-id")).toBe("n1");
+    expect(world.getAttribute("data-active")).toBe("true");
+    expect(world.style.boxShadow).toBe("0 0 0 1.5px #d97706");
+    const hello = screen.getByText("Hello").closest("mark");
+    expect(hello.getAttribute("data-active")).toBe("false");
+    expect(hello.style.boxShadow).toBe("none");
   });
 
   test("blank-quote notes appear only below the letter and stay collapsed by default", () => {

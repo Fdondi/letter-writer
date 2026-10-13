@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional, Union
 from .autocomplete_core import _role_model_from_entry, normalize_autocomplete_model_key
 from .clients.base import ModelRole, VALID_VENDOR_KEYS, normalize_config_vendor_key
 
-# Roles users may override in Settings (grouped by flow in vendor_model_flows.py).
+# Roles users may override next to the flow buttons (grouped in vendor_model_flows.py).
 CONFIGURABLE_VENDOR_ROLES = (
     "extraction",
     "rag_ranker",
@@ -53,7 +53,7 @@ def _thinking_suffix_from_role_entry(vendor_key: str, entry: Any) -> Optional[st
     if not isinstance(entry, dict):
         return None
     vendor = vendor_key.lower()
-    if vendor == "openai":
+    if vendor in ("openai", "grok", "deepseek"):
         effort = entry.get("reasoning_effort")
         if effort is not None and str(effort).strip().lower() not in ("", "none"):
             return str(effort).strip().lower()
@@ -219,3 +219,35 @@ def resolve_client_model_role(
         return ModelRole(role_key)
     except ValueError:
         return ModelRole.LETTER_DRAFT
+
+
+def _composite_model_id(composite: str) -> str:
+    raw = (composite or "").strip()
+    if "/" not in raw:
+        return raw.split("@", 1)[0]
+    _vendor, rest = raw.split("/", 1)
+    return rest.split("@", 1)[0]
+
+
+def apply_stored_role_override(
+    composite: str,
+    role: str,
+    user_data: Optional[Dict[str, Any]],
+) -> str:
+    """If composite is that role's config default, replace it with the user's override."""
+    raw = (composite or "").strip()
+    if not raw:
+        return raw
+    from .personal_data_sections import get_phase_model_overrides
+
+    overrides = get_phase_model_overrides(user_data or {})
+    vendor = raw.split("/", 1)[0].strip().lower() if "/" in raw else raw.lower()
+    override = str((overrides.get(vendor) or {}).get(role) or "").strip()
+    if not override:
+        return raw
+    if "/" not in raw:
+        return override
+    default = get_role_defaults_for_config_role(role, fallbacks=_ROLE_FALLBACKS.get(role, ())).get(vendor) or ""
+    if default and _composite_model_id(raw) == _composite_model_id(default):
+        return override
+    return raw

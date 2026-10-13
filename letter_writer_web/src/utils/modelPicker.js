@@ -90,11 +90,23 @@ export function defaultReasoningEffort(efforts) {
   return efforts[0];
 }
 
+export const OTHER_MODELS_GROUP_LABEL = "Other models (older; a later model costs the same or less)";
+
+/** Split a vendor's models into top-level and superseded ("Other models") lists. */
+export function partitionSupersededModels(models) {
+  const current = [];
+  const other = [];
+  for (const m of models || []) {
+    (m.supersededBy ? other : current).push(m);
+  }
+  return { current, other };
+}
+
 export function resolveModelIdFromDefaults(vendor, roleDefaults, grouped) {
   const parsed = parseModelKey(roleDefaults?.[vendor] || "");
   if (parsed.modelId) return parsed.modelId;
-  const models = grouped?.[vendor] || [];
-  return models[0]?.id || "";
+  const { current, other } = partitionSupersededModels(grouped?.[vendor]);
+  return current[0]?.id || other[0]?.id || "";
 }
 
 export function resolveReasoningEffortFromDefaults(vendor, roleDefaults, grouped, modelId) {

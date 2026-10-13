@@ -350,6 +350,17 @@ describe("model key helpers", () => {
     });
     expect(vendors).toEqual(["openai"]);
     expect(grouped.openai[0].composite).toBe("openai/gpt-realtime-mini");
+    expect(grouped.openai[0].supersededBy).toBeNull();
+    expect(grouped.openai[0].freeTierOnly).toBe(false);
+  });
+
+  test("buildGroupedModels carries superseded_by and free_tier_only", () => {
+    const { grouped } = buildGroupedModels({
+      OpenAI: [{ id: "gpt-5.4-nano", vendor_key: "openai", superseded_by: "gpt-6-luna" }],
+      Google: [{ id: "gemma-4-31b-it", vendor_key: "gemini", free_tier_only: true }],
+    });
+    expect(grouped.openai[0].supersededBy).toBe("gpt-6-luna");
+    expect(grouped.gemini[0].freeTierOnly).toBe(true);
   });
 
   test("formatModelKey builds composite id", () => {

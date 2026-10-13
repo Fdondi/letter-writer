@@ -6,7 +6,7 @@ import LanguageSelector from "../components/LanguageSelector";
 import ResearchComponent from "../components/ResearchComponent";
 import SimilarOffersCarousel from "../components/SimilarOffersCarousel";
 import CompetencesList from "../components/CompetencesList";
-import AutocompletePlanModelSelect from "../components/AutocompletePlanModelSelect";
+import FlowModelPopover from "../components/FlowModelPopover";
 import { useJobSession } from "../contexts/JobSessionContext";
 import { useLanguages } from "../contexts/LanguageContext";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
@@ -253,7 +253,7 @@ export default function IntakePage() {
         )}
       </div>
       
-      <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+      <div style={{ display: "flex", gap: 10, marginTop: 10, alignItems: "center", flexWrap: "wrap" }}>
         <button
           onClick={session.extractData}
           disabled={session.extracting || session.captureImporting || !session.jobText.trim()}
@@ -268,6 +268,11 @@ export default function IntakePage() {
         >
           {session.extracting || session.captureImporting ? "Extracting..." : "Extract data"}
         </button>
+        <FlowModelPopover
+          flowId="initial"
+          ariaLabel="Extraction models"
+          testId="flow-model-extract"
+        />
         {session.extractionError && (
           <div style={{ color: "var(--error-text)", padding: "10px 0", fontSize: "14px" }}>
             {session.extractionError}
@@ -601,7 +606,11 @@ export default function IntakePage() {
         >
           Start autocomplete
         </button>
-        <AutocompletePlanModelSelect />
+        <FlowModelPopover
+          flowId="autocomplete"
+          ariaLabel="Autocomplete models"
+          testId="flow-model-autocomplete"
+        />
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-color)" }}>
           <input
             type="checkbox"
@@ -624,6 +633,12 @@ export default function IntakePage() {
         >
           {session.loading ? "Starting..." : "Start vendor flow"}
         </button>
+        <FlowModelPopover
+          flowId="compose"
+          ariaLabel="Vendor flow models"
+          vendors={vendorsList}
+          testId="flow-model-vendor"
+        />
         <div
           style={{
             width: 1,
@@ -648,6 +663,13 @@ export default function IntakePage() {
           >
             Start agentic flow
           </button>
+          <FlowModelPopover
+            flowId="agentic"
+            ariaLabel="Agentic flow models"
+            vendors={vendorsList}
+            align="end"
+            testId="flow-model-agentic"
+          />
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ fontSize: 13, color: "var(--text-color)" }}>Max rounds:</span>
             <input

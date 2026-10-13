@@ -175,8 +175,8 @@ class BaseClient:
 
         Supports plain-string entries and dict entries with extra vendor keys::
 
-            "feedback": "gpt-5-mini"
-            "feedback": {"model": "gpt-5-mini", "reasoning_effort": "low"}
+            "feedback": "gpt-6-luna"
+            "feedback": {"model": "gpt-6-luna", "reasoning_effort": "low"}
         """
         roles = self.config.get("roles", {})
         entry = roles.get(model_role.value)
@@ -195,7 +195,8 @@ class BaseClient:
         Returns an empty dict for plain-string role entries or entries with no
         extra keys beyond ``model``.  Each vendor client checks for its own key::
 
-            OpenAI:    config.get("reasoning_effort")   # "none"|"low"|"medium"|"high"
+            OpenAI:    config.get("reasoning_effort")   # "none"|"low"|"medium"|"high"|"xhigh"|"max"
+            Grok:      config.get("reasoning_effort")   # "none"|"low"|"medium"|"high"|"xhigh"
             Anthropic: config.get("thinking")           # False | True
             Anthropic: config.get("effort") or config.get("thinking_effort")
                 # optional: "low"|"medium"|"high"|"max"|"xhigh" (adaptive thinking only)
@@ -241,6 +242,12 @@ class BaseClient:
         model_cfg = models_cfg.get(model_name, {})
         if not isinstance(model_cfg, dict):
             return {"input": 0.0, "output": 0.0, "search": default_search, "input_cached_mult": 0.5}
+        if model_name not in models_cfg:
+            logger.warning(
+                "No pricing for model %s in %s config; cost for this call is recorded as $0",
+                model_name,
+                self.__class__.__name__,
+            )
 
         defaults = cfg.get("defaults", {}) or {}
         if not isinstance(defaults, dict):
@@ -325,6 +332,21 @@ class BaseClient:
             # Audit logging must never break generation paths.
             logger.debug("failed to append llm_io audit event", exc_info=True)
 
+    def resolve_effective_model_role(self, model_role: ModelRole | str) -> ModelRole | str:
+        """Apply this client's bound user override (vendor/model@effort) for a role enum."""
+        if not isinstance(model_role, ModelRole):
+            return model_role
+        vendor_key = getattr(self, "_vendor_key", "") or ""
+        role_overrides = getattr(self, "_role_overrides", None) or {}
+        if not vendor_key or not role_overrides:
+            return model_role
+        # Lazy import: phase_model_settings imports ModelRole from this module.
+        from letter_writer.phase_model_settings import resolve_client_model_role
+
+        return resolve_client_model_role(
+            vendor_key, model_role.value, {vendor_key: role_overrides}
+        )
+
     def call(
         self,
         model_role: ModelRole | str,
@@ -351,8 +373,8 @@ class BaseClient:
         Gemini, etc.).
 
         ``prompt_cache_key`` — optional stable routing key for providers that
-        require it (OpenAI GPT-5.6+).  When omitted, vendors derive one from
-        the cache prefix.  Callers that share a prefix should pass the same key
+        use it (OpenAI models before GPT-5.6).  When omitted, vendors derive one
+        from the cache prefix.  Callers that share a prefix should pass the same key
         and run sequentially within that group.
         """
         raise NotImplementedError("Subclasses must implement this method")

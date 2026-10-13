@@ -37,7 +37,9 @@ from letter_writer.agentic_service import (
     format_topic_thread_for_voting,
     prune_downvoted_subcomments,
 )
+from letter_writer.call_context import bind_vendor_role_overrides, submit_with_context
 from letter_writer.clients.base import ModelVendor
+from letter_writer.firestore_store import get_user_data
 from letter_writer.feedback_checks import get_agentic_topic_context
 from letter_writer.feedback_topics import AGENTIC_TOPIC_KEYS
 from letter_writer.instructions import get_style_instructions
@@ -232,6 +234,8 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
 
         persisted = load_session_from_storage(session_key)
         uid = (persisted.get("user") or {}).get("id") if isinstance(persisted, dict) else None
+        if uid:
+            bind_vendor_role_overrides(get_user_data(uid, use_cache=True) or {})
         additional_user_info = get_effective_additional_user_info(
             metadata, ModelVendor(draft_vendor), uid
         )
@@ -281,7 +285,8 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
                             if phase_key in PHASES_SUBCOMMENT_VOTE
                             else None
                         )
-                        fut = executor.submit(
+                        fut = submit_with_context(
+                            executor,
                             cast(Callable[..., None], call_agentic_phase_action),
                             vendor=vendor,
                             phase=phase_key,
@@ -342,7 +347,7 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
 
         with ThreadPoolExecutor(max_workers=max(1, len(active_topics))) as topic_executor:
             topic_futures = {
-                topic_executor.submit(_run_topic_pipeline, t): t
+                submit_with_context(topic_executor, _run_topic_pipeline, t): t
                 for t in active_topics
             }
             for fut in as_completed(topic_futures):
@@ -383,7 +388,8 @@ def _run_ordered_feedback_loop(session_key: str) -> None:
                     f"Draft letter:\n{draft_letter}\n\n"
                     f"Company report:\n{company_report}\n"
                 )
-                fut = executor.submit(
+                fut = submit_with_context(
+                    executor,
                     cast(Callable[..., None], call_agentic_phase_action),
                     vendor=vendor,
                     phase=PHASE_B,

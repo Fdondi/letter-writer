@@ -135,6 +135,14 @@ export default function VendorFlowModelSettings({
   vendors = [],
   onSave,
   saving = false,
+  /** Render one flow inline (popover), without the accordion chrome. */
+  embeddedFlowId = null,
+  /** When set, only these vendor keys are listed. Empty array shows a hint. */
+  vendorKeys = null,
+  extractionVendor = "",
+  onExtractionVendorChange = null,
+  hideSaveButton = false,
+  saveError = null,
 }) {
   const [expandedFlowId, setExpandedFlowId] = useState(null);
   const roleDefaultsByRole = useMemo(() => flattenFlowRoleDefaults(flows), [flows]);
@@ -161,6 +169,8 @@ export default function VendorFlowModelSettings({
     setExpandedFlowId((prev) => (prev === flowId ? null : flowId));
   };
 
+  const shownFlows = embeddedFlowId ? flows.filter((flow) => flow.id === embeddedFlowId) : flows;
+
   if (!flows.length) {
     return (
       <p style={{ color: "var(--secondary-text-color)", fontStyle: "italic", margin: 0 }}>
@@ -169,19 +179,36 @@ export default function VendorFlowModelSettings({
     );
   }
 
+  if (embeddedFlowId && shownFlows.length === 0) {
+    return (
+      <p style={{ color: "var(--secondary-text-color)", fontStyle: "italic", margin: 0 }}>
+        No models for this step.
+      </p>
+    );
+  }
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {flows.map((flow) => {
-        const isExpanded = expandedFlowId === flow.id;
+    <div style={{ display: "flex", flexDirection: "column", gap: embeddedFlowId ? 16 : 12 }}>
+      {shownFlows.map((flow) => {
+        const isEmbedded = embeddedFlowId === flow.id;
+        const isExpanded = isEmbedded || expandedFlowId === flow.id;
+        const vendorsForFlow = Array.isArray(vendorKeys)
+          ? flowVendors.filter((vendorKey) => vendorKeys.includes(vendorKey))
+          : flowVendors;
         return (
           <div
             key={flow.id}
-            style={{
-              border: "1px solid var(--border-color)",
-              borderRadius: 6,
-              overflow: "hidden",
-            }}
+            style={
+              isEmbedded
+                ? undefined
+                : {
+                    border: "1px solid var(--border-color)",
+                    borderRadius: 6,
+                    overflow: "hidden",
+                  }
+            }
           >
+            {isEmbedded ? null : (
             <button
               type="button"
               onClick={() => toggleFlow(flow.id)}
@@ -217,9 +244,35 @@ export default function VendorFlowModelSettings({
                 </span>
               </span>
             </button>
+            )}
             {isExpanded ? (
-              <div style={{ padding: "16px 20px 20px", display: "flex", flexDirection: "column", gap: 24 }}>
-                {flowVendors.map((vendorKey) => {
+              <div style={{ padding: isEmbedded ? 0 : "16px 20px 20px", display: "flex", flexDirection: "column", gap: 24 }}>
+                {flow.id === "initial" && onExtractionVendorChange ? (
+                  <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, color: "var(--text-color)" }}>
+                    <span style={{ fontWeight: 600 }}>Extract uses</span>
+                    <select
+                      aria-label="Vendor that runs extract"
+                      value={extractionVendor || vendorsForFlow[0] || ""}
+                      onChange={(e) => onExtractionVendorChange(e.target.value)}
+                      style={{ fontSize: 13, padding: "6px 8px", maxWidth: 240 }}
+                    >
+                      {vendorsForFlow.map((vendorKey) => (
+                        <option key={vendorKey} value={vendorKey}>
+                          {vendorKey}
+                        </option>
+                      ))}
+                    </select>
+                    <span style={{ color: "var(--secondary-text-color)", fontSize: 12 }}>
+                      Competences, company fields, and similar-offer ranking use this vendor&apos;s models below.
+                    </span>
+                  </label>
+                ) : null}
+                {Array.isArray(vendorKeys) && vendorsForFlow.length === 0 ? (
+                  <p style={{ margin: 0, fontSize: 13, color: "var(--secondary-text-color)" }}>
+                    Select at least one vendor above. These models are the ones that button will call.
+                  </p>
+                ) : null}
+                {vendorsForFlow.map((vendorKey) => {
                   const rolesForVendor = (flow.roles || []).filter(
                     (r) => roleDefaultsByRole[r.key]?.[vendorKey]
                   );
@@ -236,6 +289,11 @@ export default function VendorFlowModelSettings({
                         }}
                       >
                         {vendorKey}
+                        {flow.id === "initial" && vendorKey === extractionVendor ? (
+                          <span style={{ marginLeft: 8, fontWeight: 600, fontSize: 12, color: "var(--text-color)" }}>
+                            used for Extract
+                          </span>
+                        ) : null}
                         <span
                           style={{
                             marginLeft: 8,
@@ -274,6 +332,13 @@ export default function VendorFlowModelSettings({
           </div>
         );
       })}
+      {hideSaveButton ? (
+        saveError ? (
+          <p style={{ margin: 0, fontSize: 12, color: "var(--error-text)" }}>{saveError}</p>
+        ) : saving ? (
+          <p style={{ margin: 0, fontSize: 12, color: "var(--secondary-text-color)" }}>Saving…</p>
+        ) : null
+      ) : (
       <div>
         <button
           type="button"
@@ -293,6 +358,7 @@ export default function VendorFlowModelSettings({
           {saving ? "Saving…" : "Save model overrides"}
         </button>
       </div>
+      )}
     </div>
   );
 }

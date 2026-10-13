@@ -20,6 +20,7 @@ from letter_writer.personal_data_sections import (
     get_models,
     get_background_models,
     get_agentic_draft_model,
+    get_extraction_vendor,
     get_phase_model_overrides,
     get_autocomplete_max_words,
     get_autocomplete_stop_on_period,
@@ -35,6 +36,7 @@ from letter_writer.personal_data_sections import (
     get_custom_instruction,
     instruction_firestore_keys,
 )
+from letter_writer.clients.base import VALID_VENDOR_KEYS
 from letter_writer.phase_model_settings import (
     get_letter_draft_role_defaults,
     get_letter_plan_role_defaults,
@@ -377,6 +379,7 @@ async def get_personal_data(session: Session = Depends(get_session)):
         "default_models": default_models,
         "default_background_models": default_background_models,
         "agentic_draft_model": agentic_draft_model,
+        "extraction_vendor": get_extraction_vendor(user_data),
         "min_column_width": min_column_width,
         "structure_instructions": get_user_structure_instructions(user_data),
         "autocomplete_max_words": get_autocomplete_max_words(user_data),
@@ -470,6 +473,15 @@ async def update_personal_data(request: Request, session: Session = Depends(get_
             }
             valid_models = [mid for mid in requested_models if mid in allowed_ids]
             updates["background_models"] = wrap_new_field("background_models", valid_models, now)
+
+        if "extraction_vendor" in data:
+            vendor = str(data.get("extraction_vendor") or "").strip().lower()
+            if vendor not in VALID_VENDOR_KEYS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"extraction_vendor must be one of {sorted(VALID_VENDOR_KEYS)}",
+                )
+            updates["extraction_vendor"] = wrap_new_field("extraction_vendor", vendor, now)
 
         if "agentic_draft_model" in data:
             val = data["agentic_draft_model"]

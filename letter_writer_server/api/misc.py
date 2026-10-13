@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from pathlib import Path
 
 from letter_writer_server.core.session import Session, get_session
-from letter_writer.client import get_client, ModelVendor
+from letter_writer.client import get_client, get_extraction_client, ModelVendor
 from letter_writer.generation import (
     get_style_instructions,
 )
@@ -96,10 +96,10 @@ async def refresh(request: Request, data: RefreshRequest, _user: dict = Depends(
 async def extract_job(request: Request, data: ExtractRequest, session: Session = Depends(get_session), _limit: None = Depends(check_spending_limits)):
     """User-bound extraction: skills + CV match + similar past jobs, all in parallel."""
     try:
-        ai_client = get_client(ModelVendor.OPENAI)
-        _reset_client_counters(ai_client)
         cv_text, user_data, user_id = resolve_cv_for_extract(session)
-        logger.info("[EXTRACT] Start: job_text length=%s", len(data.job_text))
+        extract_vendor, ai_client = get_extraction_client(user_data)
+        _reset_client_counters(ai_client)
+        logger.info("[EXTRACT] Start: vendor=%s job_text length=%s", extract_vendor.value, len(data.job_text))
         result = run_extract_pipeline(
             competence_source_text=data.job_text,
             similar_job_text=data.job_text,
@@ -111,7 +111,7 @@ async def extract_job(request: Request, data: ExtractRequest, session: Session =
             ai_client=ai_client,
         )
         _track_and_reset_client_cost(
-            user_id=user_id, phase="extract", vendor=ModelVendor.OPENAI.value, client=ai_client
+            user_id=user_id, phase="extract", vendor=extract_vendor.value, client=ai_client
         )
         return with_user_monthly_cost({
             "status": "ok",

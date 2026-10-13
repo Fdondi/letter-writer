@@ -12,6 +12,7 @@ import { persistLetterDocument, buildAgenticAiLetters } from "../utils/persistLe
 import { showNotification } from "../utils/apiNotifications";
 import { AGENTIC_TOPICS } from "../constants/feedbackTopics.js";
 import { normalizeAgenticThreads, stripAgenticThreadFields } from "../utils/agenticThreads";
+import { FLOW_LEAVE_PROMPT, useFlowHistoryGuard } from "../hooks/useFlowHistoryGuard";
 
 const REFERENCE_SIDEBAR_VIEWPORT_STYLE = {
   alignSelf: "stretch",
@@ -128,6 +129,20 @@ export default function AgenticFlowPage() {
       }
     })();
   }, [navLocation.state?.start]);
+
+  const leaveToIntake = useCallback(() => {
+    if (agenticState) {
+      session.rememberAgenticFlow({
+        state: agenticState,
+        stage: agenticStage,
+        maxRounds: agenticMaxRounds,
+        subCommentRounds: agenticSubCommentRounds,
+      });
+    }
+    navigate("/");
+  }, [agenticState, agenticStage, agenticMaxRounds, agenticSubCommentRounds, session, navigate]);
+
+  const allowHistoryLeave = useFlowHistoryGuard({ enabled: true, onLeave: leaveToIntake });
 
   if (
     !navLocation.state?.start &&
@@ -262,7 +277,11 @@ export default function AgenticFlowPage() {
     } finally { setAgenticSavingFinal(false); }
   }, [agenticState, session, agenticFinalParagraphs]);
 
-  const goBackToJobIntake = async () => navigate("/");
+  const goBackToJobIntake = () => {
+    if (!window.confirm(FLOW_LEAVE_PROMPT)) return;
+    allowHistoryLeave();
+    leaveToIntake();
+  };
 
   const handleCloseSessionAndRestart = async () => {
     const hasUnsaved = agenticState?.draft_letter || agenticState?.final_letter || Object.values(agenticState?.draft_letters || {}).some(t => t?.trim()) || Object.values(agenticState?.final_letters || {}).some(t => t?.trim());
@@ -270,7 +289,10 @@ export default function AgenticFlowPage() {
     try { await fetchWithHeartbeat("/api/phases/clear/", { method: "POST" }); } catch (e) {
       console.error("Failed to clear session:", e); session.setError("Failed to close session. Please try again."); return;
     }
-    session.resetIntake(); navigate("/");
+    session.clearPendingAgenticRestore();
+    session.resetIntake();
+    allowHistoryLeave();
+    navigate("/");
   };
 
   return (

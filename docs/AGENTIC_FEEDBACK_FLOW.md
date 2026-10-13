@@ -37,7 +37,7 @@ There is **no** sequential “one vendor after another” chain inside a topic f
 
 ## Structured output (tools / schemas)
 
-Each phase uses a **fixed JSON schema** passed to the client as `response_format` (OpenAI/DeepSeek: `response_format`; Anthropic: single tool + `tool_choice`; Gemini: `response_schema` when schema is set). The model is constrained to that schema for the call—not only by natural-language instructions.
+Each phase uses a **fixed JSON schema** passed to the client as `response_format` (OpenAI/DeepSeek: `response_format`; Grok: `response_format` as an xAI JSON-schema format; Anthropic: single tool + `tool_choice`; Gemini: `response_schema` when schema is set). The model is constrained to that schema for the call—not only by natural-language instructions.
 
 Rough shape by phase (see `letter_writer/agentic_service.py` for exact `SCHEMA_*`):
 

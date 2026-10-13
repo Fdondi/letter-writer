@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from letter_writer.client import ModelVendor, get_client
+from letter_writer.client import get_extraction_client
 from letter_writer.generation import extract_job_page_metadata
 from letter_writer.page_templates import attach_jobs_ch_company_about, extract_from_captured_page
 from letter_writer_server.api.cost_utils import check_spending_limits, with_user_monthly_cost
@@ -119,7 +119,7 @@ async def process_job_capture(
     canonical_url = str(parsed_page.get("source_url") or "").strip() or source_url
 
     cv_text, user_data, user_id = resolve_cv_for_extract(session)
-    ai_client = get_client(ModelVendor.OPENAI)
+    extract_vendor, ai_client = get_extraction_client(user_data)
     _reset_client_counters(ai_client)
     trace_dir = Path("trace", "extraction.page_capture")
 
@@ -159,7 +159,7 @@ async def process_job_capture(
     _track_and_reset_client_cost(
         user_id=user_id,
         phase="extract",
-        vendor=ModelVendor.OPENAI.value,
+        vendor=extract_vendor.value,
         client=ai_client,
     )
     return with_user_monthly_cost(

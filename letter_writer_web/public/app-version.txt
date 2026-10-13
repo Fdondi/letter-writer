@@ -1,3 +1,15 @@
+0.74.3 - Always revalidate index.html so browsers pick up a new build instead of running a cached one
+0.74.2 - Open model pickers above the page so their controls can be clicked
+0.74.1 - Add GPT-6.1 Sol at $2 / $10 with 5% cache reads; letter roles move off the older Sol models
+
+0.73.0 - Keep Laya-filtered passage notes on the letter, inactive, and park the rest in a collapsed section with edit and approve
+0.72.0 - Frame active feedback highlights so they stand apart from inactive notes
+0.71.0 - Final letter column fills the row so it sits against the job offer
+0.71.0 - Block trackpad back from closing an in-progress letter, and restore every vendor saved in the session
+0.70.2 - Hide models that match a later one's price, including Sonnet 5 and GPT-5.6 Terra; add DeepSeek V4.1 Flash and current Mistral Large/Medium/Small
+
+0.70.0 - Add GPT-6 Astra/Sol/Luna, Grok 4.6/4.7 and Gemini 3.8 Flash; drop retired models; Grok reasoning effort + JSON schema, Gemini thinking_level + cache pricing
+0.69.5 - Add Claude Fable 5.1 at $10 / $50 per million tokens, cache reads $0.25
 0.69.4 - Score RAG matches and feedback with the Ollaya container instead of a host Laya install
 0.69.3 - Remove deprecated Claude Haiku 3.5 from the Anthropic catalog
 0.69.2 - Models with structured output always request JSON via output_config.format

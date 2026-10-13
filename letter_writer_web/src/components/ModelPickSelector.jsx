@@ -6,7 +6,9 @@ import {
   defaultPriceComparisonColor,
   getModelEntry,
   getReasoningEffortsForModel,
+  OTHER_MODELS_GROUP_LABEL,
   parseModelPickKey,
+  partitionSupersededModels,
   reasoningEffortLabel,
   resolveModelIdFromDefaults,
   resolveReasoningEffortFromDefaults,
@@ -67,6 +69,7 @@ export default function ModelPickSelector({
     vendors[0] ||
     "";
   const modelsForVendor = grouped?.[vendor] || [];
+  const { current: currentModels, other: otherModels } = partitionSupersededModels(modelsForVendor);
   const modelId =
     (parsed.vendor === vendor || !parsed.vendor ? parsed.modelId : "") ||
     resolveModelIdFromDefaults(vendor, roleDefaults, grouped);
@@ -95,9 +98,17 @@ export default function ModelPickSelector({
     Boolean(defaultParsed.modelId) && id === defaultParsed.modelId;
 
   const modelOptionLabel = (m) => {
-    const name = m.name || m.id;
-    return isDefaultModelId(m.id) ? `${name} (default)` : name;
+    let label = m.name || m.id;
+    if (m.freeTierOnly) label += " (free tier only)";
+    if (m.supersededBy) label += ` (replaced by ${m.supersededBy})`;
+    return isDefaultModelId(m.id) ? `${label} (default)` : label;
   };
+
+  const renderModelOption = (m) => (
+    <option key={m.composite || `${vendor}/${m.id}`} value={m.id}>
+      {modelOptionLabel(m)}
+    </option>
+  );
 
   const effortOptionLabel = (effort) => {
     const label = reasoningEffortLabel(effort);
@@ -186,11 +197,14 @@ export default function ModelPickSelector({
             {modelId ? modelOptionLabel({ id: modelId, name: modelId }) : "—"}
           </option>
         ) : (
-          modelsForVendor.map((m) => (
-            <option key={m.composite || `${vendor}/${m.id}`} value={m.id}>
-              {modelOptionLabel(m)}
-            </option>
-          ))
+          <>
+            {currentModels.map(renderModelOption)}
+            {otherModels.length > 0 ? (
+              <optgroup label={OTHER_MODELS_GROUP_LABEL}>
+                {otherModels.map(renderModelOption)}
+              </optgroup>
+            ) : null}
+          </>
         )}
       </select>
       {showEffortSelect ? (

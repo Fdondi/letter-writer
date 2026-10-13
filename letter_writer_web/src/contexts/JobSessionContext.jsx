@@ -14,7 +14,7 @@ import {
   reportSessionExpired,
 } from "../utils/authSession.js";
 import { scheduleGoogleOAuthRedirect, clearOAuthRedirectCooldown } from "../utils/googleOAuthRedirect";
-import { syncStateToServer } from "../utils/localState.js";
+import { countRestorableVendors, syncStateToServer } from "../utils/localState.js";
 import { useSessionRehydration } from "../hooks/useSessionRehydration";
 import { useJobCapture } from "../hooks/useJobCapture";
 import { applyRestoredSessionState } from "../utils/applySessionRestore";
@@ -77,6 +77,9 @@ export function JobSessionProvider({ children }) {
     const onExpired = () => setShowSessionExpiredModal(true);
     const onRestored = () => {
       setShowSessionExpiredModal(false);
+      setIsAuthenticated(true);
+      setCheckingAuth(false);
+      markInitialAuthCheckComplete(true);
       setAuthRefreshGeneration((g) => g + 1);
     };
     window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, onExpired);
@@ -145,7 +148,11 @@ export function JobSessionProvider({ children }) {
   const [localPricingModalOpen, setLocalPricingModalOpen] = useState(false);
   const [localPricingDismissChecked, setLocalPricingDismissChecked] = useState(false);
   const pendingLocalEnableActionRef = useRef(null);
-  const [phaseSessionId, setPhaseSessionId] = useState(null);
+  const [phaseSessionId, setPhaseSessionId] = useState(() =>
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2)
+  );
   const [error, setError] = useState(null);
   const [documentSaveNotice, setDocumentSaveNotice] = useState(null);
   const [savingFinal, setSavingFinal] = useState(false);
@@ -433,23 +440,81 @@ export function JobSessionProvider({ children }) {
     setSourceUrl,
   });
 
-  useEffect(() => {
-    if (authRefreshGeneration === 0) return;
-    initializeCsrfToken().catch((e) => console.warn("Failed to refresh CSRF:", e));
-    const state = restoreStateGetterRef.current();
-    syncStateToServer(state).catch((e) => {
-      console.warn("Failed to sync local state to server after re-auth:", e);
+  const adoptRestoredFlow = useCallback((result) => {
+    if (!result) return;
+    if (result.vendor) setPendingVendorRestore(result.vendor);
+    if (result.agentic) setPendingAgenticRestore(result.agentic);
+    const names = Array.isArray(result.vendorNames) ? result.vendorNames : [];
+    if (!names.length) return;
+    setVendors((prev) => {
+      const known = new Set(prev);
+      const extras = names.filter((name) => !known.has(name));
+      return extras.length ? [...prev, ...extras] : prev;
     });
-  }, [authRefreshGeneration]);
+    setSelectedVendors((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const name of names) {
+        if (!next.has(name)) {
+          next.add(name);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+
+  const rememberVendorFlow = useCallback((payload) => {
+    if (payload) setPendingVendorRestore(payload);
+  }, []);
+
+  const rememberAgenticFlow = useCallback((payload) => {
+    if (payload) setPendingAgenticRestore(payload);
+  }, []);
+
+  useEffect(() => {
+    if (authRefreshGeneration === 0) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        await initializeCsrfToken();
+      } catch (e) {
+        console.warn("Failed to refresh CSRF:", e);
+      }
+      if (cancelled) return;
+      const state = restoreStateGetterRef.current();
+      const hadVendors = countRestorableVendors(state) > 0;
+      try {
+        await syncStateToServer(state);
+      } catch (e) {
+        console.warn("Failed to sync local state to server after re-auth:", e);
+      }
+      if (cancelled || hadVendors) return;
+      try {
+        const result = await fetchWithHeartbeat("/api/phases/state/", { method: "GET" });
+        if (cancelled || result.isHeartbeat) return;
+        const payload = result.data || {};
+        adoptRestoredFlow(
+          applyRestoredSessionState(payload.session_state || {}, sessionSetters, {
+            sessionId: payload.session_id,
+          })
+        );
+      } catch (e) {
+        console.warn("Failed to reload session vendors after sign-in:", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authRefreshGeneration, sessionSetters, adoptRestoredFlow]);
 
   const applyBackupRestore = useCallback(
     (sessionState, sessionId) => {
       const result = applyRestoredSessionState(sessionState, sessionSetters, { sessionId });
-      if (result.vendor) setPendingVendorRestore(result.vendor);
-      if (result.agentic) setPendingAgenticRestore(result.agentic);
+      adoptRestoredFlow(result);
       return result;
     },
-    [sessionSetters]
+    [sessionSetters, adoptRestoredFlow]
   );
 
   const buildJobSessionPayload = useCallback(
@@ -866,20 +931,19 @@ export function JobSessionProvider({ children }) {
 
   // ─── Effects ───────────────────────────────────────────────────────────────
 
-  // Initialize phaseSessionId + POST /api/phases/init/ on mount
+  // POST /api/phases/init/ only after the auth cookie is valid.
+  const phaseInitPostedRef = useRef(false);
   useEffect(() => {
-    const sessionId =
-      typeof crypto !== "undefined" && crypto.randomUUID
-        ? crypto.randomUUID()
-        : Math.random().toString(36).slice(2);
-    setPhaseSessionId(sessionId);
+    if (!isAuthenticated || !phaseSessionId || phaseInitPostedRef.current) return undefined;
+    phaseInitPostedRef.current = true;
     fetchWithHeartbeat("/api/phases/init/", {
       method: "POST",
-      body: JSON.stringify({ session_id: sessionId }),
+      body: JSON.stringify({ session_id: phaseSessionId }),
     }).catch((e) => {
       console.error("Failed to initialize session:", e);
     });
-  }, []);
+    return undefined;
+  }, [isAuthenticated, phaseSessionId]);
 
   // Fetch vendors when authenticated
   useEffect(() => {
@@ -891,7 +955,7 @@ export function JobSessionProvider({ children }) {
         const activeVendors = new Set(data.active || []);
         setVendors(allVendors);
         setVendorColors(generateColors(allVendors));
-        setSelectedVendors(activeVendors);
+        setSelectedVendors((prev) => (prev.size > 0 ? prev : activeVendors));
         if (typeof data.local_pricing_configured === "boolean") {
           setLocalPricingConfigured(data.local_pricing_configured);
         }
@@ -926,7 +990,7 @@ export function JobSessionProvider({ children }) {
 
   // Persist top_docs to session when allSearchResults changes
   useEffect(() => {
-    if (!phaseSessionId || !allSearchResults.length) return undefined;
+    if (!isAuthenticated || !phaseSessionId || !allSearchResults.length) return undefined;
     const t = setTimeout(() => {
       fetchWithHeartbeat("/api/phases/session/", {
         method: "POST",
@@ -937,12 +1001,12 @@ export function JobSessionProvider({ children }) {
       }).catch((e) => console.warn("Failed to persist top_docs to session:", e));
     }, 400);
     return () => clearTimeout(t);
-  }, [phaseSessionId, allSearchResults.length, effectiveTopDocs]);
+  }, [isAuthenticated, phaseSessionId, allSearchResults.length, effectiveTopDocs]);
 
   // Persist job-intake fields into session metadata so host backups get real
   // company/title labels (extraction used to update React only).
   useEffect(() => {
-    if (!phaseSessionId) return undefined;
+    if (!isAuthenticated || !phaseSessionId) return undefined;
     const t = setTimeout(() => {
       fetchWithHeartbeat("/api/phases/session/", {
         method: "POST",
@@ -967,6 +1031,7 @@ export function JobSessionProvider({ children }) {
     competences,
     pointOfContact,
     structureInstructions,
+    isAuthenticated,
   ]);
 
   // Company research countdown timer: tick every second
@@ -1053,6 +1118,7 @@ export function JobSessionProvider({ children }) {
 
   // Vendor colors on theme change
   useEffect(() => {
+    if (vendors.length) setVendorColors(generateColors(vendors));
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = () => {
       setVendorColors(generateColors(vendors));
@@ -1138,6 +1204,8 @@ export function JobSessionProvider({ children }) {
     clearPendingAgenticRestore,
     registerRestoreStateGetter,
     applyBackupRestore,
+    rememberVendorFlow,
+    rememberAgenticFlow,
     // Refs
     latestFormSnapshotRef,
     competencesScrollRef,

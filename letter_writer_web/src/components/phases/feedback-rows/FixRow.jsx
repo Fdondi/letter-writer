@@ -1,6 +1,7 @@
 import React from "react";
 import { CONTEXT_USER_SOURCE } from "../feedbackItemUtils";
 import { feedbackTopicLabel } from "../../../constants/feedbackTopics";
+import { LayaInactiveNotice } from "./FeedbackSections";
 import { LanguageSelectorTiny } from "./LanguageSelectorTiny";
 import { MachineRow } from "./MachineRow";
 import { UserContextRow, computePersistScope } from "./UserContextRow";
@@ -540,6 +541,7 @@ export function FixRow({
             : undefined
         }
       >
+        <LayaInactiveNotice item={it} />
         {header}
         {isEditing ? editBody : viewBody}
       </div>

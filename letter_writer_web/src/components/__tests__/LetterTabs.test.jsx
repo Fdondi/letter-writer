@@ -69,6 +69,13 @@ describe('LetterTabs Component', () => {
       expect(screen.getByText('Drag paragraphs here to build your final letter')).toBeInTheDocument();
     });
 
+    test('final letter column fills its share of the row', () => {
+      render(<TestWrapper {...defaultProps} />);
+
+      const column = screen.getByTestId('final-letter-column');
+      expect(column).toHaveStyle({ width: '25%', flexGrow: '1', flexShrink: '1' });
+    });
+
     test('does not render inline job offer column', () => {
       render(<TestWrapper {...defaultProps} />);
 

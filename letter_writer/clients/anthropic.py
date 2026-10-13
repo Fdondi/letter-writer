@@ -116,14 +116,18 @@ class ClaudeClient(BaseClient):
     ) -> Dict[str, Any]:
         """Build ``thinking`` / ``output_config`` for :meth:`messages.create`.
 
-        Newer models (Fable 5, Opus 5.5, Opus 4.6+, Sonnet 5, Sonnet 4.6, Mythos)
+        Newer models (Fable 5, Opus 5.5, Opus 4.6+, Sonnet 5.5, Sonnet 5, Sonnet 4.6, Mythos)
         require ``thinking.type`` ``adaptive`` and reject ``enabled`` + ``budget_tokens``.
         Opus 5.5 also rejects ``thinking.type`` ``disabled``; omit the field or send adaptive.
+        Sonnet 5.5 turns thinking off with ``between_tools`` (catalog ``thinking_off_type``);
+        omitting the field there means adaptive thinking at the default ``high`` effort.
         Older models still need manual extended thinking with ``budget_tokens``.
         See https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
+        and https://platform.claude.com/docs/en/build-with-claude/effort
         """
         if not thinking_enabled:
-            return {}
+            off_type = vendor_model_field("anthropic", model, "thinking_off_type", None)
+            return {"thinking": {"type": str(off_type)}} if off_type else {}
         norm = (model or "").lower()
         # Substrings match dated IDs (e.g. claude-opus-4-7-20250514).
         adaptive_markers = (
@@ -246,6 +250,7 @@ class ClaudeClient(BaseClient):
         prompt_cache_key: Optional[str] = None,
     ) -> str:
         _ = prompt_cache_key  # Anthropic matches on prefix content; scheduling is caller-side
+        model_role = self.resolve_effective_model_role(model_role)
         if isinstance(model_role, str):
             model, thinking_cfg = apply_model_override_thinking("anthropic", model_role)
         else:

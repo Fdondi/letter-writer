@@ -116,6 +116,23 @@ function transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCoun
   return phaseObjects;
 }
 
+function copyPhaseProgress(previousPhases, nextPhases, vendorsList) {
+  if (!previousPhases) return;
+  for (const phase of nextPhases) {
+    const old = previousPhases.find((p) => p.phase === phase.phase);
+    if (!old) continue;
+    for (const vendor of vendorsList) {
+      if (old.cardData && Object.prototype.hasOwnProperty.call(old.cardData, vendor)) {
+        phase.cardData[vendor] = old.cardData[vendor];
+      }
+      if (old.cardErrors && Object.prototype.hasOwnProperty.call(old.cardErrors, vendor)) {
+        phase.cardErrors[vendor] = old.cardErrors[vendor];
+      }
+      if (old.approvedVendors?.has?.(vendor)) phase.approvedVendors.add(vendor);
+    }
+  }
+}
+
 export default function PhaseFlow({
   vendorsList,
   onEditChange,
@@ -313,7 +330,9 @@ export default function PhaseFlow({
     phasesSchemaVersionRef.current !== PHASE_FLOW_SCHEMA_VERSION ||
     includePlanStepRef.current !== includePlanStep
   ) {
+    const previousPhases = phasesRef.current;
     phasesRef.current = transformToPhaseStructure(vendorsList, setPhaseUpdateTrigger, phaseCounters, setPhaseCounters, includePlanStep);
+    copyPhaseProgress(previousPhases, phasesRef.current, vendorsList);
     includePlanStepRef.current = includePlanStep;
     vendorsListLengthRef.current = vendorsList.length;
     phasesSchemaVersionRef.current = PHASE_FLOW_SCHEMA_VERSION;

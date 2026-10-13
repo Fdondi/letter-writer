@@ -3,7 +3,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 
 from pathlib import Path
-from letter_writer.client import get_client, ModelVendor
+from letter_writer.client import get_extraction_client
 from letter_writer.generation import extract_job_metadata_no_requirements, resolve_search_instructions
 from letter_writer.research import perform_company_research, perform_poc_research
 from letter_writer.firestore_store import get_user_data
@@ -70,11 +70,12 @@ async def extract_company_metadata(data: ExtractCompanyMetadataRequest, session:
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
         user_id = (session.get("user") or {}).get("id") or "anonymous"
-        ai_client = get_client(ModelVendor.OPENAI)
+        user_data = get_user_data(user_id, use_cache=True) if user_id and user_id != "anonymous" else {}
+        extract_vendor, ai_client = get_extraction_client(user_data)
         _reset_client_counters(ai_client)
         trace_dir = Path("trace", "research.company.extraction")
         extraction = extract_job_metadata_no_requirements(data.job_text, ai_client, trace_dir=trace_dir)
-        _track_and_reset_client_cost(user_id=user_id, phase="extract", vendor=ModelVendor.OPENAI.value, client=ai_client)
+        _track_and_reset_client_cost(user_id=user_id, phase="extract", vendor=extract_vendor.value, client=ai_client)
         return {"status": "ok", "extraction": extraction}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Company extraction failed: {e}")
@@ -106,6 +107,7 @@ async def research_company(data: ResearchCompanyRequest, session: Session = Depe
             job_text=data.job_text or "",
             additional_company_info=data.additional_company_info or "",
             search_instructions=search_instructions,
+            user_data=user_data,
         )
         return {
             "status": "ok",
@@ -123,11 +125,14 @@ async def research_poc(data: ResearchPocRequest, session: Session = Depends(get_
         raise HTTPException(status_code=401, detail="Authentication required")
     models = data.models or ["openai"]
     try:
+        user = session.get("user")
+        user_data = get_user_data(user["id"], use_cache=True) if user else {}
         results = perform_poc_research(
             poc_name=data.poc_name,
             models=models,
             company_name=data.company_name,
-            job_text=data.job_text
+            job_text=data.job_text,
+            user_data=user_data,
         )
         return {"status": "ok", "results": results}
     except Exception as e:

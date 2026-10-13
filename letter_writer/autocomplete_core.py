@@ -206,11 +206,14 @@ def resolve_autocomplete_plan_model(
 ) -> str:
     from letter_writer.personal_data_sections import get_autocomplete_plan_model
 
+    # phase_model_settings imports this module; keep the override helper local to the call.
+    from letter_writer.phase_model_settings import apply_stored_role_override
+
     role_defaults = get_autocomplete_plan_role_defaults()
     if explicit_model and str(explicit_model).strip():
         normalized = normalize_autocomplete_model_key(str(explicit_model).strip(), role_defaults)
         if normalized:
-            return normalized
+            return apply_stored_role_override(normalized, "autocomplete_plan", user_data)
     stored = get_autocomplete_plan_model(user_data)
     if stored:
         return stored
@@ -366,12 +369,15 @@ def resolve_autocomplete_model(
     ctrl_letter: Optional[str] = None,
     shift_letter: Optional[str] = None,
 ) -> str:
+    # phase_model_settings imports this module; keep the override helper local to the call.
+    from letter_writer.phase_model_settings import apply_stored_role_override
+
     role_defaults = get_autocomplete_role_defaults()
 
     if explicit_model and str(explicit_model).strip():
         normalized = normalize_autocomplete_model_key(str(explicit_model).strip(), role_defaults)
         if normalized:
-            return normalized
+            return apply_stored_role_override(normalized, "autocomplete", user_data)
 
     letter = ctrl_letter or shift_letter
     if letter:

@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { DraftFeedbackView } from "../phases/DraftFeedbackView";
 
 const letter = "Hello world from Zürich.";
@@ -57,6 +57,15 @@ function renderView(extra = {}) {
             quote: "",
             matched_text: "",
           },
+          {
+            id: "wholeLaya",
+            observation: "Invented a salary the letter never states.",
+            type: "PLEASE_FIX",
+            quote: "",
+            matched_text: "",
+            laya_verdict: "invalid",
+            laya_valid_probability: 0.12,
+          },
         ],
       }}
       feedbackKeys={["precision", "human", "accuracy"]}
@@ -102,18 +111,40 @@ describe("DraftFeedbackView notes chrome", () => {
     expect(screen.getByTestId("feedback-count-accuracy")).toHaveTextContent("1");
   });
 
-  test("invalid comments sit under already-good notes and can be restored", () => {
+  test("passage notes Laya filtered stay on the letter, inactive, and approve directly", () => {
     const onSave = jest.fn();
     renderView({ onSave });
-    expect(screen.queryByTestId("note-marker-hall1")).not.toBeInTheDocument();
-    expect(screen.getByText("Laya marked invalid (1) — not treated as critiques")).toBeInTheDocument();
-    expect(screen.getByText("Claims a degree the letter never mentions.")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    const marker = screen.getByTestId("note-marker-hall1");
+    expect(marker).toHaveAttribute("data-dealt", "true");
+    expect(marker).toHaveAttribute("data-inactive-reason", "laya");
+    expect(screen.queryByText("Claims a degree the letter never mentions.")).not.toBeInTheDocument();
+
+    fireEvent.click(marker);
+    const note = screen.getByTestId("inline-note");
+    expect(note).toHaveTextContent(
+      "Inactive because Laya scored this comment as ungrounded (8% grounded). The feedback model did not mark it as no action, and you have not approved or dismissed it.",
+    );
+    expect(note).toHaveTextContent("Claims a degree the letter never mentions.");
+    fireEvent.click(within(note).getByRole("button", { name: "Approve" }));
     expect(onSave).toHaveBeenCalledWith(
       "precision",
       expect.arrayContaining([
         expect.objectContaining({ id: "hall1", laya_restored: true }),
       ]),
     );
+  });
+
+  test("whole-letter notes Laya filtered start collapsed and can be edited or approved", () => {
+    renderView();
+    const section = screen.getByTestId("laya-filtered-section");
+    expect(section).not.toHaveAttribute("open");
+    expect(section).toHaveTextContent("Laya filtered (1)");
+    expect(screen.queryByText("Invented a salary the letter never states.")).not.toBeVisible();
+    fireEvent.click(screen.getByText("Laya filtered (1)"));
+    expect(screen.getByText("Invented a salary the letter never states.")).toBeVisible();
+    expect(screen.getByText(/12% grounded/)).toBeVisible();
+    const filtered = screen.getByTestId("laya-filtered-section");
+    expect(filtered).toHaveTextContent("Approve");
+    expect(filtered).toHaveTextContent("Edit");
   });
 });

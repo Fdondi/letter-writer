@@ -45,6 +45,12 @@
   }
 }
 
+html,
+body {
+  /* Horizontal trackpad swipes must scroll columns, not trigger browser Back. */
+  overscroll-behavior-x: none;
+}
+
 body {
   margin: 0;
   font-family: system-ui, sans-serif;

@@ -11,6 +11,9 @@ import { splitIntoParagraphs } from "../utils/split";
 import { phases as phaseModules } from "../components/phases";
 import { mergeAgentContextFromFeedback, mergeExtraInfoFromFeedback } from "../components/phases/feedbackItemUtils";
 import { persistLetterDocument, buildVendorAiLetters } from "../utils/persistLetterDocument";
+import { extractVendorDataFromRegistry } from "../utils/localState";
+import { extractVendorShelfEntries } from "../utils/sessionRehydrate";
+import { FLOW_LEAVE_PROMPT, useFlowHistoryGuard } from "../hooks/useFlowHistoryGuard";
 
 const REFERENCE_SIDEBAR_VIEWPORT_STYLE = {
   alignSelf: "stretch",
@@ -82,15 +85,24 @@ export default function VendorFlowPage() {
 
   useEffect(() => {
     session.registerRestoreStateGetter(getStateForRestore);
-    return () => {
-      session.registerRestoreStateGetter(() => ({
-        jobText: session.jobText || "",
-        cvText: "",
-        extractedData: session.extractedData,
-        phaseRegistry: null,
-      }));
-    };
   }, [session, getStateForRestore]);
+
+  const leaveToIntake = useCallback(() => {
+    const vendors = extractVendorDataFromRegistry(phaseRegistryRef.current);
+    const shelfEntries = extractVendorShelfEntries(vendors);
+    if (shelfEntries.length > 0 || Object.keys(letters).length > 0) {
+      session.rememberVendorFlow({
+        shelfEntries,
+        vendorStage,
+        assemblyVisible: vendorStage === "assembly" && assemblyVisible,
+        letters,
+        suppressPlanAutoApprove: true,
+      });
+    }
+    navigate("/");
+  }, [session, letters, vendorStage, assemblyVisible, navigate]);
+
+  const allowHistoryLeave = useFlowHistoryGuard({ enabled: true, onLeave: leaveToIntake });
 
   const phaseErrorKey = (phase, vendor) => `${phase}:${vendor}`;
 
@@ -285,9 +297,11 @@ export default function VendorFlowPage() {
     }
   }, [session.includePlanStep, phaseSessions, session.phaseSessionId, session.selectedCompanyReport, getStateForRestore, setPhaseCardFetchError, populatePhaseShelf, extractErrorMessage, session]);
 
-  const goBackToJobIntake = useCallback(async () => {
-    navigate("/");
-  }, [navigate]);
+  const goBackToJobIntake = useCallback(() => {
+    if (!window.confirm(FLOW_LEAVE_PROMPT)) return;
+    allowHistoryLeave();
+    leaveToIntake();
+  }, [allowHistoryLeave, leaveToIntake]);
 
   const handleCloseSessionAndRestart = useCallback(async () => {
     const hasUnsaved = Object.values(letters || {}).some((text) => typeof text === "string" && text.trim().length > 0);
@@ -299,9 +313,11 @@ export default function VendorFlowPage() {
       session.setError("Failed to close session. Please try again.");
       return;
     }
+    session.clearPendingVendorRestore();
     session.resetIntake();
+    allowHistoryLeave();
     navigate("/");
-  }, [letters, session, navigate]);
+  }, [letters, session, navigate, allowHistoryLeave]);
 
   const handlePersistFinalLetter = useCallback(async (finalText) => {
     if (!finalText) {

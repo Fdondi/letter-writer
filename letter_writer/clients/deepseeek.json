@@ -1,38 +1,36 @@
 {
   "defaults": {
-    "search": 0.0
+    "search": 0.0,
+    "reasoning_efforts": ["none", "low", "high", "max"]
   },
   "roles": {
-    "extraction": "deepseek-v4-flash",
-    "feedback": "deepseek-v4-pro",
-    "feedback_review": "deepseek-v4-flash",
-    "feedback_context": "deepseek-v4-flash",
-    "rag_ranker": "deepseek-v4-pro",
-    "company_research": "deepseek-v4-pro",
-    "letter_plan": "deepseek-v4-pro",
-    "letter_draft": "deepseek-v4-pro",
-    "letter_refine": "deepseek-v4-pro",
-    "agentic": "deepseek-v4-flash",
-    "autocomplete": "deepseek-chat",
-    "autocomplete_plan": "deepseek-v4-pro"
+    "extraction":       { "model": "deepseek-flash",  "reasoning_effort": "none" },
+    "feedback":         { "model": "deepseek-v4-pro", "reasoning_effort": "high" },
+    "feedback_review":  { "model": "deepseek-flash",  "reasoning_effort": "none" },
+    "feedback_context": { "model": "deepseek-flash",  "reasoning_effort": "none" },
+    "rag_ranker":       { "model": "deepseek-v4-pro", "reasoning_effort": "high" },
+    "company_research": { "model": "deepseek-v4-pro", "reasoning_effort": "high" },
+    "letter_plan":      { "model": "deepseek-v4-pro", "reasoning_effort": "high" },
+    "letter_draft":     { "model": "deepseek-v4-pro", "reasoning_effort": "high" },
+    "letter_refine":    { "model": "deepseek-v4-pro", "reasoning_effort": "high" },
+    "agentic":          { "model": "deepseek-flash",  "reasoning_effort": "low" },
+    "autocomplete":     { "model": "deepseek-flash",  "reasoning_effort": "none" },
+    "autocomplete_plan": { "model": "deepseek-v4-pro", "reasoning_effort": "high" }
   },
   "models": {
-    "deepseek-chat": {
-      "input": 0.14,
-      "output": 0.28
-    },
-    "deepseek-reasoner": {
-      "input": 0.14,
-      "output": 0.28
-    },
-    "deepseek-v4-flash": {
-      "input": 0.14,
-      "output": 0.28
+    "deepseek-flash": {
+      "input": 0.15,
+      "output": 0.60,
+      "input_cached_mult": 0.02,
+      "reasoning_efforts": ["none", "low", "high", "max"],
+      "price_note": "Off-peak rate (DeepSeek-V4.1-Flash). Peak is 2x on Mon-Fri 01:00-04:00 and 06:00-10:00 UTC, except Chinese public holidays: input $0.30, cached $0.006, output $1.20. Legacy ids deepseek-v4-flash and deepseek-v4-flash-vision-exp are retired and billed as this model."
     },
     "deepseek-v4-pro": {
-      "input": 0.435,
-      "output": 0.87
+      "input": 0.66,
+      "output": 1.98,
+      "input_cached_mult": 0.03333333333333333,
+      "reasoning_efforts": ["none", "low", "high", "max"],
+      "price_note": "Off-peak rate (DeepSeek-V4-Pro-0813). Peak is 2x on the same windows as Flash: input $1.32, cached $0.044, output $3.96. Cache hits are 1/30 of the input rate."
     }
   }
 }
-

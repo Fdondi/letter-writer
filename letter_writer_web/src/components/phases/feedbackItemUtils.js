@@ -238,6 +238,12 @@ export function isLayaHidden(it) {
   return String(it.laya_verdict || "").toLowerCase() === "invalid";
 }
 
+/** User edit or approve puts a Laya-filtered comment back into the letter. */
+export function withLayaRestored(it) {
+  if (!isLayaHidden(it)) return it;
+  return { ...it, laya_restored: true };
+}
+
 function layaFieldsFromItem(it) {
   const verdict = String(it.laya_verdict || "").toLowerCase();
   const fields = {};

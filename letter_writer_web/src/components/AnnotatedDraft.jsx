@@ -17,6 +17,20 @@ function highlightAlpha(note) {
   return note?.faint ? 0.05 : 0.22;
 }
 
+function markStyle(note) {
+  const active = Boolean(note) && !note.faint;
+  return {
+    background: hexToRgba(note.color, highlightAlpha(note)),
+    color: "inherit",
+    cursor: "pointer",
+    borderRadius: 2,
+    padding: active ? "0 1px" : 0,
+    boxShadow: active ? `0 0 0 1.5px ${note.color}` : "none",
+    boxDecorationBreak: "clone",
+    WebkitBoxDecorationBreak: "clone",
+  };
+}
+
 function NoteCard({ note, expanded, onToggle, overlay, children }) {
   const color = note.color;
   return (
@@ -268,7 +282,7 @@ export default function AnnotatedDraft({
         ) : (
           segments.map((seg) => {
             const covering = seg.noteIds.map((id) => byId.get(id)).filter(Boolean);
-            const primary = covering[0] || null;
+            const primary = covering.find((n) => !n.faint) || covering[0] || null;
             const markers = startsAt.get(seg.start) || [];
             const isQuoteEnd = Boolean(
               expandedAnchored
@@ -288,6 +302,7 @@ export default function AnnotatedDraft({
                     aria-label={n.title}
                     data-testid={`note-marker-${n.id}`}
                     data-dealt={n.faint ? "true" : "false"}
+                    data-inactive-reason={n.inactiveReason || undefined}
                     onClick={(e) => {
                       e.stopPropagation();
                       handleToggle(n.id);
@@ -298,13 +313,9 @@ export default function AnnotatedDraft({
                 {primary ? (
                   <mark
                     data-note-id={primary.id}
+                    data-active={primary.faint ? "false" : "true"}
                     onClick={() => handleToggle(primary.id)}
-                    style={{
-                      background: hexToRgba(primary.color, highlightAlpha(primary)),
-                      color: "inherit",
-                      cursor: "pointer",
-                      borderRadius: 2,
-                    }}
+                    style={markStyle(primary)}
                   >
                     {seg.text}
                   </mark>

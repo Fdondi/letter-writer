@@ -180,6 +180,16 @@ def get_models(user_data: Dict[str, Any]) -> List[str]:
     return unwrap_for_response("models", models_data) or []
 
 
+def get_extraction_vendor(user_data: Dict[str, Any]) -> str:
+    """Vendor that runs Extract data (competences, metadata, similar-offer ranking)."""
+    raw = user_data.get("extraction_vendor")
+    stored = unwrap_for_response("extraction_vendor", raw) if raw is not None else None
+    vendor = str(stored or "").strip().lower()
+    if vendor in VALID_VENDOR_KEYS:
+        return vendor
+    return "openai"
+
+
 def get_agentic_draft_model(user_data: Dict[str, Any]) -> Optional[str]:
     """Get the vendor (or vendor/model_id) used as the sole draft author in per-topic agentic flow.
     Returns None if not set (caller should fall back to first of default_models)."""
@@ -231,12 +241,17 @@ def get_autocomplete_models(user_data: Dict[str, Any]) -> List[str]:
         normalize_autocomplete_model_list,
     )
 
+    # phase_model_settings imports autocomplete_core, which imports this module.
+    from letter_writer.phase_model_settings import apply_stored_role_override
+
     raw = user_data.get("autocomplete_models")
     models = unwrap_for_response("autocomplete_models", raw) if raw is not None else raw
     if not isinstance(models, list) or not models:
-        return default_autocomplete_models(get_autocomplete_role_defaults())
+        defaults = default_autocomplete_models(get_autocomplete_role_defaults())
+        return [apply_stored_role_override(m, "autocomplete", user_data) for m in defaults]
     normalized = normalize_autocomplete_model_list([str(m or "") for m in models])
-    return normalized if normalized else default_autocomplete_models(get_autocomplete_role_defaults())
+    chosen = normalized if normalized else default_autocomplete_models(get_autocomplete_role_defaults())
+    return [apply_stored_role_override(m, "autocomplete", user_data) for m in chosen]
 
 
 def get_autocomplete_ctrl_letter_map(user_data: Dict[str, Any]) -> Dict[str, str]:
@@ -271,6 +286,9 @@ def get_autocomplete_plan_model(user_data: Dict[str, Any]) -> Optional[str]:
         normalize_autocomplete_model_key,
     )
 
+    # phase_model_settings imports autocomplete_core, which imports this module.
+    from letter_writer.phase_model_settings import apply_stored_role_override
+
     raw = user_data.get("autocomplete_plan_model")
     stored = unwrap_for_response("autocomplete_plan_model", raw) if raw is not None else None
     if stored and str(stored).strip():
@@ -278,8 +296,12 @@ def get_autocomplete_plan_model(user_data: Dict[str, Any]) -> Optional[str]:
             str(stored).strip(), get_autocomplete_plan_role_defaults()
         )
         if normalized:
-            return normalized
-    return default_autocomplete_plan_model(get_autocomplete_plan_role_defaults())
+            return apply_stored_role_override(normalized, "autocomplete_plan", user_data)
+    return apply_stored_role_override(
+        default_autocomplete_plan_model(get_autocomplete_plan_role_defaults()),
+        "autocomplete_plan",
+        user_data,
+    )
 
 def _base_composite_model_id(model_id: str) -> str:
     """Strip optional @thinking suffix from vendor/model composite ids."""

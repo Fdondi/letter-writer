@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FEEDBACK_TYPES, mergeCategoryItems, newId } from "../components/phases/feedbackItemUtils";
+import { FEEDBACK_TYPES, mergeCategoryItems, newId, withLayaRestored } from "../components/phases/feedbackItemUtils";
 
 export function useFeedbackItemEditing({
   categoryKey,
@@ -82,6 +82,7 @@ export function useFeedbackItemEditing({
     items.map((x) => {
       if (x.id !== editingId) return x;
       let row = { ...x, observation: obs, type: targetType };
+      if (targetType === FEEDBACK_TYPES.PLEASE_FIX) row = withLayaRestored(row);
       if (obsChanged && row.duplicate_group_id) {
         const { duplicate_group_id: _d, ...rest } = row;
         row = rest;

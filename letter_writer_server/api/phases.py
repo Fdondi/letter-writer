@@ -32,6 +32,7 @@ from letter_writer.phased_service import (
 )
 from letter_writer.client import get_client
 from letter_writer.session_store import set_current_request, save_vendor_data, load_vendor_data, log_user_input_event
+from letter_writer_server.core.vendor_restore import merge_restored_vendors
 from letter_writer.firestore_store import get_user_data
 from letter_writer.personal_data_sections import (
     cv_text_with_extra_info,
@@ -141,7 +142,7 @@ def restore_session(request: Request, data: InitSessionRequest, session: Session
     if data.metadata:
         session['metadata'] = data.metadata
     if data.vendors:
-        session['vendors'] = data.vendors
+        session['vendors'] = merge_restored_vendors(session.get('vendors'), data.vendors)
     return {
         "status": "ok",
         "session_id": session.session_key,
@@ -538,7 +539,7 @@ def feedback_request_context(
     if isinstance(cf, dict) and isinstance(cf.get("items"), list):
         ctx_items = cf.get("items") or []
 
-    ai_client = get_client(vendor_enum)
+    ai_client = get_client(vendor_enum, user_data=get_user_data(user["id"], use_cache=True) or {})
     _reset_client_counters(ai_client)
     try:
         metadata = session.get("metadata") or {}

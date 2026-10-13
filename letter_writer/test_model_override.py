@@ -18,6 +18,18 @@ def test_thinking_config_openai():
     assert thinking_config_for_vendor("openai", None) == {}
 
 
+def test_thinking_config_deepseek():
+    assert thinking_config_for_vendor("deepseek", "high") == {"reasoning_effort": "high"}
+    assert thinking_config_for_vendor("deepseek", "none") == {"reasoning_effort": "none"}
+
+
+def test_thinking_config_grok():
+    assert thinking_config_for_vendor("grok", "xhigh") == {"reasoning_effort": "xhigh"}
+    model, cfg = apply_model_override_thinking("grok", "grok-4.7@medium")
+    assert model == "grok-4.7"
+    assert cfg == {"reasoning_effort": "medium"}
+
+
 def test_thinking_config_gemini():
     assert thinking_config_for_vendor("gemini", "none") == {"thinking_level": None}
     assert thinking_config_for_vendor("gemini", "High") == {"thinking_level": "High"}

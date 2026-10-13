@@ -46,10 +46,17 @@ from .personal_data_sections import (
     get_agent_feedback_context,
     get_phase_model_overrides,
 )
+from .call_context import bind_vendor_role_overrides
 from .phase_model_settings import resolve_client_model_role
 from .language_settings import build_language_system_prefix
 
 logger = logging.getLogger(__name__)
+
+
+def _bind_user_model_overrides(user_id: Optional[str]) -> None:
+    if not user_id:
+        return
+    bind_vendor_role_overrides(get_user_data(user_id, use_cache=True) or {})
 
 
 def _phase_model_role_for_call(
@@ -331,6 +338,7 @@ def _run_background_phase(
     Reads common data, processes vendor-specific work, and saves only vendor data.
     Completely lock-free - vendors work in parallel.
     """
+    _bind_user_model_overrides(user_id)
     logger.info("[PHASE] background -> start (vendor=%s)", vendor.value)
     
     # Extract common data
@@ -419,6 +427,7 @@ def advance_to_plan(
     user_id: Optional[str] = None,
 ) -> VendorPhaseState:
     """Generate an approved-waiting strategic letter plan (CV, job, research, structure instructions)."""
+    _bind_user_model_overrides(user_id)
     from .session_store import load_session
 
     try:
@@ -523,6 +532,7 @@ def advance_to_draft(
     letter_plan_override: Optional[str] = None,
     user_id: Optional[str] = None,
 ) -> VendorPhaseState:
+    _bind_user_model_overrides(user_id)
     # Force reload from MongoDB to ensure we have the latest session state
     # This is important because the session might have been updated by background phase
     from .session_store import load_session
@@ -720,6 +730,7 @@ def advance_to_refinement(
     style_instructions: str = "",
     user_id: Optional[str] = None,
 ) -> VendorPhaseState:
+    _bind_user_model_overrides(user_id)
     # Force reload from MongoDB to ensure we have the latest session state
     from .session_store import load_session
     try:

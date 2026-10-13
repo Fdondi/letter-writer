@@ -24,16 +24,16 @@ def thinking_config_for_vendor(vendor_key: str, suffix: str | None) -> Dict[str,
         return {}
 
     vendor = (vendor_key or "").lower()
-    if vendor == "openai":
+    if vendor in ("openai", "grok", "deepseek"):
         return {"reasoning_effort": s.lower()}
 
     if vendor == "gemini":
         if s.lower() in ("none", "off", "null"):
             return {"thinking_level": None}
-        if s in ("Low", "Medium", "High"):
+        if s in ("Minimal", "Low", "Medium", "High"):
             return {"thinking_level": s}
         titled = s.title()
-        if titled in ("Low", "Medium", "High"):
+        if titled in ("Minimal", "Low", "Medium", "High"):
             return {"thinking_level": titled}
         return {"thinking_level": s}
 

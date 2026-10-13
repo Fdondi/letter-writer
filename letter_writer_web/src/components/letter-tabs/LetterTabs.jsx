@@ -127,7 +127,6 @@ export default function LetterTabs({
   const columnWidth = totalVisible > 0 ? `${100 / totalVisible}%` : "100%";
 
   const minColumnWidth = parseInt(localStorage.getItem("minColumnWidth") || "200", 10);
-  const vendorColumnWidthPx = `${minColumnWidth}px`;
 
   const expandedVendor = expandedColumn?.startsWith("vendor:") ? expandedColumn.replace(/^vendor:/, "") : null;
 
@@ -148,7 +147,8 @@ export default function LetterTabs({
     languageOptions,
     onSave,
     savingFinal,
-    vendorColumnWidthPx,
+    columnWidth,
+    minColumnWidth,
     onAssemblyTextChange: handleAssemblyTextChange,
   };
 
