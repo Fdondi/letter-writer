@@ -1,0 +1,5 @@
+
+
+========== Known weaknesses (objective gaps the applicant cannot fix; they are aware and chose to apply anyway) ==========
+{{lines}}
+==========

@@ -1,0 +1,77 @@
+rules_version = '2';
+
+// Rules for the Android app (Firebase Auth with Google sign-in).
+// The desktop backend uses a service account and bypasses these rules.
+// Owner = the Google account `sub`, which is the existing `user_id` everywhere.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function googleSub() {
+      return request.auth.token.firebase.identities['google.com'][0];
+    }
+
+    function signedInWithGoogle() {
+      return request.auth != null
+        && request.auth.token.firebase.identities.keys().hasAny(['google.com']);
+    }
+
+    function isOwner(userId) {
+      return signedInWithGoogle() && userId is string && googleSub() == userId;
+    }
+
+    // Firebase Auth accepts any Google account. Only accounts whose profile was
+    // created by the desktop backend count as app users.
+    function isKnownUser() {
+      return signedInWithGoogle()
+        && exists(/databases/$(database)/documents/personal_data/$(googleSub()));
+    }
+
+    // Profile (CV, languages, instructions, models) and its subcollections,
+    // including secrets/api_keys. The phone never creates a profile.
+    match /personal_data/{userId} {
+      allow read, update: if isOwner(userId);
+      allow create, delete: if false;
+
+      // `{sub}/` forces at least one segment: a bare `{path=**}` also matches the
+      // profile document itself and would re-allow create/delete on it.
+      match /{sub}/{path=**} {
+        allow read, write: if isOwner(userId) && isKnownUser();
+      }
+    }
+
+    // Previous examples and job offers. Queries must filter on user_id.
+    match /documents/{docId} {
+      allow read, delete: if isOwner(resource.data.user_id);
+      allow create: if isOwner(request.resource.data.user_id) && isKnownUser();
+      allow update: if isOwner(resource.data.user_id)
+        && request.resource.data.user_id == resource.data.user_id;
+    }
+
+    // Per-vendor draft feedback snapshots shared with the desktop.
+    match /phase_draft_feedback/{snapshotId} {
+      allow read, delete: if isOwner(resource.data.user_id);
+      allow create: if isOwner(request.resource.data.user_id) && isKnownUser();
+      allow update: if isOwner(resource.data.user_id)
+        && request.resource.data.user_id == resource.data.user_id;
+    }
+
+    // Per-vendor letter outcome records written when a letter is saved.
+    match /feedbacks/{feedbackId} {
+      allow read: if isOwner(resource.data.user_id);
+      allow create: if isOwner(request.resource.data.user_id) && isKnownUser();
+      allow update, delete: if false;
+    }
+
+    // Shared company research cache (same documents the desktop reads and writes).
+    // It holds web research about companies, not personal data.
+    match /companies/{companyId} {
+      allow read, create, update: if isKnownUser();
+      allow delete: if false;
+    }
+
+    // Everything else (sessions, admin data) stays server-only.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,25 @@
+ Reply with JSON only. The answer must be an object with key "items" whose value is an array. Each array element must be {"observation": string, "type": either "ALREADY_GOOD" or "PLEASE_FIX", "quote": string}. quote is a short verbatim excerpt from Cover Letter to Check that the observation applies to. Leave quote as "" only when the point is about the letter as a whole (rare). Emit one element per distinct observation, each item should be logically a bullet point. ALREADY_GOOD is meant as an escape hatch for when you realize after writing that the observation does not actually demand an action. Prefer marking as ALREADY_GOOD to producing irrelevant PLEASE_FIX, but do not aim to write ALREADY_GOOD points. If there is nothing substantive to critique, that's great, emit an empty items array. Avoid padding with nitpicks or non-problems. Include all the needed information, since the reviewer will ONLY see your comment, don't assume they have additional information. For example, 'include concrete metrics/examples' is not a good observation; if you have metrics or examples include them explicitly. If you don't have the data that would be needed, it is not available. Suggest ways of working around this absence instead.
+
+Optional enrichment fields per item (use them to avoid vague feedback):
+- "status": one of NOT_NEEDED | SUFFICIENT | INPUT_NEEDED.
+- "context_field": {"items": [{"text": string, "source": string}, ...]} — use ONLY objects with "source", never bare strings.
+- "user_context": string (only when status=INPUT_NEEDED).
+Rules for context_field.items[].source (must match where the snippet came from in THIS prompt):
+- CV: quoted or summarized from a "User CV" / "========== User CV" section, or from "User's additional info" when that block is present.
+- EXAMPLE: from "Reference Examples" / prior cover letters in the examples section.
+- LETTER: from "Cover Letter to Check" / the current draft only.
+- BACKGROUND_RESEARCH: from company report, job offer, and/or style instructions when those sections appear in this prompt.
+Never label a snippet from reference letters as CV, or vice versa. If you are unsure of the origin, omit the snippet.
+Hard constraint for THIS check: each context_field item's "source" must be exactly one of: {{allowed_sources}}. Do not use any other source label.
+Rules:
+1) context_field.items is NOT for talking to the user. It must contain only neutral, paste-ready snippets extracted from your context (verbatim quotes when possible, otherwise short faithful paraphrases/summaries). Each item should read like something that can be dropped into a cover letter.
+2) Do not add headings like 'Vorschläge' / 'suggestion:' / 'you should...' / imperatives in context_field.items. No instructions, no meta commentary.
+2b) context_field.items should usually be empty. Optimum count is 0. Maximum recommended is 1.
+2c) Do not cite or invent 'reference examples'. Only refer to reference examples if they were explicitly included in your input. If you want to propose sample phrasing but it is NOT a quote/paraphrase from your provided context, put it in user_instructions (not context_field.items).
+3) If your observation depends on specific concrete facts you CAN SEE in your context (numbers, dates, named projects, tools, outcomes, scope, etc.), set status=SUFFICIENT and include those facts in context_field.items.
+2) If your observation does NOT need extra facts (it is fully actionable as written), set status=NOT_NEEDED and set context_field.items to [].
+4) If your observation would require facts you DO NOT HAVE (despite the instruction above), set status=INPUT_NEEDED and write the observation as a precise request for input (what exact info is missing, why it matters, and a minimal template the user can fill). Put that template into user_instructions (for the UI placeholder). You may leave context_field.items empty.
+4b) User-input requests (status=INPUT_NEEDED) should usually be zero. Optimum count is 0. Maximum recommended is 1. Hard maximum is 2. Never exceed 2 INPUT_NEEDED items in total.
+4c) If the issue is missing factual content (e.g. languages) and you cannot quote it from your context, it is INPUT_NEEDED. If it is purely a stylistic preference and no new facts are required, it is NOT_NEEDED.
+4) Do NOT write generic requests like 'add metrics' or 'add examples' unless you can provide the concrete metrics/examples in context_field.items (SUFFICIENT) 
+Never invent facts.

@@ -1,0 +1,93 @@
+{
+  "type": "json_schema",
+  "json_schema": {
+    "name": "vendor_feedback_items",
+    "strict": false,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "observation": {
+                "type": "string"
+              },
+              "quote": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "ALREADY_GOOD",
+                  "PLEASE_FIX"
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "NOT_NEEDED",
+                  "SUFFICIENT",
+                  "INPUT_NEEDED"
+                ]
+              },
+              "context_field": {
+                "type": "object",
+                "properties": {
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": [
+                                "BACKGROUND_RESEARCH",
+                                "CV",
+                                "EXAMPLE",
+                                "LETTER"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "text",
+                            "source"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "items"
+                ]
+              },
+              "user_context": {
+                "type": "string"
+              },
+              "user_instructions": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "observation",
+              "type"
+            ]
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    }
+  }
+}

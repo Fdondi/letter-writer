@@ -1,0 +1,5 @@
+Task: Respond with a single JSON object. First, set key 'hire_problem' to a concise string (2–6 sentences): what problem, gap, or outcome the company is hiring this role to address—business or organizational need, not a list of tools. Infer from the posting; if unclear, give your best inference and briefly note uncertainty.
+Second, under these keys exactly—{{keys}}—extract key competences. Each of those keys maps to an array of strings (competences). Use empty arrays [] if none in that category. Assign each competence to the most appropriate category.{{semantic}}Output the skill name only, without level or proficiency modifiers: e.g. 'C++', 'German', 'git'. Do not include words like 'fluent', 'proficient', 'basic', 'language proficiency'—they describe level, not the skill. Separate competences that are ANDed: 'German and English' is ['German', 'English']. Single competence for alternatives: 'like C++ or Java' -> one competence.
+
+Respond with JSON only. Example format:
+{{example}}

@@ -1,0 +1,4 @@
+Task: Extract the following fields as JSON: company_name, job_title, location, language, salary, point_of_contact. Stick to one language unless it's really mixed. Use null for unknown values. For point_of_contact, extract if present: name, role (their role in the company), contact_details (email, phone, etc.), and notes. If no point of contact is found, set point_of_contact to null.
+
+Respond with JSON only. Example format:
+{"company_name":"Acme","job_title":"Senior Engineer","location":"Remote","language":"English","salary":"€80-100k","point_of_contact":{"name":"John Doe","role":"HR Manager","contact_details":"john.doe@acme.com","notes":"Please contact via email"}}

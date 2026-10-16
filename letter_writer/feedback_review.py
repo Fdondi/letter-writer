@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from langsmith import traceable
 
+from . import prompts
 from .clients.base import BaseClient, ModelRole
 from .generation import normalize_feedback_map, format_known_weaknesses_block, KNOWN_WEAKNESSES_FEEDBACK_RULES
 from .typed_shapes import TopDocument
@@ -219,21 +220,10 @@ def _stage12_batch(
     system_cache_prefix = (
         f"========== Context the checker saw ==========\n{context_block}"
     )
-    system = (
-        f"Category: {category}\n\n"
-        "You filter cover-letter critique bullets in bulk.\n"
-        "For each item set keep=false if it is:\n"
-        "  • incoherent, empty, tautological, or not actionable, OR\n"
-        "  • unjustified: misreads the letter, claims a mismatch not supported by the context, "
-        "or demands something already present, OR\n"
-        "  • asks to fix an objective known weakness (missing cert, language level, etc.) when the letter already "
-        "honestly acknowledges and frames the gap with truthful wording — see known weaknesses block in context if present.\n"
-        "  • Do NOT set keep=false for critiques that catch dishonest framing of a known weakness (inflated labels, "
-        "false fluency, incompatible level claims).\n"
-        + KNOWN_WEAKNESSES_FEEDBACK_RULES
-        + "\nOtherwise keep=true.\n"
-        "Reply JSON only: {\"results\": [{\"id\": \"<id>\", \"keep\": true}, ...]}\n"
-        "Return exactly one object per id — no omissions."
+    system = prompts.render(
+        "review/stage12_system.txt",
+        category=category,
+        known_weaknesses_rules=KNOWN_WEAKNESSES_FEEDBACK_RULES,
     )
     lines = [f"id={oid}: {obs.strip()[:1200]}" for oid, obs in items]
     prompt = "Critiques:\n" + "\n".join(lines)
@@ -318,15 +308,7 @@ def _stage3_duplicate_groups(
     """
     if len(items) < 2:
         return {}
-    system = (
-        "You group cover-letter feedback observations that are essentially the SAME issue "
-        "(same underlying problem), possibly worded differently across categories.\n"
-        "The list excludes INPUT_NEEDED rows (those are grouped separately by what information is missing).\n"
-        "Do not group items that are really about different problems.\n"
-        "Reply JSON only: {\"groups\": [[\"id1\",\"id2\"], [\"id3\"]]} "
-        "Each inner array lists item ids that should be linked. Observations that are unique form single-id groups "
-        "or may be omitted. Use only the ids provided. Empty groups array if nothing duplicates."
-    )
+    system = prompts.load("review/stage3_system.txt")
     lines = []
     for it in items:
         lines.append(
@@ -363,19 +345,10 @@ def _stage4_input_clusters(
     if not rows:
         return {}
     composite = any("::" in str(r.get("id", "")) for r in rows)
-    id_hint = (
-        "Each id may be a composite string vendor::category::item_id — copy ids EXACTLY from the list."
-        if composite
-        else "Use the exact id strings from the list."
+    id_hint = prompts.load(
+        "review/stage4_id_hint_composite.txt" if composite else "review/stage4_id_hint_plain.txt"
     )
-    system = (
-        "Several models asked the user for missing information. Cluster rows that ask for the SAME kind of information "
-        "(same facts needed to answer).\n"
-        "Rows that ask for DIFFERENT information must get DIFFERENT cluster keys — do not put them in the same cluster.\n"
-        "Reply JSON only: {\"clusters\": [{\"key\": \"short_slug_like_languages\", \"ids\": [\"...\",\"...\"]}]}.\n"
-        "Use stable, short snake_case keys (a-z0-9_). Same key means the UI can pre-fill one answer everywhere.\n"
-        + id_hint
-    )
+    system = prompts.render("review/stage4_system.txt", id_hint=id_hint)
     lines = []
     for r in rows:
         lines.append(

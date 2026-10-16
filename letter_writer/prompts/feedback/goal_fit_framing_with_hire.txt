@@ -1,0 +1,1 @@
+A separate field (shown in context as 'Hire goal / problem this role solves') states what problem or outcome the company is trying to address with this hire. Treat that as the primary reading of the hiring intent when it is non-empty; otherwise infer the hiring goal only from the job offer and company report.

@@ -1,0 +1,3 @@
+Please rewrite the cover letter incorporating all the feedback. Output only the revised letter.
+ONLY address the feedback that was provided. Do not change any part of the letter except what is touched by feedback. 
+Feedback is meant to call attention to specific aspects, but can be short-sighted in context. If you see that no feedback meaningfully needs to be addressed, output NO REVISIONS and end the answer.

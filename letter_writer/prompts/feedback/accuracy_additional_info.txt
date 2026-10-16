@@ -1,0 +1,4 @@
+
+
+IMPORTANT: The user has provided additional information about themselves that is relevant but not in their CV. Consider this when evaluating accuracy - if a claim is supported by this additional information (e.g., recent certifications, ongoing learning, planned relocation), it may be acceptable:
+User's additional info: {{info}}

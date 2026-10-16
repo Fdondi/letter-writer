@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from langsmith import traceable
 
+from . import prompts
 from .clients.base import BaseClient, ModelRole
 from .page_templates import extract_from_captured_page
 from .skill_utils import core_skill_name as _core_skill_name
@@ -89,11 +90,7 @@ def _write_trace(trace_dir: Path | None, system: str, prompt: str, raw: str) -> 
 
 # Shared system for all job-extraction calls. Keeps the prompt prefix identical across
 # metadata vs competences so providers (e.g. OpenAI) can reuse cached prefix for the job.
-EXTRACTION_SYSTEM = (
-    "You are an assistant that extracts structured data from job descriptions. "
-    "You will receive a job description and a task. Follow the task exactly. "
-    "Respond with JSON only. Do not add any other keys or prose."
-)
+EXTRACTION_SYSTEM = prompts.load("extraction/system.txt")
 
 _JOB_PREFIX = "Job description:\n"
 
@@ -115,14 +112,7 @@ def extract_job_metadata_no_requirements(
     trace_dir: Path | None = None,
 ) -> Dict[str, Any]:
     """Extract job metadata except key competences (company, role, location, etc.). No CV needed."""
-    task = (
-        "Task: Extract the following fields as JSON: company_name, job_title, location, language, salary, point_of_contact. "
-        "Stick to one language unless it's really mixed. Use null for unknown values. "
-        "For point_of_contact, extract if present: name, role (their role in the company), contact_details (email, phone, etc.), and notes. "
-        "If no point of contact is found, set point_of_contact to null."
-    )
-    example = '{"company_name":"Acme","job_title":"Senior Engineer","location":"Remote","language":"English","salary":"€80-100k","point_of_contact":{"name":"John Doe","role":"HR Manager","contact_details":"john.doe@acme.com","notes":"Please contact via email"}}'
-    prompt = f"{task}\n\nRespond with JSON only. Example format:\n{example}"
+    prompt = prompts.load("extraction/metadata_prompt.txt")
     cache_block = _job_extraction_cache_prefix(job_text)
     raw = client.call(
         ModelRole.EXTRACTION,
@@ -312,7 +302,9 @@ def extract_key_competences(
     cats = need_categories or tuple(DEFAULT_NEED_SEMANTICS.keys())
     semantics = {**DEFAULT_NEED_SEMANTICS, **(need_semantics or {})}
     keys_str = ", ".join(cats)
-    example_obj: Dict[str, Any] = {HIRE_PROBLEM_JSON_KEY: "Grow the payments platform in EU markets while hardening fraud detection."}
+    example_obj: Dict[str, Any] = {
+        HIRE_PROBLEM_JSON_KEY: prompts.load("extraction/competences_example_hire_problem.txt")
+    }
     example_obj.update({k: ["C++", "git"] if k == cats[0] else [] for k in cats})
     example = json.dumps(example_obj, separators=(",", ":"))
     parts = [
@@ -321,19 +313,9 @@ def extract_key_competences(
         if semantics.get(c) and str(semantics[c]).strip()
     ]
     semantic = (" " + "; ".join(parts) + ". ") if parts else ""
-    task = (
-        f"Task: Respond with a single JSON object. First, set key {HIRE_PROBLEM_JSON_KEY!r} to a concise string (2–6 sentences): "
-        "what problem, gap, or outcome the company is hiring this role to address—business or organizational need, not a list of tools. "
-        "Infer from the posting; if unclear, give your best inference and briefly note uncertainty.\n"
-        f"Second, under these keys exactly—{keys_str}—extract key competences. "
-        "Each of those keys maps to an array of strings (competences). Use empty arrays [] if none in that category. "
-        f"Assign each competence to the most appropriate category.{semantic}"
-        "Output the skill name only, without level or proficiency modifiers: e.g. 'C++', 'German', 'git'. "
-        "Do not include words like 'fluent', 'proficient', 'basic', 'language proficiency'—they describe level, not the skill. "
-        "Separate competences that are ANDed: 'German and English' is ['German', 'English']. "
-        "Single competence for alternatives: 'like C++ or Java' -> one competence."
+    prompt = prompts.render(
+        "extraction/competences_prompt.txt", keys=keys_str, semantic=semantic, example=example
     )
-    prompt = f"{task}\n\nRespond with JSON only. Example format:\n{example}"
     cache_block = _job_extraction_cache_prefix(job_text)
     raw = client.call(
         ModelRole.EXTRACTION,
@@ -411,13 +393,7 @@ def grade_competence_cv_match(
     )
     example = dict(zip(["C++", "German", "English", "git"], example_vals[:4]))
     example_str = json.dumps(example, separators=(",", ":"))
-    system = (
-        "You are an assistant that grades the candidate's level for each competence based on the CV. "
-        "Use exactly one of these labels per competence: " + level_list + ". "
-        "Be strict; reserve higher-level labels for clear, strong evidence. "
-        "Return strict JSON: a single object whose keys are the competences (exactly as given) "
-        "and whose values are the level strings. Do not add any other keys or prose."
-    )
+    system = prompts.render("extraction/grade_system.txt", levels=level_list)
     cv_excerpt = cv_text[:12000] if len(cv_text) > 12000 else cv_text
     from .clients.prompt_cache import combine_cache_parts
 
@@ -425,12 +401,11 @@ def grade_competence_cv_match(
         system,
         f"========== User CV:\n{cv_excerpt}\n==========",
     )
-    prompt = (
-        "Key competences (one per line):\n"
-        + "\n".join(competences)
-        + "\n\nAssign each competence one of: " + level_list + ".\n\n"
-        "Respond with JSON only. Example format:\n"
-        f"{example_str}"
+    prompt = prompts.render(
+        "extraction/grade_prompt.txt",
+        competences="\n".join(competences),
+        levels=level_list,
+        example=example_str,
     )
     raw = client.call(ModelRole.EXTRACTION, "", [prompt], system_cache_prefix=cache_block)
     _write_trace(trace_dir, cache_block, prompt, raw)

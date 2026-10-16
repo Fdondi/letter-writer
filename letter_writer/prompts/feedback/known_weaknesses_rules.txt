@@ -1,0 +1,9 @@
+
+
+Known weaknesses rules (when the block above is non-empty):
+- These are objective requirement gaps that CANNOT be fixed by obtaining the credential mid-application (missing mandatory certifications, language level below the posting, years-of-experience shortfalls, etc.). Assume the applicant is aware and may bet on transferable skills or willingness to learn.
+- Do NOT emit PLEASE_FIX asking to obtain the missing credential, raise a language level overnight, invent experience, or otherwise pretend the gap can be closed.
+- A gap counts as honestly addressed only when the letter acknowledges the real shortfall and argues around it with truthful framing (transferable skills, adjacent experience, concrete learning plan) — without inflating or mislabeling qualifications.
+- ALWAYS emit PLEASE_FIX when the letter misrepresents a known weakness, even if the topic is mentioned. This includes inflated labels (e.g. calling B2 'fluent'), incompatible pairs (e.g. 'fluent German (B2)'), implying the requirement is met when known_weaknesses says it is not, or silent omission with no honest compensating argument.
+- Mentioning a gap is not enough if the wording is dishonest or equivocating. Accuracy or precision critiques that catch false fluency, false certification, or inflated experience on a known weakness must stay as PLEASE_FIX.
+- If the letter honestly frames the gap, omit it or mark ALREADY_GOOD — never turn honest framing into an action item.

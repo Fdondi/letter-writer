@@ -1,0 +1,39 @@
+{
+  "type": "json_schema",
+  "json_schema": {
+    "name": "missing_feedback_context_items",
+    "strict": false,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "BACKGROUND_RESEARCH",
+                  "CV",
+                  "EXAMPLE",
+                  "LETTER"
+                ]
+              }
+            },
+            "required": [
+              "text",
+              "source"
+            ]
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    }
+  }
+}

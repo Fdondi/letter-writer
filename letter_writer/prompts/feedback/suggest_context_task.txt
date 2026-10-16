@@ -1,0 +1,12 @@
+
+
+========== Task (follow-up; same materials as above) ==========
+One critique was already produced about this cover letter (below). The first pass may have omitted useful paste-ready snippets drawn from the SAME materials you see above.
+
+Critique:
+{{observation}}
+
+Snippets already attached to this critique (do not repeat or lightly rephrase):
+{{existing_block}}
+
+Reply with JSON only: an object {"items": [...]} where each element is {"text": string, "source": <one of allowed values>}. The only allowed "source" values for this category are: {{allowed_sources}}. Include ONLY additional snippets from the materials in this conversation (verbatim quotes or short faithful paraphrases). Return {"items": []} if nothing new is available. Never invent facts.

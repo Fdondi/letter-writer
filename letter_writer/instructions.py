@@ -6,65 +6,24 @@ from typing import Any, Dict, Optional
 
 from langsmith import traceable
 
+from . import prompts
 from .clients.base import BaseClient, ModelRole
 
 logger = logging.getLogger(__name__)
 
 def get_structure_instructions() -> str:
-    """Load default instructions for the pre-draft *plan* phase (argument structure, not prose style)."""
-    path = Path(__file__).parent / "structure_instructions.txt"
-    try:
-        return path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return (
-            "Produce a ~10-line telegraphic strategic plan (elevator pitch). Headings: Strengths (2–3 lines), "
-            "Weaknesses (1–2 lines), Structure (3–4 lines: hook, body beats, close). One fact per strength; "
-            "honest gap framing only. No sub-bullets, no letter prose."
-        )
+    """Default instructions for the pre-draft *plan* phase (argument structure, not prose style)."""
+    return prompts.load("defaults/structure_instructions.txt")
 
 
 def get_style_instructions() -> str:
-    """Load style instructions from file."""
-    style_file = Path(__file__).parent / "style_instructions.txt"
-    try:
-        return style_file.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        # Fallback to default if file doesn't exist
-        return (
-            "Never mention explicitly that something matches the job description, they should think that by themselves. "
-            "Avoid making just a list of 'at X I did Y'. You're telling a story, the stints at specific companies are just supporting evidence for the message. "
-            "Mentions of companies should mostly emerge naturally, not be the main structure (At X this, at Y that, etc).\n"
-            "Follow the structure: 1. You are great 2. I am great 3. We'll be even greater together 4. Call to action. "
-            "Of course, keep that structure implicit, and don't use paragraph titles.\n"
-            "Return the letter as distinct paragraphs separated by a blank line (a real empty line between paragraphs). "
-            "We need those paragraph breaks — do not collapse the letter into one block of text.\n"
-            "Whenever possible, use characters supported by LaTeX. In particular, to the extent that it's reasonable, avoid symbols like & or em-dashes. "
-            "Do not double-space within a line (no two spaces between words or after periods); that is unrelated to the blank lines between paragraphs. "
-            "If in doubt, use the version of the character that would be typed by a keyboard. For example ' and not ', or 11th and not 11ᵗʰ.\n"
-        )
+    """Default style instructions."""
+    return prompts.load("defaults/style_instructions.txt")
 
 
 def get_search_instructions() -> str:
-    """Load default search instructions from file."""
-    search_file = Path(__file__).parent / "search_instructions.txt"
-    try:
-        return search_file.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        # Fallback to default if file doesn't exist
-        return (
-            "You are an expert in searching the internet for information about companies.\n\n"
-            "IMPORTANT: You are looking at the company from the point of view of a job applicant, not of an investor "
-            "or policymaker. Focus on work culture, likely work tasks, and career prospects. Product success, financial "
-            "situation, or regulatory difficulties are rarely relevant — only if they threaten to make employment "
-            "less secure or more challenging in some way.\n\n"
-            "Focus on what distinguishes the company, in the good and bad. Keep it concise but informative.\n"
-            "Do NOT include any links, only plain text.\n"
-            "Do NOT just repeat the ads the company puts out. Do report what they say about themselves, "
-            "but make it clear it's reporting on how they like to present themselves, not the objective truth. "
-            "Be inquisitive, almost cynical, read between the lines. If we are writing to a company that likes "
-            "to present themselves as trailblazing but is actually quite boring, or vice versa likes to underpromise "
-            "but is actually exceptional, we need to consider both aspects.\n"
-        )
+    """Default search instructions."""
+    return prompts.load("defaults/search_instructions.txt")
 
 
 def resolve_search_instructions(
@@ -165,25 +124,21 @@ def company_research(
     if search_instructions and search_instructions.strip():
         system = search_instructions.strip()
     else:
-        system = "You are an expert in searching the internet for information about companies."
+        system = prompts.load("research/default_system.txt")
 
     job_text_safe = (job_text or "") if job_text is not None else ""
     company_prompt = ""
     if company_name:
-        company_prompt = (
-            f"Search the internet and write a short, opinionated company report about {company_name}\n"
-            f"To disambiguiate, here is how they present themselves: {job_text_safe[:500]}...\n"
-            "Do NOT include any links, only plain text.\n"
+        company_prompt = prompts.render(
+            "research/company_prompt.txt",
+            company_name=company_name,
+            job_excerpt=job_text_safe[:500],
         )
 
-    # Add user-provided company context if available
     user_company_context = ""
     if additional_company_info and additional_company_info.strip():
-        user_company_context = (
-            f"\n\nADDITIONAL CONTEXT FROM THE USER:\n"
-            f"The applicant has provided the following additional information about the company or role. "
-            f"Please verify this information and incorporate relevant findings into your report:\n"
-            f"{additional_company_info}\n"
+        user_company_context = prompts.render(
+            "research/additional_company_info.txt", info=additional_company_info
         )
 
     # Optional point-of-contact context (e.g. recruiter/intermediary) for disambiguation or tone
@@ -191,7 +146,7 @@ def company_research(
     if point_of_contact and isinstance(point_of_contact, dict):
         parts = [f"{k}: {v}" for k, v in point_of_contact.items() if v]
         if parts:
-            poc_context = "\n\nPOINT OF CONTACT (for context only): " + "; ".join(parts) + "\n"
+            poc_context = prompts.render("research/point_of_contact.txt", details="; ".join(parts))
 
     prompt = company_prompt + user_company_context + poc_context
     if len(prompt) == 0:

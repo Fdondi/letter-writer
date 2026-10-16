@@ -1,3 +1,10 @@
+0.76.0 - Android drafts can be checked for feedback and approved onto the Final tab
+0.75.5 - Android quote matching no longer uses the Java-only (?U) regex flag, which crashed the process after the draft
+0.75.4 - Sign the Android release build with the debug certificate so the APK installs and Google sign-in still matches Firebase
+0.75.3 - Note that enabling Google sign-in is what registers the Android OAuth client
+0.75.2 - Android sign-in opens the Google account picker instead of One Tap
+0.75.1 - Android Firebase setup finds the registered app by package name so google-services.json can be downloaded
+0.75.0 - Android app (app/): standalone Kotlin letter writer with intake, swipeable vendor flow, assembly, CV/examples/instructions/settings/costs screens; prompt and cost golden parity tests; Firestore rules emulator tests (fixes profile delete hole)
 0.74.3 - Always revalidate index.html so browsers pick up a new build instead of running a cached one
 0.74.2 - Open model pickers above the page so their controls can be clicked
 0.74.1 - Add GPT-6.1 Sol at $2 / $10 with 5% cache reads; letter roles move off the older Sol models

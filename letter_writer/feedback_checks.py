@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from langsmith import traceable
 
+from . import prompts
 from .clients.base import BaseClient, ModelRole
 from .feedback_topics import AGENTIC_TOPIC_KEYS, get_agentic_topic_context_from_registry
 from .instructions import get_style_instructions
@@ -97,67 +98,7 @@ def legacy_context_string_default_source_for_category(
 # In agentic flow, agents may output SKIP or NO COMMENT to leave no feedback
 AGENTIC_SKIP_PHRASES = ("NO COMMENT", "SKIP")
 
-VENDOR_FEEDBACK_JSON_SCHEMA: Dict[str, Any] = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "vendor_feedback_items",
-        "strict": False,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "observation": {"type": "string"},
-                            "quote": {"type": "string"},
-                            "type": {
-                                "type": "string",
-                                "enum": ["ALREADY_GOOD", "PLEASE_FIX"],
-                            },
-                            "status": {
-                                "type": "string",
-                                "enum": ["NOT_NEEDED", "SUFFICIENT", "INPUT_NEEDED"],
-                            },
-                            "context_field": {
-                                "type": "object",
-                                "properties": {
-                                    "items": {
-                                        "type": "array",
-                                        "items": {
-                                            "anyOf": [
-                                                {"type": "string"},
-                                                {
-                                                    "type": "object",
-                                                    "properties": {
-                                                        "text": {"type": "string"},
-                                                        "source": {
-                                                            "type": "string",
-                                                            "enum": FEEDBACK_CONTEXT_SOURCES_JSON_ENUM,
-                                                        },
-                                                    },
-                                                    "required": ["text", "source"],
-                                                },
-                                            ]
-                                        },
-                                    }
-                                },
-                                "required": ["items"],
-                            },
-                            # Only used when status == INPUT_NEEDED. UI forces user to fill before approval.
-                            "user_context": {"type": "string"},
-                            # Optional template / hint for the user. Shown as placeholder in UI input.
-                            "user_instructions": {"type": "string"},
-                        },
-                        "required": ["observation", "type"],
-                    },
-                },
-            },
-            "required": ["items"],
-        },
-    },
-}
+VENDOR_FEEDBACK_JSON_SCHEMA: Dict[str, Any] = prompts.load_json("schemas/vendor_feedback.json")
 
 
 def _extract_json_value(raw: str) -> Any:
@@ -261,25 +202,9 @@ def normalize_parsed_feedback_items(
         )
     return out
 
-KNOWN_WEAKNESSES_FEEDBACK_RULES = (
-    "\n\nKnown weaknesses rules (when the block above is non-empty):\n"
-    "- These are objective requirement gaps that CANNOT be fixed by obtaining the credential mid-application "
-    "(missing mandatory certifications, language level below the posting, years-of-experience shortfalls, etc.). "
-    "Assume the applicant is aware and may bet on transferable skills or willingness to learn.\n"
-    "- Do NOT emit PLEASE_FIX asking to obtain the missing credential, raise a language level overnight, invent "
-    "experience, or otherwise pretend the gap can be closed.\n"
-    "- A gap counts as honestly addressed only when the letter acknowledges the real shortfall and argues around it "
-    "with truthful framing (transferable skills, adjacent experience, concrete learning plan) — without inflating or "
-    "mislabeling qualifications.\n"
-    "- ALWAYS emit PLEASE_FIX when the letter misrepresents a known weakness, even if the topic is mentioned. "
-    "This includes inflated labels (e.g. calling B2 'fluent'), incompatible pairs (e.g. 'fluent German (B2)'), "
-    "implying the requirement is met when known_weaknesses says it is not, or silent omission with no honest "
-    "compensating argument.\n"
-    "- Mentioning a gap is not enough if the wording is dishonest or equivocating. Accuracy or precision critiques "
-    "that catch false fluency, false certification, or inflated experience on a known weakness must stay as PLEASE_FIX.\n"
-    "- If the letter honestly frames the gap, omit it or mark ALREADY_GOOD — never turn honest framing into an "
-    "action item.\n"
-)
+KNOWN_WEAKNESSES_FEEDBACK_RULES = prompts.load("feedback/known_weaknesses_rules.txt")
+
+
 def format_known_weaknesses_block(known_weaknesses: Optional[Sequence[Dict[str, Any]]]) -> str:
     """Context block injected into feedback prompts when objective gaps were pre-identified."""
     if not known_weaknesses:
@@ -298,11 +223,7 @@ def format_known_weaknesses_block(known_weaknesses: Optional[Sequence[Dict[str, 
             lines.append(f"{i}. {gap}")
     if not lines:
         return ""
-    return (
-        "\n\n========== Known weaknesses (objective gaps the applicant cannot fix; they are aware and chose to apply anyway) ==========\n"
-        + "\n".join(lines)
-        + "\n==========\n"
-    )
+    return prompts.render("feedback/known_weaknesses_block.txt", lines="\n".join(lines))
 
 
 @traceable(run_type="chain", name="call_vendor_feedback_items")
@@ -326,48 +247,7 @@ def _call_vendor_feedback_items(
         allowed = frozenset(FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN)
     allowed_sorted = ", ".join(sorted(allowed))
     response_schema = vendor_feedback_json_schema_for_allowed_sources(allowed)
-    common_instructions = (
-        " Reply with JSON only. The answer must be an object with key \"items\" whose value is an array. "
-        "Each array element must be {\"observation\": string, \"type\": either \"ALREADY_GOOD\" or \"PLEASE_FIX\", \"quote\": string}. "
-        "quote is a short verbatim excerpt from Cover Letter to Check that the observation applies to. "
-        "Leave quote as \"\" only when the point is about the letter as a whole (rare). "
-        "Emit one element per distinct observation, each item should be logically a bullet point. "
-        "ALREADY_GOOD is meant as an escape hatch for when you realize after writing that the observation does not actually demand an action. "
-        "Prefer marking as ALREADY_GOOD to producing irrelevant PLEASE_FIX, but do not aim to write ALREADY_GOOD points. "
-        "If there is nothing substantive to critique, that's great, emit an empty items array. Avoid padding with nitpicks or non-problems. "
-        "Include all the needed information, since the reviewer will ONLY see your comment, don't assume they have additional information. "
-        "For example, 'include concrete metrics/examples' is not a good observation; if you have metrics or examples include them explicitly. "
-        "If you don't have the data that would be needed, it is not available. Suggest ways of working around this absence instead.\n\n"
-        "Optional enrichment fields per item (use them to avoid vague feedback):\n"
-        "- \"status\": one of NOT_NEEDED | SUFFICIENT | INPUT_NEEDED.\n"
-        "- \"context_field\": {\"items\": [{\"text\": string, \"source\": string}, ...]} — use ONLY objects with \"source\", never bare strings.\n"
-        "- \"user_context\": string (only when status=INPUT_NEEDED).\n"
-        "Rules for context_field.items[].source (must match where the snippet came from in THIS prompt):\n"
-        "- CV: quoted or summarized from a \"User CV\" / \"========== User CV\" section, or from \"User's additional info\" when that block is present.\n"
-        "- EXAMPLE: from \"Reference Examples\" / prior cover letters in the examples section.\n"
-        "- LETTER: from \"Cover Letter to Check\" / the current draft only.\n"
-        "- BACKGROUND_RESEARCH: from company report, job offer, and/or style instructions when those sections appear in this prompt.\n"
-        "Never label a snippet from reference letters as CV, or vice versa. If you are unsure of the origin, omit the snippet.\n"
-        f"Hard constraint for THIS check: each context_field item's \"source\" must be exactly one of: {allowed_sorted}. "
-        "Do not use any other source label.\n"
-        "Rules:\n"
-        "1) context_field.items is NOT for talking to the user. It must contain only neutral, paste-ready snippets extracted from your context "
-        "(verbatim quotes when possible, otherwise short faithful paraphrases/summaries). Each item should read like something that can be dropped into a cover letter.\n"
-        "2) Do not add headings like 'Vorschläge' / 'suggestion:' / 'you should...' / imperatives in context_field.items. No instructions, no meta commentary.\n"
-        "2b) context_field.items should usually be empty. Optimum count is 0. Maximum recommended is 1.\n"
-        "2c) Do not cite or invent 'reference examples'. Only refer to reference examples if they were explicitly included in your input. "
-        "If you want to propose sample phrasing but it is NOT a quote/paraphrase from your provided context, put it in user_instructions (not context_field.items).\n"
-        "3) If your observation depends on specific concrete facts you CAN SEE in your context (numbers, dates, named projects, tools, outcomes, scope, etc.), "
-        "set status=SUFFICIENT and include those facts in context_field.items.\n"
-        "2) If your observation does NOT need extra facts (it is fully actionable as written), set status=NOT_NEEDED and set context_field.items to [].\n"
-        "4) If your observation would require facts you DO NOT HAVE (despite the instruction above), set status=INPUT_NEEDED and write the observation as a precise request for input "
-        "(what exact info is missing, why it matters, and a minimal template the user can fill). Put that template into user_instructions (for the UI placeholder). You may leave context_field.items empty.\n"
-        "4b) User-input requests (status=INPUT_NEEDED) should usually be zero. Optimum count is 0. Maximum recommended is 1. Hard maximum is 2. Never exceed 2 INPUT_NEEDED items in total.\n"
-        "4c) If the issue is missing factual content (e.g. languages) and you cannot quote it from your context, it is INPUT_NEEDED. "
-        "If it is purely a stylistic preference and no new facts are required, it is NOT_NEEDED.\n"
-        "4) Do NOT write generic requests like 'add metrics' or 'add examples' unless you can provide the concrete metrics/examples in context_field.items (SUFFICIENT) \n"
-        "Never invent facts."
-    )
+    common_instructions = prompts.render("feedback/common_instructions.txt", allowed_sources=allowed_sorted)
     kw_block = format_known_weaknesses_block(known_weaknesses)
     kw_rules = KNOWN_WEAKNESSES_FEEDBACK_RULES if kw_block else ""
     enforced_system = system + common_instructions + kw_rules
@@ -418,33 +298,7 @@ def _call_vendor_feedback_items(
     return []
 
 
-MISSING_CONTEXT_ITEMS_SCHEMA: Dict[str, Any] = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "missing_feedback_context_items",
-        "strict": False,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "text": {"type": "string"},
-                            "source": {
-                                "type": "string",
-                                "enum": FEEDBACK_CONTEXT_SOURCES_JSON_ENUM,
-                            },
-                        },
-                        "required": ["text", "source"],
-                    },
-                }
-            },
-            "required": ["items"],
-        },
-    },
-}
+MISSING_CONTEXT_ITEMS_SCHEMA: Dict[str, Any] = prompts.load_json("schemas/missing_context_items.json")
 
 
 def vendor_feedback_json_schema_for_allowed_sources(allowed: frozenset) -> Dict[str, Any]:
@@ -476,11 +330,8 @@ def _phased_feedback_checker_instruction_prompts(
     style_instructions: str,
 ) -> Tuple[str, str]:
     si = style_instructions or get_style_instructions()
-    system = (
-        "You are an expert in style and tone. Check the letter for consistency with the style instructions. "
-        "Keep each observation brief. Report only concrete mismatches or omissions, not praise.\n"
-    )
-    prompt = "List any strong inconsistencies with the instructions, or use empty items if none."
+    system = prompts.load("feedback/instruction_system.txt")
+    prompt = prompts.load("feedback/instruction_user.txt")
     return system, prompt
 
 
@@ -501,28 +352,11 @@ def _phased_feedback_checker_accuracy_prompts(
 ) -> Tuple[str, str]:
     additional_context = ""
     if additional_user_info and additional_user_info.strip():
-        additional_context = (
-            "\n\nIMPORTANT: The user has provided additional information about themselves that is relevant but not in their CV. "
-            "Consider this when evaluating accuracy - if a claim is supported by this additional information (e.g., recent certifications, "
-            "ongoing learning, planned relocation), it may be acceptable:\n"
-            f"User's additional info: {additional_user_info}\n"
+        additional_context = prompts.render(
+            "feedback/accuracy_additional_info.txt", info=additional_user_info
         )
-    system = (
-        "You are an expert proofreader. Check the cover letter for factual accuracy against the user's CV. "
-        "Look for any claims or statements that are not supported by the CV or are inconsistent with it. "
-        "Provide specific feedback on any inaccuracies found. In particular:\n"
-        "1. Is what is written in the letter coherent with itself?\n"
-        "Examples of incoherhence:  'I am highly expert in Go, I used it once' (using once is not enough to claim experitise), or 'I used Python libraries such as Boost' (Boost is a C++ library)\n"
-        "2. Is what is written coherent with the user's CV? Is every claimed expertise supported?"
-        "Also pay attention to claims not strictly about tools, they also need to be supported in some way.\n"
-        "3. If known_weaknesses are listed in context, flag misrepresentation: inflated labels (fluent for B2), "
-        "incompatible pairs ('fluent German (B2)'), or implying a requirement is met when the gap block says otherwise.\n"
-        "Example: 'Crypto made me a programmer' [it's a claim, it needs to be supported by the CV]\n"
-        "Be especially wary of claims of a 'common thread' or 'throughout my carreer' if it's not supported by the CV.\n"
-        "Keep each observation brief; no praise or reassurance. If there is no meaningful issue, return an empty items list.\n"
-        + additional_context
-    )
-    prompt = "Review factual accuracy against the CV. Point out claims that cannot be verified or are inconsistent."
+    system = prompts.render("feedback/accuracy_system.txt", additional_context=additional_context)
+    prompt = prompts.load("feedback/accuracy_user.txt")
     return system, prompt
 
 
@@ -584,21 +418,8 @@ def _phased_feedback_checker_precision_prompts(
     company_report: str,
     job_text: str,
 ) -> Tuple[str, str]:
-    system = (
-        "You are a senior HR manager at the company. Evaluate how well the cover letter addresses the needs of the company, as described in the company report and job description. "
-        "1. Were all the requests in the letter addressed, either by claiming and substantiating the necessary competence, or a reasonably substitutable one, or at least ability and willingness to learn in this specific field?\n"
-        "When known_weaknesses are listed in context, honest framing of a gap counts as addressed; dishonest framing does not — "
-        "e.g. 'fluent German (B2)' or calling B2 fluent when the job requires fluency is a PLEASE_FIX, not acceptable coverage.\n"
-        "Example: 'required: Python, GO' -> 'I have several years of Python experience' [GO is missing]\n"
-        "Example: 'required: GO' -> 'while I have not used GO professionally, I have 5 years of C++ experience, and I have follwed a course on GO. When I tried GO on LeetCode, it was easy for me to use' [OK, demonstrates ability to learn]\n"
-        "2. Is there on the contrary any claimed competence that really is superflous, does not adress the explicit or implicit requirements for the job or the company, to the point it makes you wonder if the person understands the job at all?\n"
-        "Example: 'we look for a C++ developer' -> 'I have trained several AI models'\n"
-        "3. Is there any claim about the company that is not supported by the company report or company information presented in the job offer; or even if it is technically supported, is presented in a way that makes you suspect the writer doesn't understand the company?\n"
-        "Example: the company entered crypto last year -> 'excited to apply to a company that has been a pioneer in crypto since its origin' [incorrect, user clearly didn't follow the company for long]\n"
-        "Example: the company originated in the F1 racing world, but has pivoted to banking and not worked in racing in a while -> 'excited to enter the world of racing [user is either not up to date on the company, or making up misinterpreting partial information]\n"
-        "Keep each observation brief; do not praise coverage or fit. If there is no meaningful issue, return an empty items list.\n"
-    )
-    prompt = "Review consistency with the company report and job description; note misalignment or superfluous claims."
+    system = prompts.load("feedback/precision_system.txt")
+    prompt = prompts.load("feedback/precision_user.txt")
     return system, prompt
 
 
@@ -608,14 +429,8 @@ def _phased_feedback_checker_company_fit_prompts(
     company_report: str,
     job_text: str,
 ) -> Tuple[str, str]:
-    system = (
-        "You are a senior HR manager at the company. Evaluate how well the cover letter "
-        "demonstrates understanding of and alignment with the company's values, mission, tone, and culture "
-        "as described in the company report and implied by the job offer.\n"
-        "Focus on generic, shallow, or mismatched signals—not on affirming that the letter is personalized. "
-        "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
-    )
-    prompt = "Review alignment with the company's values, tone, and culture; note generic or mismatched content."
+    system = prompts.load("feedback/company_fit_system.txt")
+    prompt = prompts.load("feedback/company_fit_user.txt")
     return system, prompt
 
 
@@ -627,27 +442,11 @@ def _phased_feedback_checker_goal_fit_prompts(
     hire_problem: str = "",
 ) -> Tuple[str, str]:
     hp = (hire_problem or "").strip()
-    framing = (
-        "A separate field (shown in context as 'Hire goal / problem this role solves') states what problem or outcome "
-        "the company is trying to address with this hire. Treat that as the primary reading of the hiring intent when it is non-empty; "
-        "otherwise infer the hiring goal only from the job offer and company report.\n"
-        if hp
-        else "Infer what problem or outcome the company is trying to address with this hire from the job offer and company report.\n"
+    framing = prompts.load(
+        "feedback/goal_fit_framing_with_hire.txt" if hp else "feedback/goal_fit_framing_inferred.txt"
     )
-    system = (
-        "You are a senior hiring manager. Evaluate whether the cover letter reads like someone who understands "
-        "what the company is trying to solve or achieve with this hire, and sounds ready to contribute toward that—"
-        "whether through relevant experience, credible ability and willingness to learn in the right areas, and/or "
-        "the right mindset (ownership, clarity, collaboration, pragmatism) where the posting calls for it.\n"
-        + framing
-        + "Do not nitpick wording if the substance shows engagement with the hiring goal. "
-        "Flag only meaningful gaps: the letter ignores the central problem, focuses on unrelated bragging, "
-        "misreads what the role is for, or sounds like a generic template with no line of sight to the company's need.\n"
-        "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
-    )
-    prompt = (
-        "Review whether the letter demonstrates understanding of the hiring goal and readiness to help solve it."
-    )
+    system = prompts.render("feedback/goal_fit_system.txt", framing=framing)
+    prompt = prompts.load("feedback/goal_fit_user.txt")
     return system, prompt
 
 
@@ -668,36 +467,12 @@ def _phased_feedback_checker_user_fit_prompts(
         examples_formatted = "(No reference letters available.)"
     additional_block = ""
     if additional_user_info and additional_user_info.strip():
-        additional_block = (
-            "\n\n========== User's additional info (relevant but not fully captured in CV):\n"
-            + additional_user_info.strip()
-            + "\n==========\n"
+        additional_block = prompts.render(
+            "feedback/user_fit_additional_info.txt", info=additional_user_info.strip()
         )
-    system = (
-        "You are an expert in style and tone. The goal is continuity of voice: the draft should feel like the same author "
-        "as the reference letters (register, rhythm, how strengths and caveats are framed, paragraph logic, level of directness).\n"
-        "Reference letters are different applications: they will mention different companies, projects, and emphases. "
-        "That is expected. Do NOT treat \"the examples bring up topic X but this draft does not\" as a problem by itself, "
-        "even if X is a strength in the CV—omission is fine when this role does not call for it.\n"
-        "Use the CV and optional additional info only to flag factual gaps: claims or implications in the draft that conflict with, "
-        "or undersell without reason, facts that are clearly stated there (languages, degrees, dates, tools, etc.). "
-        "Do not ask the draft to repeat biographical detail from the examples that is absent from the CV/additional info unless "
-        "the issue is stylistic (e.g. the draft suddenly reads unlike those examples).\n"
-        "Flag divergences in tone, structure, emphasis, or how weaknesses are handled compared with the references—not missing topics "
-        "that simply differ between applications.\n"
-        "Do not praise imitation or \"good fit\" with the examples; only output items where the draft should change.\n"
-        "Keep each observation brief. If there is no meaningful issue, return an empty items list.\n"
-        "NOTE: The reference examples are prior cover letters written by/about the SAME applicant. "
-        "If the difference is that some information isn't provided, any factual claims that appear in the reference examples may be used. \n"
-        "When you attach context_field snippets, tag sources correctly: EXAMPLE for reference letters; LETTER for the draft under "
-        "\"Cover Letter to Check\"; CV for the User CV block and for the User's additional info block (both are authoritative facts about the applicant).\n"
-    )
-    prompt = (
-        "========== Reference Examples:\n" + examples_formatted + "\n==========\n"
-        + additional_block
-        + "\nCompare to the reference letters and CV. Note where the draft diverges in voice (same-hand cues), structure, emphasis, "
-        "or handling of weaknesses versus the examples, or where it misuses or omits facts that clearly matter given the CV/additional info. "
-        "Do not demand topic overlap with the examples."
+    system = prompts.load("feedback/user_fit_system.txt")
+    prompt = prompts.render(
+        "feedback/user_fit_user.txt", examples=examples_formatted, additional_block=additional_block
     )
     return system, prompt
 
@@ -755,21 +530,8 @@ def _phased_feedback_checker_human_prompts(
     """Returns (system, prompt), or None if there are no rewritten examples."""
     if _format_human_check_examples(top_docs) is None:
         return None
-    system = (
-        "You are an expert in noticing the patterns behind edits. You will receive a list of examples of job descriptions and corresponding cover letters; "
-        "first the cover letter how it was initially written, then the cover letter how a reviewer rewrote it. "
-        "The reviewer might have copied parts of the initial letter, or rewrote it from scratch. Either way, pay attention to what was changed. "
-        "You might also see ratings, chunk usage counts, explicit feedback comments, and user corrections (compact diffs showing changed portions, or full paragraphs if >20% changed) on the initial letters. "
-        "The corrections use a compact format: -original text+edited text for small changes, or full original/edited paragraphs for larger changes. "
-        "Use these to understand what the reviewer changed and removed, and pay special attention to user corrections.\n"
-        "Once you notice recurring removals or rewrites, flag if the new letter contains similar content the reviewer would likely change.\n"
-        "Do NOT flag elements merely for not appearing in references, and do not output praise—only actionable mismatches with edit patterns.\n"
-        "Do NOT flag mismatches just for existing. Ask yourself: is this difference relevant to the new job? "
-        "Example: all letters mention German proficiency because German is required or implied, but the new job is clearly in English only -> not relevant. "
-        "Or: all letters are highly formal, but the new company is proud of their informal culture -> not relevant. "
-        "Keep each observation brief. If nothing in the draft matches a pattern the reviewer would change, return empty items.\n"
-    )
-    prompt = "Flag anything in the draft that resembles content the reviewer typically removes or rewrites in the examples."
+    system = prompts.load("feedback/human_system.txt")
+    prompt = prompts.load("feedback/human_user.txt")
     return system, prompt
 
 
@@ -838,18 +600,11 @@ def _run_suggest_additional_feedback_context(
         if t:
             existing_texts.append(t)
     existing_block = "\n".join(f"- {t}" for t in existing_texts) if existing_texts else "(none)"
-    task = (
-        "\n\n========== Task (follow-up; same materials as above) ==========\n"
-        "One critique was already produced about this cover letter (below). "
-        "The first pass may have omitted useful paste-ready snippets drawn from the SAME materials you see above.\n\n"
-        f"Critique:\n{(observation or '').strip()}\n\n"
-        f"Snippets already attached to this critique (do not repeat or lightly rephrase):\n{existing_block}\n\n"
-        'Reply with JSON only: an object {"items": [...]} where each element is '
-        '{"text": string, "source": <one of allowed values>}. '
-        f"The only allowed \"source\" values for this category are: {allowed_sorted}. "
-        "Include ONLY additional snippets from the materials in this conversation "
-        "(verbatim quotes or short faithful paraphrases). "
-        'Return {"items": []} if nothing new is available. Never invent facts.\n'
+    task = prompts.render(
+        "feedback/suggest_context_task.txt",
+        observation=(observation or '').strip(),
+        existing_block=existing_block,
+        allowed_sources=allowed_sorted,
     )
     full_prompt = base_prompt + task
     ctx_schema = missing_context_items_schema_for_allowed_sources(allowed)
@@ -1358,14 +1113,14 @@ def human_check(
     known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Check the letter against human-rewritten example patterns."""
-    prompts = _phased_feedback_checker_human_prompts(letter=letter, top_docs=examples)
-    if prompts is None:
+    pair = _phased_feedback_checker_human_prompts(letter=letter, top_docs=examples)
+    if pair is None:
         logger.info(
             "none of %s have AI letters, skipping",
             ", ".join(ex.get("company_name", "?") for ex in examples),
         )
         return []
-    system, prompt = prompts
+    system, prompt = pair
     allowed = allowed_feedback_context_sources_for_category("human", top_docs=examples)
     legacy = legacy_context_string_default_source_for_category("human", top_docs=examples)
     return _call_vendor_feedback_items(

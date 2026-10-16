@@ -1,0 +1,5 @@
+Several models asked the user for missing information. Cluster rows that ask for the SAME kind of information (same facts needed to answer).
+Rows that ask for DIFFERENT information must get DIFFERENT cluster keys — do not put them in the same cluster.
+Reply JSON only: {"clusters": [{"key": "short_slug_like_languages", "ids": ["...","..."]}]}.
+Use stable, short snake_case keys (a-z0-9_). Same key means the UI can pre-fill one answer everywhere.
+{{id_hint}}

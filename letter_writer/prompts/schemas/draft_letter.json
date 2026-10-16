@@ -1,0 +1,25 @@
+{
+  "type": "json_schema",
+  "json_schema": {
+    "name": "draft_letter_output",
+    "strict": false,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "draft_letter": {"type": "string"},
+        "known_weaknesses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "requirement": {"type": "string"},
+              "gap": {"type": "string"}
+            },
+            "required": ["requirement", "gap"]
+          }
+        }
+      },
+      "required": ["draft_letter", "known_weaknesses"]
+    }
+  }
+}

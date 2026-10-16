@@ -1,0 +1,1 @@
+Write the personalized cover letter as JSON.

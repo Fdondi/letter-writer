@@ -1,0 +1,126 @@
+{
+  "cases": [
+    {
+      "id": "openai_plain",
+      "vendor": "openai",
+      "model": "gpt-6-sol",
+      "input": 12000,
+      "output": 1500,
+      "expected_cost": 0.039
+    },
+    {
+      "id": "openai_cached_search",
+      "vendor": "openai",
+      "model": "gpt-6-sol",
+      "input": 20000,
+      "output": 900,
+      "cached": 15000,
+      "cache_write": 2000,
+      "search": 1,
+      "expected_cost": 0.033
+    },
+    {
+      "id": "openai_high_tier",
+      "vendor": "openai",
+      "model": "gpt-6-sol",
+      "input": 300000,
+      "output": 40000,
+      "expected_cost": 1.0
+    },
+    {
+      "id": "grok_high_tier",
+      "vendor": "grok",
+      "model": "grok-4.7",
+      "input": 300000,
+      "output": 1000,
+      "expected_cost": 0.606
+    },
+    {
+      "id": "openai_search_model",
+      "vendor": "openai",
+      "model": "gpt-5-search-api",
+      "input": 3000,
+      "output": 800,
+      "search": 1,
+      "expected_cost": 0.02175
+    },
+    {
+      "id": "anthropic_cache",
+      "vendor": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "input": 30000,
+      "output": 2000,
+      "cache_read": 20000,
+      "cache_write": 5000,
+      "expected_cost": 0.06974999999999999
+    },
+    {
+      "id": "anthropic_plain",
+      "vendor": "anthropic",
+      "model": "claude-haiku-4-5",
+      "input": 4000,
+      "output": 700,
+      "expected_cost": 0.0075
+    },
+    {
+      "id": "gemini_low_tier",
+      "vendor": "gemini",
+      "model": "gemini-3.1-pro-preview",
+      "input": 50000,
+      "output": 3000,
+      "cached": 10000,
+      "expected_cost": 0.11800000000000001
+    },
+    {
+      "id": "gemini_high_tier",
+      "vendor": "gemini",
+      "model": "gemini-3.1-pro-preview",
+      "input": 250000,
+      "output": 3000,
+      "expected_cost": 1.036
+    },
+    {
+      "id": "gemini_search",
+      "vendor": "gemini",
+      "model": "gemini-3.5-flash",
+      "input": 8000,
+      "output": 1200,
+      "search": 3,
+      "expected_cost": 0.0648
+    },
+    {
+      "id": "mistral_plain",
+      "vendor": "mistral",
+      "model": "mistral-medium-3-5",
+      "input": 9000,
+      "output": 1100,
+      "expected_cost": 0.02175
+    },
+    {
+      "id": "grok_cached",
+      "vendor": "grok",
+      "model": "grok-4.7",
+      "input": 15000,
+      "output": 1300,
+      "cached": 6000,
+      "expected_cost": 0.0288
+    },
+    {
+      "id": "deepseek_cached",
+      "vendor": "deepseek",
+      "model": "deepseek-v4-pro",
+      "input": 18000,
+      "output": 1600,
+      "cached": 12000,
+      "expected_cost": 0.007392000000000001
+    },
+    {
+      "id": "unpriced_model",
+      "vendor": "openai",
+      "model": "no-such-model",
+      "input": 1000,
+      "output": 100,
+      "expected_cost": 0.0
+    }
+  ]
+}

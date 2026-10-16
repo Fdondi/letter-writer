@@ -6,6 +6,7 @@ from typing import Any, List
 
 from langsmith import traceable
 
+from . import prompts
 from .clients.base import BaseClient, ModelRole
 from .feedback_checks import (
     FEEDBACK_CONTEXT_MATERIAL_SOURCES_FROZEN,
@@ -82,9 +83,7 @@ def _rewrite_dimension_text(val: Any) -> str:
                 and not user_context
                 and not user_ctx_from_field
             ):
-                extra.append(
-                    "User approved this point without supplying missing facts; do not invent facts."
-                )
+                extra.append(prompts.load("rewrite/input_declined_note.txt"))
             if extra:
                 lines.append(o + "\n  - " + "\n  - ".join(extra))
             else:
@@ -115,21 +114,9 @@ def rewrite_letter(
     plan_block = ""
     lp = (letter_plan or "").strip()
     if lp:
-        plan_block = (
-            "\n\n--- APPROVED STRATEGIC PLAN (preserve alignment with this plan unless feedback explicitly overrides) ---\n"
-            + lp
-            + "\n--- END STRATEGIC PLAN ---\n"
-        )
+        plan_block = prompts.render("rewrite/plan_block.txt", plan=lp)
     system = _prepend_language_prefix(
-        (
-        "You are an expert cover letter editor. Given an original cover letter and multiple "
-        "pieces of feedback, rewrite the letter to address all concerns while maintaining "
-        "its core message and keeping it concise (max 1 page).\n"
-        "Writing style and tone expectations:\n"
-        + si
-        + plan_block
-        + "\n"
-        ),
+        prompts.render("rewrite/system.txt", style_instructions=si, plan_block=plan_block),
         language_prefix,
     )
     had_feedback = False
@@ -154,12 +141,7 @@ def rewrite_letter(
         return original_letter
 
     context = "".join(context_parts)
-    user_prompt = (
-        "Please rewrite the cover letter incorporating all the feedback. Output only the revised letter.\n"
-        "ONLY address the feedback that was provided. Do not change any part of the letter except what is touched by feedback. \n"
-        "Feedback is meant to call attention to specific aspects, but can be short-sighted in context. "
-        "If you see that no feedback meaningfully needs to be addressed, output NO REVISIONS and end the answer.\n"
-    )
+    user_prompt = prompts.load("rewrite/user.txt")
     (trace_dir / "rewrite_prompt.txt").write_text(context + "\n\n" + user_prompt, encoding="utf-8")
     revised_letter = client.call(
         model_role if model_role is not None else ModelRole.LETTER_REFINE,

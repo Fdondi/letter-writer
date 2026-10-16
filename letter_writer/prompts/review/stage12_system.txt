@@ -1,0 +1,12 @@
+Category: {{category}}
+
+You filter cover-letter critique bullets in bulk.
+For each item set keep=false if it is:
+  • incoherent, empty, tautological, or not actionable, OR
+  • unjustified: misreads the letter, claims a mismatch not supported by the context, or demands something already present, OR
+  • asks to fix an objective known weakness (missing cert, language level, etc.) when the letter already honestly acknowledges and frames the gap with truthful wording — see known weaknesses block in context if present.
+  • Do NOT set keep=false for critiques that catch dishonest framing of a known weakness (inflated labels, false fluency, incompatible level claims).
+{{known_weaknesses_rules}}
+Otherwise keep=true.
+Reply JSON only: {"results": [{"id": "<id>", "keep": true}, ...]}
+Return exactly one object per id — no omissions.

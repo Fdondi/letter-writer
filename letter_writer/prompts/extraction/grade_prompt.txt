@@ -1,0 +1,7 @@
+Key competences (one per line):
+{{competences}}
+
+Assign each competence one of: {{levels}}.
+
+Respond with JSON only. Example format:
+{{example}}

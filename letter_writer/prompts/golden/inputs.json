@@ -1,0 +1,107 @@
+{
+  "cv_text": "Francesco Dondi\nData engineer, 8 years.\n- DoubleCloud: ClickHouse, Terraform, AWS (2021-2024)\n- ETH Zurich: MAS in Machine Learning in Finance and Insurance\nLanguages: Italian (native), English (C2), German (B2)",
+  "job_text": "Generali sucht eine:n Data Engineer (m/w/d) in Zürich.\nAnforderungen: Python, SQL, AWS, ETL-Pipelines, fliessend Deutsch.\nWir bieten flexible Arbeitszeiten.",
+  "company_report": "Generali is a large insurer with a conservative culture that presents itself as innovative.",
+  "letter": "Sehr geehrte Damen und Herren,\n\nich bin fliessend in Deutsch (B2) und habe Erfahrung mit AWS.\n\nFreundliche Grüsse\nFrancesco Dondi",
+  "custom_style_instructions": "Write short paragraphs. Avoid buzzwords.",
+  "structure_instructions": "## Strengths\n## Weaknesses\n## Structure",
+  "additional_user_info": "Currently taking German C1 classes.",
+  "hire_problem": "Modernise the data platform while keeping regulators happy.",
+  "letter_plan": "## Strengths\n- AWS at DoubleCloud\n## Weaknesses\n- German B2\n## Structure\n- hook, body, close",
+  "company_name": "Generali",
+  "additional_company_info": "The team is in the Zürich office.",
+  "point_of_contact": {"name": "Jessica Karolina", "role": "Recruiting Specialist", "contact_details": "", "notes": ""},
+  "search_instructions": "Focus on culture and team size.",
+  "research_combined_context": "The team is in the Z\u00fcrich office.\n\n[Web Search Findings]:\nGenerali Switzerland has about 1800 employees.",
+  "known_weaknesses": [
+    {"id": "kw1", "requirement": "fliessend Deutsch", "gap": "German B2"},
+    {"id": "kw2", "requirement": "Insurance domain", "gap": ""}
+  ],
+  "top_docs": [
+    {
+      "id": "doc1",
+      "company_name": "Swiss Re",
+      "score": 8,
+      "job_text": "Swiss Re is hiring a data engineer.",
+      "letter_text": "Dear Swiss Re team,\n\nI build pipelines.",
+      "ai_letters": [
+        {
+          "text": "Dear Sir or Madam, I am passionate.",
+          "rating": 2,
+          "chunks_used": 1,
+          "comment": "too generic",
+          "user_corrections": [
+            {"type": "diff", "original": "passionate", "edited": "curious"},
+            {"type": "full", "original": "Old paragraph.", "edited": "New paragraph."}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "doc2",
+      "company_name": "Zurich Insurance",
+      "score": 6,
+      "job_text": "Zurich needs an analytics engineer.",
+      "letter_text": "Hello Zurich,\n\nAnalytics is my thing."
+    },
+    {
+      "id": "doc3",
+      "company_name": "Empty Letter AG",
+      "score": 3,
+      "job_text": "No letter here.",
+      "letter_text": ""
+    }
+  ],
+  "rerank_docs": {
+    "Swiss Re": {"job_text": "Swiss Re is hiring a data engineer."},
+    "Zurich Insurance": {"job_text": "Zurich needs an analytics engineer."}
+  },
+  "competences": ["Python", "SQL", "German"],
+  "rewrite_feedback": {
+    "instruction": [
+      {"id": "i1", "observation": "Too many buzzwords.", "type": "PLEASE_FIX", "status": "NOT_NEEDED"},
+      {"id": "i2", "observation": "Tone is fine.", "type": "ALREADY_GOOD"}
+    ],
+    "accuracy": [
+      {"id": "a1", "observation": "Calling B2 fluent is inaccurate.", "type": "PLEASE_FIX", "status": "SUFFICIENT",
+       "context_field": {"items": [{"text": "German (B2)", "source": "CV"}, {"text": "Learning German C1", "source": "USER"}]}},
+      {"id": "a2", "observation": "Hidden by decision model.", "type": "PLEASE_FIX", "laya_verdict": "invalid"}
+    ],
+    "precision": [
+      {"id": "p1", "observation": "Mention SQL experience.", "type": "PLEASE_FIX", "status": "INPUT_NEEDED", "user_context": "5 years of SQL"}
+    ],
+    "company_fit": [
+      {"id": "c1", "observation": "Say why insurance.", "type": "PLEASE_FIX", "status": "INPUT_NEEDED", "input_declined": true}
+    ],
+    "goal_fit": [],
+    "user_fit": [
+      {"id": "u1", "observation": "Restored by user.", "type": "PLEASE_FIX", "laya_verdict": "invalid", "laya_restored": true}
+    ],
+    "human": []
+  },
+  "review_items": [
+    ["r1", "The letter uses buzzwords."],
+    ["r2", "  Mention SQL.  "]
+  ],
+  "stage3_items": [
+    {"id": "s1", "category": "instruction", "observation": "Too formal."},
+    {"id": "s2", "category": "company_fit", "observation": "Tone too stiff."}
+  ],
+  "stage4_rows": [
+    {"id": "openai::accuracy::x1", "vendor": "openai", "category": "accuracy", "observation": "Which languages?", "user_instructions": "List languages"},
+    {"id": "gemini::precision::x2", "vendor": "gemini", "category": "precision", "observation": "Language levels?", "user_instructions": ""}
+  ],
+  "suggest_context": {
+    "category": "accuracy",
+    "observation": "Calling B2 fluent is inaccurate.",
+    "existing": [{"text": "German (B2)", "source": "CV"}, "Learning German"]
+  },
+  "user_data": {
+    "default_languages": [
+      {"code": "de", "label": "DE", "level": "B2", "instructions": ""},
+      {"code": "en", "label": "EN", "level": "C2", "instructions": "Use British spelling."},
+      {"code": "it", "label": "IT", "level": "native", "instructions": ""}
+    ]
+  },
+  "feedback_state_item": {"observation": "Calling B2 fluent is inaccurate.", "quote": "fliessend in Deutsch (B2)"}
+}

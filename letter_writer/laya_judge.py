@@ -14,6 +14,8 @@ from typing import Any, Callable, Dict, Mapping, MutableMapping, Optional
 
 import httpx
 
+from . import prompts
+
 logger = logging.getLogger(__name__)
 
 PredictFn = Callable[[Any, Dict[str, Any]], Dict[str, Any]]
@@ -22,32 +24,9 @@ _DEFAULT_OLLAYA_URL = "http://ollaya:11435"
 _DECIDE_TIMEOUT_S = 360.0
 _CONNECT_TIMEOUT_S = 5.0
 
-RAG_SIMILARITY_QUESTION: Dict[str, Any] = {
-    "similarity": {
-        "type": "score",
-        "instructions": (
-            "How similar is the candidate job to the target job in role focus and day-to-day tasks?"
-        ),
-        "criteria": [
-            "only the most basic tools or duties overlap",
-            "some overlap, but the jobs are significantly different",
-            "partial overlap of the key tasks",
-            "most key tasks match, with one major difference",
-            "nearly identical in both focus and tasks",
-        ],
-    }
-}
-
-FEEDBACK_GROUNDED_QUESTION: Dict[str, Any] = {
-    "grounded": {
-        "type": "noul",
-        "instructions": (
-            "Is this feedback comment a genuine issue or observation that the letter text "
-            "and quoted span actually support? Answer no when the comment invents a problem, "
-            "contradicts the letter, or is not about the text it cites."
-        ),
-    }
-}
+_QUESTIONS: Dict[str, Any] = prompts.load_json("decision_model/questions.json")
+RAG_SIMILARITY_QUESTION: Dict[str, Any] = _QUESTIONS["rag"]
+FEEDBACK_GROUNDED_QUESTION: Dict[str, Any] = _QUESTIONS["feedback"]
 
 _RUNTIME_LOCK = threading.Lock()
 _RUNTIME: Optional["_OllayaClient"] = None

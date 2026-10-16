@@ -1,0 +1,7 @@
+---- Example #{{number}} [estimated relevance: {{score}}/10] - {{company_name}} ----
+Job Description:
+{{job_text}}
+
+Cover Letter:
+{{letter_text}}
+

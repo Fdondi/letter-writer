@@ -1,0 +1,5 @@
+========== Reference Examples:
+{{examples}}
+==========
+{{additional_block}}
+Compare to the reference letters and CV. Note where the draft diverges in voice (same-hand cues), structure, emphasis, or handling of weaknesses versus the examples, or where it misuses or omits facts that clearly matter given the CV/additional info. Do not demand topic overlap with the examples.

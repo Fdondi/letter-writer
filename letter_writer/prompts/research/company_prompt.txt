@@ -1,0 +1,3 @@
+Search the internet and write a short, opinionated company report about {{company_name}}
+To disambiguiate, here is how they present themselves: {{job_excerpt}}...
+Do NOT include any links, only plain text.

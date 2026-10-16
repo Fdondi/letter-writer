@@ -4,64 +4,25 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-CEFR_LEVELS: tuple = ("A1", "A2", "B1", "B2", "C1", "C2", "native")
+from . import prompts
+
+_SETTINGS: Dict[str, Any] = prompts.load_json("language/settings.json")
+_LINES: Dict[str, Any] = _SETTINGS["lines"]
+
+CEFR_LEVELS: tuple = tuple(_SETTINGS["cefr_levels"])
 
 # Concrete constraints models follow better than "CEFR B2" alone.
-CEFR_LEVEL_GUIDANCE: Dict[str, str] = {
-    "A1": "Use A1 (beginner) wording only: very short sentences, basic vocabulary, present tense where possible.",
-    "A2": "Use A2 (elementary) wording: simple connected sentences, frequent everyday vocabulary, limited subordination.",
-    "B1": "Use B1 (intermediate) wording: clear standard language on familiar topics; avoid advanced idioms and complex literary phrasing.",
-    "B2": (
-        "Use B2 (upper-intermediate) wording only: fluent but clearly non-native. "
-        "Prefer common vocabulary and straightforward syntax. "
-        "Avoid C1/C2 idioms, rhetorical flourishes, academic register, and near-native nuance."
-    ),
-    "C1": "Use C1 (advanced) wording: sophisticated but natural; complex sentences allowed.",
-    "C2": "Use C2 (proficient) wording: near-native precision and nuance.",
-    "native": "Use native-speaker naturalness and idiomatic phrasing.",
-}
+CEFR_LEVEL_GUIDANCE: Dict[str, str] = dict(_SETTINGS["level_guidance"])
 
-DEFAULT_LEVEL_BY_CODE: Dict[str, str] = {
-    "de": "B2",
-    "en": "C2",
-}
+DEFAULT_LEVEL_BY_CODE: Dict[str, str] = dict(_SETTINGS["default_level_by_code"])
+_FALLBACK_LEVEL: str = _SETTINGS["fallback_level"]
 
-DEFAULT_GERMAN_INSTRUCTIONS = (
-    "Verwende echte Umlaute (ä, ö, ü, ß) — niemals ae, oe, ue oder ss als Ersatz."
-)
+DEFAULT_INSTRUCTIONS_BY_CODE: Dict[str, str] = dict(_SETTINGS["default_instructions_by_code"])
+DEFAULT_GERMAN_INSTRUCTIONS = DEFAULT_INSTRUCTIONS_BY_CODE["de"]
 
-DEFAULT_INSTRUCTIONS_BY_CODE: Dict[str, str] = {
-    "de": DEFAULT_GERMAN_INSTRUCTIONS,
-}
-
-# Job metadata language names → ISO-ish codes used in default_languages
-LANGUAGE_CODE_ALIASES: Dict[str, str] = {
-    "de": "de",
-    "deutsch": "de",
-    "german": "de",
-    "ger": "de",
-    "en": "en",
-    "english": "en",
-    "eng": "en",
-    "fr": "fr",
-    "french": "fr",
-    "français": "fr",
-    "francais": "fr",
-    "es": "es",
-    "spanish": "es",
-    "español": "es",
-    "espanol": "es",
-    "it": "it",
-    "italian": "it",
-    "italiano": "it",
-    "nl": "nl",
-    "dutch": "nl",
-    "nederlands": "nl",
-    "pt": "pt",
-    "portuguese": "pt",
-    "português": "pt",
-    "portugues": "pt",
-}
+# Job metadata language names → ISO-ish codes used in default_languages.
+# Stored as a list because the substring fallback in resolve_language_code depends on order.
+LANGUAGE_CODE_ALIASES: Dict[str, str] = {alias: code for alias, code in _SETTINGS["code_aliases"]}
 
 
 def _normalize_level(raw: Any) -> str:
@@ -79,7 +40,7 @@ def _normalize_level(raw: Any) -> str:
 
 def default_level_for_code(code: str) -> str:
     c = str(code or "").strip().lower()
-    return DEFAULT_LEVEL_BY_CODE.get(c, "B2")
+    return DEFAULT_LEVEL_BY_CODE.get(c, _FALLBACK_LEVEL)
 
 
 def default_instructions_for_code(code: str) -> str:
@@ -123,12 +84,7 @@ def get_default_languages(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     normalized = normalize_default_languages(raw)
     if normalized:
         return normalized
-    return normalize_default_languages(
-        [
-            {"code": "de", "label": "DE", "color": "#3b82f6", "enabled": True},
-            {"code": "en", "label": "EN", "color": "#6366f1", "enabled": True},
-        ]
-    )
+    return normalize_default_languages(_SETTINGS["default_languages"])
 
 
 def get_language_entry_by_code(user_data: Dict[str, Any], code: str) -> Optional[Dict[str, Any]]:
@@ -194,8 +150,8 @@ def _language_display_name(entry: Dict[str, Any]) -> str:
 
 def _level_phrase(level: str) -> str:
     if level == "native":
-        return "as a native speaker would"
-    return f"at CEFR {level} level"
+        return _LINES["level_native"]
+    return prompts.fill(_LINES["level_cefr"], "language.level_cefr", level=level)
 
 
 def build_language_instruction_lines(entry: Dict[str, Any], *, for_translation: bool = False) -> List[str]:
@@ -203,18 +159,13 @@ def build_language_instruction_lines(entry: Dict[str, Any], *, for_translation: 
     name = _language_display_name(entry)
     level = _normalize_level(entry.get("level")) or default_level_for_code(entry.get("code", ""))
     lines: List[str] = []
-    if for_translation:
-        lines.append(f"MANDATORY: Translate into {name} {_level_phrase(level)}.")
-    else:
-        lines.append(f"MANDATORY: Write in {name} {_level_phrase(level)}.")
+    key = "translate" if for_translation else "write"
+    lines.append(prompts.fill(_LINES[key], f"language.{key}", name=name, level_phrase=_level_phrase(level)))
     guidance = CEFR_LEVEL_GUIDANCE.get(level, "")
     if guidance:
         lines.append(guidance)
-    if level in ("A1", "A2", "B1", "B2"):
-        lines.append(
-            "Do not use vocabulary, idioms, or sentence complexity above this level — "
-            "even if examples, the CV, or style instructions suggest higher proficiency."
-        )
+    if level in _LINES["capped_levels"]:
+        lines.append(_LINES["level_cap"])
     extra = str(entry.get("instructions") or "").strip()
     if extra:
         lines.append(extra)
@@ -240,12 +191,7 @@ def build_language_system_prefix(
     lines = build_language_instruction_lines(entry, for_translation=False)
     if not lines:
         return ""
-    body = "\n".join(lines)
-    return (
-        "--- Language requirements (override linguistic complexity from examples/style) ---\n"
-        f"{body}\n"
-        "--- End language requirements ---\n\n"
-    )
+    return prompts.fill(_LINES["prefix"], "language.prefix", body="\n".join(lines))
 
 
 def build_translation_system_message(
@@ -263,17 +209,17 @@ def build_translation_system_message(
         instructions_override=instructions_override,
     )
     if not entry:
-        entry = {"code": target_language, "label": target_language.upper(), "level": "B2", "instructions": ""}
+        entry = {"code": target_language, "label": target_language.upper(), "level": _FALLBACK_LEVEL, "instructions": ""}
     lines = build_language_instruction_lines(entry, for_translation=True)
     src = str(source_language or "").strip()
     parts = [
-        "You are a professional translator.",
+        _LINES["translator_intro"],
         *lines,
-        "Preserve formatting, line breaks, and markdown where present.",
-        "Output only the translation — no preamble, notes, or quotes around the result.",
+        _LINES["preserve_formatting"],
+        _LINES["output_only"],
     ]
     if src:
-        parts.insert(1, f"Source language code: {src}.")
+        parts.insert(1, prompts.fill(_LINES["source_language"], "language.source_language", code=src))
     return "\n".join(parts)
 
 

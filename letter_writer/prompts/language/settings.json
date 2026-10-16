@@ -1,0 +1,162 @@
+{
+  "cefr_levels": [
+    "A1",
+    "A2",
+    "B1",
+    "B2",
+    "C1",
+    "C2",
+    "native"
+  ],
+  "level_guidance": {
+    "A1": "Use A1 (beginner) wording only: very short sentences, basic vocabulary, present tense where possible.",
+    "A2": "Use A2 (elementary) wording: simple connected sentences, frequent everyday vocabulary, limited subordination.",
+    "B1": "Use B1 (intermediate) wording: clear standard language on familiar topics; avoid advanced idioms and complex literary phrasing.",
+    "B2": "Use B2 (upper-intermediate) wording only: fluent but clearly non-native. Prefer common vocabulary and straightforward syntax. Avoid C1/C2 idioms, rhetorical flourishes, academic register, and near-native nuance.",
+    "C1": "Use C1 (advanced) wording: sophisticated but natural; complex sentences allowed.",
+    "C2": "Use C2 (proficient) wording: near-native precision and nuance.",
+    "native": "Use native-speaker naturalness and idiomatic phrasing."
+  },
+  "default_level_by_code": {
+    "de": "B2",
+    "en": "C2"
+  },
+  "fallback_level": "B2",
+  "default_instructions_by_code": {
+    "de": "Verwende echte Umlaute (ä, ö, ü, ß) — niemals ae, oe, ue oder ss als Ersatz."
+  },
+  "code_aliases": [
+    [
+      "de",
+      "de"
+    ],
+    [
+      "deutsch",
+      "de"
+    ],
+    [
+      "german",
+      "de"
+    ],
+    [
+      "ger",
+      "de"
+    ],
+    [
+      "en",
+      "en"
+    ],
+    [
+      "english",
+      "en"
+    ],
+    [
+      "eng",
+      "en"
+    ],
+    [
+      "fr",
+      "fr"
+    ],
+    [
+      "french",
+      "fr"
+    ],
+    [
+      "français",
+      "fr"
+    ],
+    [
+      "francais",
+      "fr"
+    ],
+    [
+      "es",
+      "es"
+    ],
+    [
+      "spanish",
+      "es"
+    ],
+    [
+      "español",
+      "es"
+    ],
+    [
+      "espanol",
+      "es"
+    ],
+    [
+      "it",
+      "it"
+    ],
+    [
+      "italian",
+      "it"
+    ],
+    [
+      "italiano",
+      "it"
+    ],
+    [
+      "nl",
+      "nl"
+    ],
+    [
+      "dutch",
+      "nl"
+    ],
+    [
+      "nederlands",
+      "nl"
+    ],
+    [
+      "pt",
+      "pt"
+    ],
+    [
+      "portuguese",
+      "pt"
+    ],
+    [
+      "português",
+      "pt"
+    ],
+    [
+      "portugues",
+      "pt"
+    ]
+  ],
+  "default_languages": [
+    {
+      "code": "de",
+      "label": "DE",
+      "color": "#3b82f6",
+      "enabled": true
+    },
+    {
+      "code": "en",
+      "label": "EN",
+      "color": "#6366f1",
+      "enabled": true
+    }
+  ],
+  "lines": {
+    "write": "MANDATORY: Write in {{name}} {{level_phrase}}.",
+    "translate": "MANDATORY: Translate into {{name}} {{level_phrase}}.",
+    "level_native": "as a native speaker would",
+    "level_cefr": "at CEFR {{level}} level",
+    "capped_levels": [
+      "A1",
+      "A2",
+      "B1",
+      "B2"
+    ],
+    "level_cap": "Do not use vocabulary, idioms, or sentence complexity above this level — even if examples, the CV, or style instructions suggest higher proficiency.",
+    "prefix": "--- Language requirements (override linguistic complexity from examples/style) ---\n{{body}}\n--- End language requirements ---\n\n",
+    "translator_intro": "You are a professional translator.",
+    "source_language": "Source language code: {{code}}.",
+    "preserve_formatting": "Preserve formatting, line breaks, and markdown where present.",
+    "output_only": "Output only the translation — no preamble, notes, or quotes around the result."
+  }
+}

@@ -1,0 +1,4 @@
+You group cover-letter feedback observations that are essentially the SAME issue (same underlying problem), possibly worded differently across categories.
+The list excludes INPUT_NEEDED rows (those are grouped separately by what information is missing).
+Do not group items that are really about different problems.
+Reply JSON only: {"groups": [["id1","id2"], ["id3"]]} Each inner array lists item ids that should be linked. Observations that are unique form single-id groups or may be omitted. Use only the ids provided. Empty groups array if nothing duplicates.

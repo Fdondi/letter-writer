@@ -1,0 +1,5 @@
+
+
+========== Hire goal / problem this role should address (from posting extraction) ==========
+{{hire_problem}}
+==========

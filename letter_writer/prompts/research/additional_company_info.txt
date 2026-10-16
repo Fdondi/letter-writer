@@ -1,0 +1,5 @@
+
+
+ADDITIONAL CONTEXT FROM THE USER:
+The applicant has provided the following additional information about the company or role. Please verify this information and incorporate relevant findings into your report:
+{{info}}

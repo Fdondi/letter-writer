@@ -1,0 +1,1 @@
+Each id may be a composite string vendor::category::item_id — copy ids EXACTLY from the list.

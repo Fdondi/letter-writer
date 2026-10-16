@@ -1,0 +1,21 @@
+{
+  "rag": {
+    "similarity": {
+      "type": "score",
+      "instructions": "How similar is the candidate job to the target job in role focus and day-to-day tasks?",
+      "criteria": [
+        "only the most basic tools or duties overlap",
+        "some overlap, but the jobs are significantly different",
+        "partial overlap of the key tasks",
+        "most key tasks match, with one major difference",
+        "nearly identical in both focus and tasks"
+      ]
+    }
+  },
+  "feedback": {
+    "grounded": {
+      "type": "noul",
+      "instructions": "Is this feedback comment a genuine issue or observation that the letter text and quoted span actually support? Answer no when the comment invents a problem, contradicts the letter, or is not about the text it cites."
+    }
+  }
+}

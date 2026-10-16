@@ -23,3 +23,10 @@ finetune/datasets/
 finetune/runs/
 finetune/.venv/
 data_backup/
+
+# Firestore emulator
+firestore-debug.log
+
+temp/
+firepit-log.txt
+

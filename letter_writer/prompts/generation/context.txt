@@ -1,0 +1,12 @@
+========== User CV:
+{{cv}}
+==========
+========== Examples:
+{{examples}}
+==========
+========== Company Report:
+{{company_report}}
+==========
+========== Target Job Description:
+{{job}}
+=========={{hire_block}}
