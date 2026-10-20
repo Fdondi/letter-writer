@@ -1,0 +1,3 @@
+[FAKE FIXTURE] This plan was not written by a model.
+1. Name FAKE Fixture Works.
+2. Keep the sentence "I led the FAKE fixture migration."

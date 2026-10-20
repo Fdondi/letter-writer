@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import io.github.fdondi.letterwriter.AppGraph
+import io.github.fdondi.letterwriter.BuildConfig
 import io.github.fdondi.letterwriter.core.ApiKeys
 import io.github.fdondi.letterwriter.core.DecisionModelSettings
 import io.github.fdondi.letterwriter.core.asDoubleOrNull
@@ -109,11 +110,37 @@ fun SettingsScreen(graph: AppGraph, modifier: Modifier = Modifier) {
     val profile by graph.profiles.profile.collectAsState()
     val p = profile ?: return
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (BuildConfig.DEBUG) DebugHarnessSection(graph)
         ApiKeysSection(graph)
         VendorsSection(graph, p)
         RoleModelsSection(graph, p)
         LanguagesSection(graph, p)
         DecisionModelSection(graph)
+    }
+}
+
+@Composable
+private fun DebugHarnessSection(graph: AppGraph) {
+    val enabled by graph.deviceSettings.fakePaidApis.collectAsState(initial = false)
+    val scope = rememberCoroutineScope()
+    val op = remember { Op() }
+    SectionCard("Debug harness") {
+        Text(
+            "Uses the fixture files in app/debug/fixtures instead of paid APIs. " +
+                "Off unless you turn it on. Every fixture is labeled [FAKE FIXTURE]. " +
+                "Research, extraction, drafts, feedback, rewrites, and translation do not call a model, embeddings, the decision model, or Google Translate. " +
+                "Sign-in and your profile still come from your account. You still need a CV there; the harness does not invent one. " +
+                "Saving the letter is refused, so fixture text is not stored as a real example. " +
+                "Approving a comment stays on this phone and is not written to Firestore.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Use fixture data", Modifier.weight(1f), fontWeight = FontWeight.Medium)
+            Switch(checked = enabled, enabled = !op.busy, onCheckedChange = { on ->
+                scope.launch { op.run(if (on) "Fixture data is on." else "Paid APIs are on.") { graph.deviceSettings.setFakePaidApis(on) } }
+            })
+        }
+        OpFeedback(op)
     }
 }
 

@@ -192,7 +192,7 @@ class Research(
     }
 
     /** `company_research` with search=False (the web findings are already in [additionalInfo]). */
-    private suspend fun companyReport(
+    internal suspend fun companyReport(
         companyName: String,
         jobText: String,
         client: LlmClient,

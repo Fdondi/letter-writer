@@ -5,6 +5,7 @@ import io.github.fdondi.letterwriter.auth.AuthManager
 import io.github.fdondi.letterwriter.core.AndroidSharedAssets
 import io.github.fdondi.letterwriter.core.ApiKeys
 import io.github.fdondi.letterwriter.core.DeviceSettings
+import io.github.fdondi.letterwriter.debug.DebugFixtures
 import io.github.fdondi.letterwriter.decision.DecisionJudge
 import io.github.fdondi.letterwriter.decision.DecisionModelClient
 import kotlinx.serialization.json.JsonObject
@@ -56,10 +57,18 @@ class AppGraph(val app: Application) {
     val companies by lazy { CompaniesRepository({ auth.firestore() }, embeddings) }
 
     val deviceSettings = DeviceSettings(app)
+    val debugFixtures = DebugFixtures.fromAssets(app.assets)
     val decisionJudge = DecisionJudge { prompts.loadJson("decision_model/questions.json") as JsonObject }
+
+    /**
+     * True only in a debug build, and only after the user turns the harness on in Settings.
+     * Release builds never take this branch, even if the preference was left on.
+     */
+    suspend fun fakePaidApis(): Boolean = BuildConfig.DEBUG && deviceSettings.currentFakePaidApis()
 
     /** Null with a reason when the decision model can't be used; callers show the reason and leave items unscored. */
     suspend fun decisionModelClient(): Pair<DecisionModelClient?, String> {
+        if (fakePaidApis()) return null to "Debug harness is on, so the decision model was not called."
         val key = apiKeys.value.get(ApiKeys.DECISION_MODEL)
             ?: return null to "No 'decision_model' API key saved. Add it in Settings → API keys."
         return DecisionModelClient(deviceSettings.currentDecisionModel(), key) to ""

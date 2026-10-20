@@ -1,0 +1,13 @@
+{
+  "items": [
+    {
+      "observation": "[FAKE FIXTURE] The style check is fixture text, not a model comment.",
+      "quote": "I led the FAKE fixture migration.",
+      "type": "PLEASE_FIX",
+      "status": "NOT_NEEDED",
+      "context_field": {"items": []},
+      "user_context": "",
+      "user_instructions": ""
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+0.76.1 - Android debug harness walks the letter with fixture data instead of paid APIs, and the app shows the same version as the web
 0.76.0 - Android drafts can be checked for feedback and approved onto the Final tab
 0.75.5 - Android quote matching no longer uses the Java-only (?U) regex flag, which crashed the process after the draft
 0.75.4 - Sign the Android release build with the debug certificate so the APK installs and Google sign-in still matches Firebase

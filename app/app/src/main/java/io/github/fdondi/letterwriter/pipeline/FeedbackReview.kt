@@ -135,7 +135,7 @@ class FeedbackReview(private val prompts: Prompts, private val checks: FeedbackC
     }
 
     /** `_build_justification_context`. */
-    private fun justificationContext(category: String, letter: String, inputs: LetterInputs, known: JsonArray): String {
+    internal fun justificationContext(category: String, letter: String, inputs: LetterInputs, known: JsonArray): String {
         val si = inputs.styleInstructions.ifEmpty { defaultStyle() }
         val add = inputs.additionalUserInfo.trim()
         val kw = checks.knownWeaknessesBlock(known)
@@ -170,7 +170,7 @@ class FeedbackReview(private val prompts: Prompts, private val checks: FeedbackC
         }
 
     /** `_stage12_batch`: keep/drop per id; ids the model omits get one retry, then default to keep. */
-    private suspend fun stage12(client: LlmClient, category: String, items: List<Pair<String, String>>, context: String): Map<String, Boolean> {
+    internal suspend fun stage12(client: LlmClient, category: String, items: List<Pair<String, String>>, context: String): Map<String, Boolean> {
         if (items.isEmpty()) return emptyMap()
         val prefix = "========== Context the checker saw ==========\n$context"
         val system = prompts.render(
@@ -198,7 +198,7 @@ class FeedbackReview(private val prompts: Prompts, private val checks: FeedbackC
     }
 
     /** `_stage3_duplicate_groups` (non-INPUT_NEEDED only). Input is (id, category, observation). */
-    private suspend fun stage3(client: LlmClient, items: List<Triple<String, String, String>>): Map<String, String> {
+    internal suspend fun stage3(client: LlmClient, items: List<Triple<String, String, String>>): Map<String, String> {
         if (items.size < 2) return emptyMap()
         val prompt = "Items:\n" + items.joinToString("\n") { (id, cat, obs) -> "- id=$id category=$cat :: ${PyText.take(obs, 1200)}" }
         val raw = client.call(ModelRole.FEEDBACK_REVIEW, prompts.load("review/stage3_system.txt"), listOf(prompt))
@@ -219,7 +219,7 @@ class FeedbackReview(private val prompts: Prompts, private val checks: FeedbackC
     }
 
     /** `_stage4_input_clusters`: id to slug. */
-    private suspend fun stage4(client: LlmClient, rows: List<InputRow>): Map<String, String> {
+    internal suspend fun stage4(client: LlmClient, rows: List<InputRow>): Map<String, String> {
         if (rows.isEmpty()) return emptyMap()
         val composite = rows.any { "::" in it.id }
         val hint = prompts.load(if (composite) "review/stage4_id_hint_composite.txt" else "review/stage4_id_hint_plain.txt")

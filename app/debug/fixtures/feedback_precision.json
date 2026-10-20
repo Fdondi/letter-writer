@@ -1,0 +1,13 @@
+{
+  "items": [
+    {
+      "observation": "[FAKE FIXTURE] This praise is fixture text, not a model comment.",
+      "quote": "I led the FAKE fixture migration.",
+      "type": "ALREADY_GOOD",
+      "status": "NOT_NEEDED",
+      "context_field": {"items": []},
+      "user_context": "",
+      "user_instructions": ""
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import io.github.fdondi.letterwriter.core.asObjectOrNull
 import io.github.fdondi.letterwriter.core.asStringOrNull
 import io.github.fdondi.letterwriter.core.pyStr
 import io.github.fdondi.letterwriter.data.UserProfile
+import io.github.fdondi.letterwriter.debug.FakeLlmClient
 import io.github.fdondi.letterwriter.decision.DecisionJudge
 import io.github.fdondi.letterwriter.decision.DecisionModelClient
 import io.github.fdondi.letterwriter.decision.RagJudgement
@@ -39,6 +40,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.time.Instant
 import java.util.Collections
 import java.util.Locale
 import java.util.UUID
@@ -82,11 +84,16 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
             factory.create(ModelVendor.fromKey(vendor) ?: throw IllegalArgumentException("Unknown vendor '$vendor'"))
     }
 
-    private fun ctx(): Ctx {
+    private suspend fun ctx(): Ctx {
         val sub = graph.auth.requireUser().sub
         val profile = graph.profiles.current()
         val overrides = profile.roleOverrides(graph.modelOverrides)
-        return Ctx(sub, profile, overrides, ClientFactory(graph.catalogs, graph.apiKeys.value, overrides))
+        val debugClient = if (graph.fakePaidApis()) {
+            { vendor: ModelVendor -> FakeLlmClient(vendor, graph.debugFixtures) }
+        } else {
+            null
+        }
+        return Ctx(sub, profile, overrides, ClientFactory(graph.catalogs, graph.apiKeys.value, overrides, debugClient))
     }
 
     // ---- session edits ----
@@ -274,6 +281,10 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
 
     /** Similar letters, then rerank + decision-model rescoring. Failures become warnings (the desktop only logs them). */
     private suspend fun ragStep(sub: String, jobText: String, client: LlmClient, warnings: MutableList<String>): RagStep {
+        if (graph.fakePaidApis()) {
+            warnings += "Debug harness: similar letters were not searched, because that search calls the embeddings API."
+            return RagStep(emptyList(), emptyList(), "Debug harness: the decision model was not called.")
+        }
         val raw = try {
             graph.documents.similar(sub, jobText).map { it.document.data }
         } catch (e: CancellationException) {
@@ -321,9 +332,13 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
     ) {
         val s = requireSession()
         val id = s.sessionId
-        val c = ctx()
         val company = s.intake.companyName.trim()
         require(company.isNotEmpty()) { "Enter the company name first." }
+        if (graph.fakePaidApis()) {
+            applyFixtureResearch(id, s.intake.pointOfContact?.get("name").asStringOrNull()?.trim().orEmpty())
+            return@launchTask
+        }
+        val c = ctx()
         val (models, dropped) = c.profile.backgroundModels(graph.catalogs)
         val warnings = ArrayList<String>()
         if (dropped.isNotEmpty()) warnings += "Skipped research models the phone can't run (no web search or desktop-only): ${dropped.joinToString(", ")}"
@@ -353,6 +368,32 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
                 selectedReportModel = firstOk?.key,
                 companyReport = firstOk?.value?.asObjectOrNull()?.get("report").asStringOrNull().orEmpty(),
                 pocReports = pocResult?.first ?: i.pocReports,
+                warnings = i.warnings + warnings,
+            )
+        }
+    }
+
+    /**
+     * Company and point-of-contact reports from fixtures. Does not read or write the company cache,
+     * and does not call web search. The report text itself says it is fixture data.
+     */
+    private suspend fun applyFixtureResearch(sessionId: String, pocName: String) {
+        val warnings = listOf("Debug harness: this company research is fixture text. It was not fetched and was not saved.")
+        val report = graph.debugFixtures.text("company_report.txt").trim()
+        val poc = graph.debugFixtures.text("poc_report.txt").trim()
+        val now = Instant.now().toString()
+        fun wrap(text: String) = buildJsonObject {
+            put("report", text)
+            put("updated_at", now)
+        }
+        val keys = listOf("fake/fixture")
+        editIntake(sessionId) { i ->
+            i.copy(
+                companyReports = JsonObject(keys.associateWith { wrap(report) }),
+                researchSource = "fixture",
+                selectedReportModel = keys.first(),
+                companyReport = report,
+                pocReports = if (pocName.isNotEmpty()) JsonObject(keys.associateWith { wrap(poc) }) else i.pocReports,
                 warnings = i.warnings + warnings,
             )
         }
@@ -473,7 +514,12 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
         setLabel(key, "Checking the draft")
         val (annotated, checkErrors) = costPhase(c.sub, "feedback", vendorCost(id, vendor, "feedback")) {
             val results = checks.runAll(text, inputs, known, client)
-            val spans = QuoteSpans { graph.embeddings.embedBatch(it) }
+            val spans = if (graph.fakePaidApis()) {
+                warnings += "Debug harness: quote matching did not call the embeddings API. A quote is highlighted only when that exact fixture sentence is in the letter."
+                QuoteSpans { throw IllegalStateException("Debug harness does not call embeddings") }
+            } else {
+                QuoteSpans { graph.embeddings.embedBatch(it) }
+            }
             val attached = spans.attachToFeedback(results.mapValues { it.value.items }, text)
             spans.failures.forEach { warnings += "Quote matching: $it" }
             val (dc, detail) = graph.decisionModelClient()
@@ -584,6 +630,7 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
         }
         val after = requireSession()
         val w = after.vendorWork(vendor)
+        if (graph.fakePaidApis()) return
         graph.documents.savePhaseDraftFeedbackSnapshot(
             c.sub,
             after.sessionId,
@@ -761,6 +808,14 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
 
     /** `/api/translate/`: Google (billed per character) or Gemini (cost phase `translate`), per the profile setting. */
     suspend fun translate(text: String, target: String, source: String? = null): Translation {
+        if (graph.fakePaidApis()) {
+            return Translation(
+                graph.debugFixtures.text("translation.txt").trim(),
+                "fake",
+                null,
+                "Debug harness: this translation is fixture text. Google Translate and Gemini were not called.",
+            )
+        }
         val c = ctx()
         return when (graph.languages.translationProvider(c.profile.data)) {
             "llm" -> costPhase(c.sub, "translate", { }) {
@@ -816,6 +871,9 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
      * and the feedback answers merged into the profile's extra_info / agent_feedback_context.
      */
     suspend fun saveLetter(): String {
+        if (graph.fakePaidApis()) {
+            throw IllegalStateException("Debug harness is on. This letter is fixture data and was not saved to your examples.")
+        }
         val s = requireSession()
         val c = ctx()
         val letter = s.finalText

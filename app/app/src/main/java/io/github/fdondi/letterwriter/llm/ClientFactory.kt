@@ -2,13 +2,20 @@ package io.github.fdondi.letterwriter.llm
 
 import io.github.fdondi.letterwriter.core.ApiKeys
 
-/** Python `get_client(vendor)` + bound role overrides. */
+/**
+ * Python `get_client(vendor)` + bound role overrides.
+ *
+ * [debugClient] is set only while the debug harness is on. It replaces the paid
+ * client and does not read an API key. Left null, [create] always uses the real vendor.
+ */
 class ClientFactory(
     private val catalogs: Catalogs,
     private val keys: ApiKeys,
     private val overrides: VendorRoleOverrides,
+    private val debugClient: ((ModelVendor) -> LlmClient)? = null,
 ) {
     fun create(vendor: ModelVendor): LlmClient {
+        debugClient?.let { return it(vendor) }
         val catalog = catalogs[vendor]
         val key = keys.require(keyField(vendor), "${vendor.label} calls")
         return when (vendor) {

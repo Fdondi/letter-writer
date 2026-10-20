@@ -1,6 +1,7 @@
 package io.github.fdondi.letterwriter.core
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -33,6 +34,16 @@ class DeviceSettings(private val context: Context) {
     private val baseUrlKey = stringPreferencesKey("decision_model_base_url")
     private val modelKey = stringPreferencesKey("decision_model_model")
     private val hideBelowKey = doublePreferencesKey("decision_model_feedback_hide_below")
+    private val fakePaidApisKey = booleanPreferencesKey("debug_fake_paid_apis")
+
+    /** Off unless the user turns it on. Release builds ignore the stored value. */
+    val fakePaidApis: Flow<Boolean> = context.deviceSettingsStore.data.map { it[fakePaidApisKey] == true }
+
+    suspend fun currentFakePaidApis(): Boolean = fakePaidApis.first()
+
+    suspend fun setFakePaidApis(enabled: Boolean) {
+        context.deviceSettingsStore.edit { it[fakePaidApisKey] = enabled }
+    }
 
     val decisionModel: Flow<DecisionModelSettings> = context.deviceSettingsStore.data.map { p ->
         DecisionModelSettings(

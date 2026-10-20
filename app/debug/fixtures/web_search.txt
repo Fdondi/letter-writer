@@ -1,0 +1,1 @@
+[FAKE FIXTURE] Web search was not called. There are no findings.

@@ -100,7 +100,7 @@ class FeedbackChecks(private val prompts: Prompts, private val defaultStyle: () 
     }
 
     /** `_call_vendor_feedback_items`. */
-    private suspend fun callItems(
+    internal suspend fun callItems(
         category: String,
         checker: CheckerPrompt,
         topDocs: List<JsonObject>,

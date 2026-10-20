@@ -271,6 +271,7 @@ private fun JobDetails(graph: AppGraph, s: WorkSession, onStartWriting: () -> Un
                 when (i.researchSource) {
                     "cache" -> "Reused a saved report (less than 6 months old)."
                     "similar" -> "Reused the saved report of a company with a similar name."
+                    "fixture" -> "Fixture text from the debug harness. Nothing was fetched or saved."
                     else -> "New research."
                 },
                 style = MaterialTheme.typography.bodySmall,

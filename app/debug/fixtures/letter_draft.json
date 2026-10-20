@@ -1,0 +1,9 @@
+{
+  "draft_letter": "[FAKE FIXTURE] This draft was not written by a model.\n\nDear FAKE Fixture Works,\n\nI am applying for the FAKE Fixture Engineer role. I led the FAKE fixture migration.\n\nKind regards,\nFAKE Applicant",
+  "known_weaknesses": [
+    {
+      "requirement": "[FAKE FIXTURE] A requirement that is not from a posting.",
+      "gap": "[FAKE FIXTURE] A gap that is not from a CV."
+    }
+  ]
+}

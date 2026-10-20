@@ -39,13 +39,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.github.fdondi.letterwriter.AppGraph
+import io.github.fdondi.letterwriter.BuildConfig
 import io.github.fdondi.letterwriter.auth.SignedInUser
 import io.github.fdondi.letterwriter.cost.CostSyncState
 import io.github.fdondi.letterwriter.data.ProfileMissingException
 import io.github.fdondi.letterwriter.ui.common.BusyRow
 import io.github.fdondi.letterwriter.ui.common.ErrorText
+import io.github.fdondi.letterwriter.ui.common.WarningList
 import io.github.fdondi.letterwriter.ui.settings.CostsScreen
 import io.github.fdondi.letterwriter.ui.settings.CvScreen
 import io.github.fdondi.letterwriter.ui.settings.ExamplesScreen
@@ -110,6 +114,7 @@ private fun AppShell(graph: AppGraph, user: SignedInUser) {
     val snackbar = remember { SnackbarHostState() }
     val message by graph.flow.message.collectAsState()
     val shared by graph.incomingShare.collectAsState()
+    val fakePaidApis by graph.deviceSettings.fakePaidApis.collectAsState(initial = false)
 
     LaunchedEffect(message) {
         val m = message ?: return@LaunchedEffect
@@ -147,11 +152,20 @@ private fun AppShell(graph: AppGraph, user: SignedInUser) {
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawer.open() } }) { Icon(Icons.Filled.Menu, contentDescription = "Menu") }
                     },
+                    actions = { AppVersionLabel() },
                 )
             },
             snackbarHost = { SnackbarHost(snackbar) },
         ) { padding ->
             Column(Modifier.padding(padding).fillMaxSize()) {
+                if (BuildConfig.DEBUG && fakePaidApis) {
+                    WarningList(
+                        listOf(
+                            "Debug harness is on. Research, drafts, feedback, and rewrites are fixture data labeled [FAKE FIXTURE]. Paid APIs are not called, and this letter will not be saved to your account.",
+                        ),
+                        Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
                 CostConsentBanner(graph)
                 val content = Modifier.fillMaxSize()
                 when (destination) {
@@ -165,6 +179,19 @@ private fun AppShell(graph: AppGraph, user: SignedInUser) {
             }
         }
     }
+}
+
+/** Same string the web shows beside the title, from `letter_writer_web/public/app-version.txt` at build time. */
+@Composable
+private fun AppVersionLabel() {
+    Text(
+        "v${BuildConfig.VERSION_NAME}",
+        modifier = Modifier.padding(end = 16.dp).semantics {
+            contentDescription = "Application version ${BuildConfig.VERSION_NAME}"
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 /** BigQuery needs a one-time OAuth consent before queued costs can be uploaded. */

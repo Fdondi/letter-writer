@@ -1,0 +1,9 @@
+{
+  "hire_problem": "[FAKE FIXTURE] FAKE Fixture Works is hiring a FAKE Fixture Engineer so this screen can be walked without a model. This is not a real hiring need.",
+  "critical": ["FixtureStack"],
+  "expected": ["FixtureLang"],
+  "nice to have": [],
+  "useful": [],
+  "necessary": [],
+  "marginally useful": []
+}

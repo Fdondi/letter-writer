@@ -13,6 +13,19 @@ if (file("google-services.json").exists()) {
 }
 
 val repoRoot: File = rootDir.parentFile
+
+// Same string the web UI reads at runtime from the first line of this changelog.
+val appVersionFile = repoRoot.resolve("letter_writer_web/public/app-version.txt")
+val appVersion = appVersionFile.useLines { lines ->
+    lines.map { it.trim() }.firstOrNull { it.isNotEmpty() }
+}?.substringBefore(" - ")?.trim().orEmpty()
+require(Regex("""\d+\.\d+\.\d+""").matches(appVersion)) {
+    "First line of $appVersionFile must be \"<major.minor.patch> - <text>\", found: ${appVersion.ifEmpty { "(empty)" }}"
+}
+val appVersionParts = appVersion.split(".").map { it.toInt() }
+// 0.75.0 -> 75000, 0.76.1 -> 76001.
+val appVersionCode = appVersionParts[0] * 100_000 + appVersionParts[1] * 1_000 + appVersionParts[2]
+
 val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
@@ -28,8 +41,8 @@ android {
         applicationId = "io.github.fdondi.letterwriter"
         minSdk = 29
         targetSdk = 37
-        versionCode = 75000
-        versionName = "0.75.0"
+        versionCode = appVersionCode
+        versionName = appVersion
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField(
@@ -102,9 +115,36 @@ val syncSharedAssets = tasks.register<SyncSharedAssets>("syncSharedAssets") {
     clientsDir.set(repoRoot.resolve("letter_writer/clients"))
 }
 
+/** Fixture replies for the debug harness. Packaged only into debug builds, under assets/fixtures/. */
+abstract class SyncDebugFixtures : DefaultTask() {
+    @get:InputDirectory
+    abstract val fixturesDir: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @get:Inject
+    abstract val fs: FileSystemOperations
+
+    @TaskAction
+    fun sync() {
+        fs.sync {
+            from(fixturesDir)
+            into(outputDir.get().dir("fixtures"))
+        }
+    }
+}
+
+val syncDebugFixtures = tasks.register<SyncDebugFixtures>("syncDebugFixtures") {
+    fixturesDir.set(rootDir.resolve("debug/fixtures"))
+}
+
 androidComponents {
     onVariants { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(syncSharedAssets, SyncSharedAssets::outputDir)
+        if (variant.name.contains("debug")) {
+            variant.sources.assets?.addGeneratedSourceDirectory(syncDebugFixtures, SyncDebugFixtures::outputDir)
+        }
     }
 }
 

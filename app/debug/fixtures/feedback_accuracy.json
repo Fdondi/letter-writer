@@ -1,0 +1,13 @@
+{
+  "items": [
+    {
+      "observation": "[FAKE FIXTURE] The accuracy check wants a made-up detail filled in.",
+      "quote": "I led the FAKE fixture migration.",
+      "type": "PLEASE_FIX",
+      "status": "INPUT_NEEDED",
+      "context_field": {"items": []},
+      "user_context": "",
+      "user_instructions": "[FAKE FIXTURE] Say what the migration was, or skip the question."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "company_name": "FAKE Fixture Works",
+  "job_title": "FAKE Fixture Engineer",
+  "location": "FAKE City",
+  "language": "English",
+  "salary": "FAKE 0",
+  "point_of_contact": {
+    "name": "FAKE Contact",
+    "role": "FAKE Recruiter",
+    "contact_details": "fake@fixture.invalid",
+    "notes": "[FAKE FIXTURE] Not a real person."
+  }
+}
