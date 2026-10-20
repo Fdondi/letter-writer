@@ -4,24 +4,31 @@ from .base import BaseClient, ModelRole, vendor_model_field
 from .prompt_cache import merge_cache_prefixes, prepare_cache_block
 from .model_override import apply_model_override_thinking
 from anthropic import Anthropic
-from typing import List, Dict, Any, Optional, FrozenSet
+from typing import List, Dict, Any, Optional
 import typer
 from langsmith import traceable
 
-# Anthropic rejects ``thinking.type == "enabled"`` (budget_tokens) on these
-# families; use adaptive thinking + ``output_config.effort`` instead. See:
-# https://platform.claude.com/docs/en/about-claude/models/migration-guide
-_ADAPTIVE_THINKING_MODEL_MARKERS: FrozenSet[str] = frozenset(
-    ("fable-5", "opus-5-5", "opus-4-8", "opus-4-7", "opus-4-6", "sonnet-5", "sonnet-4-6")
-)
-_VALID_THINKING_EFFORTS: FrozenSet[str] = frozenset(
-    ("low", "medium", "high", "max", "xhigh")
-)
+# ``thinking_efforts`` includes ``off`` for the picker. That value turns thinking
+# off; it is not an ``output_config.effort`` the API accepts.
+_THINKING_OFF_VALUES = frozenset(("off", "none", "false"))
 
 
-def _anthropic_model_requires_adaptive_thinking(model: str) -> bool:
-    m = (model or "").lower()
-    return any(marker in m for marker in _ADAPTIVE_THINKING_MODEL_MARKERS)
+def _catalog_thinking_efforts(model: str) -> List[str]:
+    """Effort values this model accepts, from its catalog entry or vendor defaults."""
+    raw = vendor_model_field("anthropic", model, "thinking_efforts", [])
+    if not isinstance(raw, list):
+        return []
+    return [str(x).lower() for x in raw if str(x).strip().lower() not in _THINKING_OFF_VALUES]
+
+
+def _catalog_default_effort(model: str, allowed: List[str]) -> str:
+    raw = vendor_model_field("anthropic", model, "default_thinking_effort", None)
+    chosen = str(raw).strip().lower() if raw else ""
+    if chosen and (not allowed or chosen in allowed):
+        return chosen
+    if allowed:
+        return allowed[0]
+    return chosen
 
 
 def _schema_blocks_json_output(node: Any) -> Optional[str]:
@@ -116,45 +123,32 @@ class ClaudeClient(BaseClient):
     ) -> Dict[str, Any]:
         """Build ``thinking`` / ``output_config`` for :meth:`messages.create`.
 
-        Newer models (Fable 5, Opus 5.5, Opus 4.6+, Sonnet 5.5, Sonnet 5, Sonnet 4.6, Mythos)
-        require ``thinking.type`` ``adaptive`` and reject ``enabled`` + ``budget_tokens``.
-        Opus 5.5 also rejects ``thinking.type`` ``disabled``; omit the field or send adaptive.
-        Sonnet 5.5 turns thinking off with ``between_tools`` (catalog ``thinking_off_type``);
-        omitting the field there means adaptive thinking at the default ``high`` effort.
-        Older models still need manual extended thinking with ``budget_tokens``.
-        See https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
-        and https://platform.claude.com/docs/en/build-with-claude/effort
+        ``thinking_type``, ``thinking_efforts``, ``default_thinking_effort``, and
+        ``thinking_off_type`` come from the Anthropic catalog. ``adaptive`` sends
+        ``output_config.effort``. Anything else uses manual extended thinking with
+        ``budget_tokens`` (strictly less than ``max_tokens``). A dated snapshot
+        matches the longest catalog id it contains.
         """
         if not thinking_enabled:
             off_type = vendor_model_field("anthropic", model, "thinking_off_type", None)
             return {"thinking": {"type": str(off_type)}} if off_type else {}
-        norm = (model or "").lower()
-        # Substrings match dated IDs (e.g. claude-opus-4-7-20250514).
-        adaptive_markers = (
-            "claude-fable-5",
-            "claude-opus-5-5",
-            "claude-opus-4-8",
-            "claude-opus-4-7",
-            "claude-opus-4-6",
-            "claude-sonnet-5",
-            "claude-sonnet-4-6",
-            "claude-mythos",
-            "mythos-preview",
-        )
-        if any(marker in norm for marker in adaptive_markers):
-            effort_raw = thinking_cfg.get("effort") or thinking_cfg.get("thinking_effort") or "high"
-            effort = str(effort_raw).lower() if effort_raw is not None else "high"
-            if effort not in _VALID_THINKING_EFFORTS:
-                typer.echo(
-                    f"[WARNING] Invalid thinking effort {effort_raw!r}; using 'high'. "
-                    f"Expected one of {sorted(_VALID_THINKING_EFFORTS)}."
-                )
-                effort = "high"
+        thinking_type = str(vendor_model_field("anthropic", model, "thinking_type", "enabled") or "enabled").lower()
+        if thinking_type == "adaptive":
+            allowed = _catalog_thinking_efforts(model)
+            effort_raw = thinking_cfg.get("effort") or thinking_cfg.get("thinking_effort")
+            effort = str(effort_raw).strip().lower() if effort_raw else ""
+            if not effort or (allowed and effort not in allowed):
+                fallback = _catalog_default_effort(model, allowed)
+                if effort:
+                    typer.echo(
+                        f"[WARNING] Invalid thinking effort {effort_raw!r} for {model}; using {fallback!r}. "
+                        f"Expected one of {allowed}."
+                    )
+                effort = fallback
             return {
                 "thinking": {"type": "adaptive"},
                 "output_config": {"effort": effort},
             }
-        # budget_tokens must be strictly less than max_tokens
         return {
             "thinking": {
                 "type": "enabled",
@@ -199,7 +193,34 @@ class ClaudeClient(BaseClient):
     # Cache read  = input_cached_mult × input (10% on most Claude models; 5% on Opus 5.5)
     # Cache write = 125 % of input price (5-minute ephemeral)
     # Regular     = 100 %
+    # A price object with ``threshold`` switches both rates when the prompt
+    # (input tokens) is longer than that. Haiku 5.5 does this at 100k tokens.
+    # Entries without a threshold keep the flat or low rate.
     # ------------------------------------------------------------------
+    def _prices_for_prompt(self, model_name: str, input_tokens: int, costs: Dict[str, Any]) -> tuple:
+        cfg = self._load_cost_config()
+        models = cfg.get("models", {}) if isinstance(cfg, dict) else {}
+        model_cfg = models.get(model_name, {}) if isinstance(models, dict) else {}
+        if not isinstance(model_cfg, dict):
+            return costs["input"], costs["output"]
+        threshold = None
+        for key in ("input", "output"):
+            field = model_cfg.get(key)
+            if isinstance(field, dict) and field.get("threshold") is not None:
+                threshold = int(field["threshold"])
+                break
+
+        def pick(field: Any, flat: float) -> float:
+            if threshold is None or not isinstance(field, dict):
+                return flat
+            low = float(field.get("low", flat) or 0.0)
+            high = float(field.get("high", low) or low)
+            return high if input_tokens > threshold else low
+
+        return pick(model_cfg.get("input"), float(costs["input"])), pick(
+            model_cfg.get("output"), float(costs["output"])
+        )
+
     def track_cost(
         self,
         model_name: str,
@@ -212,7 +233,7 @@ class ClaudeClient(BaseClient):
         cache_write_tokens: int = 0,
     ):
         costs = self.get_model_cost(model_name)
-        input_price = costs["input"]
+        input_price, output_price = self._prices_for_prompt(model_name, input_tokens, costs)
         cache_read_mult = float(costs.get("input_cached_mult", 0.10))
 
         regular = max(0, input_tokens - cache_read_tokens - cache_write_tokens)
@@ -221,7 +242,7 @@ class ClaudeClient(BaseClient):
             + (cache_read_tokens / 1_000_000) * input_price * cache_read_mult
             + (cache_write_tokens / 1_000_000) * input_price * 1.25
         )
-        output_cost = (output_tokens / 1_000_000) * costs["output"]
+        output_cost = (output_tokens / 1_000_000) * output_price
         search_cost = (search_queries / 1_000) * costs["search"]
 
         self.total_cost += input_cost + output_cost + search_cost

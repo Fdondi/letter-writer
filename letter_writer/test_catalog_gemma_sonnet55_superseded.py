@@ -25,6 +25,7 @@ _EXPECTED_SUPERSEDED = {
     "claude-opus-4-6": "claude-opus-5-5",
     "claude-opus-4-7": "claude-opus-5-5",
     "claude-opus-4-8": "claude-opus-5-5",
+    "claude-haiku-4-5": "claude-haiku-5-5",
     "claude-fable-5": "claude-fable-5-1",
     "gpt-5.6-luna": "gpt-6-luna",
     "gpt-5.6-terra": "gpt-6.1-sol",
@@ -42,6 +43,7 @@ _EXPECTED_SUPERSEDED = {
 
 # Successor costs more on at least one rate, so the older model stays top level.
 _STAYS_TOP_LEVEL = (
+    "claude-haiku-5-5",
     "claude-sonnet-5-5",
     "claude-fable-5-1",
     "gpt-6.1-sol",
@@ -162,6 +164,74 @@ def test_sonnet_55_thinking_on_is_adaptive_and_off_is_between_tools():
     assert _picker_by_id()["claude-sonnet-5-5"]["reasoning_efforts"] == [
         "off", "low", "medium", "high", "xhigh", "max",
     ]
+
+
+def test_haiku_55_switches_both_rates_when_the_prompt_passes_100k():
+    client = _bare(ClaudeClient)
+    costs = client.get_model_cost("claude-haiku-5-5")
+    assert costs["input"] == 0.10
+    assert costs["output"] == 0.50
+    assert costs["input_cached_mult"] == 0.10
+    assert anthropic_min_cache_tokens("claude-haiku-5-5") == 512
+
+    at_cap = _bare(ClaudeClient)
+    at_cap.track_cost("claude-haiku-5-5", input_tokens=100_000, output_tokens=1_000)
+    assert at_cap.total_cost == pytest.approx(100_000 / 1_000_000 * 0.10 + 1_000 / 1_000_000 * 0.50)
+
+    # Output length does not select the rate. A long reply on a short prompt stays short.
+    long_reply = _bare(ClaudeClient)
+    long_reply.track_cost("claude-haiku-5-5", input_tokens=50_000, output_tokens=200_000)
+    assert long_reply.total_cost == pytest.approx(50_000 / 1_000_000 * 0.10 + 200_000 / 1_000_000 * 0.50)
+
+    long_prompt = _bare(ClaudeClient)
+    long_prompt.track_cost(
+        "claude-haiku-5-5",
+        input_tokens=100_001,
+        output_tokens=1_000,
+        cache_read_tokens=100_001,
+    )
+    assert long_prompt.total_cost == pytest.approx(
+        100_001 / 1_000_000 * 0.50 * 0.10 + 1_000 / 1_000_000 * 2.50
+    )
+
+    flat = _bare(ClaudeClient)
+    flat.track_cost("claude-haiku-4-5", input_tokens=200_000, output_tokens=1_000)
+    assert flat.total_cost == pytest.approx(200_000 / 1_000_000 * 1.0 + 1_000 / 1_000_000 * 5.0)
+
+
+def test_thinking_mode_and_efforts_come_from_the_catalog():
+    dated = ClaudeClient._thinking_request_kwargs(
+        "claude-opus-4-7-20250514", True, 8000, {"effort": "medium"}
+    )
+    assert dated == {"thinking": {"type": "adaptive"}, "output_config": {"effort": "medium"}}
+    unknown = ClaudeClient._thinking_request_kwargs("claude-mythos-preview", True, 8000, {"effort": "high"})
+    assert unknown["thinking"]["type"] == "enabled"
+    rejected = ClaudeClient._thinking_request_kwargs("claude-haiku-5-5", True, 8000, {"effort": "nope"})
+    assert rejected["output_config"]["effort"] == "high"
+
+
+def test_haiku_55_thinking_on_is_adaptive_and_off_is_disabled():
+    on = ClaudeClient._thinking_request_kwargs("claude-haiku-5-5", True, 8000, {"effort": "low"})
+    assert on == {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}
+    off = ClaudeClient._thinking_request_kwargs("claude-haiku-5-5", False, 8000, {})
+    assert off == {"thinking": {"type": "disabled"}}
+    assert ClaudeClient._thinking_request_kwargs("claude-haiku-4-5", True, 8000, {})["thinking"]["type"] == "enabled"
+    assert _picker_by_id()["claude-haiku-5-5"]["reasoning_efforts"] == [
+        "off", "low", "medium", "high", "xhigh", "max",
+    ]
+
+
+def test_anthropic_cheap_roles_moved_to_haiku_55():
+    client = _bare(ClaudeClient)
+    for role in (
+        ModelRole.EXTRACTION,
+        ModelRole.FEEDBACK,
+        ModelRole.FEEDBACK_REVIEW,
+        ModelRole.FEEDBACK_CONTEXT,
+        ModelRole.AGENTIC,
+        ModelRole.AUTOCOMPLETE,
+    ):
+        assert client.get_model_for_role(role) == "claude-haiku-5-5"
 
 
 def test_anthropic_sonnet_roles_moved_to_sonnet_55():

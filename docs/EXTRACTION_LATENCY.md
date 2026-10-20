@@ -6,7 +6,7 @@ Extraction is **I/O-bound**: most of the time is waiting for the LLM API (networ
 
 ## What we already do
 
-- **Extraction role**: Job metadata extraction uses `ModelRole.EXTRACTION` (e.g. gpt-6-luna, claude-haiku-4-5, gemini-2.5-flash-lite per vendor `roles.extraction` in `letter_writer/clients/*.json`).
+- **Extraction role**: Job metadata extraction uses `ModelRole.EXTRACTION` (e.g. gpt-6-luna, claude-haiku-5-5, gemini-2.5-flash-lite per vendor `roles.extraction` in `letter_writer/clients/*.json`).
 - **Parallel calls**: `extract_job_metadata_no_requirements` and `extract_key_competences` run in parallel (2 threads). Grading runs after, since it depends on extraction output.
 - **In-memory cache**: Repeated extraction for the **same job** (e.g. multiple CVs) reuses the two extraction results; only grading is re-run (see `_EXTRACTION_CACHE` in `generation.py`).
 - **Shared prompt prefix**: Both extraction calls use the same system prompt and the same start of the user message (`Job description:\n{job_text}\n\n`). The **task** (metadata vs competences) is only in the suffix. That allows provider-side prompt caching.

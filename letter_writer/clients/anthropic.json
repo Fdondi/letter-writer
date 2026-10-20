@@ -4,20 +4,22 @@
     "input_cached_mult": 0.10,
     "min_cache_tokens": 2048,
     "structured_output": false,
+    "thinking_type": "enabled",
+    "default_thinking_effort": "high",
     "thinking_efforts": ["off", "low", "medium", "high", "max"]
   },
   "roles": {
-    "extraction":       { "model": "claude-haiku-4-5",  "thinking": false },
-    "feedback":         { "model": "claude-haiku-4-5",  "thinking": true },
-    "feedback_review":  { "model": "claude-haiku-4-5",  "thinking": false },
-    "feedback_context": { "model": "claude-haiku-4-5",  "thinking": false },
+    "extraction":       { "model": "claude-haiku-5-5",  "thinking": false },
+    "feedback":         { "model": "claude-haiku-5-5",  "thinking": true },
+    "feedback_review":  { "model": "claude-haiku-5-5",  "thinking": false },
+    "feedback_context": { "model": "claude-haiku-5-5",  "thinking": false },
     "rag_ranker":       { "model": "claude-sonnet-5-5", "thinking": true, "effort": "medium" },
     "company_research": { "model": "claude-sonnet-5-5", "thinking": true, "effort": "medium" },
     "letter_plan":      { "model": "claude-sonnet-5-5", "thinking": true, "effort": "medium" },
     "letter_draft":     { "model": "claude-sonnet-5-5", "thinking": true, "effort": "medium" },
     "letter_refine":    { "model": "claude-sonnet-5-5", "thinking": true, "effort": "medium" },
-    "agentic":          { "model": "claude-haiku-4-5",  "thinking": false },
-    "autocomplete":         { "model": "claude-haiku-4-5",  "thinking": false },
+    "agentic":          { "model": "claude-haiku-5-5",  "thinking": false },
+    "autocomplete":         { "model": "claude-haiku-5-5",  "thinking": false },
     "autocomplete_plan":    { "model": "claude-opus-5-5",   "thinking": true, "effort": "high" }
   },
   "models":
@@ -26,13 +28,25 @@
       "input": 1.00,
       "output": 5.00,
       "min_cache_tokens": 4096,
-      "structured_output": true
+      "structured_output": true,
+      "thinking_type": "enabled",
+      "superseded_by": "claude-haiku-5-5"
+    },
+    "claude-haiku-5-5": {
+      "input": { "low": 0.10, "high": 0.50, "threshold": 100000 },
+      "output": { "low": 0.50, "high": 2.50, "threshold": 100000 },
+      "min_cache_tokens": 512,
+      "structured_output": true,
+      "thinking_type": "adaptive",
+      "thinking_off_type": "disabled",
+      "thinking_efforts": ["off", "low", "medium", "high", "xhigh", "max"]
     },
     "claude-sonnet-4-5": {
       "input": 3.00,
       "output": 15.00,
       "min_cache_tokens": 1024,
       "structured_output": true,
+      "thinking_type": "enabled",
       "superseded_by": "claude-sonnet-5-5"
     },
     "claude-sonnet-4-6": {
@@ -40,6 +54,7 @@
       "output": 15.00,
       "min_cache_tokens": 1024,
       "structured_output": true,
+      "thinking_type": "adaptive",
       "superseded_by": "claude-sonnet-5-5"
     },
     "claude-sonnet-5": {
@@ -47,6 +62,7 @@
       "output": 10.00,
       "min_cache_tokens": 1024,
       "structured_output": true,
+      "thinking_type": "adaptive",
       "superseded_by": "claude-sonnet-5-5"
     },
     "claude-sonnet-5-5": {
@@ -54,6 +70,7 @@
       "output": 10.00,
       "min_cache_tokens": 512,
       "structured_output": true,
+      "thinking_type": "adaptive",
       "thinking_off_type": "between_tools",
       "thinking_efforts": ["off", "low", "medium", "high", "xhigh", "max"]
     },
@@ -62,6 +79,7 @@
       "output": 25.00,
       "min_cache_tokens": 4096,
       "structured_output": true,
+      "thinking_type": "enabled",
       "superseded_by": "claude-opus-5-5"
     },
     "claude-opus-4-6": {
@@ -69,6 +87,7 @@
       "output": 25.00,
       "min_cache_tokens": 4096,
       "structured_output": true,
+      "thinking_type": "adaptive",
       "superseded_by": "claude-opus-5-5"
     },
     "claude-opus-4-7": {
@@ -76,6 +95,7 @@
       "output": 25.00,
       "min_cache_tokens": 2048,
       "structured_output": true,
+      "thinking_type": "adaptive",
       "superseded_by": "claude-opus-5-5"
     },
     "claude-opus-4-8": {
@@ -83,6 +103,7 @@
       "output": 25.00,
       "min_cache_tokens": 1024,
       "structured_output": true,
+      "thinking_type": "adaptive",
       "superseded_by": "claude-opus-5-5"
     },
     "claude-opus-5-5": {
@@ -91,6 +112,7 @@
       "input_cached_mult": 0.05,
       "min_cache_tokens": 512,
       "structured_output": true,
+      "thinking_type": "adaptive",
       "thinking_efforts": ["low", "medium", "high", "xhigh", "max"]
     },
     "claude-fable-5": {
@@ -98,6 +120,7 @@
       "output": 50.00,
       "min_cache_tokens": 512,
       "structured_output": true,
+      "thinking_type": "adaptive",
       "thinking_efforts": ["low", "medium", "high", "xhigh", "max"],
       "superseded_by": "claude-fable-5-1"
     },
@@ -107,6 +130,7 @@
       "input_cached_mult": 0.025,
       "min_cache_tokens": 512,
       "structured_output": true,
+      "thinking_type": "adaptive",
       "thinking_efforts": ["low", "medium", "high", "xhigh", "max"]
     }
   }

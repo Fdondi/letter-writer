@@ -3,6 +3,7 @@ package io.github.fdondi.letterwriter.llm
 import io.github.fdondi.letterwriter.core.Json
 import io.github.fdondi.letterwriter.core.SharedAssets
 import io.github.fdondi.letterwriter.core.asDoubleOrNull
+import io.github.fdondi.letterwriter.core.asLongOrNull
 import io.github.fdondi.letterwriter.core.asObjectOrNull
 import io.github.fdondi.letterwriter.core.asStringOrNull
 import kotlinx.serialization.json.JsonArray
@@ -76,6 +77,18 @@ class VendorCatalog(val vendor: ModelVendor, private val root: JsonObject) {
         )
     }
 
+    /**
+     * [modelCost] at the short-prompt rate, or the `high` rate when [inputTokens]
+     * is over a catalog `threshold`. Haiku 5.5 switches both rates on prompt length.
+     */
+    fun costForPrompt(model: String, inputTokens: Long): ModelCost {
+        val base = modelCost(model)
+        val entry = models[model] as? JsonObject ?: return base
+        val threshold = promptThreshold(entry["input"]) ?: promptThreshold(entry["output"]) ?: return base
+        if (inputTokens <= threshold) return base
+        return base.copy(input = highPrice(entry["input"], base.input), output = highPrice(entry["output"], base.output))
+    }
+
     /** Python `get_all_model_pricing` rows for this vendor (models with a price, or free-tier-only). */
     fun modelInfos(): List<ModelInfo> {
         val defaultSearch = defaults["search"].asDoubleOrNull() ?: 0.0
@@ -139,6 +152,14 @@ class VendorCatalog(val vendor: ModelVendor, private val root: JsonObject) {
             val root = Json.parse(text) as? JsonObject
                 ?: throw IllegalStateException("Catalog ${vendor.catalogStem}.json is not a JSON object")
             return VendorCatalog(vendor, root)
+        }
+
+        private fun promptThreshold(field: JsonElement?): Long? =
+            (field as? JsonObject)?.get("threshold")?.asLongOrNull()
+
+        private fun highPrice(field: JsonElement?, fallback: Double): Double {
+            val o = field as? JsonObject ?: return fallback
+            return o["high"]?.asDoubleOrNull() ?: o["low"]?.asDoubleOrNull() ?: fallback
         }
 
         /** Number, or the `low` (else `high`) tier of a `{low, high}` price. */

@@ -132,7 +132,7 @@ class AnthropicClient(
             write += u["cache_creation_input_tokens"].asLongOrNull() ?: 0
         }
         if (input == 0L && output == 0L) return
-        val c = catalog.modelCost(model)
+        val c = catalog.costForPrompt(model, input)
         val regular = maxOf(0, input - read - write)
         val inputCost = regular / 1e6 * c.input + read / 1e6 * c.input * c.inputCachedMult + write / 1e6 * c.input * 1.25
         val cost = inputCost + output / 1e6 * c.output + searchQueries / 1e3 * c.search
@@ -186,15 +186,11 @@ class AnthropicClient(
             val offType = catalog.modelField(model, "thinking_off_type").asStringOrNull()
             return if (!offType.isNullOrEmpty()) mapOf("thinking" to buildJsonObject { put("type", offType) }) else emptyMap()
         }
-        val norm = model.lowercase()
-        if (ADAPTIVE_MARKERS.any { it in norm }) {
-            val raw = cfg["effort"].asStringOrNull()?.takeIf { it.isNotEmpty() }
-                ?: cfg["thinking_effort"].asStringOrNull()?.takeIf { it.isNotEmpty() }
-                ?: "high"
-            val effort = raw.lowercase().takeIf { it in VALID_EFFORTS } ?: "high"
+        val thinkingType = catalog.modelField(model, "thinking_type").asStringOrNull()?.lowercase() ?: "enabled"
+        if (thinkingType == "adaptive") {
             return mapOf(
                 "thinking" to buildJsonObject { put("type", "adaptive") },
-                "output_config" to buildJsonObject { put("effort", effort) },
+                "output_config" to buildJsonObject { put("effort", adaptiveEffort(model, cfg)) },
             )
         }
         return mapOf(
@@ -205,12 +201,27 @@ class AnthropicClient(
         )
     }
 
+    /** Catalog ``thinking_efforts`` except ``off``, which means thinking disabled. */
+    private fun catalogEfforts(model: String): List<String> {
+        val raw = catalog.modelField(model, "thinking_efforts") as? JsonArray ?: return emptyList()
+        return raw.mapNotNull { (it as? JsonPrimitive)?.content?.trim()?.lowercase() }
+            .filter { it.isNotEmpty() && it !in THINKING_OFF }
+    }
+
+    private fun adaptiveEffort(model: String, cfg: Map<String, JsonElement>): String {
+        val allowed = catalogEfforts(model)
+        val requested = (
+            cfg["effort"].asStringOrNull()?.takeIf { it.isNotEmpty() }
+                ?: cfg["thinking_effort"].asStringOrNull()?.takeIf { it.isNotEmpty() }
+            )?.lowercase()
+        if (!requested.isNullOrEmpty() && (allowed.isEmpty() || requested in allowed)) return requested
+        val fallback = catalog.modelField(model, "default_thinking_effort").asStringOrNull()?.trim()?.lowercase()
+        if (!fallback.isNullOrEmpty() && (allowed.isEmpty() || fallback in allowed)) return fallback
+        return allowed.firstOrNull() ?: requested.orEmpty()
+    }
+
     companion object {
-        private val ADAPTIVE_MARKERS = listOf(
-            "claude-fable-5", "claude-opus-5-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
-            "claude-sonnet-5", "claude-sonnet-4-6", "claude-mythos", "mythos-preview",
-        )
-        private val VALID_EFFORTS = setOf("low", "medium", "high", "max", "xhigh")
+        private val THINKING_OFF = setOf("off", "none", "false")
 
         private fun cachedText(text: String) = buildJsonObject {
             put("type", "text")

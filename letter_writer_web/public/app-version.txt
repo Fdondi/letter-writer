@@ -1,3 +1,5 @@
+0.77.1 - Read Claude thinking mode and allowed efforts from the Anthropic catalog
+0.77.0 - Deprecate Claude Haiku 4.5 in favor of Haiku 5.5, billing the short or long prompt rate at 100k tokens
 0.76.1 - Android debug harness walks the letter with fixture data instead of paid APIs, and the app shows the same version as the web
 0.76.0 - Android drafts can be checked for feedback and approved onto the Final tab
 0.75.5 - Android quote matching no longer uses the Java-only (?U) regex flag, which crashed the process after the draft

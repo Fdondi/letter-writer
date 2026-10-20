@@ -102,6 +102,7 @@ def test_supported_models_use_output_config_format():
         "claude-opus-4-8",
         "claude-sonnet-4-6",
         "claude-haiku-4-5",
+        "claude-haiku-5-5",
         "claude-fable-5",
         "claude-fable-5-1",
     ):
