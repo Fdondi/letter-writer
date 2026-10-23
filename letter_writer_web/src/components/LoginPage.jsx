@@ -1,6 +1,18 @@
 import React, { useState, useEffect } from "react";
 import { scheduleGoogleOAuthRedirect } from "../utils/googleOAuthRedirect";
 
+/**
+ * Only allow same-site relative paths as post-login return targets.
+ * Absolute, protocol-relative or javascript: URLs in ?return= would turn
+ * the login page into an open redirect.
+ */
+export function sanitizeReturnUrl(url) {
+  if (typeof url !== "string" || !url.startsWith("/") || url.startsWith("//") || url.startsWith("/\\")) {
+    return "/";
+  }
+  return url;
+}
+
 export default function LoginPage() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -20,7 +32,7 @@ export default function LoginPage() {
           // The problem is if the user clicked logout, got redirected here, and is STILL authenticated.
           
           const params = new URLSearchParams(window.location.search);
-          const returnUrl = params.get("return") || sessionStorage.getItem("authReturnUrl") || "/";
+          const returnUrl = sanitizeReturnUrl(params.get("return") || sessionStorage.getItem("authReturnUrl") || "/");
           sessionStorage.removeItem("authReturnUrl");
           
           // If return URL is /login, go to root instead to avoid loop
@@ -53,7 +65,7 @@ export default function LoginPage() {
     // Store return URL in session storage before redirecting to OAuth
     // This preserves it across the OAuth redirect flow
     const params = new URLSearchParams(window.location.search);
-    const returnUrl = params.get("return") || "/";
+    const returnUrl = sanitizeReturnUrl(params.get("return") || "/");
     if (returnUrl && returnUrl !== "/login") {
       sessionStorage.setItem("authReturnUrl", returnUrl);
     }

@@ -1,3 +1,5 @@
+0.78.2 - Login page: only accept same-site relative ?return= targets (open-redirect fix)
+0.78.1 - Update dependencies to clear all 46 npm audit vulnerabilities (react-router-dom 7, uuid 14, grpc-js 1.14 override in rules tests); Docker builds now use npm 12
 0.78.0 - Paragraph flow: a few random-vendor drafts compared paragraph by paragraph, with per-paragraph regenerate, discard and "generate another", and feedback that never blocks (reviewer-filtered per topic, Laya-ungrounded drawn faint); every request is profiled (queue, round trip, server stages, cost, tokens)
 0.77.2 - Publish the frontend HTTP redirect on 8442 and the event-log admin on 8444
 0.77.1 - Read Claude thinking mode and allowed efforts from the Anthropic catalog
