@@ -1,0 +1,15 @@
+{
+  "type": "json_schema",
+  "json_schema": {
+    "name": "paragraph_continue_output",
+    "strict": false,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "paragraph": {"type": "string"},
+        "letter_complete": {"type": "boolean"}
+      },
+      "required": ["paragraph", "letter_complete"]
+    }
+  }
+}

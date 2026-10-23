@@ -149,6 +149,7 @@ class DocumentRequest(BaseModel):
     feedback_agent_context: Optional[List[Dict[str, Any]]] = None
     autocomplete_sections: Optional[List[Dict[str, Any]]] = None
     autocomplete_history: Optional[Dict[str, Any]] = None
+    paragraph_history: Optional[Dict[str, Any]] = None
 
 @router.get("/")
 async def list_docs(request: Request, session: Session = Depends(get_session)):

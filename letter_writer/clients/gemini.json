@@ -14,6 +14,7 @@
     "company_research": { "model": "gemini-3.8-flash",         "thinking_level": "Medium" },
     "letter_plan":      { "model": "gemini-3.1-pro-preview",   "thinking_level": "High" },
     "letter_draft":     { "model": "gemini-3.1-pro-preview",   "thinking_level": "High" },
+    "paragraph":        { "model": "gemini-3.1-pro-preview",   "thinking_level": "High" },
     "letter_refine":    { "model": "gemini-3.1-pro-preview",   "thinking_level": "High" },
     "agentic":          { "model": "gemini-2.5-flash-lite", "thinking_level": null },
     "autocomplete":         { "model": "gemini-2.5-flash-lite", "thinking_level": null },

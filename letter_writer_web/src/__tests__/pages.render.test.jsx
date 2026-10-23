@@ -17,6 +17,7 @@ import IntakePage from "../pages/IntakePage";
 import VendorFlowPage from "../pages/VendorFlowPage";
 import AgenticFlowPage from "../pages/AgenticFlowPage";
 import AutocompleteFlowPage from "../pages/AutocompleteFlowPage";
+import ParagraphFlowPage from "../pages/ParagraphFlowPage";
 import LetterTabs from "../components/LetterTabs";
 import PhaseFlow from "../components/PhaseFlow";
 import AgenticFlow from "../components/AgenticFlow";
@@ -66,6 +67,7 @@ function renderApp(initialPath = "/") {
               <Route path="/flows/vendors" element={<VendorFlowPage />} />
               <Route path="/flows/agentic" element={<AgenticFlowPage />} />
               <Route path="/flows/autocomplete" element={<AutocompleteFlowPage />} />
+              <Route path="/flows/paragraph" element={<ParagraphFlowPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
@@ -230,6 +232,13 @@ describe("pages render smoke (build gate)", () => {
       path: "/flows/autocomplete",
       assert: async () => {
         expect(screen.getByText(/Autocomplete letter/i)).toBeInTheDocument();
+      },
+    },
+    {
+      path: "/flows/paragraph",
+      assert: async () => {
+        expect(screen.getByRole("button", { name: /Back to job details/i })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /Generate another/i })).toBeInTheDocument();
       },
     },
   ];

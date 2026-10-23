@@ -89,6 +89,7 @@ class ModelOverrides(private val catalogs: Catalogs) {
         val CONFIGURABLE_VENDOR_ROLES = listOf(
             "extraction", "rag_ranker", "company_research", "letter_plan", "letter_draft", "letter_refine",
             "feedback", "feedback_review", "feedback_context", "autocomplete", "autocomplete_plan", "agentic",
+            "paragraph",
         )
 
         private val ROLE_FALLBACKS = mapOf(
@@ -99,6 +100,7 @@ class ModelOverrides(private val catalogs: Catalogs) {
             "autocomplete" to listOf("letter_draft"),
             "autocomplete_plan" to listOf("letter_plan", "letter_draft"),
             "agentic" to listOf("letter_draft"),
+            "paragraph" to listOf("letter_draft"),
         )
 
         /** Python `resolve_client_model_role`: the model part when the override targets this vendor. */

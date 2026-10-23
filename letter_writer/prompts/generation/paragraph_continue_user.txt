@@ -1,0 +1,4 @@
+========== Letter so far:
+{{letter_so_far}}
+=========={{instructions_block}}
+Write the next paragraph as JSON.

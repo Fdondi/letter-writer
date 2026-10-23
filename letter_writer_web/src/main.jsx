@@ -10,6 +10,7 @@ import IntakePage from "./pages/IntakePage.jsx";
 import VendorFlowPage from "./pages/VendorFlowPage.jsx";
 import AgenticFlowPage from "./pages/AgenticFlowPage.jsx";
 import AutocompleteFlowPage from "./pages/AutocompleteFlowPage.jsx";
+import ParagraphFlowPage from "./pages/ParagraphFlowPage.jsx";
 import { setupApiNotifications } from "./utils/apiNotifications";
 import "./critical-theme.css";
 
@@ -40,6 +41,7 @@ createRoot(rootEl).render(
             <Route path="/flows/vendors" element={<VendorFlowPage />} />
             <Route path="/flows/agentic" element={<AgenticFlowPage />} />
             <Route path="/flows/autocomplete" element={<AutocompleteFlowPage />} />
+            <Route path="/flows/paragraph" element={<ParagraphFlowPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

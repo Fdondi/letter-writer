@@ -12,6 +12,7 @@
     "company_research": { "model": "deepseek-v4-pro", "reasoning_effort": "high" },
     "letter_plan":      { "model": "deepseek-v4-pro", "reasoning_effort": "high" },
     "letter_draft":     { "model": "deepseek-v4-pro", "reasoning_effort": "high" },
+    "paragraph":        { "model": "deepseek-v4-pro", "reasoning_effort": "high" },
     "letter_refine":    { "model": "deepseek-v4-pro", "reasoning_effort": "high" },
     "agentic":          { "model": "deepseek-flash",  "reasoning_effort": "low" },
     "autocomplete":     { "model": "deepseek-flash",  "reasoning_effort": "none" },

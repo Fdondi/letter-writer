@@ -287,6 +287,114 @@
     ],
     "result": "fancy"
   },
+  "paragraph_regenerate": {
+    "calls": [
+      {
+        "role": "paragraph",
+        "system": "--- Language requirements (override linguistic complexity from examples/style) ---\nMANDATORY: Write in DE at CEFR B2 level.\nUse B2 (upper-intermediate) wording only: fluent but clearly non-native. Prefer common vocabulary and straightforward syntax. Avoid C1/C2 idioms, rhetorical flourishes, academic register, and near-native nuance.\nDo not use vocabulary, idioms, or sentence complexity above this level — even if examples, the CV, or style instructions suggest higher proficiency.\nVerwende echte Umlaute (ä, ö, ü, ß) — niemals ae, oe, ue oder ss als Ersatz.\n--- End language requirements ---\n\nYou are an expert cover letter writer. Using the user's CV, relevant examples of job descriptions and their corresponding cover letters, the company report, and the target job description, you revise ONE paragraph of a cover letter. Rewrite only the marked paragraph so it fits seamlessly between the paragraphs around it, in the same style as the examples. Do not repeat content that the rest of the letter already covers.\nRemember to use the language of THE TARGET JOB DESCRIPTION, even if some or all of the examples might be in a different language. Use the examples at a higher level: look at style, structure, what is paid attention to, etc.\nWrite short paragraphs. Avoid buzzwords.\n\n--- ADDITIONAL INFORMATION ABOUT THE APPLICANT ---\nThe user has provided the following additional information about themselves that is relevant to this position but may not be fully captured in their CV. Please consider this when writing the letter:\nCurrently taking German C1 classes.\n--- END ADDITIONAL INFORMATION ---\n\n\nReply with the rewritten paragraph only: plain prose, no heading, no quotation marks around it, no commentary.",
+        "user_messages": [
+          "========== Current letter (the paragraph to rewrite is between >>> and <<<):\nSehr geehrte Damen und Herren,\n\n>>>\nich bin fliessend in Deutsch (B2) und habe Erfahrung mit AWS.\n<<<\n\nFreundliche Grüsse\nFrancesco Dondi\n==========\n========== Feedback on the marked paragraph:\nMake it more concrete.\n==========\nRewrite the marked paragraph, addressing the feedback."
+        ],
+        "search": false,
+        "response_format": null,
+        "cache_prefix": null,
+        "system_cache_prefix": "========== User CV:\nFrancesco Dondi\nData engineer, 8 years.\n- DoubleCloud: ClickHouse, Terraform, AWS (2021-2024)\n- ETH Zurich: MAS in Machine Learning in Finance and Insurance\nLanguages: Italian (native), English (C2), German (B2)\n==========\n========== Examples:\n---- Example #1 [estimated relevance: 8/10] - Swiss Re ----\nJob Description:\nSwiss Re is hiring a data engineer.\n\nCover Letter:\nDear Swiss Re team,\n\nI build pipelines.\n\n\n\n---- Example #2 [estimated relevance: 6/10] - Zurich Insurance ----\nJob Description:\nZurich needs an analytics engineer.\n\nCover Letter:\nHello Zurich,\n\nAnalytics is my thing.\n\n\n==========\n========== Company Report:\nGenerali is a large insurer with a conservative culture that presents itself as innovative.\n==========\n========== Target Job Description:\nGenerali sucht eine:n Data Engineer (m/w/d) in Zürich.\nAnforderungen: Python, SQL, AWS, ETL-Pipelines, fliessend Deutsch.\nWir bieten flexible Arbeitszeiten.\n==========\n\n========== Hire goal / problem this role should address (from posting extraction) ==========\nModernise the data platform while keeping regulators happy.\n==========\n",
+        "prompt_cache_key": null
+      }
+    ],
+    "result": "rewritten"
+  },
+  "paragraph_regenerate_defaults": {
+    "calls": [
+      {
+        "role": "paragraph",
+        "system": "You are an expert cover letter writer. Using the user's CV, relevant examples of job descriptions and their corresponding cover letters, the company report, and the target job description, you revise ONE paragraph of a cover letter. Rewrite only the marked paragraph so it fits seamlessly between the paragraphs around it, in the same style as the examples. Do not repeat content that the rest of the letter already covers.\nRemember to use the language of THE TARGET JOB DESCRIPTION, even if some or all of the examples might be in a different language. Use the examples at a higher level: look at style, structure, what is paid attention to, etc.\nNever mention explicitly that something matches the job description, they should think that by themselves. Avoid making just a list of 'at X I did Y'. You're telling a story, the stints at specific companies are just supporting evidence for the message. Mentions of companies should mostly emerge naturally, not be the main structure (At X this, at Y that, etc).\nFollow the structure: 1. You are great 2. I am great 3. We'll be even greater together 4. Call to action. Of course, keep that structure implicit, and don't use paragraph titles.\nReturn the letter as distinct paragraphs separated by a blank line (a real empty line between paragraphs). We need those paragraph breaks — do not collapse the letter into one block of text.\nWhenever possible, use characters supported by LaTeX. In particular, to the extent that it's reasonable, avoid symbols like & or em-dashes (meaning any number of - or other visually similar symbols). Do not double-space within a line (no two spaces between words or after periods); that is unrelated to the blank lines between paragraphs. If in doubt, use the version of the character that would be typed by a keyboard. For example ' and not ', or 11th and not 11ᵗʰ.\nPlease refrain from trite terms like \"resonates\", or terms that try too hard to be cool and end up not being professional, like \"shepherded\" referring to servers.\n\n\nReply with the rewritten paragraph only: plain prose, no heading, no quotation marks around it, no commentary.",
+        "user_messages": [
+          "========== Current letter (the paragraph to rewrite is between >>> and <<<):\n>>>\nSehr geehrte Damen und Herren,\n<<<\n\nich bin fliessend in Deutsch (B2) und habe Erfahrung mit AWS.\n\nFreundliche Grüsse\nFrancesco Dondi\n==========\n========== Feedback on the marked paragraph:\n(none given: write a stronger alternative)\n==========\nRewrite the marked paragraph, addressing the feedback."
+        ],
+        "search": false,
+        "response_format": null,
+        "cache_prefix": null,
+        "system_cache_prefix": "========== User CV:\nFrancesco Dondi\nData engineer, 8 years.\n- DoubleCloud: ClickHouse, Terraform, AWS (2021-2024)\n- ETH Zurich: MAS in Machine Learning in Finance and Insurance\nLanguages: Italian (native), English (C2), German (B2)\n==========\n========== Examples:\n\n==========\n========== Company Report:\n\n==========\n========== Target Job Description:\nGenerali sucht eine:n Data Engineer (m/w/d) in Zürich.\nAnforderungen: Python, SQL, AWS, ETL-Pipelines, fliessend Deutsch.\nWir bieten flexible Arbeitszeiten.\n==========",
+        "prompt_cache_key": null
+      }
+    ],
+    "result": "rewritten"
+  },
+  "paragraph_continue": {
+    "calls": [
+      {
+        "role": "paragraph",
+        "system": "--- Language requirements (override linguistic complexity from examples/style) ---\nMANDATORY: Write in DE at CEFR B2 level.\nUse B2 (upper-intermediate) wording only: fluent but clearly non-native. Prefer common vocabulary and straightforward syntax. Avoid C1/C2 idioms, rhetorical flourishes, academic register, and near-native nuance.\nDo not use vocabulary, idioms, or sentence complexity above this level — even if examples, the CV, or style instructions suggest higher proficiency.\nVerwende echte Umlaute (ä, ö, ü, ß) — niemals ae, oe, ue oder ss als Ersatz.\n--- End language requirements ---\n\nYou are an expert cover letter writer. Using the user's CV, relevant examples of job descriptions and their corresponding cover letters, the company report, and the target job description, you help the user assemble a cover letter one paragraph at a time. The user has picked and edited the text so far. Write ONLY the next paragraph that should follow it, continuing its argument, tone and language, in the same style as the examples. Do not repeat anything already said. If the letter so far is empty, write the opening paragraph.\nRemember to use the language of THE TARGET JOB DESCRIPTION, even if some or all of the examples might be in a different language. Use the examples at a higher level: look at style, structure, what is paid attention to, etc.\nWrite short paragraphs. Avoid buzzwords.\n\n--- ADDITIONAL INFORMATION ABOUT THE APPLICANT ---\nThe user has provided the following additional information about themselves that is relevant to this position but may not be fully captured in their CV. Please consider this when writing the letter:\nCurrently taking German C1 classes.\n--- END ADDITIONAL INFORMATION ---\n\n\nReply with JSON only: {\"paragraph\": string, \"letter_complete\": boolean}.\nparagraph is the next paragraph only: plain prose, no heading.\nletter_complete is true when the letter is finished once this paragraph is added (it closes the letter, e.g. with the sign-off) and nothing further should follow.",
+        "user_messages": [
+          "========== Letter so far:\nSehr geehrte Damen und Herren,\n==========\n========== Instructions from the user for this paragraph:\nMention the team lead role.\n==========\nWrite the next paragraph as JSON."
+        ],
+        "search": false,
+        "response_format": {
+          "type": "json_schema",
+          "json_schema": {
+            "name": "paragraph_continue_output",
+            "strict": false,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "paragraph": {
+                  "type": "string"
+                },
+                "letter_complete": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "paragraph",
+                "letter_complete"
+              ]
+            }
+          }
+        },
+        "cache_prefix": null,
+        "system_cache_prefix": "========== User CV:\nFrancesco Dondi\nData engineer, 8 years.\n- DoubleCloud: ClickHouse, Terraform, AWS (2021-2024)\n- ETH Zurich: MAS in Machine Learning in Finance and Insurance\nLanguages: Italian (native), English (C2), German (B2)\n==========\n========== Examples:\n---- Example #1 [estimated relevance: 8/10] - Swiss Re ----\nJob Description:\nSwiss Re is hiring a data engineer.\n\nCover Letter:\nDear Swiss Re team,\n\nI build pipelines.\n\n\n\n---- Example #2 [estimated relevance: 6/10] - Zurich Insurance ----\nJob Description:\nZurich needs an analytics engineer.\n\nCover Letter:\nHello Zurich,\n\nAnalytics is my thing.\n\n\n==========\n========== Company Report:\nGenerali is a large insurer with a conservative culture that presents itself as innovative.\n==========\n========== Target Job Description:\nGenerali sucht eine:n Data Engineer (m/w/d) in Zürich.\nAnforderungen: Python, SQL, AWS, ETL-Pipelines, fliessend Deutsch.\nWir bieten flexible Arbeitszeiten.\n==========\n\n========== Hire goal / problem this role should address (from posting extraction) ==========\nModernise the data platform while keeping regulators happy.\n==========\n",
+        "prompt_cache_key": null
+      }
+    ]
+  },
+  "paragraph_continue_empty": {
+    "calls": [
+      {
+        "role": "paragraph",
+        "system": "You are an expert cover letter writer. Using the user's CV, relevant examples of job descriptions and their corresponding cover letters, the company report, and the target job description, you help the user assemble a cover letter one paragraph at a time. The user has picked and edited the text so far. Write ONLY the next paragraph that should follow it, continuing its argument, tone and language, in the same style as the examples. Do not repeat anything already said. If the letter so far is empty, write the opening paragraph.\nRemember to use the language of THE TARGET JOB DESCRIPTION, even if some or all of the examples might be in a different language. Use the examples at a higher level: look at style, structure, what is paid attention to, etc.\nNever mention explicitly that something matches the job description, they should think that by themselves. Avoid making just a list of 'at X I did Y'. You're telling a story, the stints at specific companies are just supporting evidence for the message. Mentions of companies should mostly emerge naturally, not be the main structure (At X this, at Y that, etc).\nFollow the structure: 1. You are great 2. I am great 3. We'll be even greater together 4. Call to action. Of course, keep that structure implicit, and don't use paragraph titles.\nReturn the letter as distinct paragraphs separated by a blank line (a real empty line between paragraphs). We need those paragraph breaks — do not collapse the letter into one block of text.\nWhenever possible, use characters supported by LaTeX. In particular, to the extent that it's reasonable, avoid symbols like & or em-dashes (meaning any number of - or other visually similar symbols). Do not double-space within a line (no two spaces between words or after periods); that is unrelated to the blank lines between paragraphs. If in doubt, use the version of the character that would be typed by a keyboard. For example ' and not ', or 11th and not 11ᵗʰ.\nPlease refrain from trite terms like \"resonates\", or terms that try too hard to be cool and end up not being professional, like \"shepherded\" referring to servers.\n\n\nReply with JSON only: {\"paragraph\": string, \"letter_complete\": boolean}.\nparagraph is the next paragraph only: plain prose, no heading.\nletter_complete is true when the letter is finished once this paragraph is added (it closes the letter, e.g. with the sign-off) and nothing further should follow.",
+        "user_messages": [
+          "========== Letter so far:\n(nothing written yet)\n==========\nWrite the next paragraph as JSON."
+        ],
+        "search": false,
+        "response_format": {
+          "type": "json_schema",
+          "json_schema": {
+            "name": "paragraph_continue_output",
+            "strict": false,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "paragraph": {
+                  "type": "string"
+                },
+                "letter_complete": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "paragraph",
+                "letter_complete"
+              ]
+            }
+          }
+        },
+        "cache_prefix": null,
+        "system_cache_prefix": "========== User CV:\nFrancesco Dondi\nData engineer, 8 years.\n- DoubleCloud: ClickHouse, Terraform, AWS (2021-2024)\n- ETH Zurich: MAS in Machine Learning in Finance and Insurance\nLanguages: Italian (native), English (C2), German (B2)\n==========\n========== Examples:\n\n==========\n========== Company Report:\n\n==========\n========== Target Job Description:\nGenerali sucht eine:n Data Engineer (m/w/d) in Zürich.\nAnforderungen: Python, SQL, AWS, ETL-Pipelines, fliessend Deutsch.\nWir bieten flexible Arbeitszeiten.\n==========",
+        "prompt_cache_key": null
+      }
+    ]
+  },
   "feedback_instruction": {
     "calls": [
       {

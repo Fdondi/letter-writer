@@ -17,6 +17,7 @@
     "company_research": { "model": "claude-sonnet-5-5", "thinking": true, "effort": "medium" },
     "letter_plan":      { "model": "claude-sonnet-5-5", "thinking": true, "effort": "medium" },
     "letter_draft":     { "model": "claude-sonnet-5-5", "thinking": true, "effort": "medium" },
+    "paragraph":        { "model": "claude-sonnet-5-5", "thinking": true, "effort": "medium" },
     "letter_refine":    { "model": "claude-sonnet-5-5", "thinking": true, "effort": "medium" },
     "agentic":          { "model": "claude-haiku-5-5",  "thinking": false },
     "autocomplete":         { "model": "claude-haiku-5-5",  "thinking": false },

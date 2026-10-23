@@ -57,9 +57,12 @@ from letter_writer.laya_judge import (  # noqa: E402
     rag_state,
 )
 from letter_writer.letter_generation import (  # noqa: E402
+    continue_letter_paragraph,
     fancy_letter,
     generate_letter,
     generate_letter_plan,
+    regenerate_paragraph,
+    split_letter_paragraphs,
 )
 from letter_writer.retrieval import rerank_documents  # noqa: E402
 from letter_writer.rewrite import rewrite_letter  # noqa: E402
@@ -210,6 +213,49 @@ def build_cases(inp: Dict[str, Any], trace: Path) -> Dict[str, Any]:
     )
     cases["draft_defaults"] = _calls(draft_reply, lambda c: generate_letter(cv, [], "", job, c, trace) and None)
     cases["fancy"] = _calls("fancy", lambda c: fancy_letter(letter, c))
+
+    letter_paras = split_letter_paragraphs(letter) or [letter]
+    cases["paragraph_regenerate"] = _calls(
+        "rewritten",
+        lambda c: regenerate_paragraph(
+            letter_paras,
+            len(letter_paras) // 2,
+            "Make it more concrete.",
+            cv,
+            docs,
+            report,
+            job,
+            c,
+            style_instructions=inp["custom_style_instructions"],
+            additional_user_info=add,
+            hire_problem=hire,
+            language_prefix=lang_prefix,
+        ),
+    )
+    cases["paragraph_regenerate_defaults"] = _calls(
+        "rewritten", lambda c: regenerate_paragraph(letter_paras, 0, "", cv, [], "", job, c)
+    )
+    continue_reply = '{"paragraph": "next", "letter_complete": false}'
+    cases["paragraph_continue"] = _calls(
+        continue_reply,
+        lambda c: continue_letter_paragraph(
+            "\n\n".join(letter_paras[:1]),
+            cv,
+            docs,
+            report,
+            job,
+            c,
+            instructions="Mention the team lead role.",
+            style_instructions=inp["custom_style_instructions"],
+            additional_user_info=add,
+            hire_problem=hire,
+            language_prefix=lang_prefix,
+        )
+        and None,
+    )
+    cases["paragraph_continue_empty"] = _calls(
+        continue_reply, lambda c: continue_letter_paragraph("", cv, [], "", job, c) and None
+    )
 
     for suffix, weaknesses in (("", kw), ("_no_kw", None)):
         cases["feedback_instruction" + suffix] = _calls(

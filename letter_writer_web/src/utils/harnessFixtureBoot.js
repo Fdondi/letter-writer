@@ -6,6 +6,7 @@ export function harnessRestorePath(restoreResult) {
   if (!restoreResult || typeof restoreResult !== "object") return "/";
   if (restoreResult.vendor) return "/flows/vendors";
   if (restoreResult.agentic) return "/flows/agentic";
+  if (restoreResult.paragraph) return "/flows/paragraph";
   return "/";
 }
 

@@ -11,6 +11,7 @@
     "company_research": "local-model",
     "letter_plan": "local-model",
     "letter_draft": "local-model",
+    "paragraph":    "local-model",
     "letter_refine": "local-model",
     "agentic": "local-model",
     "autocomplete": "local-model",

@@ -69,6 +69,16 @@ VENDOR_MODEL_FLOWS: tuple[_FlowDef, ...] = (
             {"key": "agentic", "label": "Draft", "fallbacks": ("letter_draft",)},
         ),
     },
+    {
+        "id": "paragraph",
+        "title": "Paragraph flow",
+        "description": "A few random-vendor drafts compared paragraph by paragraph; regenerate, continue, non-blocking feedback.",
+        "roles": (
+            {"key": "paragraph", "label": "Draft / continue", "fallbacks": ("letter_draft",)},
+            {"key": "feedback", "label": "Feedback", "fallbacks": ()},
+            {"key": "feedback_review", "label": "Feedback review", "fallbacks": ("feedback",)},
+        ),
+    },
 )
 
 

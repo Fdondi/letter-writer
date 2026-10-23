@@ -12,7 +12,7 @@ import { normalizeAgenticThreads } from "./agenticThreads";
  */
 export function applyRestoredSessionState(sessionState, setters, { sessionId = null } = {}) {
   if (!sessionState || typeof sessionState !== "object") {
-    return { restored: false, vendor: null, agentic: null, vendorNames: [] };
+    return { restored: false, vendor: null, agentic: null, paragraph: null, vendorNames: [] };
   }
 
   let restored = false;
@@ -103,5 +103,14 @@ export function applyRestoredSessionState(sessionState, setters, { sessionId = n
     restored = true;
   }
 
-  return { restored, vendor, agentic, vendorNames };
+  // Paragraph flow keeps its own state; its vendors entries only hold example letters.
+  let paragraph = null;
+  const rawParagraph = sessionState.paragraph;
+  if (rawParagraph && typeof rawParagraph === "object" && Array.isArray(rawParagraph.drafts) && rawParagraph.drafts.length > 0) {
+    paragraph = { state: rawParagraph };
+    vendor = null;
+    restored = true;
+  }
+
+  return { restored, vendor, agentic, paragraph, vendorNames };
 }

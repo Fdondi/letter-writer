@@ -197,6 +197,7 @@ export function JobSessionProvider({ children }) {
   // Flow restore payloads (reload / backup restore)
   const [pendingVendorRestore, setPendingVendorRestore] = useState(null);
   const [pendingAgenticRestore, setPendingAgenticRestore] = useState(null);
+  const [pendingParagraphRestore, setPendingParagraphRestore] = useState(null);
 
   // Refs
   const latestFormSnapshotRef = useRef(null);
@@ -214,6 +215,7 @@ export function JobSessionProvider({ children }) {
 
   const clearPendingVendorRestore = useCallback(() => setPendingVendorRestore(null), []);
   const clearPendingAgenticRestore = useCallback(() => setPendingAgenticRestore(null), []);
+  const clearPendingParagraphRestore = useCallback(() => setPendingParagraphRestore(null), []);
 
   // ─── Derived values ────────────────────────────────────────────────────────
 
@@ -396,6 +398,7 @@ export function JobSessionProvider({ children }) {
     sessionSetters,
     setPendingVendorRestore,
     setPendingAgenticRestore,
+    setPendingParagraphRestore,
   });
 
   const applyCapturePayload = useCallback((payload) => {
@@ -444,6 +447,7 @@ export function JobSessionProvider({ children }) {
     if (!result) return;
     if (result.vendor) setPendingVendorRestore(result.vendor);
     if (result.agentic) setPendingAgenticRestore(result.agentic);
+    if (result.paragraph) setPendingParagraphRestore(result.paragraph);
     const names = Array.isArray(result.vendorNames) ? result.vendorNames : [];
     if (!names.length) return;
     setVendors((prev) => {
@@ -590,6 +594,7 @@ export function JobSessionProvider({ children }) {
     setVendorFeedback({});
     setPendingVendorRestore(null);
     setPendingAgenticRestore(null);
+    setPendingParagraphRestore(null);
     setCompetenceHighlightTerm(null);
     setAssemblyHighlightCtx({ competenceCounts: {}, finalAssemblyTextNormalized: "" });
     return newId;
@@ -1200,8 +1205,10 @@ export function JobSessionProvider({ children }) {
     // Restore
     pendingVendorRestore,
     pendingAgenticRestore,
+    pendingParagraphRestore,
     clearPendingVendorRestore,
     clearPendingAgenticRestore,
+    clearPendingParagraphRestore,
     registerRestoreStateGetter,
     applyBackupRestore,
     rememberVendorFlow,

@@ -150,6 +150,43 @@ def _resolve_top_docs_for_phases(session: SessionState, state: VendorPhaseState)
     return list(state.top_docs or [])
 
 
+@dataclass
+class DraftInputs:
+    """Everything a draft-style generation call needs, resolved from the session."""
+
+    cv_text: str
+    job_text: str
+    company_report: str
+    top_docs: List[TopDocument]
+    style_instructions: str
+    additional_user_info: str
+    hire_problem: str
+    language_prefix: str
+
+
+def resolve_draft_inputs(
+    session: SessionState,
+    state: VendorPhaseState,
+    vendor: ModelVendor,
+    user_id: Optional[str],
+    *,
+    company_report_override: Optional[str] = None,
+    style_instructions: str = "",
+) -> DraftInputs:
+    """Shared context for draft (vendor flow) and paragraph-flow generation."""
+    return DraftInputs(
+        cv_text=session.cv_text,
+        job_text=session.job_text,
+        company_report=company_report_override or state.company_report or "",
+        top_docs=_resolve_top_docs_for_phases(session, state),
+        style_instructions=style_instructions or session.style_instructions,
+        # User notes for this job plus persisted feedback Q&A (agent_feedback_context in profile)
+        additional_user_info=get_effective_additional_user_info(session.metadata, vendor, user_id),
+        hire_problem=str(get_metadata_field(session.metadata, vendor, "hire_problem", "") or ""),
+        language_prefix=language_prefix_for_session(session.metadata, vendor, user_id),
+    )
+
+
 def get_metadata_field(metadata: dict, vendor: ModelVendor, field: str, default: str = ""):
     """Get a metadata field, checking vendor-specific storage first, then common metadata.
     
@@ -606,14 +643,19 @@ def advance_to_draft(
     trace_dir.mkdir(parents=True, exist_ok=True)
     ai_client = get_client(vendor)
 
-    top_docs = _resolve_top_docs_for_phases(session, state)
-    company_report = company_report_override or state.company_report or ""
-    job_text = session.job_text
-    cv_text = session.cv_text
-    
-    # Use provided instructions or fall back to session
-    if not style_instructions:
-        style_instructions = session.style_instructions
+    inputs = resolve_draft_inputs(
+        session,
+        state,
+        vendor,
+        user_id,
+        company_report_override=company_report_override,
+        style_instructions=style_instructions,
+    )
+    top_docs = inputs.top_docs
+    company_report = inputs.company_report
+    job_text = inputs.job_text
+    cv_text = inputs.cv_text
+    style_instructions = inputs.style_instructions
 
     letter_plan = (
         letter_plan_override
@@ -627,10 +669,9 @@ def advance_to_draft(
     else:
         logger.info("[PHASE] draft -> %s :: no letter plan (optional plan step skipped)", vendor.value)
 
-    # User notes for this job plus persisted feedback Q&A (agent_feedback_context in profile)
-    additional_user_info = get_effective_additional_user_info(session.metadata, vendor, user_id)
-    hire_problem = str(get_metadata_field(session.metadata, vendor, "hire_problem", "") or "")
-    language_prefix = language_prefix_for_session(session.metadata, vendor, user_id)
+    additional_user_info = inputs.additional_user_info
+    hire_problem = inputs.hire_problem
+    language_prefix = inputs.language_prefix
 
     state.company_report = company_report
     state.top_docs = top_docs

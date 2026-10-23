@@ -388,6 +388,31 @@ def _prepare_autocomplete_history(history: Optional[Dict[str, Any]]) -> Optional
     }
 
 
+def _prepare_paragraph_history(history: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Paragraph flow record for study: every draft/option, every UI choice, the final pick,
+    and the per-request timeline (queue/round-trip/server-stage ms, cost, tokens, dropped notes)."""
+    if not history or not isinstance(history, dict):
+        return None
+
+    def _dict_list(key: str) -> List[dict]:
+        raw = history.get(key)
+        return [x for x in raw if isinstance(x, dict)] if isinstance(raw, list) else []
+
+    total_cost = history.get("total_cost")
+    if not isinstance(total_cost, (int, float)) or (
+        isinstance(total_cost, float) and (math.isnan(total_cost) or math.isinf(total_cost))
+    ):
+        total_cost = 0
+    return {
+        "drafts": _dict_list("drafts"),
+        "events": _dict_list("events"),
+        "final_paragraphs": _dict_list("final_paragraphs"),
+        "timeline": _dict_list("timeline"),
+        "run_started_at": history.get("run_started_at") if isinstance(history.get("run_started_at"), str) else None,
+        "total_cost": float(total_cost),
+    }
+
+
 def _prepare_ai_letters(ai_letters: Optional[List[dict]]) -> List[dict]:
     """Normalize AI/negative letters for storage."""
     now = datetime.now(timezone.utc)
@@ -565,6 +590,10 @@ def upsert_document(collection, data: dict, *, allow_update: bool = True, user_i
         "updated_at": updated_at_dt,
         "created_at": created_at_dt,
     }
+
+    paragraph_history = _prepare_paragraph_history(data.get("paragraph_history"))
+    if paragraph_history is not None:
+        base["paragraph_history"] = paragraph_history
 
     if "application_event_log" in data:
         incoming_log = data.get("application_event_log")

@@ -27,6 +27,7 @@ _WORK_TOP_KEYS = (
     "cv_text",
     "metadata",
     "vendors",
+    "paragraph",
     "style_instructions",
     "structure_instructions",
     "selected_top_docs",
@@ -44,6 +45,7 @@ RESTORE_SESSION_KEYS = (
     "metadata",
     "vendors",
     "agentic",
+    "paragraph",
     "style_instructions",
     "structure_instructions",
     "selected_top_docs",
@@ -124,6 +126,9 @@ def has_reconstructable_work(data: Dict[str, Any]) -> bool:
     agentic = data.get("agentic")
     if isinstance(agentic, dict) and agentic.get("status"):
         return True
+    paragraph = data.get("paragraph")
+    if isinstance(paragraph, dict) and paragraph.get("drafts"):
+        return True
     return False
 
 
@@ -182,6 +187,9 @@ def _infer_backup_stage(data: Dict[str, Any]) -> str:
     agentic = data.get("agentic")
     if isinstance(agentic, dict) and agentic.get("status"):
         return "agentic" if agentic.get("status") != "done" else "assembly"
+    paragraph = data.get("paragraph")
+    if isinstance(paragraph, dict) and paragraph.get("drafts"):
+        return "paragraph"
     vendors = data.get("vendors")
     if isinstance(vendors, dict):
         has_final = False

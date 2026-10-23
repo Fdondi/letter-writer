@@ -14,6 +14,7 @@ export function useSessionRehydration({
   sessionSetters,
   setPendingVendorRestore,
   setPendingAgenticRestore,
+  setPendingParagraphRestore,
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -83,7 +84,14 @@ export function useSessionRehydration({
           }
         }
 
-        if (result.restored && !result.vendor && !result.agentic && location.pathname !== "/") {
+        if (result.paragraph) {
+          setPendingParagraphRestore?.(result.paragraph);
+          if (!location.pathname.startsWith("/flows/paragraph")) {
+            navigate("/flows/paragraph", { replace: true, state: { rehydrated: true } });
+          }
+        }
+
+        if (result.restored && !result.vendor && !result.agentic && !result.paragraph && location.pathname !== "/") {
           navigate("/", { replace: true });
         }
 
@@ -104,6 +112,7 @@ export function useSessionRehydration({
     sessionSetters,
     setPendingVendorRestore,
     setPendingAgenticRestore,
+    setPendingParagraphRestore,
     navigate,
     location.pathname,
   ]);

@@ -115,7 +115,7 @@ services:
     restart: unless-stopped
     ports:
       - "8443:443"
-      - "8080:80"
+      - "8442:80"
     volumes:
       - ./certs:/etc/nginx/certs:ro
       - ./letter_writer_web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
@@ -129,7 +129,7 @@ services:
     container_name: letter-writer-event-log-admin
     restart: unless-stopped
     ports:
-      - "8081:80"
+      - "8444:80"
     depends_on:
       - backend
 

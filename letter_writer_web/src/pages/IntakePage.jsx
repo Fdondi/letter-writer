@@ -12,6 +12,18 @@ import { useLanguages } from "../contexts/LanguageContext";
 import { fetchWithHeartbeat } from "../utils/apiHelpers";
 import { buildCompetenceRatingsForProfile, getEffectiveRating, getEffectiveImportance } from "../utils/competenceScales";
 
+const PARAGRAPH_DRAFT_COUNT_KEY = "paragraphFlowDraftCount";
+
+function readParagraphDraftCount() {
+  try {
+    const n = parseInt(localStorage.getItem(PARAGRAPH_DRAFT_COUNT_KEY) || "", 10);
+    if (Number.isFinite(n) && n >= 1 && n <= 8) return n;
+  } catch {
+    /* ignore */
+  }
+  return 3;
+}
+
 export default function IntakePage() {
   const navigate = useNavigate();
   const session = useJobSession();
@@ -19,6 +31,16 @@ export default function IntakePage() {
 
   const [agenticMaxRounds, setAgenticMaxRounds] = useState(3);
   const [agenticSubCommentRounds, setAgenticSubCommentRounds] = useState(0);
+  const [paragraphDraftCount, setParagraphDraftCountState] = useState(readParagraphDraftCount);
+
+  const setParagraphDraftCount = (n) => {
+    setParagraphDraftCountState(n);
+    try {
+      localStorage.setItem(PARAGRAPH_DRAFT_COUNT_KEY, String(n));
+    } catch {
+      /* ignore */
+    }
+  };
 
   const vendorsList = Array.from(session.selectedVendors);
 
@@ -101,6 +123,24 @@ export default function IntakePage() {
         subCommentRounds: agenticSubCommentRounds,
       },
     });
+  };
+
+  const handleSubmitParagraph = async () => {
+    if (!session.jobTitle.trim()) {
+      session.setError("Job title is required");
+      return;
+    }
+    session.setError(null);
+    session.setDocumentId(null);
+    try {
+      await session.beginFreshWorkSession();
+    } catch (e) {
+      console.error("Failed to update session:", e);
+      session.setError("Failed to update session. Please try again.");
+      return;
+    }
+    await saveCompetenceRatings();
+    navigate("/flows/paragraph", { state: { start: true, draftCount: paragraphDraftCount } });
   };
 
   return (
@@ -689,6 +729,52 @@ export default function IntakePage() {
               max={8}
               value={agenticSubCommentRounds}
               onChange={(e) => setAgenticSubCommentRounds(Math.max(0, Math.min(8, parseInt(e.target.value, 10) || 0)))}
+              style={{ width: 48, padding: "6px 8px", borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }}
+            />
+          </label>
+        </div>
+        <div
+          style={{
+            width: 1,
+            minHeight: 24,
+            backgroundColor: "var(--border-color)",
+            margin: "0 4px",
+          }}
+          aria-hidden="true"
+        />
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <button
+            type="button"
+            data-testid="start-paragraph-flow"
+            onClick={handleSubmitParagraph}
+            disabled={session.captureImporting || !session.jobText || !session.jobTitle.trim() || session.selectedVendors.size === 0}
+            title="A few random-vendor drafts, compared paragraph by paragraph"
+            style={{
+              padding: "10px 20px",
+              backgroundColor: !session.jobText || !session.jobTitle.trim() || session.selectedVendors.size === 0 ? "var(--header-bg)" : "#c2410c",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor: !session.jobText || !session.jobTitle.trim() || session.selectedVendors.size === 0 ? "not-allowed" : "pointer",
+            }}
+          >
+            Start paragraph flow
+          </button>
+          <FlowModelPopover
+            flowId="paragraph"
+            ariaLabel="Paragraph flow models"
+            vendors={vendorsList}
+            align="end"
+            testId="flow-model-paragraph"
+          />
+          <label style={{ display: "flex", alignItems: "center", gap: 6 }} title="Drafts written at the start, each by a randomly picked vendor among the selected ones.">
+            <span style={{ fontSize: 13, color: "var(--text-color)" }}>Drafts:</span>
+            <input
+              type="number"
+              min={1}
+              max={8}
+              value={paragraphDraftCount}
+              onChange={(e) => setParagraphDraftCount(Math.max(1, Math.min(8, parseInt(e.target.value, 10) || 3)))}
               style={{ width: 48, padding: "6px 8px", borderRadius: 4, border: "1px solid var(--border-color)", backgroundColor: "var(--bg-color)", color: "var(--text-color)" }}
             />
           </label>

@@ -28,7 +28,8 @@ export default function AppLayout() {
   const session = useJobSession();
   const fillViewport =
     location.pathname.startsWith("/flows/vendors") ||
-    location.pathname.startsWith("/flows/agentic");
+    location.pathname.startsWith("/flows/agentic") ||
+    location.pathname.startsWith("/flows/paragraph");
   const { isAuthenticated, checkingAuth, showSessionExpiredModal } = session;
   const harnessFixtureBootRef = useRef(false);
 
@@ -190,6 +191,8 @@ export default function AppLayout() {
               navigate("/flows/vendors", { state: { rehydrated: true } });
             } else if (result.agentic) {
               navigate("/flows/agentic", { state: { rehydrated: true } });
+            } else if (result.paragraph) {
+              navigate("/flows/paragraph", { state: { rehydrated: true } });
             } else if (result.restored) {
               navigate("/", { replace: true });
             }

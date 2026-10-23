@@ -408,6 +408,56 @@ def _parallel_stage12(
     return out
 
 
+def review_feedback_topic(
+    *,
+    client: BaseClient,
+    topic: str,
+    items: Sequence[Dict[str, Any]],
+    draft_letter: str,
+    style_instructions: str,
+    cv_text: str,
+    additional_user_info: str,
+    company_report: str,
+    job_text: str,
+    top_docs: Sequence[TopDocument],
+    hire_problem: str = "",
+    known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Stages 1+2 for one topic's items: ``(kept, dropped)``.
+
+    Same keep/drop judgement as ``review_feedback_for_vendor``, so a single topic can be
+    filtered as soon as it lands. Items without an id or observation are kept (fail-open).
+    """
+    reviewable = [
+        (str(it["id"]), str(it.get("observation", "")).strip())
+        for it in items
+        if isinstance(it, dict) and it.get("id") and str(it.get("observation", "")).strip()
+    ]
+    if not reviewable:
+        return list(items), []
+    context_block = _build_justification_context(
+        topic,
+        draft_letter=draft_letter,
+        style_instructions=style_instructions,
+        cv_text=cv_text,
+        additional_user_info=additional_user_info,
+        company_report=company_report,
+        job_text=job_text,
+        top_docs=top_docs,
+        hire_problem=hire_problem,
+        known_weaknesses=known_weaknesses,
+    )
+    keep_map = _stage12_batch(client, topic, reviewable, context_block)
+    kept: List[Dict[str, Any]] = []
+    dropped: List[Dict[str, Any]] = []
+    for it in items:
+        if isinstance(it, dict) and not keep_map.get(str(it.get("id", "")), True):
+            dropped.append(it)
+        else:
+            kept.append(it)
+    return kept, dropped
+
+
 def review_feedback_for_vendor(
     *,
     client: BaseClient,

@@ -12,6 +12,7 @@
     "company_research": "mistral-large-latest",
     "letter_plan": "mistral-large-latest",
     "letter_draft": "mistral-large-latest",
+    "paragraph":    "mistral-large-latest",
     "letter_refine": "mistral-large-latest",
     "agentic": "mistral-small-latest",
     "autocomplete": "mistral-small-latest",

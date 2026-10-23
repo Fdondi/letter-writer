@@ -13,6 +13,7 @@ import { buildAutocompletePlanAiLetter, sectionsToProposalText } from "./autocom
  * @param {Array} [opts.aiLetters] - AI letter entries for vendor/agentic flows
  * @param {object} [opts.feedbackExtras] - { feedback_extra_info, feedback_agent_context } for vendor flow
  * @param {object} [opts.autocompleteData] - { sections, proposalLetterText, autocompleteHistory, completionModel, planModel, planCost, cycleModels, totalCost }
+ * @param {object} [opts.paragraphHistory] - paragraph flow record (see utils/paragraphFlow.js buildParagraphHistory)
  * @returns {Promise<{ documentId: string|null, warnings: string[] }>}
  */
 export async function persistLetterDocument({
@@ -22,6 +23,7 @@ export async function persistLetterDocument({
   aiLetters,
   feedbackExtras,
   autocompleteData,
+  paragraphHistory,
 }) {
   const trimmed = (letterText || "").trim();
   if (!trimmed) {
@@ -42,6 +44,10 @@ export async function persistLetterDocument({
 
   if (aiLetters) {
     payload.ai_letters = aiLetters;
+  }
+
+  if (paragraphHistory) {
+    payload.paragraph_history = paragraphHistory;
   }
 
   if (feedbackExtras) {

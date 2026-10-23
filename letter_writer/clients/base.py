@@ -126,6 +126,7 @@ class ModelRole(Enum):
     LETTER_DRAFT = "letter_draft"
     LETTER_REFINE = "letter_refine"
     AGENTIC = "agentic"
+    PARAGRAPH = "paragraph"
     AUTOCOMPLETE = "autocomplete"
     AUTOCOMPLETE_PLAN = "autocomplete_plan"
     TRANSLATION = "translation"

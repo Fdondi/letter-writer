@@ -13,6 +13,7 @@
     "company_research": "grok-4.7",
     "letter_plan": "grok-4.7",
     "letter_draft": "grok-4.7",
+    "paragraph":    "grok-4.7",
     "letter_refine": "grok-4.7",
     "agentic": "grok-4.3",
     "autocomplete": "grok-4.3",

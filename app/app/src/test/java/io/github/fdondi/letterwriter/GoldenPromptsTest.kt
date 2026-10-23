@@ -62,6 +62,10 @@ class GoldenPromptsTest {
     private val notReplayed = mapOf(
         "research_custom" to "desktop helper called with search=True and a point of contact; neither app's research flow does that (see research_flow)",
         "research_default" to "same helper with search=True; the research flow always passes search=False",
+        "paragraph_regenerate" to "paragraph flow is web-only for now",
+        "paragraph_regenerate_defaults" to "paragraph flow is web-only for now",
+        "paragraph_continue" to "paragraph flow is web-only for now",
+        "paragraph_continue_empty" to "paragraph flow is web-only for now",
     )
 
     private class Recording(private val reply: String) : LlmClient {

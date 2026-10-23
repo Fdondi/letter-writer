@@ -991,8 +991,18 @@ def _format_correction(corr: dict) -> str:
         edited = corr.get("edited", "").strip()
         return f"  Original: {original}\n  Edited: {edited}"
 
-@traceable(run_type="chain", name="run_phased_feedback_checks")
-def run_phased_feedback_checks(
+PHASED_FEEDBACK_TOPIC_KEYS: Tuple[str, ...] = (
+    "instruction",
+    "accuracy",
+    "precision",
+    "company_fit",
+    "goal_fit",
+    "user_fit",
+    "human",
+)
+
+
+def _phased_feedback_tasks(
     *,
     draft_letter: str,
     cv_text: str,
@@ -1004,14 +1014,8 @@ def run_phased_feedback_checks(
     additional_user_info: str = "",
     hire_problem: str = "",
     known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
-) -> Dict[str, List[Dict[str, Any]]]:
-    """Run all draft feedback checks with cache-aware scheduling.
-
-    Checks that share the same ``system_cache_prefix`` run sequentially so
-    providers bill one cache write and subsequent reads at the discount rate.
-    """
-    from .clients.prompt_cache import run_cache_grouped_tasks
-
+) -> List[Tuple[str, Optional[str], Any]]:
+    """(topic, cache_prefix, thunk) per draft feedback check."""
     si = style_instructions or get_style_instructions()
     company_job_ctx = _company_job_letter_context(
         company_report=company_report, job_text=job_text, letter=draft_letter
@@ -1026,7 +1030,7 @@ def run_phased_feedback_checks(
     )
     human_ctx = _human_check_context(top_docs=top_docs, letter=draft_letter)
 
-    tasks: List[Tuple[str, Optional[str], Any]] = [
+    return [
         (
             "instruction",
             instruction_ctx,
@@ -1084,16 +1088,8 @@ def run_phased_feedback_checks(
         ),
     ]
 
-    results = run_cache_grouped_tasks(tasks, max_parallel_groups=7)
-    out = {
-        "instruction": results.get("instruction") or [],
-        "accuracy": results.get("accuracy") or [],
-        "precision": results.get("precision") or [],
-        "company_fit": results.get("company_fit") or [],
-        "goal_fit": results.get("goal_fit") or [],
-        "user_fit": results.get("user_fit") or [],
-        "human": results.get("human") or [],
-    }
+
+def _annotate_phased_feedback(out: Dict[str, List[Dict[str, Any]]], draft_letter: str) -> None:
     try:
         attach_quote_spans_to_feedback(out, draft_letter)
     except Exception:
@@ -1102,7 +1098,83 @@ def run_phased_feedback_checks(
         annotate_feedback_validity(out, draft_letter)
     except Exception:
         logger.exception("Laya feedback scoring failed")
+
+
+@traceable(run_type="chain", name="run_phased_feedback_checks")
+def run_phased_feedback_checks(
+    *,
+    draft_letter: str,
+    cv_text: str,
+    company_report: str,
+    job_text: str,
+    top_docs: Sequence[TopDocument],
+    client: BaseClient,
+    style_instructions: str = "",
+    additional_user_info: str = "",
+    hire_problem: str = "",
+    known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Run all draft feedback checks with cache-aware scheduling.
+
+    Checks that share the same ``system_cache_prefix`` run sequentially so
+    providers bill one cache write and subsequent reads at the discount rate.
+    """
+    from .clients.prompt_cache import run_cache_grouped_tasks
+
+    tasks = _phased_feedback_tasks(
+        draft_letter=draft_letter,
+        cv_text=cv_text,
+        company_report=company_report,
+        job_text=job_text,
+        top_docs=top_docs,
+        client=client,
+        style_instructions=style_instructions,
+        additional_user_info=additional_user_info,
+        hire_problem=hire_problem,
+        known_weaknesses=known_weaknesses,
+    )
+    results = run_cache_grouped_tasks(tasks, max_parallel_groups=7)
+    out = {key: results.get(key) or [] for key in PHASED_FEEDBACK_TOPIC_KEYS}
+    _annotate_phased_feedback(out, draft_letter)
     return out
+
+
+@traceable(run_type="chain", name="run_feedback_topic")
+def run_feedback_topic(
+    topic: str,
+    *,
+    draft_letter: str,
+    cv_text: str,
+    company_report: str,
+    job_text: str,
+    top_docs: Sequence[TopDocument],
+    client: BaseClient,
+    style_instructions: str = "",
+    additional_user_info: str = "",
+    hire_problem: str = "",
+    known_weaknesses: Optional[Sequence[Dict[str, Any]]] = None,
+    annotate: bool = True,
+) -> List[Dict[str, Any]]:
+    """Run a single draft feedback check (quote spans + Laya attached unless ``annotate=False``)."""
+    if topic not in PHASED_FEEDBACK_TOPIC_KEYS:
+        raise KeyError(f"Unknown feedback topic: {topic}")
+    tasks = _phased_feedback_tasks(
+        draft_letter=draft_letter,
+        cv_text=cv_text,
+        company_report=company_report,
+        job_text=job_text,
+        top_docs=top_docs,
+        client=client,
+        style_instructions=style_instructions,
+        additional_user_info=additional_user_info,
+        hire_problem=hire_problem,
+        known_weaknesses=known_weaknesses,
+    )
+    fn = next(fn for name, _prefix, fn in tasks if name == topic)
+    out = {topic: fn() or []}
+    if annotate:
+        _annotate_phased_feedback(out, draft_letter)
+    return out[topic]
 
 
 @traceable(run_type="chain", name="human_check")

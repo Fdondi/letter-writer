@@ -1,0 +1,7 @@
+========== Current letter (the paragraph to rewrite is between >>> and <<<):
+{{letter}}
+==========
+========== Feedback on the marked paragraph:
+{{feedback}}
+==========
+Rewrite the marked paragraph, addressing the feedback.

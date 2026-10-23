@@ -23,6 +23,7 @@ CONFIGURABLE_VENDOR_ROLES = (
     "autocomplete",
     "autocomplete_plan",
     "agentic",
+    "paragraph",
 )
 
 # Legacy alias
@@ -41,6 +42,7 @@ _ROLE_FALLBACKS: Dict[str, tuple[str, ...]] = {
     "autocomplete": ("letter_draft",),
     "autocomplete_plan": ("letter_plan", "letter_draft"),
     "agentic": ("letter_draft",),
+    "paragraph": ("letter_draft",),
 }
 
 

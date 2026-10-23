@@ -3,9 +3,9 @@
 from letter_writer.vendor_model_flows import VENDOR_MODEL_FLOWS, get_vendor_model_flows
 
 
-def test_vendor_model_flows_include_initial_compose_autocomplete_agentic():
+def test_vendor_model_flows_include_initial_compose_autocomplete_agentic_paragraph():
     ids = {f["id"] for f in VENDOR_MODEL_FLOWS}
-    assert ids == {"initial", "compose", "autocomplete", "agentic"}
+    assert ids == {"initial", "compose", "autocomplete", "agentic", "paragraph"}
 
 
 def test_initial_flow_has_extraction_rag_and_research():

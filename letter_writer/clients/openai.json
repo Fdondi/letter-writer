@@ -13,6 +13,7 @@
     "company_research": { "model": "gpt-5.2",      "reasoning_effort": "medium" },
     "letter_plan":      { "model": "gpt-6.1-sol",  "reasoning_effort": "high" },
     "letter_draft":     { "model": "gpt-6.1-sol",  "reasoning_effort": "high" },
+    "paragraph":        { "model": "gpt-6.1-sol",  "reasoning_effort": "high" },
     "letter_refine":    { "model": "gpt-6.1-sol",  "reasoning_effort": "high" },
     "agentic":          { "model": "gpt-6-luna",   "reasoning_effort": "none" },
     "autocomplete":     { "model": "gpt-realtime-mini", "reasoning_effort": "none" },

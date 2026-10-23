@@ -49,6 +49,10 @@ LLM_PATH_PREFIXES = (
     "/api/research/",
     "/api/autocomplete/complete/",
     "/api/autocomplete/plan/",
+    "/api/paragraph/draft/",
+    "/api/paragraph/regenerate/",
+    "/api/paragraph/continue/",
+    "/api/paragraph/feedback/",
     "/api/phase-feedback/snapshot/",
     "/api/documents/",
 )
