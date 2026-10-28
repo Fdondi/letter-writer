@@ -5,6 +5,7 @@ import io.github.fdondi.letterwriter.core.PyText
 import io.github.fdondi.letterwriter.core.asObjectOrNull
 import io.github.fdondi.letterwriter.core.asStringOrNull
 import io.github.fdondi.letterwriter.data.CompaniesRepository
+import io.github.fdondi.letterwriter.data.CompanyStore
 import io.github.fdondi.letterwriter.llm.LlmClient
 import io.github.fdondi.letterwriter.llm.ModelOverrides
 import io.github.fdondi.letterwriter.llm.ModelRole
@@ -42,7 +43,7 @@ data class CompanyResearchResult(
  */
 class Research(
     private val prompts: Prompts,
-    private val companies: CompaniesRepository,
+    private val companies: CompanyStore,
     private val clientFor: (ModelVendor) -> LlmClient,
     private val overrides: () -> VendorRoleOverrides,
     private val modelOverrides: ModelOverrides,

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -24,11 +25,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import io.github.fdondi.letterwriter.BuildConfig
-import io.github.fdondi.letterwriter.auth.AuthManager
+import io.github.fdondi.letterwriter.auth.AuthGateway
 import kotlinx.coroutines.launch
 
 @Composable
-fun SignInScreen(auth: AuthManager, modifier: Modifier = Modifier) {
+fun SignInScreen(auth: AuthGateway, modifier: Modifier = Modifier, onDemo: (() -> Unit)? = null) {
     val activity = LocalContext.current as Activity
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
@@ -82,5 +83,14 @@ fun SignInScreen(auth: AuthManager, modifier: Modifier = Modifier) {
             ) { Text("Sign in with Google") }
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center) }
+        if (onDemo != null && !busy) {
+            OutlinedButton(onClick = onDemo) { Text("Try the demo") }
+            Text(
+                "Demo: a made-up account with sample jobs and letters. Model replies are canned, nothing is sent anywhere, and your account is not touched.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }

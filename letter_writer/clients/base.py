@@ -49,6 +49,8 @@ class ModelVendor(Enum):
     GROK = "grok"
     DEEPSEEK = "deepseek"
     LOCAL = "local"
+    # Claude Code CLI on the host subscription; only the opportunity batch runs it.
+    CLAUDE_CODE = "claude_code"
 
 
 VALID_VENDOR_KEYS = frozenset(v.value for v in ModelVendor)

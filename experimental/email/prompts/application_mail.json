@@ -1,0 +1,26 @@
+{
+  "type": "json_schema",
+  "json_schema": {
+    "name": "application_mail",
+    "strict": true,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["received", "viewed", "forwarded", "screening", "interview", "final", "offer", "rejection", "withdrawn", "other", "not_application"]
+        },
+        "company": {"type": "string"},
+        "agency": {"type": "string"},
+        "job_title": {"type": "string"},
+        "job_reference": {"type": "string"},
+        "job_url": {"type": "string"},
+        "positive_feedback": {"type": "boolean"},
+        "feedback_quote": {"type": "string"},
+        "summary": {"type": "string"}
+      },
+      "required": ["kind", "company", "agency", "job_title", "job_reference", "job_url", "positive_feedback", "feedback_quote", "summary"]
+    }
+  }
+}

@@ -1,6 +1,8 @@
 package io.github.fdondi.letterwriter.data
 
 import io.github.fdondi.letterwriter.core.Http
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Node
@@ -34,6 +36,11 @@ object JobPageFetcher {
 
     suspend fun fetch(url: String): Page {
         val html = Http.getText("Job page", url, mapOf("User-Agent" to "Mozilla/5.0 (Android) LetterWriter"))
+        // Parsing a large page takes long enough to stutter the UI; keep it off the main thread.
+        return withContext(Dispatchers.Default) { parse(url, html) }
+    }
+
+    private fun parse(url: String, html: String): Page {
         val doc = Jsoup.parse(html, url)
         doc.select("script, style, noscript, nav, footer, svg, form, iframe").remove()
         val text = blockText(doc.body())

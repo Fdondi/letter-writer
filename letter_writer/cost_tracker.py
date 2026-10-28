@@ -21,6 +21,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
+# Load .env before the BIGQUERY_* settings below are read: on the host (the opportunity batch) this
+# module is imported before anything else loads it, and the project would be fixed as unset.
+from letter_writer import config  # noqa: F401
 from letter_writer.clients.base import normalize_config_vendor_key
 
 logger = logging.getLogger(__name__)

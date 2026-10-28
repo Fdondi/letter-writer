@@ -513,8 +513,8 @@ export function JobSessionProvider({ children }) {
   }, [authRefreshGeneration, sessionSetters, adoptRestoredFlow]);
 
   const applyBackupRestore = useCallback(
-    (sessionState, sessionId) => {
-      const result = applyRestoredSessionState(sessionState, sessionSetters, { sessionId });
+    (sessionState, sessionId, options = {}) => {
+      const result = applyRestoredSessionState(sessionState, sessionSetters, { sessionId, ...options });
       adoptRestoredFlow(result);
       return result;
     },

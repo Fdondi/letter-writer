@@ -14,6 +14,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.security.MessageDigest
+import java.util.Collections
 import java.util.UUID
 
 /** One INPUT_NEEDED row sent to stage 4. */
@@ -26,7 +27,8 @@ data class InputRow(val id: String, val vendor: String, val category: String, va
  */
 class FeedbackReview(private val prompts: Prompts, private val checks: FeedbackChecks, private val defaultStyle: () -> String) {
 
-    val warnings = ArrayList<String>()
+    /** Appended from the per-category stages, which run concurrently. */
+    val warnings: MutableList<String> = Collections.synchronizedList(ArrayList())
 
     /** `review_feedback_for_vendor`: stages 1+2 per category, then 4, then 3. */
     suspend fun reviewForVendor(

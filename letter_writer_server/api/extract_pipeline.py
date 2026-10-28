@@ -18,7 +18,8 @@ from letter_writer.generation import (
     _level_label_for_rating,
 )
 from letter_writer.firestore_store import get_collection, get_user_data
-from letter_writer.personal_data_sections import get_competence_ratings, cv_text_with_extra_info
+from letter_writer.headless import latest_cv_text
+from letter_writer.personal_data_sections import get_competence_ratings
 from letter_writer.retrieval import retrieve_similar_job_offers, select_top_documents, sanitize_search_results
 from letter_writer_server.core.session import Session
 
@@ -33,11 +34,8 @@ def resolve_cv_for_extract(session: Session) -> tuple[str, Dict[str, Any], str]:
     user_data: Dict[str, Any] = {}
     if not cv_text and user:
         user_data = get_user_data(user["id"], use_cache=True)
-        cv_revisions = user_data.get("cv_revisions", [])
-        if cv_revisions:
-            sorted_revs = sorted(cv_revisions, key=lambda x: x.get("created_at", ""), reverse=True)
-            base_cv = sorted_revs[0].get("content", "")
-            session["cv_text"] = cv_text_with_extra_info(base_cv, user_data)
+        if user_data.get("cv_revisions"):
+            session["cv_text"] = latest_cv_text(user_data)
     elif user:
         user_data = get_user_data(user["id"], use_cache=True)
 
@@ -290,3 +288,66 @@ def run_extract_pipeline(
         "job_text": cleaned_job_text,
         "session_id": session.session_key,
     }
+
+
+def run_capture_extract(
+    session: Session,
+    *,
+    visible_text: str,
+    html: str,
+    source_url: str,
+    scale_cfg: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Extract a captured job page into ``session`` (job text, metadata, similar letters).
+
+    Shared by ``/api/job-capture/{id}/process/`` and the opportunity batch. Records the
+    extraction cost and adds ``source_url`` to the result.
+    """
+    # misc imports this module; import its helpers here to avoid the cycle.
+    from letter_writer.client import get_extraction_client
+    from letter_writer.generation import extract_job_page_metadata
+    from letter_writer.page_templates import extract_from_captured_page
+    from letter_writer_server.api.misc import _reset_client_counters, _track_and_reset_client_cost
+
+    parsed_page = extract_from_captured_page(html, source_url)
+    focused_text = str(parsed_page.get("job_text") or "").strip()
+    competence_source_text = focused_text or visible_text or html
+    canonical_url = str(parsed_page.get("source_url") or "").strip() or source_url
+
+    cv_text, user_data, user_id = resolve_cv_for_extract(session)
+    extract_vendor, ai_client = get_extraction_client(user_data)
+    _reset_client_counters(ai_client)
+    trace_dir = Path("trace", "extraction.page_capture")
+
+    def _page_metadata():
+        meta = extract_job_page_metadata(
+            visible_text,
+            ai_client,
+            html=html,
+            source_url=source_url,
+            trace_dir=trace_dir,
+            parsed_page=parsed_page,
+        )
+        if canonical_url:
+            meta["source_url"] = str(meta.get("source_url") or "").strip() or canonical_url
+        return meta
+
+    result = run_extract_pipeline(
+        competence_source_text=competence_source_text,
+        similar_job_text=None,
+        page_metadata_fn=_page_metadata,
+        session=session,
+        scale_cfg=scale_cfg,
+        user_data=user_data,
+        cv_text=cv_text,
+        user_id=user_id,
+        ai_client=ai_client,
+    )
+    _track_and_reset_client_cost(
+        user_id=user_id,
+        phase="extract",
+        vendor=extract_vendor.value,
+        client=ai_client,
+    )
+    result["source_url"] = str((result.get("extraction") or {}).get("source_url") or canonical_url)
+    return result

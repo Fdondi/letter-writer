@@ -31,6 +31,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -45,9 +46,9 @@ import io.github.fdondi.letterwriter.AppGraph
 import io.github.fdondi.letterwriter.core.asObjectOrNull
 import io.github.fdondi.letterwriter.core.asStringOrNull
 import io.github.fdondi.letterwriter.core.pyStr
-import io.github.fdondi.letterwriter.llm.ModelVendor
 import io.github.fdondi.letterwriter.pipeline.FeedbackItems
 import io.github.fdondi.letterwriter.pipeline.FeedbackUi
+import io.github.fdondi.letterwriter.pipeline.PipelineSession
 import io.github.fdondi.letterwriter.pipeline.VendorStage
 import io.github.fdondi.letterwriter.pipeline.VendorWork
 import io.github.fdondi.letterwriter.pipeline.WorkSession
@@ -69,7 +70,7 @@ val CATEGORY_LABELS = mapOf(
     "human" to "Human",
 )
 
-fun vendorLabel(key: String): String = ModelVendor.fromKey(key)?.label ?: key
+fun vendorLabel(key: String): String = PipelineSession.label(key)
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -170,6 +171,16 @@ private fun VendorPage(graph: AppGraph, s: WorkSession, vendor: String, busy: St
             Text(vendorLabel(vendor), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             if (w.totalCost > 0) Text(formatDollars(w.totalCost), style = MaterialTheme.typography.bodyMedium)
         }
+        if (s.opportunityId != null) {
+            Text(
+                if (PipelineSession.isPhoneVendor(vendor)) {
+                    "Drafted by the desktop pipeline."
+                } else {
+                    "Drafted by the desktop pipeline. ${vendorLabel(vendor)} runs on the desktop; a rewrite here goes through the ${if (vendor == "claude_code") "Anthropic API" else "API of one of your vendors"}."
+                },
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         busy?.let { BusyRow(it) }
         w.error?.let { err ->
             ErrorText(err)
@@ -223,6 +234,27 @@ private fun VendorPage(graph: AppGraph, s: WorkSession, vendor: String, busy: St
                 }
                 OutlinedButton(enabled = busy == null, onClick = { flow.refine(vendor, false) }) { Text("Rewrite again") }
             }
+            if (w.feedback.isNotEmpty()) FinalComments(graph, s, vendor, w, busy)
+        }
+    }
+}
+
+/**
+ * Comments on a finished letter. Pipeline letters arrive finished but may still ask questions;
+ * answering them and rewriting uses the answers.
+ */
+@Composable
+private fun FinalComments(graph: AppGraph, s: WorkSession, vendor: String, w: VendorWork, busy: String?) {
+    val open = FeedbackItems.CATEGORIES.sumOf { cat ->
+        w.items(cat).count { it["status"].pyStr().uppercase() == "INPUT_NEEDED" && !FeedbackUi.itemIsApproved(it, w.itemApprovals) && !FeedbackUi.isHidden(it) }
+    }
+    var expanded by rememberSaveable(vendor) { mutableStateOf(open > 0) }
+    SectionCard(if (open > 0) "Comments · $open question(s) for you" else "Comments") {
+        TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide comments" else "Show comments") }
+        if (expanded) {
+            FeedbackList(graph, s, vendor, w, busy)
+            Text("Rewriting starts again from the draft and applies these comments, including your answers.", style = MaterialTheme.typography.bodySmall)
+            Button(enabled = busy == null, onClick = { graph.flow.refine(vendor, false) }) { Text("Rewrite with these comments") }
         }
     }
 }
@@ -252,7 +284,6 @@ private fun DraftSection(graph: AppGraph, s: WorkSession, vendor: String, w: Ven
     val flow = graph.flow
     var editing by rememberSaveable(vendor) { mutableStateOf(false) }
     var fancy by rememberSaveable(vendor) { mutableStateOf(false) }
-    var category by rememberSaveable(vendor) { mutableStateOf(FeedbackItems.CATEGORIES.first()) }
     val isDraftStage = w.stage == VendorStage.DRAFT
 
     SectionCard("Draft") {
@@ -289,33 +320,7 @@ private fun DraftSection(graph: AppGraph, s: WorkSession, vendor: String, w: Ven
                 Button(onClick = { flow.checkDraft(vendor) }) { Text("Check this draft") }
             }
         } else {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (cat in FeedbackItems.CATEGORIES) {
-                    val items = w.items(cat)
-                    val pending = FeedbackUi.pleaseFixItems(items).count { !FeedbackUi.itemIsApproved(it, w.itemApprovals) }
-                    FilterChip(
-                        selected = category == cat,
-                        onClick = { category = cat },
-                        label = { Text("${CATEGORY_LABELS[cat] ?: cat}${if (pending > 0) " · $pending" else if (items.isNotEmpty()) " ✓" else ""}") },
-                    )
-                }
-            }
-            val items = w.items(category)
-            val visible = items.filter { !FeedbackUi.isHidden(it) }
-            val hidden = items.filter { FeedbackUi.isHidden(it) }
-            if (visible.isEmpty()) Text("No comments in this category.", style = MaterialTheme.typography.bodySmall)
-            for (item in visible) FeedbackItemView(graph, s, vendor, category, item, w.itemApprovals)
-            if (hidden.isNotEmpty()) {
-                var showHidden by remember(category) { mutableStateOf(false) }
-                TextButton(onClick = { showHidden = !showHidden }) {
-                    Text("${if (showHidden) "Hide" else "Show"} ${hidden.size} comment(s) the decision model judged ungrounded")
-                }
-                if (showHidden) for (item in hidden) FeedbackItemView(graph, s, vendor, category, item, w.itemApprovals)
-            }
-            TextButton(onClick = { flow.addItem(vendor, category) }) { Text("+ Add a comment") }
-            if (busy == null) {
-                TextButton(onClick = { flow.checkDraft(vendor) }) { Text("Check again") }
-            }
+            FeedbackList(graph, s, vendor, w, busy)
         }
     }
 
@@ -330,5 +335,40 @@ private fun DraftSection(graph: AppGraph, s: WorkSession, vendor: String, w: Ven
     }
     Button(enabled = ready && busy == null, onClick = { flow.approveDraft(vendor, fancy) }, modifier = Modifier.fillMaxWidth()) {
         Text(if (ready) "Approve draft" else "Approve every comment first")
+    }
+}
+
+/** Category chips and the comments of the picked category. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FeedbackList(graph: AppGraph, s: WorkSession, vendor: String, w: VendorWork, busy: String?) {
+    val flow = graph.flow
+    var category by rememberSaveable(vendor) { mutableStateOf(FeedbackItems.CATEGORIES.first()) }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        for (cat in FeedbackItems.CATEGORIES) {
+            val items = w.items(cat)
+            val pending = FeedbackUi.pleaseFixItems(items).count { !FeedbackUi.itemIsApproved(it, w.itemApprovals) }
+            FilterChip(
+                selected = category == cat,
+                onClick = { category = cat },
+                label = { Text("${CATEGORY_LABELS[cat] ?: cat}${if (pending > 0) " · $pending" else if (items.isNotEmpty()) " ✓" else ""}") },
+            )
+        }
+    }
+    val items = w.items(category)
+    val visible = items.filter { !FeedbackUi.isHidden(it) }
+    val hidden = items.filter { FeedbackUi.isHidden(it) }
+    if (visible.isEmpty()) Text("No comments in this category.", style = MaterialTheme.typography.bodySmall)
+    for (item in visible) key(item["id"].pyStr()) { FeedbackItemView(graph, s, vendor, category, item, w.itemApprovals) }
+    if (hidden.isNotEmpty()) {
+        var showHidden by remember(category) { mutableStateOf(false) }
+        TextButton(onClick = { showHidden = !showHidden }) {
+            Text("${if (showHidden) "Hide" else "Show"} ${hidden.size} comment(s) the decision model judged ungrounded")
+        }
+        if (showHidden) for (item in hidden) key(item["id"].pyStr()) { FeedbackItemView(graph, s, vendor, category, item, w.itemApprovals) }
+    }
+    TextButton(onClick = { flow.addItem(vendor, category) }) { Text("+ Add a comment") }
+    if (busy == null && w.stage == VendorStage.DRAFT) {
+        TextButton(onClick = { flow.checkDraft(vendor) }) { Text("Check again") }
     }
 }

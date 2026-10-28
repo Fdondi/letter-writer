@@ -12,12 +12,22 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
+/** The two BigQuery calls the cost table needs. Tests use an in-memory one. */
+interface BigQueryApi {
+    /** Returns the indexes of rows BigQuery rejected, with the reason. */
+    suspend fun insertAll(token: String, table: String, rows: List<Pair<String, JsonObject>>): Map<Int, String>
+
+    /** Runs a standard-SQL query with named parameters; returns rows as column-name maps of raw strings. */
+    suspend fun query(token: String, sql: String, params: List<QueryParam>): List<Map<String, String?>>
+
+    fun tableRef(table: String): String
+}
+
 /** Minimal BigQuery REST client (insertAll + jobs.query) authorised with the user's OAuth token. */
-class BigQueryClient(private val project: String, private val dataset: String) {
+class BigQueryClient(private val project: String, private val dataset: String) : BigQueryApi {
     private val base = "https://bigquery.googleapis.com/bigquery/v2/projects/$project"
 
-    /** Returns the indexes of rows BigQuery rejected, with the reason. */
-    suspend fun insertAll(token: String, table: String, rows: List<Pair<String, JsonObject>>): Map<Int, String> {
+    override suspend fun insertAll(token: String, table: String, rows: List<Pair<String, JsonObject>>): Map<Int, String> {
         val body = buildJsonObject {
             put("skipInvalidRows", false)
             put("ignoreUnknownValues", false)
@@ -43,8 +53,7 @@ class BigQueryClient(private val project: String, private val dataset: String) {
         return failed
     }
 
-    /** Runs a standard-SQL query with named parameters; returns rows as column-name maps of raw strings. */
-    suspend fun query(token: String, sql: String, params: List<QueryParam>): List<Map<String, String?>> {
+    override suspend fun query(token: String, sql: String, params: List<QueryParam>): List<Map<String, String?>> {
         val body = buildJsonObject {
             put("query", sql)
             put("useLegacySql", false)
@@ -87,7 +96,7 @@ class BigQueryClient(private val project: String, private val dataset: String) {
         }
     }
 
-    fun tableRef(table: String) = "`$project.$dataset.$table`"
+    override fun tableRef(table: String) = "`$project.$dataset.$table`"
 
     private fun auth(token: String) = mapOf("Authorization" to "Bearer $token")
 }

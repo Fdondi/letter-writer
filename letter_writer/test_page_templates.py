@@ -9,9 +9,9 @@ import pytest
 
 from letter_writer.job_extraction import extract_job_page_metadata
 from letter_writer.page_templates import (
-    attach_jobs_ch_company_about,
     extract_from_captured_page,
     match_page_template,
+    parse_jobs_ch_company_about,
 )
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "extensions" / "job-capture" / "examples"
@@ -397,31 +397,13 @@ def test_jobs_ch_company_compact_uses_description_not_teaser():
     assert parsed["company_profile_url"] == JOBS_CH_COMPANY_URL
 
 
-def test_attach_company_about_fills_from_fetched_profile():
-    parsed = extract_from_captured_page(
-        JOBS_CH_COMPACT, "https://www.jobs.ch/fr/offres-emplois/?term=cpp"
-    )
-    assert parsed["additional_company_info"] == ""
-    attach_jobs_ch_company_about(parsed, fetch_html=lambda url: JOBS_CH_COMPANY_COMPACT)
-    assert parsed["additional_company_info"].startswith(JOBS_CH_COMPANY_LEAD)
-    assert "www.cardcenter.ch" in parsed["additional_company_info"]
-    assert "contribution stable" not in parsed["additional_company_info"]
-
-
-def test_attach_company_about_stays_empty_when_fetch_fails():
-    parsed = extract_from_captured_page(
-        JOBS_CH_COMPACT, "https://www.jobs.ch/fr/offres-emplois/?term=cpp"
-    )
-    attach_jobs_ch_company_about(parsed, fetch_html=lambda url: "")
-    assert parsed["additional_company_info"] == ""
-
-
-def test_extract_job_page_metadata_includes_attached_company_about():
+def test_extract_job_page_metadata_includes_captured_company_about():
     client = MagicMock()
     parsed = extract_from_captured_page(
         JOBS_CH_COMPACT, "https://www.jobs.ch/fr/offres-emplois/?term=cpp"
     )
-    attach_jobs_ch_company_about(parsed, fetch_html=lambda url: JOBS_CH_COMPANY_COMPACT)
+    # The server never fetches the company profile; a captured profile's text arrives in the page.
+    parsed["additional_company_info"] = parse_jobs_ch_company_about(JOBS_CH_COMPANY_COMPACT)
     result = extract_job_page_metadata(
         "ignored chrome",
         client,

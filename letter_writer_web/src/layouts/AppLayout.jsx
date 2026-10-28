@@ -153,6 +153,7 @@ export default function AppLayout() {
             <AppVersionLabel />
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button onClick={() => navigate("/opportunities")} style={{ padding: "8px 12px", border: "1px solid var(--border-color)", borderRadius: "4px", backgroundColor: location.pathname === "/opportunities" ? "#3b82f6" : "var(--button-bg)", color: location.pathname === "/opportunities" ? "white" : "var(--button-text)", cursor: "pointer", fontSize: "14px" }}>Jobs</button>
             <button onClick={() => setShowStyleBlade(true)} style={{ padding: "8px 12px", border: "1px solid var(--border-color)", borderRadius: "4px", backgroundColor: "var(--button-bg)", color: "var(--button-text)", cursor: "pointer", fontSize: "14px", position: "relative" }}>
               AI Instructions
               {instructionsUpstreamPending && (

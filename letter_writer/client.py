@@ -30,6 +30,9 @@ def get_client(vendor: ModelVendor, *, user_data: Optional[Dict[str, Any]] = Non
     elif vendor == ModelVendor.LOCAL:
         from .clients.local import LocalClient
         client = LocalClient()
+    elif vendor == ModelVendor.CLAUDE_CODE:
+        from .clients.claude_code import ClaudeCodeClient
+        client = ClaudeCodeClient()
     else:
         raise ValueError(f"Invalid vendor: {vendor}")
     client._vendor_key = vendor.value

@@ -17,6 +17,7 @@ from letter_writer.feedback_checks import (
     run_suggest_additional_feedback_context,
 )
 from letter_writer.instructions import get_structure_instructions as get_default_structure_instructions
+from letter_writer.headless import latest_cv_text
 from letter_writer.clients.base import ModelVendor
 from letter_writer_server.api.cost_utils import with_user_monthly_cost
 from letter_writer.phased_service import (
@@ -35,7 +36,6 @@ from letter_writer.session_store import set_current_request, save_vendor_data, l
 from letter_writer_server.core.vendor_restore import merge_restored_vendors
 from letter_writer.firestore_store import get_user_data
 from letter_writer.personal_data_sections import (
-    cv_text_with_extra_info,
     get_structure_instructions as get_user_structure_instructions,
 )
 from letter_writer.typed_shapes import TopDocument
@@ -111,13 +111,8 @@ def init_session(request: Request, data: InitSessionRequest, session: Session = 
             # Load CV from Firestore
             if user_id:
                 user_data = get_user_data(user_id, use_cache=True)
-                # Assuming get_cv_revisions logic or just get cv_revisions directly
-                cv_revisions = user_data.get('cv_revisions', [])
-                # Find latest
-                if cv_revisions:
-                    latest = max(cv_revisions, key=lambda x: x.get('created_at', ''))
-                    base_cv = latest.get('content', '')
-                    session['cv_text'] = cv_text_with_extra_info(base_cv, user_data)
+                if user_data.get('cv_revisions'):
+                    session['cv_text'] = latest_cv_text(user_data)
     
     if data.job_text:
         session['job_text'] = data.job_text

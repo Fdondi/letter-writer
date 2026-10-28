@@ -111,6 +111,36 @@ def with_user_monthly_cost(payload: Dict[str, Any], session: Any, months_back: i
     return payload
 
 
+def spending_limit_error(user_id: str, session: Any = None) -> Optional[Tuple[int, str]]:
+    """(HTTP status, reason) when ``user_id`` may not spend more on paid APIs now, else None.
+
+    402 when the daily or monthly limit is reached; 503 when spend cannot be verified.
+    Shared by the FastAPI dependency below and the opportunity batch.
+    """
+    try:
+        monthly, cost_error = _get_user_monthly_cost_with_pending(user_id, session)
+        if cost_error:
+            return 503, (
+                "Cannot verify spending limits: cost analytics are unavailable "
+                f"({cost_error}). Check container network access to Google APIs."
+            )
+        if monthly >= MONTHLY_LIMIT_USD:
+            return 402, (
+                f"Monthly spending limit of ${MONTHLY_LIMIT_USD:.2f} reached. "
+                "Contact support to increase your limit."
+            )
+        daily = get_user_today_cost(user_id)
+        if daily >= DAILY_LIMIT_USD:
+            return 402, (
+                f"Daily spending limit of ${DAILY_LIMIT_USD:.2f} reached. "
+                "Limit resets at midnight UTC."
+            )
+    except Exception as exc:
+        logger.warning("Spending limit check failed for user=%s: %s", user_id, exc)
+        return 503, f"Cannot verify spending limits: {exc}"
+    return None
+
+
 async def check_spending_limits(
     user: dict = Depends(require_auth),
     session: Session = Depends(get_session),
@@ -118,35 +148,6 @@ async def check_spending_limits(
     """FastAPI dependency: raises HTTP 402 if the user has exceeded their daily or monthly limit."""
     if is_harness_mode():
         return None
-    user_id = user["id"]
-    try:
-        monthly, cost_error = _get_user_monthly_cost_with_pending(user_id, session)
-        if cost_error:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "Cannot verify spending limits: cost analytics are unavailable "
-                    f"({cost_error}). Check container network access to Google APIs."
-                ),
-            )
-        if monthly >= MONTHLY_LIMIT_USD:
-            raise HTTPException(
-                status_code=402,
-                detail=f"Monthly spending limit of ${MONTHLY_LIMIT_USD:.2f} reached. "
-                       "Contact support to increase your limit.",
-            )
-        daily = get_user_today_cost(user_id)
-        if daily >= DAILY_LIMIT_USD:
-            raise HTTPException(
-                status_code=402,
-                detail=f"Daily spending limit of ${DAILY_LIMIT_USD:.2f} reached. "
-                       "Limit resets at midnight UTC.",
-            )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.warning("Spending limit check failed for user=%s: %s", user_id, exc)
-        raise HTTPException(
-            status_code=503,
-            detail=f"Cannot verify spending limits: {exc}",
-        ) from exc
+    blocked = spending_limit_error(user["id"], session)
+    if blocked:
+        raise HTTPException(status_code=blocked[0], detail=blocked[1])

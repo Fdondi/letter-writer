@@ -1,0 +1,148 @@
+{
+  "comment": "Shared by letter_writer/test_opportunity_store.py and app OpportunityKeysTest.kt. Keys and clean URLs are hand-written; hashes were computed once and must match on both sides.",
+  "user_id": "100200300400500600700",
+  "canonical_keys": [
+    {
+      "url": "https://www.jobs.ch/de/stellenangebote/detail/6ef0e053-1d7a-45bc-b9a7-a32dd1dfb5f7/?source=jobmail&utm_medium=email",
+      "canonical_key": "jobs.ch:6ef0e053-1d7a-45bc-b9a7-a32dd1dfb5f7",
+      "clean_url": "https://www.jobs.ch/de/stellenangebote/detail/6ef0e053-1d7a-45bc-b9a7-a32dd1dfb5f7",
+      "source": "jobs.ch"
+    },
+    {
+      "url": "https://www.jobs.ch/fr/offres-emplois/detail/6EF0E053-1D7A-45BC-B9A7-A32DD1DFB5F7/",
+      "canonical_key": "jobs.ch:6ef0e053-1d7a-45bc-b9a7-a32dd1dfb5f7",
+      "clean_url": "https://www.jobs.ch/fr/offres-emplois/detail/6EF0E053-1D7A-45BC-B9A7-A32DD1DFB5F7",
+      "source": "jobs.ch"
+    },
+    {
+      "url": "https://www.jobs.ch/en/vacancies/detail/6ef0e053-1d7a-45bc-b9a7-a32dd1dfb5f7/?term=cuda",
+      "canonical_key": "jobs.ch:6ef0e053-1d7a-45bc-b9a7-a32dd1dfb5f7",
+      "clean_url": "https://www.jobs.ch/en/vacancies/detail/6ef0e053-1d7a-45bc-b9a7-a32dd1dfb5f7?term=cuda",
+      "source": "jobs.ch"
+    },
+    {
+      "url": "https://www.jobup.ch/fr/emplois/detail/6ef0e053-1d7a-45bc-b9a7-a32dd1dfb5f7/",
+      "canonical_key": "jobs.ch:6ef0e053-1d7a-45bc-b9a7-a32dd1dfb5f7",
+      "clean_url": "https://www.jobup.ch/fr/emplois/detail/6ef0e053-1d7a-45bc-b9a7-a32dd1dfb5f7",
+      "source": "jobs.ch"
+    },
+    {
+      "url": "https://www.jobscout24.ch/de/job/6ef0e053-1d7a-45bc-b9a7-a32dd1dfb5f7/",
+      "canonical_key": "jobs.ch:6ef0e053-1d7a-45bc-b9a7-a32dd1dfb5f7",
+      "clean_url": "https://www.jobscout24.ch/de/job/6ef0e053-1d7a-45bc-b9a7-a32dd1dfb5f7",
+      "source": "jobs.ch"
+    },
+    {
+      "url": "https://www.jobs.ch/de/firmen/12345/?utm_source=x",
+      "canonical_key": "url:https://jobs.ch/de/firmen/12345",
+      "clean_url": "https://www.jobs.ch/de/firmen/12345",
+      "source": "manual"
+    },
+    {
+      "url": "https://www.linkedin.com/jobs/view/4012345678/?trk=eml-email_job_alert&refId=abc%3D%3D",
+      "canonical_key": "linkedin:4012345678",
+      "clean_url": "https://www.linkedin.com/jobs/view/4012345678",
+      "source": "linkedin"
+    },
+    {
+      "url": "https://ch.linkedin.com/jobs/view/senior-software-engineer-at-acme-4012345678",
+      "canonical_key": "linkedin:4012345678",
+      "clean_url": "https://ch.linkedin.com/jobs/view/senior-software-engineer-at-acme-4012345678",
+      "source": "linkedin"
+    },
+    {
+      "url": "https://www.linkedin.com/comm/jobs/view/4012345678?trackingId=xyz&lipi=abc",
+      "canonical_key": "linkedin:4012345678",
+      "clean_url": "https://www.linkedin.com/comm/jobs/view/4012345678?lipi=abc",
+      "source": "linkedin"
+    },
+    {
+      "url": "https://www.linkedin.com/jobs/collections/recommended/?currentJobId=4012345678",
+      "canonical_key": "linkedin:4012345678",
+      "clean_url": "https://www.linkedin.com/jobs/collections/recommended?currentJobId=4012345678",
+      "source": "linkedin"
+    },
+    {
+      "url": "https://swissdevjobs.ch/jobs/Acme-AG-Senior-CPP-Developer?utm_source=alert",
+      "canonical_key": "swissdevjobs:acme-ag-senior-cpp-developer",
+      "clean_url": "https://swissdevjobs.ch/jobs/Acme-AG-Senior-CPP-Developer",
+      "source": "swissdevjobs"
+    },
+    {
+      "url": "https://Careers.Example.com/Job/123/?utm_campaign=x&b=2&a=1#apply",
+      "canonical_key": "url:https://careers.example.com/job/123?a=1&b=2",
+      "clean_url": "https://Careers.Example.com/Job/123?a=1&b=2",
+      "source": "manual"
+    },
+    {
+      "url": "http://localhost:8080/jobs/7?uid=9&mid=3",
+      "canonical_key": "url:http://localhost:8080/jobs/7",
+      "clean_url": "http://localhost:8080/jobs/7",
+      "source": "manual"
+    },
+    {
+      "url": "HTTPS://www.Example.com",
+      "canonical_key": "url:https://example.com",
+      "clean_url": "https://www.Example.com",
+      "source": "manual"
+    },
+    {
+      "url": "  https://example.com/a?flag&x=  ",
+      "canonical_key": "url:https://example.com/a?flag&x",
+      "clean_url": "https://example.com/a?flag&x",
+      "source": "manual"
+    },
+    {
+      "url": "not a url",
+      "canonical_key": "url:not a url",
+      "clean_url": "not a url",
+      "source": "manual"
+    },
+    {
+      "url": "www.example.com/jobs/1",
+      "canonical_key": "url:www.example.com/jobs/1",
+      "clean_url": "www.example.com/jobs/1",
+      "source": "manual"
+    },
+    {
+      "url": "https://exa_mple.com/jobs/1",
+      "canonical_key": "url:https://exa_mple.com/jobs/1",
+      "clean_url": "https://exa_mple.com/jobs/1",
+      "source": "manual"
+    },
+    {
+      "url": "https://example.com/a b",
+      "canonical_key": "url:https://example.com/a b",
+      "clean_url": "https://example.com/a b",
+      "source": "manual"
+    }
+  ],
+  "text_keys": [
+    {
+      "text": "  Senior  Engineer\n\nAcme AG  ",
+      "text_key": "text:b9ec12da4eb02766"
+    },
+    {
+      "text": "Senior Engineer Acme AG",
+      "text_key": "text:b9ec12da4eb02766"
+    },
+    {
+      "text": "Ingenieur Zug\tCUDA",
+      "text_key": "text:85cc36221a2088a4"
+    }
+  ],
+  "document_ids": [
+    {
+      "canonical_key": "jobs.ch:6ef0e053-1d7a-45bc-b9a7-a32dd1dfb5f7",
+      "document_id": "7eb3bea5172d8b8829a39a439b19901a"
+    },
+    {
+      "canonical_key": "linkedin:4012345678",
+      "document_id": "b35c70ef3de1fa1ff1db211f37ef375f"
+    },
+    {
+      "canonical_key": "text:0123456789abcdef",
+      "document_id": "b2d124ce182f1bdcec7ab2db4720cddb"
+    }
+  ]
+}

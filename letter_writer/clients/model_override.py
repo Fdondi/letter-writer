@@ -42,6 +42,11 @@ def thinking_config_for_vendor(vendor_key: str, suffix: str | None) -> Dict[str,
             return {"thinking": False}
         return {"thinking": True, "thinking_effort": s.lower()}
 
+    if vendor == "claude_code":
+        if s.lower() in ("off", "none", "false"):
+            return {}
+        return {"effort": s.lower()}
+
     return {}
 
 

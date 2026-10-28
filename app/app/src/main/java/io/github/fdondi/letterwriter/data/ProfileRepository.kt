@@ -6,7 +6,6 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import io.github.fdondi.letterwriter.core.ApiKeys
-import io.github.fdondi.letterwriter.core.Prompts
 import io.github.fdondi.letterwriter.core.asStringOrNull
 import io.github.fdondi.letterwriter.core.textOrEmpty
 import io.github.fdondi.letterwriter.llm.ModelOverrides
@@ -16,31 +15,66 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.tasks.await
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import java.security.MessageDigest
 
 class ProfileMissingException(sub: String) : IllegalStateException(
     "No profile personal_data/$sub exists. Sign in once on the desktop app with this Google account; " +
         "the phone never creates profiles.",
 )
 
+/** `personal_data/{sub}` and its API keys. [ProfileRepository] is the Firestore one; tests use an in-memory one. */
+interface ProfileStore {
+    /** The last profile loaded or written; screens read it. */
+    val profile: StateFlow<UserProfile?>
+
+    suspend fun load(sub: String): UserProfile
+
+    fun current(): UserProfile = profile.value ?: throw IllegalStateException("Profile not loaded")
+
+    suspend fun appendCvRevision(sub: String, content: String, source: String = "manual_edit")
+
+    suspend fun saveDefaultVendors(sub: String, vendors: List<String>)
+
+    suspend fun saveExtractionVendor(sub: String, vendor: String)
+
+    suspend fun saveBackgroundModels(sub: String, models: List<String>, allowed: Set<String>)
+
+    suspend fun saveRoleOverrides(sub: String, raw: JsonObject)
+
+    suspend fun saveLanguages(sub: String, entries: List<LanguageEntry>)
+
+    suspend fun saveTranslationProvider(sub: String, provider: String)
+
+    suspend fun saveInstruction(sub: String, kind: InstructionKind, text: String)
+
+    suspend fun clearInstruction(sub: String, kind: InstructionKind)
+
+    suspend fun saveExtraInfo(sub: String, rows: List<JsonObject>)
+
+    suspend fun mergeFeedbackExtraInfo(sub: String, feedbackRows: List<JsonObject>)
+
+    suspend fun mergeFeedbackAgentContext(sub: String, feedbackRows: List<JsonObject>)
+
+    suspend fun loadApiKeys(sub: String): ApiKeys
+
+    suspend fun saveApiKey(sub: String, field: String, value: String)
+}
+
 /** Reads and writes `personal_data/{sub}` with the same field shapes as `api/personal_data.py`. */
 class ProfileRepository(
     private val db: () -> FirebaseFirestore,
-    private val prompts: Prompts,
+    private val instructionDefaults: InstructionDefaults,
     private val modelOverrides: ModelOverrides,
-) {
+) : ProfileStore {
     private val _profile = MutableStateFlow<UserProfile?>(null)
-    val profile: StateFlow<UserProfile?> = _profile.asStateFlow()
+    override val profile: StateFlow<UserProfile?> = _profile.asStateFlow()
 
     private fun doc(sub: String): DocumentReference = db().collection("personal_data").document(sub)
 
-    suspend fun load(sub: String): UserProfile {
+    override suspend fun load(sub: String): UserProfile {
         val snap = doc(sub).get().await()
         if (!snap.exists()) throw ProfileMissingException(sub)
         return UserProfile(sub, FirestoreJson.toJsonObject(snap.data)).also { _profile.value = it }
     }
-
-    fun current(): UserProfile = _profile.value ?: throw IllegalStateException("Profile not loaded")
 
     private suspend fun update(sub: String, updates: Map<String, Any?>) {
         doc(sub).set(updates + ("updated_at" to Timestamp.now()), SetOptions.merge()).await()
@@ -50,7 +84,7 @@ class ProfileRepository(
     private fun wrap(value: Any?): Map<String, Any?> = mapOf("value" to value, "updated_at" to Timestamp.now())
 
     /** Raw revisions are re-written as read so their Firestore Timestamps stay Timestamps. */
-    suspend fun appendCvRevision(sub: String, content: String, source: String = "manual_edit") {
+    override suspend fun appendCvRevision(sub: String, content: String, source: String) {
         val existing = (doc(sub).get().await().get("cv_revisions") as? List<*>).orEmpty()
         val newRevision = mapOf(
             "content" to content.trim(),
@@ -61,76 +95,49 @@ class ProfileRepository(
         update(sub, mapOf("cv_revisions" to existing + newRevision))
     }
 
-    suspend fun saveDefaultVendors(sub: String, vendors: List<String>) = update(sub, mapOf("models" to wrap(vendors)))
+    override suspend fun saveDefaultVendors(sub: String, vendors: List<String>) = update(sub, mapOf("models" to wrap(vendors)))
 
-    suspend fun saveExtractionVendor(sub: String, vendor: String) {
+    override suspend fun saveExtractionVendor(sub: String, vendor: String) {
         val v = vendor.trim().lowercase()
         require(v in ModelOverrides.VALID_VENDOR_KEYS) { "extraction_vendor must be one of ${ModelOverrides.VALID_VENDOR_KEYS.sorted()}" }
         update(sub, mapOf("extraction_vendor" to wrap(v)))
     }
 
-    suspend fun saveBackgroundModels(sub: String, models: List<String>, allowed: Set<String>) {
+    override suspend fun saveBackgroundModels(sub: String, models: List<String>, allowed: Set<String>) {
         update(sub, mapOf("background_models" to wrap(models.filter { it in allowed })))
     }
 
-    suspend fun saveRoleOverrides(sub: String, raw: JsonObject) {
+    override suspend fun saveRoleOverrides(sub: String, raw: JsonObject) {
         val cleaned = modelOverrides.normalize(raw)
         val wrapped = wrap(cleaned)
         update(sub, mapOf("vendor_role_model_overrides" to wrapped, "phase_model_overrides" to wrapped))
     }
 
-    suspend fun saveLanguages(sub: String, entries: List<LanguageEntry>) {
+    override suspend fun saveLanguages(sub: String, entries: List<LanguageEntry>) {
         update(sub, mapOf("default_languages" to entries.map { FirestoreJson.toFirestore(it.toJson()) }))
     }
 
-    suspend fun saveTranslationProvider(sub: String, provider: String) {
+    override suspend fun saveTranslationProvider(sub: String, provider: String) {
         val p = provider.trim().lowercase()
         require(p == "google" || p == "llm") { "translation_provider must be 'google' or 'llm'" }
         update(sub, mapOf("translation_provider" to wrap(p)))
     }
 
     /** Desktop `_save_custom_instruction`: stores the text plus the default it was based on. */
-    suspend fun saveInstruction(sub: String, kind: InstructionKind, text: String) {
+    override suspend fun saveInstruction(sub: String, kind: InstructionKind, text: String) {
         require(text.isNotBlank()) { "Instructions cannot be empty" }
-        val (defaultText, defaultHash) = defaultInstruction(kind)
+        val (defaultText, defaultHash) = instructionDefaults.default(kind)
         val wrapped = wrap(text) + mapOf("default_baseline_hash" to defaultHash) +
             (if (defaultText.isNotEmpty()) mapOf("default_baseline_text" to defaultText) else emptyMap())
         update(sub, mapOf(kind.firestoreKeys.first() to wrapped))
     }
 
-    suspend fun clearInstruction(sub: String, kind: InstructionKind) {
+    override suspend fun clearInstruction(sub: String, kind: InstructionKind) {
         update(sub, kind.firestoreKeys.associateWith { FieldValue.delete() })
     }
 
-    /** (normalized default text, sha256[:16]) like `instruction_defaults.get_default_instruction`. */
-    fun defaultInstruction(kind: InstructionKind): Pair<String, String> {
-        val text = prompts.load(kind.defaultFile).replace("\r\n", "\n").trim()
-        val hash = MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }.take(16)
-        return text to hash
-    }
-
-    /** Effective instructions plus whether the repo default changed since the custom text was saved. */
-    fun instructionState(profile: UserProfile, kind: InstructionKind): InstructionState {
-        val (defaultText, defaultHash) = defaultInstruction(kind)
-        val custom = profile.customInstruction(kind).trim().ifEmpty { null }
-        val baselineHash = if (custom != null) profile.instructionBaselineHash(kind) else ""
-        val upstreamUpdated = when {
-            custom != null && baselineHash.isNotEmpty() -> baselineHash != defaultHash
-            custom != null -> custom != defaultText.trim()
-            else -> false
-        }
-        return InstructionState(
-            effective = custom ?: defaultText,
-            custom = custom,
-            default = defaultText,
-            baseline = if (custom != null) profile.instructionBaselineText(kind).ifEmpty { null } else null,
-            upstreamUpdated = upstreamUpdated,
-        )
-    }
-
     /** Desktop `_normalize_extra_info` + `_stamp_extra_info_items` for the CV tab's notes. */
-    suspend fun saveExtraInfo(sub: String, rows: List<JsonObject>) {
+    override suspend fun saveExtraInfo(sub: String, rows: List<JsonObject>) {
         val previous = load(sub).extraInfo.associateBy { it.textOrEmpty("id") }
         val now = Timestamp.now()
         val prevTimestamps = (doc(sub).get().await().get("extra_info") as? List<*>).orEmpty()
@@ -146,7 +153,7 @@ class ProfileRepository(
     }
 
     /** Desktop `_apply_feedback_extra_info_merge`: manual rows kept, feedback rows replaced. */
-    suspend fun mergeFeedbackExtraInfo(sub: String, feedbackRows: List<JsonObject>) {
+    override suspend fun mergeFeedbackExtraInfo(sub: String, feedbackRows: List<JsonObject>) {
         val now = Timestamp.now()
         val normalized = feedbackRows.map { normalizeExtraInfoRow(it) + ("updated_at" to now) }
         normalized.forEach { require(it["source"] == "feedback") { "each entry in feedback_extra_info must have source \"feedback\"" } }
@@ -156,7 +163,7 @@ class ProfileRepository(
     }
 
     /** Desktop `_apply_feedback_agent_context_merge`. */
-    suspend fun mergeFeedbackAgentContext(sub: String, feedbackRows: List<JsonObject>) {
+    override suspend fun mergeFeedbackAgentContext(sub: String, feedbackRows: List<JsonObject>) {
         val now = Timestamp.now()
         val normalized = feedbackRows.map { row ->
             val id = row.textOrEmpty("id").trim()
@@ -180,13 +187,13 @@ class ProfileRepository(
         update(sub, mapOf("agent_feedback_context" to manual + normalized))
     }
 
-    suspend fun loadApiKeys(sub: String): ApiKeys {
+    override suspend fun loadApiKeys(sub: String): ApiKeys {
         val snap = doc(sub).collection("secrets").document("api_keys").get().await()
         val values = (snap.data ?: emptyMap()).mapNotNull { (k, v) -> (v as? String)?.let { k to it } }.toMap()
         return ApiKeys(values)
     }
 
-    suspend fun saveApiKey(sub: String, field: String, value: String) {
+    override suspend fun saveApiKey(sub: String, field: String, value: String) {
         require(field in ApiKeys.ALL) { "Unknown API key field $field" }
         val ref = doc(sub).collection("secrets").document("api_keys")
         val v = value.trim()
@@ -217,11 +224,3 @@ class ProfileRepository(
         }
     }
 }
-
-data class InstructionState(
-    val effective: String,
-    val custom: String?,
-    val default: String,
-    val baseline: String?,
-    val upstreamUpdated: Boolean,
-)

@@ -11,6 +11,7 @@ import VendorFlowPage from "./pages/VendorFlowPage.jsx";
 import AgenticFlowPage from "./pages/AgenticFlowPage.jsx";
 import AutocompleteFlowPage from "./pages/AutocompleteFlowPage.jsx";
 import ParagraphFlowPage from "./pages/ParagraphFlowPage.jsx";
+import JobsPage from "./pages/JobsPage.jsx";
 import { setupApiNotifications } from "./utils/apiNotifications";
 import "./critical-theme.css";
 
@@ -21,6 +22,13 @@ if (typeof document !== "undefined") {
 
 // Install global fetch wrapper for API completion notifications.
 setupApiNotifications();
+
+// Installable on the desktop (public/manifest.webmanifest). Production builds only.
+if (import.meta.env.PROD && typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch((e) => console.warn("Service worker:", e));
+  });
+}
 
 // NOTE: StrictMode is intentionally NOT enabled to avoid double-rendering in development
 // which causes duplicate API calls and 202 heartbeat responses.
@@ -42,6 +50,7 @@ createRoot(rootEl).render(
             <Route path="/flows/agentic" element={<AgenticFlowPage />} />
             <Route path="/flows/autocomplete" element={<AutocompleteFlowPage />} />
             <Route path="/flows/paragraph" element={<ParagraphFlowPage />} />
+            <Route path="/opportunities" element={<JobsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

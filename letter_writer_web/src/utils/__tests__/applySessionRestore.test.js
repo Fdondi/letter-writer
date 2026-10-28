@@ -86,6 +86,84 @@ describe("applyRestoredSessionState", () => {
     expect(result.vendor.suppressPlanAutoApprove).toBe(true);
   });
 
+  it("forceAssembly jumps to crafting the final letter with drafts as candidates", () => {
+    const setters = {
+      setPhaseSessionId: jest.fn(),
+      setJobText: jest.fn(),
+      setCompanyName: jest.fn(),
+      setJobTitle: jest.fn(),
+      setLocation: jest.fn(),
+      setLanguage: jest.fn(),
+      setSalary: jest.fn(),
+      setAdditionalUserInfo: jest.fn(),
+      setAdditionalCompanyInfo: jest.fn(),
+      setShowAdditionalInfo: jest.fn(),
+      setHireProblem: jest.fn(),
+      setRequirements: jest.fn(),
+      setCompetences: jest.fn(),
+      setPointOfContact: jest.fn(),
+      setShowPointOfContact: jest.fn(),
+      setExtractedData: jest.fn(),
+    };
+
+    const result = applyRestoredSessionState(
+      {
+        job_text: "Engineer role",
+        vendors: {
+          // Drafted but never rewritten (batch ran with --rewrite-rounds 0): the draft is the candidate.
+          openai: { draft_letter: "Dear hiring manager" },
+          anthropic: { draft_letter: "Sehr geehrte", final_letter: "Sehr geehrte refined" },
+        },
+      },
+      setters,
+      { forceAssembly: true }
+    );
+
+    expect(result.vendor).toMatchObject({
+      vendorStage: "assembly",
+      assemblyVisible: true,
+      suppressPlanAutoApprove: true,
+    });
+    expect(result.vendor.letters).toEqual({
+      openai: "Dear hiring manager",
+      anthropic: "Sehr geehrte refined",
+    });
+  });
+
+  it("forceAssembly keeps the inferred stage when nothing was drafted", () => {
+    const setters = {
+      setPhaseSessionId: jest.fn(),
+      setJobText: jest.fn(),
+      setCompanyName: jest.fn(),
+      setJobTitle: jest.fn(),
+      setLocation: jest.fn(),
+      setLanguage: jest.fn(),
+      setSalary: jest.fn(),
+      setAdditionalUserInfo: jest.fn(),
+      setAdditionalCompanyInfo: jest.fn(),
+      setShowAdditionalInfo: jest.fn(),
+      setHireProblem: jest.fn(),
+      setRequirements: jest.fn(),
+      setCompetences: jest.fn(),
+      setPointOfContact: jest.fn(),
+      setShowPointOfContact: jest.fn(),
+      setExtractedData: jest.fn(),
+    };
+
+    const result = applyRestoredSessionState(
+      {
+        job_text: "Engineer role",
+        vendors: { openai: { letter_plan: "Plan only, drafting failed" } },
+      },
+      setters,
+      { forceAssembly: true }
+    );
+
+    expect(result.vendor.vendorStage).toBe("phases");
+    expect(result.vendor.assemblyVisible).toBe(false);
+    expect(result.vendor.letters).toEqual({});
+  });
+
   it("returns agentic restore descriptor when agentic status present", () => {
     const setters = {
       setPhaseSessionId: jest.fn(),

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from letter_writer_server.core.session import Session, get_session
 from letter_writer_server.api.personal_data import _normalize_agent_feedback_context, _normalize_extra_info
+from letter_writer_server.api.opportunities import finish_session_opportunity
 from letter_writer.personal_data_sections import (
     merge_manual_agent_feedback_context_with_feedback_rows,
     merge_manual_extra_with_feedback_rows,
@@ -220,6 +221,7 @@ async def create_doc(request: Request, data: DocumentRequest, session: Session =
         out: Dict[str, Any] = {"document": document}
         if save_warnings:
             out["warnings"] = save_warnings
+        out.update(finish_session_opportunity(session, user["id"], document["id"]))
         return out
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -317,6 +319,7 @@ async def update_doc(document_id: str, data: DocumentRequest, request: Request, 
         out: Dict[str, Any] = {"document": updated}
         if save_warnings:
             out["warnings"] = save_warnings
+        out.update(finish_session_opportunity(session, user["id"], document_id))
         return out
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

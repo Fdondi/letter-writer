@@ -11,6 +11,7 @@ import {
   getDoc,
   getDocs,
   query,
+  runTransaction,
   setDoc,
   updateDoc,
   where,
@@ -65,6 +66,13 @@ beforeEach(async () => {
     await setDoc(doc(db, "feedbacks", "f1"), { user_id: ME });
     await setDoc(doc(db, "companies", "generali"), { company_name: "Generali" });
     await setDoc(doc(db, "sessions", "s1"), { user_id: ME });
+    await setDoc(doc(db, "opportunities", "proposed"), { user_id: ME, canonical_key: "linkedin:1", status: "proposed", title: "T" });
+    await setDoc(doc(db, "opportunities", "ready"), { user_id: ME, canonical_key: "linkedin:2", status: "ready", vendors_done: ["openai"] });
+    await setDoc(doc(db, "opportunities", "ready", "state", "session"), { vendors: { openai: { draft_letter: "D" } } });
+    await setDoc(doc(db, "opportunities", "drafting"), { user_id: ME, canonical_key: "linkedin:3", status: "drafting", lease: { owner: "batch" } });
+    await setDoc(doc(db, "opportunities", "theirs"), { user_id: OTHER, canonical_key: "linkedin:4", status: "proposed" });
+    await setDoc(doc(db, "opportunities", "theirs", "state", "session"), { vendors: {} });
+    await setDoc(doc(db, "alert_messages", "a1"), { user_id: ME, message_id: "m1" });
   });
 });
 
@@ -156,6 +164,81 @@ describe("companies (shared research cache)", () => {
     await assertSucceeds(setDoc(doc(googleUser(ME), "companies", "generali"), { reports: {} }, { merge: true }));
     await assertFails(getDoc(doc(googleUser(STRANGER), "companies", "generali")));
     await assertFails(deleteDoc(doc(googleUser(ME), "companies", "generali")));
+  });
+});
+
+describe("opportunities (job pipeline)", () => {
+  test("owner lists their jobs filtered by user_id; unfiltered lists are refused", async () => {
+    const db = googleUser(ME);
+    await assertSucceeds(getDocs(query(collection(db, "opportunities"), where("user_id", "==", ME))));
+    await assertFails(getDocs(collection(db, "opportunities")));
+    await assertFails(getDoc(doc(db, "opportunities", "theirs")));
+  });
+
+  test("the phone creates captured or approved jobs for itself only", async () => {
+    const db = googleUser(ME);
+    await assertSucceeds(setDoc(doc(db, "opportunities", "new1"), { user_id: ME, canonical_key: "url:x", status: "captured", capture: { text: "t" } }));
+    await assertSucceeds(setDoc(doc(db, "opportunities", "new2"), { user_id: ME, canonical_key: "url:y", status: "approved" }));
+    await assertFails(setDoc(doc(db, "opportunities", "new3"), { user_id: ME, canonical_key: "url:z", status: "ready" }));
+    await assertFails(setDoc(doc(db, "opportunities", "new4"), { user_id: OTHER, canonical_key: "url:z", status: "captured" }));
+    await assertFails(setDoc(doc(googleUser(STRANGER), "opportunities", "new5"), { user_id: STRANGER, canonical_key: "url:z", status: "captured" }));
+  });
+
+  test("the app's send: a transaction reads the (missing) job, then creates it", async () => {
+    const db = googleUser(ME);
+    const ref = doc(db, "opportunities", "sent-from-phone");
+    await assertSucceeds(getDoc(ref));
+    await assertSucceeds(
+      runTransaction(db, async (tx) => {
+        const snap = await tx.get(ref);
+        if (snap.exists()) throw new Error("expected a new job");
+        tx.set(ref, { user_id: ME, canonical_key: "text:abc", status: "captured", capture: { text: "posting", via: "share_text" } });
+      }),
+    );
+    // Sending again reads the job just made and attaches the new text to it.
+    await assertSucceeds(
+      runTransaction(db, async (tx) => {
+        const snap = await tx.get(ref);
+        tx.set(ref, { status: "captured", capture: { text: "posting v2" }, updated_at: 2 }, { merge: true });
+      }),
+    );
+    // A miss reveals nothing, but someone else's existing job stays unreadable, in a transaction too.
+    const other = googleUser(OTHER);
+    await assertFails(runTransaction(other, async (tx) => { await tx.get(doc(other, "opportunities", "sent-from-phone")); }));
+  });
+
+  test("triage, capture and done are allowed; desktop states and bookkeeping are not", async () => {
+    const db = googleUser(ME);
+    await assertSucceeds(updateDoc(doc(db, "opportunities", "proposed"), { status: "approved", updated_at: 1 }));
+    await assertSucceeds(updateDoc(doc(db, "opportunities", "proposed"), { status: "captured", capture: { text: "posting" } }));
+    await assertSucceeds(updateDoc(doc(db, "opportunities", "ready"), { status: "done", document_id: "doc1" }));
+    // Sending the posting again with other desktop settings.
+    await assertSucceeds(updateDoc(doc(db, "opportunities", "proposed"), { status: "captured", capture: { text: "p" }, rewrite_rounds: 2, final_feedback: false }));
+    await assertFails(updateDoc(doc(db, "opportunities", "proposed"), { status: "ready" }));
+    await assertFails(updateDoc(doc(db, "opportunities", "proposed"), { status: "drafting" }));
+    await assertFails(updateDoc(doc(db, "opportunities", "proposed"), { user_id: OTHER }));
+    await assertFails(updateDoc(doc(db, "opportunities", "proposed"), { vendors_done: ["openai"] }));
+    await assertFails(updateDoc(doc(db, "opportunities", "proposed"), { canonical_key: "linkedin:9" }));
+  });
+
+  test("a job the desktop is drafting cannot be touched", async () => {
+    await assertFails(updateDoc(doc(googleUser(ME), "opportunities", "drafting"), { status: "skipped" }));
+  });
+
+  test("nobody else updates my jobs and nobody deletes them", async () => {
+    await assertFails(updateDoc(doc(googleUser(OTHER), "opportunities", "proposed"), { status: "approved" }));
+    await assertFails(deleteDoc(doc(googleUser(ME), "opportunities", "proposed")));
+  });
+
+  test("drafts are readable by the owner only and written only by the desktop", async () => {
+    await assertSucceeds(getDoc(doc(googleUser(ME), "opportunities", "ready", "state", "session")));
+    await assertFails(getDoc(doc(googleUser(ME), "opportunities", "theirs", "state", "session")));
+    await assertFails(getDoc(doc(googleUser(OTHER), "opportunities", "ready", "state", "session")));
+    await assertFails(setDoc(doc(googleUser(ME), "opportunities", "ready", "state", "session"), { vendors: {} }));
+  });
+
+  test("the alert mail log is server-only", async () => {
+    await assertFails(getDoc(doc(googleUser(ME), "alert_messages", "a1")));
   });
 });
 

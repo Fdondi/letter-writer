@@ -54,12 +54,17 @@ import io.github.fdondi.letterwriter.ui.settings.CostsScreen
 import io.github.fdondi.letterwriter.ui.settings.CvScreen
 import io.github.fdondi.letterwriter.ui.settings.ExamplesScreen
 import io.github.fdondi.letterwriter.ui.settings.InstructionsScreen
+import io.github.fdondi.letterwriter.ui.pipeline.PipelineScreen
 import io.github.fdondi.letterwriter.ui.settings.SettingsScreen
 import io.github.fdondi.letterwriter.ui.write.WriteScreen
+import io.github.fdondi.letterwriter.ui.write.WriteTab
 import kotlinx.coroutines.launch
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 
 private enum class Destination(val title: String) {
     WRITE("Write a letter"),
+    PIPELINE("Job pipeline"),
     CV("CV"),
     EXAMPLES("Previous examples"),
     INSTRUCTIONS("AI instructions"),
@@ -90,6 +95,7 @@ fun SignedInRoot(graph: AppGraph, user: SignedInUser) {
         } catch (e: Exception) {
             Boot.Failed("Could not load your profile: ${e.message ?: e::class.simpleName}")
         }
+        // flush() reports failures in its state; it must not end this effect (or the app) by throwing.
         if (boot == Boot.Ready) graph.costs.flush()
     }
     when (val b = boot) {
@@ -111,6 +117,7 @@ private fun AppShell(graph: AppGraph, user: SignedInUser) {
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var destination by rememberSaveable { mutableStateOf(Destination.WRITE) }
+    var writeTab by rememberSaveable { mutableIntStateOf(WriteTab.JOB) }
     val snackbar = remember { SnackbarHostState() }
     val message by graph.flow.message.collectAsState()
     val shared by graph.incomingShare.collectAsState()
@@ -122,7 +129,10 @@ private fun AppShell(graph: AppGraph, user: SignedInUser) {
         graph.flow.dismissMessage()
     }
     LaunchedEffect(shared) {
-        if (shared != null) destination = Destination.WRITE
+        if (shared != null) {
+            destination = Destination.WRITE
+            writeTab = WriteTab.JOB
+        }
     }
 
     ModalNavigationDrawer(
@@ -158,7 +168,9 @@ private fun AppShell(graph: AppGraph, user: SignedInUser) {
             snackbarHost = { SnackbarHost(snackbar) },
         ) { padding ->
             Column(Modifier.padding(padding).fillMaxSize()) {
-                if (BuildConfig.DEBUG && fakePaidApis) {
+                if (graph.demo) {
+                    DemoBanner(onLeave = { graph.auth.signOut() }, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                } else if (BuildConfig.DEBUG && fakePaidApis) {
                     WarningList(
                         listOf(
                             "Debug harness is on. Research, drafts, feedback, and rewrites are fixture data labeled [FAKE FIXTURE]. Paid APIs are not called, and this letter will not be saved to your account.",
@@ -166,10 +178,25 @@ private fun AppShell(graph: AppGraph, user: SignedInUser) {
                         Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     )
                 }
+                CrashReportCard(Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
                 CostConsentBanner(graph)
                 val content = Modifier.fillMaxSize()
                 when (destination) {
-                    Destination.WRITE -> WriteScreen(graph, content)
+                    Destination.WRITE -> WriteScreen(
+                        graph,
+                        tab = writeTab,
+                        onTab = { writeTab = it },
+                        onSentToPipeline = { destination = Destination.PIPELINE },
+                        modifier = content,
+                    )
+                    Destination.PIPELINE -> PipelineScreen(
+                        graph,
+                        onOpenLetter = { tab ->
+                            writeTab = tab
+                            destination = Destination.WRITE
+                        },
+                        modifier = content,
+                    )
                     Destination.CV -> CvScreen(graph, content)
                     Destination.EXAMPLES -> ExamplesScreen(graph, content)
                     Destination.INSTRUCTIONS -> InstructionsScreen(graph, content)
@@ -206,6 +233,28 @@ private fun CostConsentBanner(graph: AppGraph) {
     val consent = failed.needsConsent ?: return
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(failed.message, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-        TextButton(onClick = { launcher.launch(IntentSenderRequest.Builder(consent.intent).build()) }) { Text("Allow") }
+        TextButton(onClick = { runCatching { launcher.launch(IntentSenderRequest.Builder(consent.intent).build()) } }) { Text("Allow") }
+    }
+}
+
+@Composable
+private fun DemoBanner(onLeave: () -> Unit, modifier: Modifier = Modifier) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "Demo mode: made-up account and sample data. Model replies are canned; nothing is sent anywhere.",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+            TextButton(onClick = onLeave) { Text("Leave demo") }
+        }
     }
 }

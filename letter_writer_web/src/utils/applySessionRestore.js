@@ -3,14 +3,17 @@ import {
   extractVendorShelfEntries,
   inferVendorStageFromVendors,
   extractLettersFromVendors,
+  extractAssemblyLettersFromVendors,
 } from "./sessionRehydrate";
 import { normalizeAgenticThreads } from "./agenticThreads";
 
 /**
  * Apply shared JobSession fields from a server session_state snapshot.
  * Returns a flow-specific restore descriptor; callers handle navigation.
+ * ``forceAssembly`` (opening a completed pipeline job) lands on the final-letter assembly with
+ * the batch's drafts as candidates instead of the inferred feedback/phases stage.
  */
-export function applyRestoredSessionState(sessionState, setters, { sessionId = null } = {}) {
+export function applyRestoredSessionState(sessionState, setters, { sessionId = null, forceAssembly = false } = {}) {
   if (!sessionState || typeof sessionState !== "object") {
     return { restored: false, vendor: null, agentic: null, paragraph: null, vendorNames: [] };
   }
@@ -73,14 +76,17 @@ export function applyRestoredSessionState(sessionState, setters, { sessionId = n
   const shelfEntries = extractVendorShelfEntries(vendors);
   const vendorStageHint = inferVendorStageFromVendors(vendors);
   const lettersFromVendors = extractLettersFromVendors(vendors);
+  const assemblyLetters = forceAssembly ? extractAssemblyLettersFromVendors(vendors) : {};
+  // Jump to crafting the final letter only when there is a drafted letter to craft from.
+  const jumpToAssembly = forceAssembly && Object.keys(assemblyLetters).length > 0;
 
   let vendor = null;
   if (shelfEntries.length > 0 || vendorStageHint !== "input" || Object.keys(lettersFromVendors).length > 0) {
     vendor = {
       shelfEntries,
-      vendorStage: vendorStageHint === "input" ? "phases" : vendorStageHint,
-      assemblyVisible: vendorStageHint === "assembly",
-      letters: lettersFromVendors,
+      vendorStage: jumpToAssembly ? "assembly" : vendorStageHint === "input" ? "phases" : vendorStageHint,
+      assemblyVisible: jumpToAssembly || vendorStageHint === "assembly",
+      letters: jumpToAssembly ? assemblyLetters : lettersFromVendors,
       suppressPlanAutoApprove: true,
     };
     restored = true;

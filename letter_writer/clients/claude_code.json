@@ -1,0 +1,28 @@
+{
+  "_comment": "Claude Code CLI on the host subscription (letter_writer.batch only). Prices are 0: this is not API spend; the CLI's total_cost_usd is recorded separately as cost_subscription_estimate_usd.",
+  "defaults": {
+    "search": 0.0,
+    "structured_output": true
+  },
+  "roles": {
+    "extraction":       { "model": "claude-haiku-5-5" },
+    "feedback":         { "model": "claude-haiku-5-5" },
+    "feedback_review":  { "model": "claude-haiku-5-5" },
+    "feedback_context": { "model": "claude-haiku-5-5" },
+    "rag_ranker":       { "model": "claude-sonnet-5-5", "effort": "medium" },
+    "company_research": { "model": "claude-sonnet-5-5", "effort": "medium" },
+    "letter_plan":      { "model": "claude-opus-5-5",   "effort": "medium" },
+    "letter_draft":     { "model": "claude-opus-5-5",   "effort": "medium" },
+    "paragraph":        { "model": "claude-sonnet-5-5", "effort": "medium" },
+    "letter_refine":    { "model": "claude-opus-5-5",   "effort": "medium" },
+    "agentic":          { "model": "claude-haiku-5-5" },
+    "autocomplete":     { "model": "claude-haiku-5-5" },
+    "autocomplete_plan": { "model": "claude-sonnet-5-5", "effort": "high" },
+    "translation":      { "model": "claude-sonnet-5-5" }
+  },
+  "models": {
+    "claude-haiku-5-5":  { "input": 0.0, "output": 0.0, "structured_output": true },
+    "claude-sonnet-5-5": { "input": 0.0, "output": 0.0, "structured_output": true },
+    "claude-opus-5-5":   { "input": 0.0, "output": 0.0, "structured_output": true }
+  }
+}

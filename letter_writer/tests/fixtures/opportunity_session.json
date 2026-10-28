@@ -1,0 +1,242 @@
+{
+ "opportunity": {
+  "user_id": "100200300400500600700",
+  "status": "ready",
+  "url": "https://www.jobs.ch/de/stellenangebote/detail/11111111-2222-4333-8444-555555555555",
+  "vendors_done": [
+   "openai",
+   "claude_code"
+  ],
+  "vendors_failed": {
+   "gemini": "fake failure for the fixture"
+  },
+  "input_needed_count": 2,
+  "fit_summary": {
+   "matched": [
+    "FixtureStack"
+   ],
+   "gaps": []
+  }
+ },
+ "state": {
+  "style_instructions": "Never mention explicitly that something matches the job description, they should think that by themselves. Avoid making just a list of 'at X I did Y'. You're telling a story, the stints at specific companies are just supporting evidence for the message. Mentions of companies should mostly emerge naturally, not be the main structure (At X this, at Y that, etc).\nFollow the structure: 1. You are great 2. I am great 3. We'll be even greater together 4. Call to action. Of course, keep that structure implicit, and don't use paragraph titles.\nReturn the letter as distinct paragraphs separated by a blank line (a real empty line between paragraphs). We need those paragraph breaks — do not collapse the letter into one block of text.\nWhenever possible, use characters supported by LaTeX. In particular, to the extent that it's reasonable, avoid symbols like & or em-dashes (meaning any number of - or other visually similar symbols). Do not double-space within a line (no two spaces between words or after periods); that is unrelated to the blank lines between paragraphs. If in doubt, use the version of the character that would be typed by a keyboard. For example ' and not ', or 11th and not 11ᵗʰ.\nPlease refrain from trite terms like \"resonates\", or terms that try too hard to be cool and end up not being professional, like \"shepherded\" referring to servers.",
+  "structure_instructions": "Strategic planning only — no draft letter prose.\n\nHard limit: ~10 lines total (headings count). Telegraphic. Elevator-pitch density.\n\nUse exactly these headings:\n\n## Strengths\n2–3 lines — top claims; each with one concrete CV fact (role, metric, date).\n\n## Weaknesses\n1–2 lines — honest gaps vs the role; one-line framing each (no invented experience).\n\n## Structure\n3–4 lines — opening hook → body beats → close. Argument flow only.\n\nNo sub-bullets, no paragraphs, no letter wording.",
+  "search_instructions": "You are an expert in searching the internet for information about companies.\n\nIMPORTANT: You are looking at the company from the point of view of a job applicant, not of an investor or policymaker. Focus on work culture, likely work tasks, and career prospects. Product success, financial situation, or regulatory difficulties are rarely relevant — only if they threaten to make employment less secure or more challenging in some way.\n\nFocus on what distinguishes the company, in the good and bad. Keep it concise but informative.\nDo NOT include any links, only plain text.\nDo NOT just repeat the ads the company puts out. Do report what they say about themselves, but make it clear it's reporting on how they like to present themselves, not the objective truth. Be inquisitive, almost cynical, read between the lines. If we are writing to a company that likes to present themselves as trailblazing but is actually quite boring, or vice versa likes to underpromise but is actually exceptional, we need to consider both aspects.",
+  "metadata": {
+   "common": {
+    "competences": {
+     "FixtureStack": {
+      "need": "critical",
+      "level": "Professional"
+     },
+     "FixtureLang": {
+      "need": "expected",
+      "level": "Brief experience"
+     }
+    },
+    "requirements": [
+     "FixtureStack",
+     "FixtureLang"
+    ],
+    "hire_problem": "[FAKE FIXTURE] FAKE Fixture Works is hiring a FAKE Fixture Engineer so this screen can be walked without a model. This is not a real hiring need.",
+    "company_name": "FAKE Fixture Works",
+    "job_title": "FAKE Fixture Engineer",
+    "location": "FAKE City",
+    "language": "English",
+    "salary": "FAKE 0",
+    "point_of_contact": {
+     "name": "FAKE Contact",
+     "role": "FAKE Recruiter",
+     "contact_details": "fake@fixture.invalid",
+     "notes": "[FAKE FIXTURE] Not a real person."
+    },
+    "source_url": "https://www.jobs.ch/de/stellenangebote/detail/11111111-2222-4333-8444-555555555555/"
+   }
+  },
+  "vendors": {
+   "claude_code": {
+    "top_docs": [],
+    "company_report": "FAKE research report on FAKE Fixture Works.",
+    "letter_plan": "[claude_code] [FAKE FIXTURE] This plan was not written by a model.\n1. Name FAKE Fixture Works.\n2. Keep the sentence \"I led the FAKE fixture migration.\"",
+    "draft_letter": "[claude_code] [FAKE FIXTURE] This draft was not written by a model.\n\nDear FAKE Fixture Works,\n\nI am applying for the FAKE Fixture Engineer role. I led the FAKE fixture migration.\n\nKind regards,\nFAKE Applicant",
+    "known_weaknesses": [
+     {
+      "id": "74df90d8-ba55-407e-9c7d-c63a577cbf60",
+      "requirement": "[FAKE FIXTURE] A requirement that is not from a posting.",
+      "gap": "[FAKE FIXTURE] A gap that is not from a CV."
+     }
+    ],
+    "final_letter": "[claude_code] [FAKE FIXTURE] This rewrite was not written by a model.\n\nDear FAKE Fixture Works,\n\nI am applying for the FAKE Fixture Engineer role. I led the FAKE fixture migration. The rewrite fixture adds this sentence so the Final tab is not a copy of the draft.\n\nKind regards,\nFAKE Applicant\n",
+    "feedback": {
+     "instruction": [
+      {
+       "id": "efe98d8f-c979-46e2-ae27-456425346a8d",
+       "observation": "[FAKE FIXTURE] The style check is fixture text, not a model comment.",
+       "type": "PLEASE_FIX",
+       "status": "NOT_NEEDED",
+       "context_field": {
+        "items": []
+       },
+       "user_context": "",
+       "user_instructions": "",
+       "input_declined": false,
+       "persist_user_context_to_cv": true,
+       "persist_user_context_for_agents": true,
+       "quote": "I led the FAKE fixture migration.",
+       "matched_text": "I led the FAKE fixture migration.",
+       "span_start": 147,
+       "span_end": 180,
+       "laya_verdict": "unscored",
+       "laya_error": "Ollaya is not reachable at http://127.0.0.1:9. Start the ollaya container (ConnectError: [Errno 111] Connection refused)."
+      }
+     ],
+     "accuracy": [
+      {
+       "id": "44ca4c54-11d7-44b4-8cc4-cfa478a837f5",
+       "observation": "[FAKE FIXTURE] The accuracy check wants a made-up detail filled in.",
+       "type": "PLEASE_FIX",
+       "status": "INPUT_NEEDED",
+       "context_field": {
+        "items": []
+       },
+       "user_context": "",
+       "user_instructions": "[FAKE FIXTURE] Say what the migration was, or skip the question.",
+       "input_declined": false,
+       "persist_user_context_to_cv": true,
+       "persist_user_context_for_agents": true,
+       "quote": "I led the FAKE fixture migration.",
+       "matched_text": "I led the FAKE fixture migration.",
+       "span_start": 147,
+       "span_end": 180,
+       "laya_verdict": "unscored",
+       "laya_error": "Ollaya is not reachable at http://127.0.0.1:9. Start the ollaya container (ConnectError: [Errno 111] Connection refused)."
+      }
+     ],
+     "precision": [
+      {
+       "id": "1930bae4-d5e5-4f96-83b1-6985eb9d9112",
+       "observation": "[FAKE FIXTURE] This praise is fixture text, not a model comment.",
+       "type": "ALREADY_GOOD",
+       "status": "NOT_NEEDED",
+       "context_field": {
+        "items": []
+       },
+       "user_context": "",
+       "user_instructions": "",
+       "input_declined": false,
+       "persist_user_context_to_cv": true,
+       "persist_user_context_for_agents": true,
+       "quote": "I led the FAKE fixture migration.",
+       "matched_text": "I led the FAKE fixture migration.",
+       "span_start": 147,
+       "span_end": 180
+      }
+     ],
+     "company_fit": [],
+     "goal_fit": [],
+     "user_fit": [],
+     "human": []
+    },
+    "cost": 0.0,
+    "comments_on": "final_letter",
+    "batch_settings": {
+     "rewrite_rounds": 1,
+     "final_feedback": true
+    }
+   },
+   "openai": {
+    "top_docs": [],
+    "company_report": "FAKE research report on FAKE Fixture Works.",
+    "letter_plan": "[openai] [FAKE FIXTURE] This plan was not written by a model.\n1. Name FAKE Fixture Works.\n2. Keep the sentence \"I led the FAKE fixture migration.\"",
+    "draft_letter": "[openai] [FAKE FIXTURE] This draft was not written by a model.\n\nDear FAKE Fixture Works,\n\nI am applying for the FAKE Fixture Engineer role. I led the FAKE fixture migration.\n\nKind regards,\nFAKE Applicant",
+    "known_weaknesses": [
+     {
+      "id": "0fe0c6a0-354b-4b96-aab1-1eebfe75b904",
+      "requirement": "[FAKE FIXTURE] A requirement that is not from a posting.",
+      "gap": "[FAKE FIXTURE] A gap that is not from a CV."
+     }
+    ],
+    "final_letter": "[openai] [FAKE FIXTURE] This rewrite was not written by a model.\n\nDear FAKE Fixture Works,\n\nI am applying for the FAKE Fixture Engineer role. I led the FAKE fixture migration. The rewrite fixture adds this sentence so the Final tab is not a copy of the draft.\n\nKind regards,\nFAKE Applicant\n",
+    "feedback": {
+     "instruction": [
+      {
+       "id": "a1f92ac5-77d3-44a6-9328-19d60fd04f92",
+       "observation": "[FAKE FIXTURE] The style check is fixture text, not a model comment.",
+       "type": "PLEASE_FIX",
+       "status": "NOT_NEEDED",
+       "context_field": {
+        "items": []
+       },
+       "user_context": "",
+       "user_instructions": "",
+       "input_declined": false,
+       "persist_user_context_to_cv": true,
+       "persist_user_context_for_agents": true,
+       "quote": "I led the FAKE fixture migration.",
+       "matched_text": "I led the FAKE fixture migration.",
+       "span_start": 142,
+       "span_end": 175,
+       "laya_verdict": "unscored",
+       "laya_error": "Ollaya is not reachable at http://127.0.0.1:9. Start the ollaya container (ConnectError: [Errno 111] Connection refused)."
+      }
+     ],
+     "accuracy": [
+      {
+       "id": "4b10497d-dec7-4d22-ad53-d4830819501a",
+       "observation": "[FAKE FIXTURE] The accuracy check wants a made-up detail filled in.",
+       "type": "PLEASE_FIX",
+       "status": "INPUT_NEEDED",
+       "context_field": {
+        "items": []
+       },
+       "user_context": "",
+       "user_instructions": "[FAKE FIXTURE] Say what the migration was, or skip the question.",
+       "input_declined": false,
+       "persist_user_context_to_cv": true,
+       "persist_user_context_for_agents": true,
+       "quote": "I led the FAKE fixture migration.",
+       "matched_text": "I led the FAKE fixture migration.",
+       "span_start": 142,
+       "span_end": 175,
+       "laya_verdict": "unscored",
+       "laya_error": "Ollaya is not reachable at http://127.0.0.1:9. Start the ollaya container (ConnectError: [Errno 111] Connection refused)."
+      }
+     ],
+     "precision": [
+      {
+       "id": "c4b5e1d7-b592-4487-90d7-8cb8432afc7f",
+       "observation": "[FAKE FIXTURE] This praise is fixture text, not a model comment.",
+       "type": "ALREADY_GOOD",
+       "status": "NOT_NEEDED",
+       "context_field": {
+        "items": []
+       },
+       "user_context": "",
+       "user_instructions": "",
+       "input_declined": false,
+       "persist_user_context_to_cv": true,
+       "persist_user_context_for_agents": true,
+       "quote": "I led the FAKE fixture migration.",
+       "matched_text": "I led the FAKE fixture migration.",
+       "span_start": 142,
+       "span_end": 175
+      }
+     ],
+     "company_fit": [],
+     "goal_fit": [],
+     "user_fit": [],
+     "human": []
+    },
+    "cost": 0.0,
+    "comments_on": "final_letter",
+    "batch_settings": {
+     "rewrite_rounds": 1,
+     "final_feedback": true
+    }
+   }
+  },
+  "job_text": "FAKE Fixture Engineer at FAKE Fixture Works in FAKE City. You know FixtureStack and FixtureLang.",
+  "selected_top_docs": [],
+  "capture_fingerprint": "49627bf5fab1533eb900b97db040f685"
+ }
+}

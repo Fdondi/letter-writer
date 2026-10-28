@@ -568,7 +568,10 @@ def advance_to_draft(
     style_instructions: str = "",
     letter_plan_override: Optional[str] = None,
     user_id: Optional[str] = None,
+    run_checks: bool = True,
 ) -> VendorPhaseState:
+    """Draft the letter, then (unless ``run_checks`` is False) run the feedback checks and their
+    review on it. The opportunity batch skips the checks when nobody will read them."""
     _bind_user_model_overrides(user_id)
     # Force reload from MongoDB to ensure we have the latest session state
     # This is important because the session might have been updated by background phase
@@ -700,48 +703,14 @@ def advance_to_draft(
         # Capture draft cost before feedback generation
         _update_cost(state, ai_client, phase="draft", user_id=user_id, vendor_str=vendor.value)
         _reset_client_counters(ai_client)
-        
-        # Run checks on the draft so the user can review/override feedback before refinement
-        logger.info("[PHASE] draft -> %s :: running checks (FEEDBACK)", vendor.value)
-        feedback = run_phased_feedback_checks(
-            draft_letter=draft_letter,
-            cv_text=cv_text,
-            company_report=company_report,
-            job_text=job_text,
-            top_docs=top_docs,
-            client=ai_client,
-            style_instructions=style_instructions,
-            additional_user_info=additional_user_info,
-            hire_problem=hire_problem,
-            known_weaknesses=known_weaknesses,
-        )
-        
-        # Capture feedback cost separately
-        _update_cost(state, ai_client, phase="feedback", user_id=user_id, vendor_str=vendor.value)
-        _reset_client_counters(ai_client)
 
-        feedback = review_feedback_for_vendor(
-            client=ai_client,
-            draft_letter=draft_letter,
-            feedback=feedback,
-            style_instructions=style_instructions,
-            cv_text=cv_text,
-            additional_user_info=additional_user_info,
-            company_report=company_report,
-            job_text=job_text,
-            top_docs=top_docs,
-            vendor=vendor.value,
-            hire_problem=hire_problem,
-            known_weaknesses=known_weaknesses,
-        )
-        state.feedback = feedback
-        session.vendors[vendor.value] = state
-        merge_input_clusters_across_session_vendors(session=session, client=ai_client)
-        state = session.vendors[vendor.value]
-        feedback = state.feedback
+        if run_checks:
+            # Run checks on the draft so the user can review/override feedback before refinement
+            state = _check_and_review(session, state, vendor, ai_client, inputs, draft_letter, known_weaknesses, user_id)
+            feedback = state.feedback
+        else:
+            feedback = {}
 
-        _update_cost(state, ai_client, phase=FEEDBACK_REVIEW_PHASE, user_id=user_id, vendor_str=vendor.value)
-        
     except Exception:
         logger.exception("advance_to_draft failed for vendor=%s session_id=%s", vendor.value, session.session_id)
         raise
@@ -755,6 +724,89 @@ def advance_to_draft(
     for v_name, v_state in session.vendors.items():
         save_vendor_data(session.session_id, v_name, v_state)
     
+    return state
+
+
+def _check_and_review(
+    session: SessionState,
+    state: VendorPhaseState,
+    vendor: ModelVendor,
+    ai_client: Any,
+    inputs: DraftInputs,
+    letter: str,
+    known_weaknesses: Any,
+    user_id: Optional[str],
+) -> VendorPhaseState:
+    """The feedback half of the draft phase on ``letter``: the checks, their review, and input
+    questions linked across the session's vendors. Costs are recorded per phase; returns the state."""
+    logger.info("[PHASE] draft -> %s :: running checks (FEEDBACK)", vendor.value)
+    feedback = run_phased_feedback_checks(
+        draft_letter=letter,
+        cv_text=inputs.cv_text,
+        company_report=inputs.company_report,
+        job_text=inputs.job_text,
+        top_docs=inputs.top_docs,
+        client=ai_client,
+        style_instructions=inputs.style_instructions,
+        additional_user_info=inputs.additional_user_info,
+        hire_problem=inputs.hire_problem,
+        known_weaknesses=known_weaknesses,
+    )
+
+    # Capture feedback cost separately
+    _update_cost(state, ai_client, phase="feedback", user_id=user_id, vendor_str=vendor.value)
+    _reset_client_counters(ai_client)
+
+    feedback = review_feedback_for_vendor(
+        client=ai_client,
+        draft_letter=letter,
+        feedback=feedback,
+        style_instructions=inputs.style_instructions,
+        cv_text=inputs.cv_text,
+        additional_user_info=inputs.additional_user_info,
+        company_report=inputs.company_report,
+        job_text=inputs.job_text,
+        top_docs=inputs.top_docs,
+        vendor=vendor.value,
+        hire_problem=inputs.hire_problem,
+        known_weaknesses=known_weaknesses,
+    )
+    state.feedback = feedback
+    session.vendors[vendor.value] = state
+    merge_input_clusters_across_session_vendors(session=session, client=ai_client)
+    state = session.vendors[vendor.value]
+
+    _update_cost(state, ai_client, phase=FEEDBACK_REVIEW_PHASE, user_id=user_id, vendor_str=vendor.value)
+    return state
+
+
+def check_letter(
+    *,
+    session_id: str,
+    vendor: ModelVendor,
+    letter: str,
+    style_instructions: str = "",
+    user_id: Optional[str] = None,
+) -> VendorPhaseState:
+    """Run the draft phase's checks and review on ``letter`` (a rewrite to comment again) and
+    store them as the vendor's feedback. The letter texts themselves are left as they are."""
+    _bind_user_model_overrides(user_id)
+    from .session_store import load_session, save_vendor_data
+
+    session = load_session(session_id, force_reload=True)
+    if session is None:
+        raise ValueError(f"Session {session_id} not found in database")
+    state = session.vendors.get(vendor.value)
+    if state is None:
+        raise ValueError(f"Vendor {vendor.value} not in session")
+    if not (letter or "").strip():
+        raise ValueError("No letter to check")
+    ai_client = get_client(vendor)
+    inputs = resolve_draft_inputs(session, state, vendor, user_id, style_instructions=style_instructions)
+    _reset_client_counters(ai_client)
+    state = _check_and_review(session, state, vendor, ai_client, inputs, letter, state.known_weaknesses, user_id)
+    for v_name, v_state in session.vendors.items():
+        save_vendor_data(session.session_id, v_name, v_state)
     return state
 
 

@@ -158,3 +158,22 @@ export function extractLettersFromVendors(vendors) {
   });
   return letters;
 }
+
+/**
+ * Assembly candidates for a queued job the batch drafted: each vendor's refined final when it
+ * has one, else its draft. Unlike extractLettersFromVendors, a draft counts here — crafting the
+ * final letter starts from the batch's drafts when it never rewrote them.
+ */
+export function extractAssemblyLettersFromVendors(vendors) {
+  const letters = {};
+  if (!vendors || typeof vendors !== "object") return letters;
+  Object.entries(vendors).forEach(([vendor, vdata]) => {
+    if (!vdata || typeof vdata !== "object") return;
+    if (vendorHasCompletedFinal(vdata)) {
+      letters[vendor] = vdata.final_letter;
+    } else if (nonEmptyText(vdata.draft_letter)) {
+      letters[vendor] = vdata.draft_letter;
+    }
+  });
+  return letters;
+}

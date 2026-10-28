@@ -64,7 +64,7 @@ fun CostsScreen(graph: AppGraph, modifier: Modifier = Modifier) {
         reload++
     }
 
-    LaunchedEffect(pending) { pendingCost = graph.costs.pendingCost() }
+    LaunchedEffect(pending) { pendingCost = runCatching { graph.costs.pendingCost() }.getOrDefault(0.0) }
     LaunchedEffect(monthsBack, reload) {
         loading = true
         error = null

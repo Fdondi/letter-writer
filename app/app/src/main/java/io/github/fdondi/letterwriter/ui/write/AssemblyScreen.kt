@@ -2,14 +2,16 @@ package io.github.fdondi.letterwriter.ui.write
 
 import android.content.ClipData
 import android.content.Intent
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -22,8 +24,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.PrimaryScrollableTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -31,7 +34,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
@@ -41,6 +43,7 @@ import io.github.fdondi.letterwriter.AppGraph
 import io.github.fdondi.letterwriter.pipeline.Translation
 import io.github.fdondi.letterwriter.pipeline.VendorFlowEngine
 import io.github.fdondi.letterwriter.pipeline.VendorStage
+import io.github.fdondi.letterwriter.pipeline.WorkSession
 import io.github.fdondi.letterwriter.ui.common.BusyRow
 import io.github.fdondi.letterwriter.ui.common.ErrorText
 import io.github.fdondi.letterwriter.ui.common.PersistedTextField
@@ -48,13 +51,97 @@ import io.github.fdondi.letterwriter.ui.common.SectionCard
 import io.github.fdondi.letterwriter.ui.common.WarningList
 import kotlinx.coroutines.launch
 
-/** Final letter: paragraphs picked from the vendor letters, then copy, share, translate or save. */
-@OptIn(ExperimentalLayoutApi::class)
+/** Pages of the Final tab: the vendor letters, the letter being built, and the info about the job. */
+object FinalPage {
+    const val LETTERS = 0
+    const val YOUR_LETTER = 1
+    const val INFO = 2
+    val LABELS = listOf("Letters", "Your letter", "Info")
+}
+
+/**
+ * The final letter. One level of swipeable tabs holds the vendor letters to review, the letter
+ * being built and the job info; the vendor letters themselves are swipeable tabs, one per page,
+ * so they sit side by side instead of stacked in one scroll.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun AssemblyScreen(graph: AppGraph, modifier: Modifier = Modifier) {
     val session by graph.flow.session.collectAsState()
-    val profile by graph.profiles.profile.collectAsState()
     val s = session ?: return
+    val pager = rememberPagerState { FinalPage.LABELS.size }
+    val scope = rememberCoroutineScope()
+    Column(modifier.fillMaxSize()) {
+        PrimaryScrollableTabRow(selectedTabIndex = pager.currentPage.coerceIn(0, FinalPage.LABELS.size - 1), edgePadding = 8.dp) {
+            FinalPage.LABELS.forEachIndexed { idx, label ->
+                Tab(
+                    selected = pager.currentPage == idx,
+                    onClick = { scope.launch { pager.animateScrollToPage(idx) } },
+                    text = { Text(label) },
+                )
+            }
+        }
+        HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
+            when (page) {
+                FinalPage.LETTERS -> LettersPage(graph, s)
+                FinalPage.YOUR_LETTER -> YourLetterPage(graph, s)
+                else -> InfoPage(s)
+            }
+        }
+    }
+}
+
+/**
+ * The vendor letters, one swipeable tab per letter. Each letter gets a page of its own, so going
+ * from one letter to the other is a lateral swipe instead of scrolling through a list.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun LettersPage(graph: AppGraph, s: WorkSession) {
+    val running by graph.flow.running.collectAsState()
+    // Letters to review: every finished one, and for desktop jobs also drafts it left unrewritten (0 rounds).
+    val finished = s.vendors.mapNotNull { v ->
+        s.vendorWork(v).takeIf { w -> w.reviewText.isNotBlank() && (w.stage == VendorStage.FINAL || s.opportunityId != null) }
+    }
+    if (finished.isEmpty()) {
+        Text(
+            "No vendor has a finished letter yet. Approve a draft on the Letters tab first.",
+            Modifier.padding(16.dp),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        return
+    }
+    val pager = rememberPagerState { finished.size }
+    val scope = rememberCoroutineScope()
+    Column(Modifier.fillMaxSize()) {
+        Text(
+            "Each paragraph shows its comments. Add a paragraph as it is, or redraft it now with the comments you keep ticked, your answers and a note.",
+            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        PrimaryScrollableTabRow(selectedTabIndex = pager.currentPage.coerceIn(0, finished.size - 1), edgePadding = 8.dp) {
+            finished.forEachIndexed { idx, w ->
+                Tab(
+                    selected = pager.currentPage == idx,
+                    onClick = { scope.launch { pager.animateScrollToPage(idx) } },
+                    text = { Text(vendorLabel(w.vendor)) },
+                )
+            }
+        }
+        HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
+            val w = finished[page]
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+                VendorParagraphReview(graph, s, w, running)
+            }
+        }
+    }
+}
+
+/** The letter being built: paragraphs picked from the vendor letters, then copy, share, translate or save. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun YourLetterPage(graph: AppGraph, s: WorkSession) {
+    val profile by graph.profiles.profile.collectAsState()
     val flow = graph.flow
     val context = LocalContext.current
     val clipboard = LocalClipboard.current
@@ -66,42 +153,19 @@ fun AssemblyScreen(graph: AppGraph, modifier: Modifier = Modifier) {
     var translation by remember { mutableStateOf<Translation?>(null) }
     var translateError by remember { mutableStateOf<String?>(null) }
 
-    fun copy(text: String) = scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Letter", text))) }
+    fun copy(text: String) = scope.launch { runCatching { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Letter", text))) } }
     fun share(text: String) {
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_TEXT, text)
             putExtra(Intent.EXTRA_SUBJECT, listOf(s.intake.jobTitle, s.intake.companyName).filter { it.isNotBlank() }.joinToString(" — "))
         }
-        context.startActivity(Intent.createChooser(send, "Share the letter"))
+        runCatching { context.startActivity(Intent.createChooser(send, "Share the letter")) }
     }
 
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        val finished = s.vendors.mapNotNull { v -> s.vendorWork(v).takeIf { it.stage == VendorStage.FINAL && it.finalLetter.isNotBlank() } }
-        if (finished.isEmpty()) {
-            Text("No vendor has a finished letter yet. Approve a draft on the Letters tab first.", style = MaterialTheme.typography.bodyMedium)
-        }
-        for (w in finished) {
-            var expanded by remember(w.vendor) { mutableStateOf(s.paragraphs.isEmpty() && finished.size == 1) }
-            SectionCard(vendorLabel(w.vendor)) {
-                Text(w.finalLetter, style = MaterialTheme.typography.bodyMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { flow.useWholeLetter(w.vendor) }) { Text("Use whole letter") }
-                    TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide paragraphs" else "Pick paragraphs") }
-                }
-                if (expanded) {
-                    for (p in w.finalLetter.split(Regex("\\n\\s*\\n")).map { it.trim() }.filter { it.isNotEmpty() }) {
-                        Row(verticalAlignment = Alignment.Top) {
-                            Text(p, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                            TextButton(onClick = { flow.addParagraph(w.vendor, p) }) { Text("Add") }
-                        }
-                    }
-                }
-            }
-        }
-
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionCard("Your letter") {
-            if (s.paragraphs.isEmpty()) Text("Add paragraphs from the letters above.", style = MaterialTheme.typography.bodySmall)
+            if (s.paragraphs.isEmpty()) Text("Add paragraphs from the letters on the Letters page.", style = MaterialTheme.typography.bodySmall)
             s.paragraphs.forEachIndexed { idx, p ->
                 Text(
                     "${vendorLabel(p.vendor)}${if (p.text != p.originalText) " · edited" else ""}",
@@ -128,6 +192,9 @@ fun AssemblyScreen(graph: AppGraph, modifier: Modifier = Modifier) {
                     else "Already saved; saving again updates the same example.",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                if (s.opportunityId != null) {
+                    Text("Saving also marks this job done in the job pipeline.", style = MaterialTheme.typography.bodySmall)
+                }
                 if (saving) {
                     BusyRow("Saving")
                 } else {

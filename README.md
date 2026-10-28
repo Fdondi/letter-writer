@@ -1,23 +1,55 @@
-Cover letter customizator. 
+# Letter Writer
 
-# Usage
+Writes cover letters tailored to a job posting from your CV and your previous letters. Several LLM
+vendors draft side by side; automatic checks comment on each draft, you answer or approve the
+comments, the drafts are rewritten, and you assemble the final letter from the best paragraphs.
 
-## Prerequisite 
+It runs as a web app (Docker, on this computer), an Android app, and a browser extension that
+captures job postings. The **opportunity pipeline** drafts letters on this computer for the jobs you
+send from the phone, the extension or the web app.
 
-### Python environment
+The phone never connects to this computer: the Android app and the desktop only read and write
+Firestore, at their own pace. No VPN or open port is needed.
 
-pip install -r requirements.txt
+## How it fits together
 
-### API Keys
+| Part | What it is | Where |
+|---|---|---|
+| Backend | FastAPI: extraction, research, drafting, feedback, saving | `letter_writer/` (logic), `letter_writer_server/` (API); container `backend`, port 8000 |
+| Web app | React; served by nginx over HTTPS | `letter_writer_web/`; container `frontend`, https://localhost:8443 (8442 redirects) |
+| Firestore (database `letter`) | All data: profile and CV (`personal_data`), previous letters with their embeddings (`documents`), company research cache (`companies`), letter feedback (`feedbacks`, `phase_draft_feedback`), the job pipeline (`opportunities`) | Google Cloud; the backend uses `gcloud-credentials.json` |
+| Redis | Pending cost records before they reach BigQuery | container `redis`, port 6379 |
+| BigQuery | Cost history and spending limits | Google Cloud |
+| Ollaya ("Laya") | Local decision model that scores feedback and similar letters | container `ollaya`, `127.0.0.1:11435` |
+| Event-log admin | Inspects saved application event logs | container `event-log-admin`, port 8444 |
+| LLM vendors | OpenAI, Anthropic, Gemini, Mistral, Grok, DeepSeek, a local OpenAI-compatible server, and Claude Code (subscription, batch only) | models per vendor and role in `letter_writer/clients/*.json`, per-phase overrides in Settings |
+| Android app | Kotlin/Compose; talks to Firestore and the vendors directly | `app/` |
+| Browser extension | Queues the open job posting for the desktop batch, like the phone app | `extensions/job-capture/` (`package.sh` builds the store/self-hosted packages), docs in `docs/JOB_CAPTURE_EXTENSION.md` |
+| Opportunity pipeline | Captured postings → drafted letters on a timer; the app combines them | `letter_writer/batch.py`, see below; mail reading experimental in `experimental/email/` |
 
-Set up the required API keys as environment variables (or in a `.env` file):
+Similar letters are found by vector search over `documents` (OpenAI `text-embedding-3-small`);
+there is no separate vector database.
 
-- `OPENAI_API_KEY`: Required for OpenAI models
-- `ANTHROPIC_API_KEY`: Required for Claude/Anthropic models  
-- `GOOGLE_API_KEY`: Required for Gemini models
-- `GOOGLE_TRANSLATE_API_KEY`: Required for Google Translate API (used in the assembly stage for translating letters)
-- `MISTRAL_API_KEY`: Required for Mistral models (optional)
-- `XAI_API_KEY`: Required for Grok models (optional)
+## Setup
+
+### 1. Configuration
+
+Put these in `.env` in the repository root (Docker Compose and the Python code both read it):
+
+- `OPENAI_API_KEY` — OpenAI models, and embeddings for similar-letter search
+- `ANTHROPIC_API_KEY` — Anthropic models
+- `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) — Gemini models
+- `MISTRAL_API_KEY`, `XAI_API_KEY` (Grok), `DEEPSEEK_API_KEY` — optional vendors
+- `GOOGLE_TRANSLATE_API_KEY` — translation in the assembly stage
+- `GOOGLE_CLOUD_PROJECT`, `FIRESTORE_PROJECT_ID`, `FIRESTORE_DATABASE=letter` — Firestore
+- `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_SECRET`, `APP_SECRET_KEY` — sign-in to the web app
+- `USER_MONTHLY_LIMIT_USD`, `USER_DAILY_LIMIT_USD` — spending limits for API calls
+- optional `LANGSMITH_*` — tracing
+
+The Google service-account key goes in `gcloud-credentials.json` (repository root; gitignored).
+
+Do not put `OLLAYA_BASE_URL` in `.env`: Compose copies `.env` values into the backend container,
+where Ollaya is `http://ollaya:11435`, not `127.0.0.1`.
 
 ### Local LLM (LM Studio or OpenAI-compatible server)
 
@@ -48,10 +80,6 @@ For the web application, CV content is loaded from Firestore (`cv_revisions`) an
 
 CLI usage still supports file-based CV input, but it must be provided explicitly with `--cv`.
 
-### Qdrant
-
-Qdrant accessible; tested running locally in Docker on port 6333 (configurable)
-
 ### Source data
 
 Job offers and correspective letters need to be either in different folders, or have different suffixes (be it file extension or name).
@@ -59,268 +87,237 @@ All the pairs which have the same name once the suffix is removed, are considere
 
 In case the text the lettter is within boilerplate (for example, a `.tex` source file), it's possible to instruct to ignore before and after a given keyword.
 
-## Running the Application
-
-The application consists of a FastAPI backend, a React frontend, and Qdrant vector database. You can run them either locally or using Docker.
-
-### Option 1: Using Docker (Recommended)
-
-The easiest way to run the entire application stack is using Docker Compose:
+### 2. Run with Docker
 
 ```bash
-docker-compose up
+docker compose up -d          # backend, frontend, redis, ollaya, event-log-admin
+docker compose up -d --build  # after code changes
+docker compose logs backend   # when something does not start
 ```
 
-This will start:
-- **Qdrant** vector database on port `6333` (uses your existing data volume)
-- **FastAPI backend** on port `8000`
-- **React frontend** on port `5173`
+Open https://localhost:8443 (the certificate in `certs/` is a local mkcert one; trust it once).
+The backend waits for Ollaya to report healthy; the first start downloads the Laya model and can take several minutes.
 
-**Note**: The docker-compose configuration uses your existing Qdrant data volume (`letter-writer_qdrant_storage`). If you've already initialized Qdrant with your data, it will be available immediately. If you need to stop your existing Qdrant container first, you can do so - docker-compose will start a new one using the same data.
+### 3. Load your previous letters
 
-To run in detached mode (background):
+Similar-letter search needs your past job offers and letters in Firestore (`documents`). Pairs are
+files with the same name once the suffix is removed:
 
 ```bash
-docker-compose up -d
+docker compose exec backend python -m letter_writer refresh \
+  --jobs-source-folder jobs --jobs-source-suffix .txt \
+  --letters-source-folder letters --letters-source-suffix .txt
 ```
 
-To stop all services:
+Every letter you save in the app is added to the same collection.
+
+### Running without Docker
 
 ```bash
-docker-compose down
-```
-
-To rebuild containers after code changes:
-
-```bash
-docker-compose up --build
-```
-
-**Troubleshooting**: If backend or frontend don't start automatically:
-- Check logs: `docker-compose logs backend` or `docker-compose logs frontend`
-- The backend waits for Qdrant to be healthy before starting (this can take 30-60 seconds)
-- If services are stopped, they will auto-restart due to `restart: unless-stopped` policy
-- To start all services: `docker-compose up -d` (runs in background)
-
-**Note**: Make sure your `.env` file is in the project root with all required API keys (see Prerequisites section).
-
-#### Initializing Qdrant Collection
-
-**Important**: The docker-compose setup uses the Qdrant data volume `letter-writer_qdrant_storage`. If you've already initialized Qdrant with your data in this volume, it will be available immediately.
-
-**If you get "Qdrant collection not found" error**: This means the collection is empty and needs to be initialized. Run the refresh command below to populate it with your job offers and letters. This is a one-time setup (or whenever you add new examples).
-
-**To check if your collection exists**, you can query Qdrant:
-```bash
-curl http://localhost:6333/collections
-```
-
-If the `job_offers` collection is not listed, you need to run refresh.
-
-**Option A: Using the API (Recommended)**
-
-Make a POST request to the refresh endpoint. Paths are relative to the project root (mounted at `/app` in the container). The Qdrant connection will use the default service name:
-
-```bash
-curl -X POST http://localhost:8000/api/refresh/ -H "Content-Type: application/json" -d "{\"jobs_source_folder\": \"jobs\", \"jobs_source_suffix\": \".txt\", \"letters_source_folder\": \"letters\", \"letters_source_suffix\": \".txt\"}"
-```
-
-**Option B: Using the CLI inside Docker**
-
-Execute the refresh command inside the backend container. Paths are relative to `/app`. The Qdrant connection will use the service name `qdrant`:
-
-```bash
-docker-compose exec backend python -m letter_writer refresh --jobs-source-folder jobs --jobs-source-suffix .txt --letters-source-folder letters --letters-source-suffix .txt --qdrant-host qdrant --qdrant-port 6333
-```
-
-**Note**: The docker-compose setup uses your existing Qdrant data volume, so your initialized collection will be available. If you need to customize the Qdrant connection, you can set `QDRANT_HOST` and `QDRANT_PORT` in your `.env` file.
-
-**Note**: Adjust the folder paths and suffixes according to your actual data structure. The default expects `examples/` folder with `.txt` jobs and `.tex` letters, but you can customize these paths.
-
-### Option 2: Running Locally
-
-#### Prerequisites
-
-- Python 3.11+ installed
-- Node.js 20+ installed
-- Qdrant running (see Qdrant section below)
-
-#### Backend (FastAPI)
-
-From the project root directory, run:
-
-```bash
+pip install -r requirements.txt
 python -m uvicorn letter_writer_server.main:app --host 0.0.0.0 --port 8000
+cd letter_writer_web && npm install && npm run dev   # http://localhost:5173, proxies /api to :8000
 ```
 
-The backend will start on `http://localhost:8000` by default.
+## Opportunity pipeline (job posting → drafted letters → your letter)
 
-#### Frontend (React/Vite)
+Design and reasoning: `OPPORTUNITY_PIPELINE_PLAN.md`; component map: `docs/OPPORTUNITY_PIPELINE.md`.
+Reading job alerts and application replies from Gmail is experimental and not used:
+`experimental/email/README.md`.
 
-First, install Node.js dependencies (if not already done):
+### How it works
+
+1. **Send a job.** On the phone, share a posting (text or link) to Letter Writer, or paste it, pick
+   the vendors (all are selected to start with; Anthropic runs as Claude Code on your subscription
+   on the desktop and through its API on the phone), how many times the desktop should **comment and
+   rewrite** each draft (0, 1 or 2; default 1) and whether it should **comment the last version**
+   (default on), and choose **Send to the desktop**. In the browser, the extension queues the open posting
+   (Options page: off opens the intake tab instead, for interactive extraction); in the web
+   app, **Jobs → Add a job by hand**. The job is saved in Firestore as **captured** (a bare link waits
+   as **needs text** until you add the posting text).
+2. **The desktop drafts it.** Every 15 minutes a timer on this computer runs
+   `letter_writer.batch run-captured`, which takes up to 3 captured jobs (oldest first): extraction
+   (company, title, competences, similar letters), one company research, then per vendor: plan →
+   draft → (comments → rewrite) as many times as the job asks → comments on the last version if
+   asked. Vendors are the job's own list; a job without one (extension, web) uses every vendor: the
+   desktop has no defaults. In the batch Anthropic is always Claude Code, never the API. The job becomes **ready**, or **failed** with each vendor's error. A run
+   with nothing captured only reads Firestore.
+3. **You finish it.** In the app (**Job pipeline → Ready → Open the drafts**) the **Final** tab shows
+   each vendor's letter paragraph by paragraph, with its comments on the paragraph they quote
+   (highlighted) or on the whole letter. Add a paragraph as it is, or **Redraft** it right away with
+   the comments you keep ticked, your answers to questions and a note: that call goes straight from
+   the phone to the vendor's API (a paragraph Claude Code wrote goes to the Anthropic API: same
+   vendor, realtime). Nothing has to
+   be approved first. Combine paragraphs from any vendors, save; saving marks the job **done**. The
+   web app (**Jobs → Ready → Craft letter**) jumps straight to assembling the final letter from the
+   drafts.
+
+The phone and the desktop never connect to each other; both only read and write Firestore.
+
+### One-time setup (this Linux machine)
+
+1. **Python environment for the batch** (host, not Docker; the `claude` CLI and its login live here):
+   ```bash
+   uv venv .venv --python 3.13 && VIRTUAL_ENV=.venv uv pip install -r requirements.txt
+   ```
+2. **Your account id.** The batch acts for one Google account, identified by its `sub`:
+   ```bash
+   .venv/bin/python -m letter_writer.batch users
+   ```
+   lists the profiles in Firestore (yours has your CV revisions); in the web app, hover your name in
+   the header. Add it to `.env`:
+   ```bash
+   echo 'LW_USER_ID=<your sub>' >> .env
+   ```
+   With a single profile in Firestore this step can be skipped.
+3. **Check the connection:** `.venv/bin/python -m letter_writer.batch status`
+   (the batch uses `gcloud-credentials.json` and Ollaya on `127.0.0.1:11435` by itself).
+4. **Restart Compose** so Ollaya is published on the host (feedback scoring): `docker compose up -d`.
+   Without it drafting still works, with a warning that comments were not scored.
+5. **Firestore rules** that let the phone save jobs and read drafts:
+   ```bash
+   (cd firebase && firebase deploy --only firestore --project gen-lang-client-0535858734)
+   ```
+6. **Extension sign-in (queueing).** From version 1.3.0 the extension queues jobs straight in
+   Firestore like the phone app — no backend involved. Open the extension's Options and click
+   **Sign in with Google** with the same account the phone app uses (one-time: register the redirect
+   URI shown there in the Google Cloud console — on the web
+   client Firebase Auth's Google provider uses, i.e. the "Web client ID" under Authentication →
+   Sign-in method → Google → *Web SDK configuration*, the same client `google-services.json`
+   lists; not the Android client and not the desktop app's own web client; leave *Use this client
+   for an AI-powered agent* unchecked — that designates a client for agents calling Google APIs
+   (MCP), not for user sign-in). Firefox for
+   Android has no sign-in API (and no app server on the phone): there the extension hands the page
+   to the **Android app** over a `letterwriter://capture?…` link — install the app and sign in there,
+   and it queues the job itself (`docs/JOB_CAPTURE_EXTENSION.md` → *Firefox for Android*).
+7. **Extension:** reload it (version 1.3.7; from 1.3.0 it queues sent pages directly in Firestore
+   by default — Options page to turn it off; 1.1.0 asked for the job sites' host permissions;
+   1.3.1/1.3.2 fixed the Google sign-in call on Firefox and Chrome, 1.3.3 signs in with the
+   Firebase-configured web client, 1.3.4 drops the unnecessary Firebase authorized-domains step,
+   1.3.5 shows the OAuth client ID next to the redirect URI in the setup, 1.3.6 fixes the
+   Firebase sign-in exchange (INVALID_REQUEST_URI) and documents that the redirect URI never
+   changes — register it once, 1.3.7 stores the Google sub as the queued-write user id (not the
+   Firebase localId)).
+8. **The timer** (every 15 minutes; a run missed while the machine is off or asleep happens on wake):
+   ```bash
+   scripts/opportunities/install.sh timer
+   systemctl --user enable --now letter-opportunities.timer
+   ```
+   Log: `temp/opportunities/routine.log`. Stop with `systemctl --user disable --now letter-opportunities.timer`.
+
+By hand instead of the timer: `.venv/bin/python -m letter_writer.batch run-captured`, or
+`scripts/opportunities/install.sh skill` and then `/letter-opportunities` in Claude Code started in
+this folder. On Claude Code Desktop (Windows/macOS), a scheduled task with
+`docs/routines/letter-opportunities/SKILL.md` does the same.
+
+### Day to day
+
+- **Jobs** (web: header button or `/opportunities`; Android: **Job pipeline**): send jobs, follow
+  them through Queued (sent) → Running (the desktop is drafting it: step and vendors done so far)
+  → Ready, craft the final letter from the drafts.
+- **Failed** jobs show each vendor's error; **Retry** queues them again (`batch retry <id>`). A retry
+  keeps every draft that already succeeded for the same posting text and drafts only the missing
+  vendors; each draft is saved as soon as its vendor finishes, so a run that dies halfway loses
+  nothing that was done. New posting text drafts everything again.
+- By hand: `.venv/bin/python -m letter_writer.batch seed --url <link> --text-file posting.txt`
+  adds a captured job; `batch run-captured --max-jobs 1` drafts it now.
+- `batch run-captured --vendors claude_code,openai,gemini --rewrite-rounds 0 --no-final-feedback`
+  fills in vendors and settings for jobs that came without them; a job's own choices win.
+
+### Costs
+
+API vendors count toward the spending limits (checked before each job; over the limit only
+`claude_code` runs). `claude_code` uses your Claude subscription; its estimated cost is stored on the
+job as `cost_subscription_estimate_usd` and is not API spend. Extraction uses the extraction vendor
+set in your profile.
+
+### Troubleshooting
+
+| Symptom | Where to look |
+|---|---|
+| Job stays Queued | Is the timer running (`systemctl --user list-timers`)? `temp/opportunities/routine.log` |
+| Job stuck in Running | `temp/opportunities/routine.log`; a crashed run's job is taken over after its 2-hour lease, keeping the drafts it finished |
+| Job failed | the error per vendor on the job; `claude_code`: is `claude` logged in on this machine? |
+| "Set LW_USER_ID" | setup step 2 |
+| The phone cannot save a job | setup step 5 (rules) |
+| Extension never shows ✓ | sign in with Google in the extension's Options (queueing on); on Firefox for Android the badge shows `→`: install the Android app, sign in there, and it queues the job (setup step 6) |
+| Sign-in fails with `redirect_uri_mismatch` | the redirect URI never changes — register the one shown on the extension's Options page (exactly, no trailing slash) on the OAuth client shown there; a mismatch means it is not registered or is on the wrong client |
+| Sign-in fails with `INVALID_REQUEST_URI` | the loaded extension predates 1.3.6 (it sent the extension origin as the Firebase requestUri) — reload 1.3.6+ |
+| Extension capture fails with "Missing or insufficient permissions" | the rules key on the Google sub (`107281079540942343648`-style), not the Firebase uid: from 1.3.7 the extension stores the Google sub as the user id — reload 1.3.7+ and check `lwAuth.userId` in the extension storage (about:debugging → Inspect → Storage). The account also needs a `personal_data/{sub}` profile (created by the desktop backend; `LW_USER_ID` in `.env` is the sub) |
+
+## Android app
 
 ```bash
-cd letter_writer_web
-npm install
+cd app && ./gradlew installDebug        # phone connected over adb; or assembleRelease for an APK
 ```
 
-Then start the development server:
+Firebase setup for a new project: `scripts/firebase/setup_android_firebase.sh`.
+
+**Demo mode** (no sign-in): tap **Try the demo** on the sign-in screen. It is a made-up account
+with sample jobs (one per pipeline tab, a ready one with desktop drafts) and letters; every model
+reply is canned and nothing leaves the phone. Each visit starts afresh; your account and your real
+letter in progress are not touched. **Leave demo** in the banner returns to where you were (your
+account, or the sign-in screen). It works in debug and release builds. From adb:
+`adb shell am start -n io.github.fdondi.letterwriter/.MainActivity --ez io.github.fdondi.letterwriter.DEMO true`.
+
+Smoke test (demo mode; fails on any crash): `python3 scripts/android/demo_smoke.py [--serial <device>]`.
+It is safe on your own phone: demo data is separate, starts afresh, and the app is left as it was.
+On an emulator add `--apk app/app/build/outputs/apk/debug/app-debug.apk --fresh` (installs, clears
+the app's data, grants the notification permission). Run emulators with the real GPU and a memory
+cap, e.g. `systemd-run --user --scope -p MemoryMax=4G emulator -avd <avd> -gpu host`: the
+software-GPU modes crash or leak on this machine.
+
+## Command line
+
+`python -m letter_writer <command>` (options can also be set as environment variables):
+
+- `refresh` — loads previous job offers and letters into Firestore (`documents`).
+  `--jobs-source-folder`, `--jobs-source-suffix` (default `.txt`), `--letters-source-folder`,
+  `--letters-source-suffix` (default `.tex`), `--letters-ignore-until` / `--letters-ignore-after`
+  (strip boilerplate such as `\makelettertitle` … `\closing`), `--negative-letters-source-folder`,
+  `--negative-letters-source-suffix`, `--clear`.
+- `process_job <path>` — writes a letter without the web app. `--cv <path>` (required),
+  `--company-name`, `--out`, `--model-vendor` (default: every vendor except `claude_code`), `--refine/--no-refine`,
+  `--fancy`.
+
+`python -m letter_writer.batch --help` lists the pipeline commands. Traces of model calls are saved
+under `trace/`.
+
+## How a letter is written
+
+1. **Extraction.** The posting is cleaned (site templates for jobs.ch, LinkedIn, swissdevjobs) and an
+   LLM extracts company, title, location, language, contact, competences with how critical each is,
+   and the problem the hire should solve. Your CV is graded against each competence.
+2. **Similar letters.** The 7 most similar previous job offers come from vector search; an LLM and the
+   Laya decision model re-score them; the top 3 are the examples.
+3. **Company research.** A web-search model writes a report on the company (and the contact person);
+   reports are cached in `companies` and reused for 6 months.
+4. **Plan** (optional). Each vendor plans the letter's argument, following your structure instructions.
+5. **Draft.** Each vendor writes a letter from the CV, the examples, the research, the posting and the
+   plan, following your style instructions, and lists the posting's requirements the CV does not meet.
+6. **Feedback checks.** Seven checks comment on each draft: style instructions, accuracy against the CV,
+   precision against the posting, company fit, goal fit (does it solve the hire's problem), your voice
+   (compared with your previous letters), and human tone. A review pass merges and filters the
+   comments, and Laya scores them. Comments that need information from you become questions.
+7. **Rewrite.** Each draft is rewritten with the comments you approved and the answers you gave
+   (optionally a fancier style pass).
+8. **Assembly.** You pick paragraphs from the vendors' letters, translate if needed, and save; saving
+   adds the letter to your examples and records which vendor's text you kept.
+
+Models per vendor and step are in `letter_writer/clients/<vendor>.json` (`roles`); Settings → models
+overrides them per phase.
+
+## Tests
+
+No test calls a real service (`letter_writer/conftest.py` blanks API keys and blocks Firestore,
+LangSmith and Ollaya; live vendor checks in `test_client.py` run only with `LW_LIVE_API_TESTS=1`).
 
 ```bash
-npm run dev
+pytest letter_writer letter_writer_server -n 4          # Firestore tests use the local emulator (Java)
+pytest experimental/email/tests                          # the email experiments
+cd letter_writer_web && npx jest
+cd extensions/job-capture && node --test *.test.mjs
+scripts/firebase/test_rules.sh                        # rules + the extension's direct-Firestore path
+cd app && ./gradlew --offline testDebugUnitTest
+python3 scripts/android/demo_smoke.py                    # on a connected phone or emulator
 ```
-
-The frontend will start on `http://localhost:5173` by default. The Vite dev server is configured to proxy API requests from `/api` to the backend at `http://localhost:8000`.
-
-#### Qdrant (Local)
-
-If not using Docker, you can run Qdrant locally:
-
-```bash
-docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
-```
-
-#### Initializing Qdrant Collection (Local)
-
-After starting Qdrant, populate it with your data using the CLI:
-
-```bash
-python -m letter_writer refresh --jobs-source-folder jobs --jobs-source-suffix .txt --letters-source-folder letters --letters-source-suffix .txt
-```
-
-Or use the API endpoint at `http://localhost:8000/api/refresh/` with a POST request (see Docker section above for the JSON format).
-
-### Accessing the Application
-
-Once all services are running, open your browser and navigate to:
-- Frontend: `http://localhost:5173`
-- Backend API: `http://localhost:8000/api/`
-- Qdrant Dashboard: `http://localhost:6333/dashboard` (if using Docker)
-
-## Debug 
-
-Useful information is saved under trace/
-
-# Commands
-
-Commands can be specified in sequence one after the other. 
-
-- `refresh`: refreshes example repository (default)
-
-- `process_job <path>`: writes a letter. 
-   Parameter: path to the file containing the job to write a letter for, or to the folder containing the jobs. If a folder is given, the newest file will be used. 
-
-## Options:
-
-### Common
-
-- `--qdrant-host=<uri>`: URI Qdrant server is running at. Defaults to localhost.
-- `--qdrant-port=<num>`: Port Qdrant server is running at. Defaults to 6333.
-
-###  For `refresh`
-
--`--clear`: Empty the Qdrant repository before rebuilding it.
-
-- `--jobs-source-folder=<Path>`: folder holding the job offers to be used to build the Qdrant repo.
-- `--jobs-source-suffix=<str>`: suffix used to recognize the job offers in the folder.
-
-- `--letters-source-folder=<Path>`: folder holding the letters to be used as the payload of the Qdrant repo.
-- `--letters-source-suffix=<str>`: suffix used to recognize the letters in the folder.
-
-- `--letters-ignore-until=<str>`: if present, letter text will be discarded as boilerplate until the first occurrence of the string. In a `.tex` letter template, this might be `\makelettertitle`. 
-- `--letters-ignore-after=<str>`: if present, letter text will be discarded as boilerplate after the first occurrence of the string. In a `.tex` letter template, this might be `\closing`. 
-
-### For `process_job`
-
-- `--cv=<path>`: required path to the user's CV in text form; markdown recommended.
-- `--openai-key=<key>`: OpenAI API key
-- `--company-name=<str>`: company to write the letter for. If not provided, defaults to the stem of the job description filename
-- `--refine=<bool>`: Whether to try to improve the letter through feedback. 
-- `--out=<path>`: Path to write the letter to. Defaults to `letters/<company_name>.txt`.
-
-## Config File:
-
-All flags can be set through envronment variables (if not needed for the current command they will just be ignored).
-Environment variables can be in turn set through an .env file, `load_dotenv()` will be called.
-
-# Details: 
-
-The pipeline uses existing examples to guide the model to write cover letters in the style of the existing ones. This happens in various stages:
-
-## 1. Preliminary research
-### 1a. Similar example retrieval
-
-#### 1a.I RAG
-
-RAG with Qdrant is used to retrieve the top 7 most similar job offers for which a letter was already written. 
-
-#### 1a.II Intellgent evaluation
-
-The LLM is presented with the company report, the original job offer, and the retrieved documents; it then scores the documents on actual similarity to the original job offer.
-The top 3 advance.
-
-Given the recent price drop, we can use: o4-mini.
-Because it's a resoning model, we should not need to try and trick the model into thinking about it by requesting a justification. We can just ask a Pydantic map lette_company_name -> score out of 10. 
-
-### 1b. Web research
-
-The LLM is given the company_name + the start of the job offer (which usually presents the company, for disambiguation) and asked to search the internet to write a short report on the company.
-Model to use: gpt-4o-search-preview
-
-## 2. Writing the letter
-
-The LLM is presented with:
-- The user's CV
-- The 3 selected examples of job_description -> letter
-- The company report
-- The target job description
-and is asked to write a letter for the target job description.
-Model to use: o3.
-
-## 3. Feedback
-Model to use: 4.1-mini -we focus on fewer documents so context isn't an issue, and we want to not worry about price to do as many checks as needed.
-
-###  3a. Accuracy check
-
-The LLM is presented with:
-- The user's CV
-- The written letter
-
-And is asked:
-1. Is what is written in the letter coherent with itself? 
-Examples of incoherhence:  "I am highly expert in Go, I used it once" (using once is not enough to claim experitise), or "I used Python libraries such as Boost" (Boost is a C++ library)
-2. Is what is written coherent with the user's CV? Is every claimed expertise supported? 
-
-### 3b. Precision check
-
-The LLM is presented with:
-- The job offer
-- the company research
-- The written letter
-is given the persona of the HR person who will evaulate the letter,
-and is asked:
-1. Were all the requests in the letter addressed, either by claiming and substantiating the necessary competence, or a reasonably substitutable one, or at least ability and willingness to learn in this specific field?
-    Example: "required: Python, GO" -> "I have several years of Python experience" [GO is missing]
-    Example: "rquired: GO" -> "while I have not used GO professionally, I have 5 years of C++ experience, and I have follwed a course on GO. When I tried GO on LeetCode, it was easy for me to use" [OK, demonstrates ability to learn]  
-2. Is there on the contrary any claimed competence that really is superflous, does not adress the explicit or implicit requirements for the job or the company, to the point it makes you wonder if the person understands the job at all?
-   Example: "we look for a C++ developer" -> "I have trained several AI models"
-
-### 3c. Company fit
-The LLM is presented with:
-- The job offer
-- the company research
-- The written letter
-is given the persona of the HR person who will evaulate the letter,
-and is asked:
-Does this letter match the style and tone of the company? Does it feel generic, or written for them?
-
-### 3c. User fit
-The LLM is presented with:
-- The letters from the top examples
-- The written letter
-And asked:
-Does the last letter match the previous ones? Does it look like it's written by the same hand? Does it pay attention to the same aspects? Does it highlight strengths and negotiate weaknesses in the same way? 
-
-## 4 Rewrite
-
-The LLM is presented with the letter and the feedbacks from the previous stages, and is asked to make any necesary adjustments. 

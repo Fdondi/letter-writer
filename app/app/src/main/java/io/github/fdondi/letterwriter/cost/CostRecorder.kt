@@ -1,11 +1,12 @@
 package io.github.fdondi.letterwriter.cost
 
-import io.github.fdondi.letterwriter.auth.AuthManager
+import io.github.fdondi.letterwriter.auth.AuthGateway
 import io.github.fdondi.letterwriter.auth.BigQueryAuth
 import io.github.fdondi.letterwriter.core.Json
 import io.github.fdondi.letterwriter.core.asDoubleOrNull
 import io.github.fdondi.letterwriter.core.asStringOrNull
 import io.github.fdondi.letterwriter.llm.UsageCollector
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,8 +37,8 @@ sealed interface CostSyncState {
  */
 class CostRecorder(
     private val queueFile: File,
-    private val auth: AuthManager,
-    private val bigQuery: BigQueryClient,
+    private val auth: AuthGateway,
+    private val bigQuery: BigQueryApi,
 ) {
     private val mutex = Mutex()
     private val _state = MutableStateFlow<CostSyncState>(CostSyncState.Idle)
@@ -110,18 +111,35 @@ class CostRecorder(
     /**
      * Sends queued rows to `letter_writer.api_costs`. With [savingUserId] set, every row gets
      * `document_saved` = (row user == saver), as in desktop `flush_on_letter_completion`.
+     *
+     * Never throws (it runs from screens and app start): a failure ends up in [state].
      */
-    suspend fun flush(savingUserId: String? = null) = mutex.withLock {
+    suspend fun flush(savingUserId: String? = null) {
+        try {
+            flushQueued(savingUserId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _state.value = CostSyncState.Failed("Cost upload failed: ${e.message ?: e::class.simpleName}")
+        }
+    }
+
+    private suspend fun flushQueued(savingUserId: String?) = mutex.withLock {
         val queue = readQueue()
         if (queue.isEmpty()) {
             _state.value = CostSyncState.Synced(Instant.now())
             return@withLock
         }
         _state.value = CostSyncState.Syncing
-        val token = when (val a = runCatching { auth.bigQueryAuth() }.getOrElse { e ->
+        val authResult = try {
+            auth.bigQueryAuth()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             _state.value = CostSyncState.Failed("BigQuery authorization failed: ${e.message}")
             return@withLock
-        }) {
+        }
+        val token = when (val a = authResult) {
             is BigQueryAuth.Token -> a.accessToken
             is BigQueryAuth.NeedsConsent -> {
                 _state.value = CostSyncState.Failed("Allow BigQuery access to upload ${queue.size} queued cost rows", a)
@@ -138,6 +156,8 @@ class CostRecorder(
         }
         val failed = try {
             bigQuery.insertAll(token, TABLE, rows)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             _state.value = CostSyncState.Failed("BigQuery insert failed: ${e.message}")
             return@withLock
@@ -218,12 +238,27 @@ class CostRecorder(
 
     private data class Queued(val insertId: String, val row: JsonObject)
 
+    /**
+     * Lines that don't parse (a write cut short by a crash or a full disk) are moved to
+     * `<queue>.bad` and skipped, so one broken line can't block every later upload.
+     */
     private fun readQueue(): List<Queued> {
         if (!queueFile.isFile) return emptyList()
-        return queueFile.readLines().filter { it.isNotBlank() }.map { line ->
-            val o = Json.parse(line) as JsonObject
-            Queued((o["insert_id"] as JsonPrimitive).content, o["row"] as JsonObject)
+        val good = ArrayList<Queued>()
+        val bad = ArrayList<String>()
+        for (line in queueFile.readLines()) {
+            if (line.isBlank()) continue
+            val parsed = runCatching {
+                val o = Json.parse(line) as JsonObject
+                Queued((o["insert_id"] as JsonPrimitive).content, o["row"] as JsonObject)
+            }.getOrNull()
+            if (parsed != null) good += parsed else bad += line
         }
+        if (bad.isNotEmpty()) {
+            File(queueFile.parentFile, queueFile.name + ".bad").appendText(bad.joinToString("") { it + "\n" })
+            writeQueue(good)
+        }
+        return good
     }
 
     private fun writeQueue(items: List<Queued>) {

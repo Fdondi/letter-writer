@@ -37,12 +37,29 @@ class FirebaseNotConfiguredException(detail: String) : IllegalStateException(
     "Firebase is not configured for this build ($detail). Run scripts/firebase/setup_android_firebase.sh, then rebuild.",
 )
 
-class AuthManager(private val context: Context) {
+/** The account the app runs as. [AuthManager] is the Google/Firebase one; tests use a fixed user. */
+interface AuthGateway {
+    val user: StateFlow<SignedInUser?>
+
+    /** Null when sign-in can work; otherwise why it can't (shown on the sign-in screen). */
+    val configurationProblem: String?
+
+    fun requireUser(): SignedInUser = user.value ?: throw IllegalStateException("Not signed in")
+
+    suspend fun signIn(activity: Activity): SignedInUser
+
+    fun signOut()
+
+    /** OAuth access token for the BigQuery REST API, scoped to the signed-in Google account. */
+    suspend fun bigQueryAuth(): BigQueryAuth
+}
+
+class AuthManager(private val context: Context) : AuthGateway {
     private val _user = MutableStateFlow<SignedInUser?>(null)
-    val user: StateFlow<SignedInUser?> = _user.asStateFlow()
+    override val user: StateFlow<SignedInUser?> = _user.asStateFlow()
 
     /** Null when the build lacks google-services.json or the web client id. */
-    val configurationProblem: String? = when {
+    override val configurationProblem: String? = when {
         FirebaseApp.getApps(context).isEmpty() -> "app/app/google-services.json is missing"
         BuildConfig.WEB_CLIENT_ID.isBlank() -> "letterwriter.webClientId is missing from app/local.properties"
         else -> null
@@ -61,9 +78,7 @@ class AuthManager(private val context: Context) {
         return FirebaseFirestore.getInstance(FirebaseApp.getInstance(), BuildConfig.FIRESTORE_DATABASE)
     }
 
-    fun requireUser(): SignedInUser = _user.value ?: throw IllegalStateException("Not signed in")
-
-    suspend fun signIn(activity: Activity): SignedInUser {
+    override suspend fun signIn(activity: Activity): SignedInUser {
         configurationProblem?.let { throw FirebaseNotConfiguredException(it) }
         val option = GetSignInWithGoogleOption.Builder(BuildConfig.WEB_CLIENT_ID).build()
         val request = GetCredentialRequest.Builder().addCredentialOption(option).build()
@@ -79,13 +94,12 @@ class AuthManager(private val context: Context) {
         return toSignedIn(firebaseUser).also { _user.value = it }
     }
 
-    fun signOut() {
+    override fun signOut() {
         if (configurationProblem == null) FirebaseAuth.getInstance().signOut()
         _user.value = null
     }
 
-    /** OAuth access token for the BigQuery REST API, scoped to the signed-in Google account. */
-    suspend fun bigQueryAuth(): BigQueryAuth {
+    override suspend fun bigQueryAuth(): BigQueryAuth {
         val request = AuthorizationRequest.builder()
             .setRequestedScopes(listOf(Scope(BIGQUERY_SCOPE)))
             .build()

@@ -12,6 +12,7 @@ enum class ModelRole(val value: String) {
     LETTER_DRAFT("letter_draft"),
     LETTER_REFINE("letter_refine"),
     TRANSLATION("translation"),
+    PARAGRAPH("paragraph"),
     ;
 
     companion object {

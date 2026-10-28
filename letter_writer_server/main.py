@@ -60,7 +60,7 @@ from letter_writer_server.core.harness import (
     llm_disabled_body,
 )
 
-from letter_writer_server.api import admin_event_log, auth, phases, personal_data, research, documents, costs, misc, phase_feedback, autocomplete, agentic, paragraph, job_capture, harness
+from letter_writer_server.api import admin_event_log, auth, phases, personal_data, research, documents, costs, misc, phase_feedback, autocomplete, agentic, paragraph, job_capture, harness, opportunities
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -133,6 +133,7 @@ app.include_router(phase_feedback.router, prefix="/api/phase-feedback", tags=["p
 app.include_router(costs.router, prefix="/api/costs", tags=["costs"])
 app.include_router(misc.router, prefix="/api", tags=["misc"])
 app.include_router(job_capture.router, prefix="/api/job-capture", tags=["job_capture"])
+app.include_router(opportunities.router, prefix="/api/opportunities", tags=["opportunities"])
 app.include_router(admin_event_log.router, prefix="/api/admin/event-log", tags=["admin_event_log"])
 app.include_router(harness.router, prefix="/api/harness", tags=["harness"])
 

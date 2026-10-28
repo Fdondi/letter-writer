@@ -3,6 +3,10 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Keeps the process alive while model calls run (KeepAliveService). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".LetterWriterApp"
@@ -35,6 +39,29 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
+
+        <!-- Queues a job the browser extension handed over (`letterwriter://capture?…`). -->
+        <activity
+            android:name=".QueueCaptureActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="capture"
+                    android:scheme="letterwriter" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".core.KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

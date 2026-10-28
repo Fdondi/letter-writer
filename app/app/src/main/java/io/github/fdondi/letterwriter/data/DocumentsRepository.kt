@@ -30,31 +30,55 @@ data class StoredDocument(val id: String, val data: JsonObject) {
 
 data class SimilarDocument(val document: StoredDocument, val similarity: Double)
 
+/** Previous examples (`documents`) and the per-letter records saved with them. Tests use an in-memory one. */
+interface DocumentStore {
+    suspend fun list(sub: String, limit: Long = 50): List<StoredDocument>
+
+    suspend fun get(sub: String, id: String): StoredDocument?
+
+    suspend fun delete(sub: String, id: String)
+
+    suspend fun upsert(sub: String, data: JsonObject): StoredDocument
+
+    suspend fun saveFeedback(sub: String, documentId: String, letterText: String, aiLetters: JsonArray): Int
+
+    suspend fun savePhaseDraftFeedbackSnapshot(
+        sub: String,
+        sessionId: String,
+        documentId: String?,
+        vendor: String,
+        feedback: JsonObject,
+        feedbackOverrides: JsonObject?,
+    ): String
+
+    suspend fun similar(sub: String, jobText: String, limit: Int = 7): List<SimilarDocument>
+}
+
 /**
  * Port of the document functions in `firestore_store.py`.
  * Writes use Firestore-native values (Timestamp, vector) so the desktop reads them unchanged.
  */
 class DocumentsRepository(
     private val db: () -> FirebaseFirestore,
-    private val embeddings: Embeddings,
-) {
+    private val embeddings: EmbeddingService,
+) : DocumentStore {
     private fun documents(): CollectionReference = db().collection("documents")
 
-    suspend fun list(sub: String, limit: Long = 50): List<StoredDocument> =
+    override suspend fun list(sub: String, limit: Long): List<StoredDocument> =
         documents().whereEqualTo("user_id", sub)
             .orderBy("created_at", Query.Direction.DESCENDING)
             .limit(limit)
             .get().await()
             .documents.map { serialize(it.id, it.data) }
 
-    suspend fun get(sub: String, id: String): StoredDocument? {
+    override suspend fun get(sub: String, id: String): StoredDocument? {
         val snap = documents().document(id).get().await()
         if (!snap.exists()) return null
         if (snap.getString("user_id") != sub) throw SecurityException("Document $id belongs to a different user")
         return serialize(snap.id, snap.data)
     }
 
-    suspend fun delete(sub: String, id: String) {
+    override suspend fun delete(sub: String, id: String) {
         get(sub, id) ?: return
         documents().document(id).delete().await()
     }
@@ -67,7 +91,7 @@ class DocumentsRepository(
      * omits blocks/autocomplete/notes resets them. Here an update of an existing
      * document writes only the keys present in [data], plus the derived fields.
      */
-    suspend fun upsert(sub: String, data: JsonObject): StoredDocument {
+    override suspend fun upsert(sub: String, data: JsonObject): StoredDocument {
         val now = Timestamp.now()
         val companyRaw = data["company_name"].asStringOrNull()?.takeIf { it.isNotEmpty() }
             ?: data["company"].asStringOrNull()?.takeIf { it.isNotEmpty() }
@@ -174,7 +198,7 @@ class DocumentsRepository(
     }
 
     /** `save_feedback`: one `feedbacks` record per ai_letters entry. */
-    suspend fun saveFeedback(sub: String, documentId: String, letterText: String, aiLetters: JsonArray): Int {
+    override suspend fun saveFeedback(sub: String, documentId: String, letterText: String, aiLetters: JsonArray): Int {
         val now = Timestamp.now()
         var saved = 0
         for (entry in aiLetters.mapNotNull { it.asObjectOrNull() }) {
@@ -207,7 +231,7 @@ class DocumentsRepository(
     }
 
     /** `save_phase_draft_feedback_snapshot`. */
-    suspend fun savePhaseDraftFeedbackSnapshot(
+    override suspend fun savePhaseDraftFeedbackSnapshot(
         sub: String,
         sessionId: String,
         documentId: String?,
@@ -236,7 +260,7 @@ class DocumentsRepository(
      * Replaces Firestore `find_nearest` (COSINE, limit 7), which the Android SDK lacks:
      * the user's documents are scored on the device. Documents without a vector are skipped.
      */
-    suspend fun similar(sub: String, jobText: String, limit: Int = 7): List<SimilarDocument> {
+    override suspend fun similar(sub: String, jobText: String, limit: Int): List<SimilarDocument> {
         val query = embeddings.embed(jobText)
         val snaps = documents().whereEqualTo("user_id", sub).get().await().documents
         return snaps.mapNotNull { s ->

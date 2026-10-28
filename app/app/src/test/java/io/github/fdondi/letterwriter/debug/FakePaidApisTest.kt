@@ -57,7 +57,6 @@ class FakePaidApisTest {
         val line = repoRoot.resolve("letter_writer_web/public/app-version.txt").readLines().first { it.isNotBlank() }
         val version = line.substringBefore(" - ").trim()
         assertEquals(version, BuildConfig.VERSION_NAME)
-        assertEquals("0.76.1", version)
     }
 
     @Test

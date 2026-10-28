@@ -92,7 +92,8 @@ export default function AuthButton() {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "8px 16px" }}>
       <div style={{ fontSize: "14px", color: "#333" }}>
-        <strong>{user.name || user.email}</strong>
+        {/* The id is the Google `sub`: LW_USER_ID for the opportunity batch. */}
+        <strong title={user.id ? `Account id: ${user.id}` : undefined}>{user.name || user.email}</strong>
         {user.provider && (
           <span style={{ fontSize: "12px", color: "#666", marginLeft: "8px" }}>
             ({user.provider})

@@ -118,6 +118,31 @@ class LetterGeneration(private val prompts: Prompts) {
         throw IllegalStateException("Draft letter generation failed after $maxRetries attempts: ${detail.take(500)}")
     }
 
+    /**
+     * `regenerate_paragraph`: rewrite paragraph [index] of [paragraphs] so it fits between the
+     * others, addressing [feedback] (see [regenerateFeedback]).
+     */
+    suspend fun regenerateParagraph(paragraphs: List<String>, index: Int, feedback: String, inputs: LetterInputs, client: LlmClient): String {
+        require(index in paragraphs.indices) { "paragraph index $index out of range (0..${paragraphs.size - 1})" }
+        val marked = paragraphs.withIndex().joinToString("\n\n") { (i, p) -> if (i == index) ">>>\n$p\n<<<" else p }
+        val additional = if (inputs.additionalUserInfo.isNotBlank()) prompts.render("generation/draft_additional_info.txt", "info" to inputs.additionalUserInfo) else ""
+        val system = prependLanguagePrefix(
+            prompts.render(
+                "generation/paragraph_regenerate_system.txt",
+                "style_instructions" to inputs.styleInstructions.ifEmpty { defaultStyle() },
+                "additional_context" to additional,
+            ),
+            inputs.languagePrefix,
+        )
+        val user = prompts.render(
+            "generation/paragraph_regenerate_user.txt",
+            "letter" to marked,
+            "feedback" to feedback.trim().ifEmpty { "(none given: write a stronger alternative)" },
+        )
+        val text = client.call(ModelRole.PARAGRAPH, system, listOf(user), systemCachePrefix = generationContext(inputs))
+        return text.trim().replace(">>>", "").replace("<<<", "").trim()
+    }
+
     /** `fancy_letter`. */
     suspend fun fancy(letter: String, client: LlmClient): String =
         client.call(
@@ -212,6 +237,29 @@ class LetterGeneration(private val prompts: Prompts) {
             "User Fit Feedback" to "user_fit",
             "Human Feedback" to "human",
         )
+
+        /** `split_letter_paragraphs`: blank-line separated, like the web's `splitIntoParagraphs`. */
+        fun splitParagraphs(text: String): List<String> =
+            text.trim().split(Regex("\\n\\s*\\n")).map { it.trim() }.filter { it.isNotEmpty() }
+
+        /**
+         * `format_regenerate_feedback`: the user's own text first, then each comment they picked as
+         * `- [topic] observation (about: "quote")`.
+         */
+        fun regenerateFeedback(userFeedback: String, notes: List<JsonObject>): String {
+            val parts = ArrayList<String>()
+            if (userFeedback.isNotBlank()) parts += userFeedback.trim()
+            for (note in notes) {
+                val obs = note.textOrEmpty("observation").trim()
+                if (obs.isEmpty()) continue
+                val topic = note.textOrEmpty("topic").trim()
+                val quote = note.textOrEmpty("quote").trim()
+                var line = if (topic.isNotEmpty()) "- [$topic] $obs" else "- $obs"
+                if (quote.isNotEmpty()) line += " (about: \"$quote\")"
+                parts += line
+            }
+            return parts.joinToString("\n")
+        }
 
         /** `_prepend_language_prefix`. */
         fun prependLanguagePrefix(system: String, languagePrefix: String): String {

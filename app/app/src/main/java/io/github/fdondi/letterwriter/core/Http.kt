@@ -11,7 +11,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class HttpStatusException(
@@ -73,15 +72,19 @@ object Http {
                         cont.resumeWithException(IOException("$service request failed: ${e.message}", e))
                     }
 
+                    // Reading the body can still fail (connection reset, read timeout). OkHttp only logs
+                    // an exception thrown from here, so without the catch the caller would wait forever,
+                    // and anything other than an IOException would crash the app on OkHttp's thread.
                     override fun onResponse(call: Call, response: Response) {
-                        response.use {
-                            val text = it.body.string()
-                            if (it.isSuccessful) {
-                                cont.resume(text)
-                            } else {
-                                cont.resumeWithException(HttpStatusException(service, it.code, text))
+                        val outcome = try {
+                            response.use {
+                                val text = it.body.string()
+                                if (it.isSuccessful) Result.success(text) else Result.failure(HttpStatusException(service, it.code, text))
                             }
+                        } catch (e: Throwable) {
+                            Result.failure(IOException("$service response could not be read: ${e.message ?: e::class.simpleName}", e))
                         }
+                        cont.resumeWith(outcome)
                     }
                 },
             )

@@ -15,11 +15,26 @@ import kotlinx.serialization.json.JsonPrimitive
 /** Outcome of a write; [warning] is set when the name vector could not be stored (the desktop only logs this). */
 data class CompanyWriteResult(val id: String, val warning: String?)
 
+/** The shared `companies` research cache. Tests use an in-memory one. */
+interface CompanyStore {
+    suspend fun get(companyName: String): JsonObject?
+
+    suspend fun save(companyName: String, data: JsonObject): CompanyWriteResult
+
+    suspend fun saveAlias(aliasCompanyName: String, canonicalDocId: String, canonicalCompanyName: String?): CompanyWriteResult
+
+    suspend fun getPoc(companyName: String, pocName: String): JsonObject?
+
+    suspend fun savePoc(companyName: String, pocName: String, reports: JsonObject): String
+
+    suspend fun searchSimilar(companyName: String, limit: Int = 5): List<JsonObject>
+}
+
 /** Port of the shared `companies` research cache functions in `firestore_store.py`. */
 class CompaniesRepository(
     private val db: () -> FirebaseFirestore,
-    private val embeddings: Embeddings,
-) {
+    private val embeddings: EmbeddingService,
+) : CompanyStore {
     private fun companies(): CollectionReference = db().collection("companies")
 
     suspend fun resolveDocId(docId: String, maxHops: Int = 3): String {
@@ -35,7 +50,7 @@ class CompaniesRepository(
     }
 
     /** `get_company_info`, with alias resolution. */
-    suspend fun get(companyName: String): JsonObject? {
+    override suspend fun get(companyName: String): JsonObject? {
         require(companyName.isNotEmpty()) { "company_name is required" }
         val requested = normalizeDocId(companyName)
         val id = resolveDocId(requested)
@@ -50,7 +65,7 @@ class CompaniesRepository(
     }
 
     /** `save_company_info`: merges, never persists `reports.*.top_docs`. */
-    suspend fun save(companyName: String, data: JsonObject): CompanyWriteResult {
+    override suspend fun save(companyName: String, data: JsonObject): CompanyWriteResult {
         require(companyName.isNotEmpty()) { "company_name is required" }
         val id = normalizeDocId(companyName)
         val ref = companies().document(id)
@@ -73,7 +88,7 @@ class CompaniesRepository(
     }
 
     /** `save_company_alias`. */
-    suspend fun saveAlias(aliasCompanyName: String, canonicalDocId: String, canonicalCompanyName: String?): CompanyWriteResult {
+    override suspend fun saveAlias(aliasCompanyName: String, canonicalDocId: String, canonicalCompanyName: String?): CompanyWriteResult {
         require(aliasCompanyName.isNotEmpty() && canonicalDocId.isNotEmpty()) { "alias_company_name and canonical_doc_id are required" }
         val aliasId = normalizeDocId(aliasCompanyName)
         val root = resolveDocId(canonicalDocId)
@@ -93,7 +108,7 @@ class CompaniesRepository(
     }
 
     /** `get_poc_info`: the `pocs.<key>` entry of the (alias-resolved) company doc. */
-    suspend fun getPoc(companyName: String, pocName: String): JsonObject? {
+    override suspend fun getPoc(companyName: String, pocName: String): JsonObject? {
         require(companyName.isNotEmpty() && pocName.isNotEmpty()) { "company_name and poc_name are required" }
         val id = resolveDocId(normalizeDocId(companyName))
         val snap = companies().document(id).get().await()
@@ -105,7 +120,7 @@ class CompaniesRepository(
      * `save_poc_info`. The desktop writes to the unresolved company id while reading
      * through aliases; the phone writes to the resolved id so the next read finds it.
      */
-    suspend fun savePoc(companyName: String, pocName: String, reports: JsonObject): String {
+    override suspend fun savePoc(companyName: String, pocName: String, reports: JsonObject): String {
         require(companyName.isNotEmpty() && pocName.isNotEmpty()) { "company_name and poc_name are required" }
         val id = resolveDocId(normalizeDocId(companyName))
         val now = Timestamp.now()
@@ -129,7 +144,7 @@ class CompaniesRepository(
      * shared collection is scored on the device (over-fetch max(limit*3, 10), then
      * flatten aliases to canonical docs and dedupe).
      */
-    suspend fun searchSimilar(companyName: String, limit: Int = 5): List<JsonObject> {
+    override suspend fun searchSimilar(companyName: String, limit: Int): List<JsonObject> {
         if (companyName.isEmpty()) return emptyList()
         val query = embeddings.embed(companyName)
         val snaps = companies().get().await().documents

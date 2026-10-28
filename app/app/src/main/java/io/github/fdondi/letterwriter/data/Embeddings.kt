@@ -12,12 +12,19 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlin.math.sqrt
 
+/** Text to vectors for similar-letter search and quote matching. Tests use a deterministic fake. */
+interface EmbeddingService {
+    suspend fun embedBatch(texts: List<String>): List<DoubleArray>
+}
+
+suspend fun EmbeddingService.embed(text: String): DoubleArray = embedBatch(listOf(text)).first()
+
 /**
  * OpenAI `text-embedding-3-small`, as `vector_store.embed_batch`.
  * The desktop does not record embedding spend in the cost table; neither does the phone.
  */
-class Embeddings(private val apiKey: () -> String) {
-    suspend fun embedBatch(texts: List<String>): List<DoubleArray> {
+class Embeddings(private val apiKey: () -> String) : EmbeddingService {
+    override suspend fun embedBatch(texts: List<String>): List<DoubleArray> {
         if (texts.isEmpty()) return emptyList()
         val body = buildJsonObject {
             put("model", MODEL)
@@ -35,8 +42,6 @@ class Embeddings(private val apiKey: () -> String) {
         }
     }
 
-    suspend fun embed(text: String): DoubleArray = embedBatch(listOf(text)).first()
-
     companion object {
         const val MODEL = "text-embedding-3-small"
         private const val URL = "https://api.openai.com/v1/embeddings"
@@ -44,6 +49,7 @@ class Embeddings(private val apiKey: () -> String) {
         /** Firestore `Vector` fields, or plain number arrays (the desktop stores alias vectors that way). */
         fun vectorOf(raw: Any?): DoubleArray? = when (raw) {
             is VectorValue -> raw.toArray()
+            is DoubleArray -> raw
             is List<*> -> raw.map { (it as? Number)?.toDouble() ?: return null }.toDoubleArray()
             else -> null
         }

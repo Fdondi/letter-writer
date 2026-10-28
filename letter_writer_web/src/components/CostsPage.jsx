@@ -153,6 +153,7 @@ export default function CostsPage() {
       mistral: "Mistral",
       grok: "xAI Grok",
       deepseek: "DeepSeek",
+      claude_code: "Claude Code (subscription)",
       google_translate: "Google Translate"
     };
     return names[vendor] || vendor;

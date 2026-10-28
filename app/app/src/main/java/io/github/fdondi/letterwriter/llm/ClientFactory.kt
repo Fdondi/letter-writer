@@ -30,6 +30,9 @@ class ClientFactory(
 
     fun hasKey(vendor: ModelVendor): Boolean = keys.has(keyField(vendor))
 
+    /** [create] would succeed: a stand-in client is set, or the vendor's key is saved. */
+    fun canCreate(vendor: ModelVendor): Boolean = debugClient != null || hasKey(vendor)
+
     companion object {
         fun keyField(vendor: ModelVendor): String =
             when (vendor) {

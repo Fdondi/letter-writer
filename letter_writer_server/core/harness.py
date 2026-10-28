@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
-from letter_writer.page_templates import attach_jobs_ch_company_about, extract_from_captured_page
+from letter_writer.page_templates import extract_from_captured_page
 
 logger = logging.getLogger(__name__)
 
@@ -290,7 +290,6 @@ def apply_harness_job_capture(session: Any, payload: Dict[str, Any]) -> Dict[str
     title = str(payload.get("title") or "").strip()
     url = str(payload.get("url") or "").strip()
     parsed = extract_from_captured_page(html, url)
-    attach_jobs_ch_company_about(parsed)
     focused = str(parsed.get("job_text") or "").strip()
     if parsed.get("template"):
         job_text = focused or visible or html

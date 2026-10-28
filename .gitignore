@@ -27,6 +27,18 @@ data_backup/
 # Firestore emulator
 firestore-debug.log
 
+# Browser extension packaging artifacts (extensions/job-capture/package.sh); keys/ holds the
+# CRX signing key — local only, but back it up: losing it changes the extension ID
+extensions/job-capture/dist/
+extensions/job-capture/keys/
+
 temp/
 firepit-log.txt
 
+
+# Host virtualenv for the opportunity batch (docs/OPPORTUNITY_PIPELINE.md)
+.venv/
+
+# Email experiments: real mail kept on this machine only (experimental/email/README.md)
+experimental/email/samples/
+experimental/email/review/

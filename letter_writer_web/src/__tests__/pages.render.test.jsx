@@ -18,6 +18,7 @@ import VendorFlowPage from "../pages/VendorFlowPage";
 import AgenticFlowPage from "../pages/AgenticFlowPage";
 import AutocompleteFlowPage from "../pages/AutocompleteFlowPage";
 import ParagraphFlowPage from "../pages/ParagraphFlowPage";
+import JobsPage from "../pages/JobsPage";
 import LetterTabs from "../components/LetterTabs";
 import PhaseFlow from "../components/PhaseFlow";
 import AgenticFlow from "../components/AgenticFlow";
@@ -68,6 +69,7 @@ function renderApp(initialPath = "/") {
               <Route path="/flows/agentic" element={<AgenticFlowPage />} />
               <Route path="/flows/autocomplete" element={<AutocompleteFlowPage />} />
               <Route path="/flows/paragraph" element={<ParagraphFlowPage />} />
+              <Route path="/opportunities" element={<JobsPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
@@ -135,6 +137,13 @@ function installFetchMock({ authenticated = true } = {}) {
     }
     if (String(url).includes("/api/documents/")) {
       return jsonResponse({ documents: [] });
+    }
+    if (String(url).includes("/api/opportunities/")) {
+      return jsonResponse({
+        opportunities: [
+          { id: "o1", status: "ready", title: "Senior Engineer", company: "Fixture AG", url: "https://example.com/j/1", vendors_done: ["openai", "claude_code"], input_needed_count: 2, fit_summary: { matched: ["C++"], gaps: [] } },
+        ],
+      });
     }
     if (String(url).includes("/api/phases/backups/")) {
       return jsonResponse({ backups: [] });
@@ -232,6 +241,13 @@ describe("pages render smoke (build gate)", () => {
       path: "/flows/autocomplete",
       assert: async () => {
         expect(screen.getByText(/Autocomplete letter/i)).toBeInTheDocument();
+      },
+    },
+    {
+      path: "/opportunities",
+      assert: async () => {
+        expect(await screen.findByText("Senior Engineer")).toBeInTheDocument();
+        expect(screen.getByRole("tab", { name: /Ready \(1\)/ })).toHaveAttribute("aria-selected", "true");
       },
     },
     {

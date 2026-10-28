@@ -8,30 +8,39 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import io.github.fdondi.letterwriter.AppGraph
 import io.github.fdondi.letterwriter.ui.intake.IntakeScreen
 
+/** Tabs of [WriteScreen], as ints so the shell can keep the selection across rotations. */
+object WriteTab {
+    const val JOB = 0
+    const val LETTERS = 1
+    const val FINAL = 2
+}
+
 /** The letter in progress: job intake, the vendor columns, and the assembled final letter. */
 @Composable
-fun WriteScreen(graph: AppGraph, modifier: Modifier = Modifier) {
+fun WriteScreen(
+    graph: AppGraph,
+    tab: Int,
+    onTab: (Int) -> Unit,
+    onSentToPipeline: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val session by graph.flow.session.collectAsState()
-    var tab by rememberSaveable { mutableIntStateOf(0) }
     val hasSession = session != null
-    if (!hasSession) tab = 0
+    val shown = if (hasSession) tab else WriteTab.JOB
     Column(modifier) {
-        PrimaryTabRow(selectedTabIndex = tab) {
-            Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Job") })
-            Tab(selected = tab == 1, enabled = hasSession, onClick = { tab = 1 }, text = { Text("Letters") })
-            Tab(selected = tab == 2, enabled = hasSession, onClick = { tab = 2 }, text = { Text("Final") })
+        PrimaryTabRow(selectedTabIndex = shown) {
+            Tab(selected = shown == WriteTab.JOB, onClick = { onTab(WriteTab.JOB) }, text = { Text("Job") })
+            Tab(selected = shown == WriteTab.LETTERS, enabled = hasSession, onClick = { onTab(WriteTab.LETTERS) }, text = { Text("Letters") })
+            Tab(selected = shown == WriteTab.FINAL, enabled = hasSession, onClick = { onTab(WriteTab.FINAL) }, text = { Text("Final") })
         }
         val content = Modifier.fillMaxSize()
-        when (tab) {
-            0 -> IntakeScreen(graph, onStartWriting = { tab = 1 }, modifier = content)
-            1 -> VendorFlowScreen(graph, onGoToFinal = { tab = 2 }, modifier = content)
+        when (shown) {
+            WriteTab.JOB -> IntakeScreen(graph, onStartWriting = { onTab(WriteTab.LETTERS) }, onSentToPipeline = onSentToPipeline, modifier = content)
+            WriteTab.LETTERS -> VendorFlowScreen(graph, onGoToFinal = { onTab(WriteTab.FINAL) }, modifier = content)
             else -> AssemblyScreen(graph, content)
         }
     }

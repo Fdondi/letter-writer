@@ -72,6 +72,9 @@ Done. Remaining console steps:
      registered SHA-1. Without it, sign-in fails with UNREGISTERED_ON_API_CONSOLE.
      Copy the "Web client ID" it shows into app/local.properties as
      letterwriter.webClientId=<id>
+     The web client is a normal sign-in client: leave "Use this client for an
+     AI-powered agent" unchecked (that option is for agents calling Google APIs
+     via MCP, not for user sign-in).
   2. https://console.cloud.google.com/auth/audience?project=$PROJECT
      Keep "Testing", add your Google account as a test user.
   3. https://console.cloud.google.com/auth/scopes?project=$PROJECT

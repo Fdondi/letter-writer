@@ -69,6 +69,34 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Job pipeline shared with the desktop batch (OPPORTUNITY_PIPELINE_PLAN.md §3). The phone
+    // captures postings and triages; drafting, ready and failed belong to the batch (service
+    // account), which also writes the drafts (state/session). alert_messages stays server-only.
+    function phoneSetsStatus(status) {
+      return status in ['proposed', 'approved', 'skipped', 'captured', 'done', 'applied'];
+    }
+
+    match /opportunities/{oppId} {
+      // The app sends a job in a transaction that first reads its document, which does not exist
+      // yet for a new job (resource == null). Ids are hashes, so a miss reveals nothing.
+      allow get: if resource == null || isOwner(resource.data.user_id);
+      allow list: if isOwner(resource.data.user_id);
+      allow create: if isOwner(request.resource.data.user_id) && isKnownUser()
+        && request.resource.data.status in ['approved', 'captured'];
+      allow update: if isOwner(resource.data.user_id)
+        && resource.data.status != 'drafting'
+        && phoneSetsStatus(request.resource.data.status)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+             ['status', 'capture', 'skip_reason', 'updated_at', 'vendors_requested', 'url', 'document_id',
+              'rewrite_rounds', 'final_feedback']);
+      allow delete: if false;
+
+      match /state/{docId} {
+        allow read: if isOwner(get(/databases/$(database)/documents/opportunities/$(oppId)).data.user_id);
+        allow write: if false;
+      }
+    }
+
     // Everything else (sessions, admin data) stays server-only.
     match /{document=**} {
       allow read, write: if false;

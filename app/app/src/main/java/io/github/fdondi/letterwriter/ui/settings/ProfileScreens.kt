@@ -201,7 +201,7 @@ fun InstructionsScreen(graph: AppGraph, modifier: Modifier = Modifier) {
 
 @Composable
 private fun InstructionEditor(graph: AppGraph, kind: InstructionKind, profile: io.github.fdondi.letterwriter.data.UserProfile) {
-    val state = graph.profiles.instructionState(profile, kind)
+    val state = graph.instructionDefaults.state(profile, kind)
     val scope = rememberCoroutineScope()
     val save = rememberSaver()
     var text by remember(state.effective) { mutableStateOf(state.effective) }

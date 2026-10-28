@@ -1,0 +1,5 @@
+From: {{sender}}
+Subject: {{subject}}
+Date: {{date}}
+
+{{body}}

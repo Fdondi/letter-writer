@@ -75,6 +75,8 @@ android {
     }
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Robolectric runs the Compose UI tests (AssemblyScreenTest) on the JVM.
+        unitTests.isIncludeAndroidResources = true
     }
 }
 
@@ -115,10 +117,17 @@ val syncSharedAssets = tasks.register<SyncSharedAssets>("syncSharedAssets") {
     clientsDir.set(repoRoot.resolve("letter_writer/clients"))
 }
 
-/** Fixture replies for the debug harness. Packaged only into debug builds, under assets/fixtures/. */
+/**
+ * Fixture replies under assets/fixtures/: the debug harness (debug builds only, on a real account)
+ * and demo mode (every build: made-up account, nothing leaves the phone). Includes the UI harness
+ * jobs as demo_opportunities.json.
+ */
 abstract class SyncDebugFixtures : DefaultTask() {
     @get:InputDirectory
     abstract val fixturesDir: DirectoryProperty
+
+    @get:InputFile
+    abstract val demoJobs: RegularFileProperty
 
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
@@ -130,6 +139,7 @@ abstract class SyncDebugFixtures : DefaultTask() {
     fun sync() {
         fs.sync {
             from(fixturesDir)
+            from(demoJobs) { rename { "demo_opportunities.json" } }
             into(outputDir.get().dir("fixtures"))
         }
     }
@@ -137,14 +147,13 @@ abstract class SyncDebugFixtures : DefaultTask() {
 
 val syncDebugFixtures = tasks.register<SyncDebugFixtures>("syncDebugFixtures") {
     fixturesDir.set(rootDir.resolve("debug/fixtures"))
+    demoJobs.set(repoRoot.resolve("ui-harness/fixtures/opportunities/opportunities.json"))
 }
 
 androidComponents {
     onVariants { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(syncSharedAssets, SyncSharedAssets::outputDir)
-        if (variant.name.contains("debug")) {
-            variant.sources.assets?.addGeneratedSourceDirectory(syncDebugFixtures, SyncDebugFixtures::outputDir)
-        }
+        variant.sources.assets?.addGeneratedSourceDirectory(syncDebugFixtures, SyncDebugFixtures::outputDir)
     }
 }
 
@@ -183,6 +192,9 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.androidx.compose.ui.test.manifest)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

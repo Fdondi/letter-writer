@@ -33,8 +33,54 @@
   </head>
   <body>
     <h1>Letter Writer Capture</h1>
+    <h2>Queue jobs (direct to Firestore)</h2>
     <p>
-      Captured pages are sent to this origin, then Letter Writer opens with
+      With queueing on (the checkbox below), sending a page writes the job straight to Firestore —
+      like the phone app — and the desktop batch drafts it on its next run. No local server
+      needed. This needs a one-time Google sign-in with the same account the phone app uses.
+      On browsers without extension sign-in (Firefox for Android) the page is handed to the
+      Letter Writer app instead, which queues the job itself.
+    </p>
+    <p class="status" id="auth-status">Checking sign-in…</p>
+    <p>
+      <button id="sign-in" type="button">Sign in with Google</button>
+      <button id="sign-out" type="button" hidden>Sign out</button>
+    </p>
+    <details style="margin-top: 0.9rem">
+      <summary>One-time setup (Google Cloud console)</summary>
+      <ol style="line-height: 1.6">
+        <li>
+          Google Cloud Console → project <code>gen-lang-client-0535858734</code> → APIs &amp;
+          Services → Credentials → this OAuth 2.0 web client (the one Firebase Auth's Google
+          provider uses — the "Web client ID" under Firebase → Authentication → Sign-in method →
+          Google; not the Android client, not the desktop app's client; leave "Use this client for
+          an AI-powered agent" unchecked):
+          <code id="setup-client"></code>
+          → add this redirect URI (exactly, no trailing slash):
+          <code id="setup-redirect"></code>
+        </li>
+        <li>Then click <em>Sign in with Google</em> above and pick the same account as the phone app.</li>
+      </ol>
+      <p style="font-size: 0.9rem; opacity: 0.85">
+        No Firebase console step: the extension signs in through the Firebase Auth REST API, and
+        the authorized-domains list is only enforced for the Firebase JS SDK and the hosted auth
+        handler — not for REST calls. (That field also rejects <code>chrome-extension://…</code> and
+        <code>moz-extension://…</code> entries: it wants a domain name.)
+      </p>
+      <p style="font-size: 0.9rem; opacity: 0.85">
+        The redirect URI never changes — register it once. On Firefox the label is the SHA-1 of
+        the add-on ID in the manifest (<code>browser_specific_settings.gecko.id</code>), so it is
+        the same whether the add-on is loaded unpackaged or installed signed, in any profile, and
+        across updates and reinstalls. On Chrome/Edge it is keyed to the extension ID, which the
+        signing key in <code>keys/</code> pins for packaged installs (an unpacked load gets a
+        path-derived ID, hence a different URI — register the one shown here for the copy you
+        installed). If sign-in fails with <code>redirect_uri_mismatch</code>, the URI is not
+        registered (exactly, no trailing slash) or sits on the wrong client.
+      </p>
+    </details>
+    <h2 style="margin-top: 1.6rem">Stash flow (app origin)</h2>
+    <p>
+      With queueing off, captured pages are sent to this origin, then Letter Writer opens with
       <code>?capture=</code> so extraction can run in your logged-in session.
     </p>
     <p>
@@ -50,9 +96,19 @@
         required
         placeholder="https://localhost:8443"
       />
+      <label for="queue-jobs" style="font-weight: 400; margin-top: 0.9rem">
+        <input type="checkbox" id="queue-jobs" style="width: auto" />
+        Queue captured jobs directly in Firestore (like the phone app)
+      </label>
+      <p style="font-size: 0.9rem; opacity: 0.85">
+        On: sending a page creates or updates the job in the pipeline and the desktop drafts it
+        on its next run — no intake tab, no local server needed. Off: the page is sent to the app
+        origin above and Letter Writer opens with it so you can review the extraction first.
+      </p>
       <button type="submit">Save</button>
     </form>
     <p class="status" id="status" hidden></p>
+    <script src="firestore.js"></script>
     <script src="options.js"></script>
   </body>
 </html>

@@ -8,10 +8,16 @@ from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+# These call the real vendor APIs and cost money: opt-in only (LW_LIVE_API_TESTS=1).
+live_api = pytest.mark.skipif(
+    os.getenv("LW_LIVE_API_TESTS") != "1", reason="live API call; set LW_LIVE_API_TESTS=1 to run"
+)
+
 # Test data
 SYSTEM_PROMPT = "You are a helpful assistant. Keep responses brief and to the point."
 USER_MESSAGE = "Hello, how are you today?"
 
+@live_api
 def test_openai_client_tiny_no_search():
     """Test OpenAI client with tiny model without search"""
     client = get_client(ModelVendor.OPENAI)
@@ -25,6 +31,7 @@ def test_openai_client_tiny_no_search():
     assert len(response) > 0
     logger.info("OpenAI tiny no search response: %s...", response[:100])
 
+@live_api
 def test_openai_client_tiny_with_search():
     """Test OpenAI client with tiny model with search"""
     client = get_client(ModelVendor.OPENAI)
@@ -38,6 +45,7 @@ def test_openai_client_tiny_with_search():
     assert len(response) > 0
     logger.info("OpenAI tiny with search response: %s...", response[:100])
 
+@live_api
 def test_anthropic_client_tiny_no_search():
     """Test Anthropic client with tiny model without search"""
     client = get_client(ModelVendor.ANTHROPIC)
@@ -51,6 +59,7 @@ def test_anthropic_client_tiny_no_search():
     assert len(response) > 0
     logger.info("Anthropic tiny no search response: %s...", response[:100])
 
+@live_api
 def test_anthropic_client_tiny_with_search():
     """Test Anthropic client with tiny model with search"""
     client = get_client(ModelVendor.ANTHROPIC)
@@ -64,6 +73,7 @@ def test_anthropic_client_tiny_with_search():
     assert len(response) > 0
     logger.info("Anthropic tiny with search response: %s...", response[:100])
 
+@live_api
 def test_gemini_client_tiny_no_search():
     """Test Gemini client with tiny model without search"""
     client = get_client(ModelVendor.GEMINI)
@@ -77,6 +87,7 @@ def test_gemini_client_tiny_no_search():
     assert len(response) > 0
     logger.info("Gemini tiny no search response: %s...", response[:100])
 
+@live_api
 def test_gemini_client_tiny_with_search():
     """Test Gemini client with tiny model with search"""
     client = get_client(ModelVendor.GEMINI)
@@ -90,6 +101,7 @@ def test_gemini_client_tiny_with_search():
     assert len(response) > 0
     logger.info("Gemini tiny with search response: %s...", response[:100])
 
+@live_api
 def test_mistral_client_tiny_no_search():
     """Test Mistral client with tiny model without search"""
     # Skip if MISTRAL_API_KEY is not set
@@ -107,6 +119,7 @@ def test_mistral_client_tiny_no_search():
     assert len(response) > 0
     logger.info("Mistral tiny no search response: %s...", response[:100])
 
+@live_api
 def test_mistral_client_tiny_with_search():
     """Test Mistral client with tiny model with search"""
     # Skip if MISTRAL_API_KEY is not set
@@ -124,6 +137,7 @@ def test_mistral_client_tiny_with_search():
     assert len(response) > 0
     logger.info("Mistral tiny with search response: %s...", response[:100])
 
+@live_api
 def test_grok_client_tiny_no_search():
     """Test Grok client with tiny model without search"""
     # Skip if XAI_API_KEY is not set
@@ -141,6 +155,7 @@ def test_grok_client_tiny_no_search():
     assert len(response) > 0
     logger.info("Grok tiny no search response: %s...", response[:100])
 
+@live_api
 def test_grok_client_tiny_with_search():
     """Test Grok client with tiny model with search (should warn and proceed without search)"""
     # Skip if XAI_API_KEY is not set
@@ -158,6 +173,7 @@ def test_grok_client_tiny_with_search():
     assert len(response) > 0
     logger.info("Grok tiny with search response: %s...", response[:100])
 
+@live_api
 def test_deepseek_client_tiny_no_search():
     """Test DeepSeek client with tiny model without search"""
     client = get_client(ModelVendor.DEEPSEEK)
@@ -171,6 +187,7 @@ def test_deepseek_client_tiny_no_search():
     assert len(response) > 0
     logger.info("DeepSeek tiny no search response: %s...", response[:100])
 
+@live_api
 def test_deepseek_client_tiny_with_search():
     
     client = get_client(ModelVendor.DEEPSEEK)
@@ -184,8 +201,11 @@ def test_deepseek_client_tiny_with_search():
     assert len(response) > 0
     logger.info("DeepSeek tiny with search response: %s...", response[:100])
 
-def test_client_factory():
-    """Test that get_client returns the correct client type for each vendor"""
+def test_client_factory(monkeypatch):
+    """Test that get_client returns the correct client type for each vendor (no calls are made)"""
+    for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        if not os.getenv(key):
+            monkeypatch.setenv(key, "test-key-not-used")
     openai_client = get_client(ModelVendor.OPENAI)
     assert type(openai_client).__name__ == "OpenAIClient"
     

@@ -272,8 +272,11 @@ async def translate(data: TranslateRequest, session: Session = Depends(get_sessi
 async def list_vendors(session: Session = Depends(get_session)):
     from letter_writer.local_pricing import is_local_energy_pricing_configured
 
-    vendors = [v.value for v in ModelVendor]
-    active_vendors = set(vendors)
+    from letter_writer.clients.claude_code import claude_binary
+
+    # claude_code needs the CLI on this machine (the batch host, not the backend container).
+    vendors = [v.value for v in ModelVendor if v != ModelVendor.CLAUDE_CODE or claude_binary()]
+    active_vendors = {v for v in vendors if v != ModelVendor.CLAUDE_CODE.value}
 
     session_selected = session.get("metadata", {}).get("common", {}).get("selected_vendors")
     if session_selected:

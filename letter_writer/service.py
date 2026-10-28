@@ -363,7 +363,9 @@ def write_cover_letter(
     letters: dict[str, dict] = {}
 
     if model_vendor is None:
-        with ThreadPoolExecutor(max_workers=len(ModelVendor)) as executor:
+        # claude_code spends the Claude subscription; it runs only when asked for by name.
+        all_vendors = [mv for mv in ModelVendor if mv != ModelVendor.CLAUDE_CODE]
+        with ThreadPoolExecutor(max_workers=len(all_vendors)) as executor:
             futures = {
                 executor.submit(
                     _process_single_vendor,
@@ -378,7 +380,7 @@ def write_cover_letter(
                     style_instructions,
                     logger,
                 ): mv
-                for mv in ModelVendor
+                for mv in all_vendors
             }
             with get_progress_tracker(len(futures)) as pbar:
                 for future in as_completed(futures):

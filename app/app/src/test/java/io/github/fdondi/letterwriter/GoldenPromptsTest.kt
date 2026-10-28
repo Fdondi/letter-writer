@@ -62,8 +62,6 @@ class GoldenPromptsTest {
     private val notReplayed = mapOf(
         "research_custom" to "desktop helper called with search=True and a point of contact; neither app's research flow does that (see research_flow)",
         "research_default" to "same helper with search=True; the research flow always passes search=False",
-        "paragraph_regenerate" to "paragraph flow is web-only for now",
-        "paragraph_regenerate_defaults" to "paragraph flow is web-only for now",
         "paragraph_continue" to "paragraph flow is web-only for now",
         "paragraph_continue_empty" to "paragraph flow is web-only for now",
     )
@@ -206,6 +204,13 @@ class GoldenPromptsTest {
         compareCalls("draft", draftReply) { generation.draft(inputs(style = style, languagePrefix = langPrefix), plan, it); null }
         compareCalls("draft_defaults", draftReply) { generation.draft(inputs(topDocs = emptyList(), companyReport = "", additional = "", hireProblem = ""), "", it); null }
         compareCalls("fancy", "fancy") { generation.fancy(letter, it) }
+        val paras = LetterGeneration.splitParagraphs(letter).ifEmpty { listOf(letter) }
+        compareCalls("paragraph_regenerate", "rewritten") {
+            generation.regenerateParagraph(paras, paras.size / 2, "Make it more concrete.", inputs(style = style, languagePrefix = langPrefix), it)
+        }
+        compareCalls("paragraph_regenerate_defaults", "rewritten") {
+            generation.regenerateParagraph(paras, 0, "", inputs(topDocs = emptyList(), companyReport = "", additional = "", hireProblem = ""), it)
+        }
 
         val feedbackReply = """{"items": []}"""
         fun check(case: String, category: String, ins: LetterInputs, known: JsonArray) = compareCalls(case, feedbackReply) { client ->

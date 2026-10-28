@@ -2,10 +2,13 @@ package io.github.fdondi.letterwriter.pipeline
 
 import io.github.fdondi.letterwriter.AppGraph
 import io.github.fdondi.letterwriter.core.ApiKeys
+import io.github.fdondi.letterwriter.core.CrashLog
 import io.github.fdondi.letterwriter.core.asBooleanOrNull
 import io.github.fdondi.letterwriter.core.asObjectOrNull
 import io.github.fdondi.letterwriter.core.asStringOrNull
 import io.github.fdondi.letterwriter.core.pyStr
+import io.github.fdondi.letterwriter.data.Opportunity
+import io.github.fdondi.letterwriter.data.OpportunityStatus
 import io.github.fdondi.letterwriter.data.UserProfile
 import io.github.fdondi.letterwriter.debug.FakeLlmClient
 import io.github.fdondi.letterwriter.decision.DecisionJudge
@@ -19,6 +22,7 @@ import io.github.fdondi.letterwriter.llm.UsageCollector
 import io.github.fdondi.letterwriter.llm.VendorRoleOverrides
 import io.github.fdondi.letterwriter.llm.withUsagePhase
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -53,7 +57,14 @@ import java.util.UUID
  * (`costs.recordPhase`) even when the call fails.
  */
 class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessionStore) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** Errors from actions that have no place in the session (item edits, snapshots, cost queueing). */
+    private val _message = MutableStateFlow<String?>(null)
+    val message: StateFlow<String?> = _message.asStateFlow()
+
+    /** Last line of defense: anything a task did not catch becomes a message instead of killing the app. */
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> _message.value = "Unexpected error: ${describe(e)}" },
+    )
 
     private val _loaded = MutableStateFlow(false)
     val loaded: StateFlow<Boolean> = _loaded.asStateFlow()
@@ -66,12 +77,13 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
     private val _running = MutableStateFlow<Map<String, String>>(emptyMap())
     val running: StateFlow<Map<String, String>> = _running.asStateFlow()
 
-    /** Errors from actions that have no place in the session (item edits, snapshots, cost queueing). */
-    private val _message = MutableStateFlow<String?>(null)
-    val message: StateFlow<String?> = _message.asStateFlow()
-
     fun dismissMessage() {
         _message.value = null
+    }
+
+    /** Shows [text] in the snackbar (outcomes of actions that don't change the letter, like sending a job to the desktop). */
+    fun showMessage(text: String) {
+        _message.value = text
     }
 
     private val generation = LetterGeneration(graph.prompts)
@@ -80,15 +92,30 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
     private val translator = Translator(graph.languages)
 
     private data class Ctx(val sub: String, val profile: UserProfile, val overrides: VendorRoleOverrides, val factory: ClientFactory) {
-        fun client(vendor: String): LlmClient =
-            factory.create(ModelVendor.fromKey(vendor) ?: throw IllegalArgumentException("Unknown vendor '$vendor'"))
+        fun client(vendor: String): LlmClient = factory.create(runnerFor(vendor))
+
+        /**
+         * The phone vendor that runs [vendor]'s steps: itself, or for a desktop-only vendor
+         * (`claude_code` drafts from the pipeline) a stand-in with an API key.
+         */
+        fun runnerFor(vendor: String): ModelVendor {
+            ModelVendor.fromKey(vendor)?.let { return it }
+            val candidates = PipelineSession.STAND_INS[vendor].orEmpty() +
+                profile.defaultVendors.mapNotNull { ModelVendor.fromKey(it) } +
+                listOfNotNull(ModelVendor.fromKey(profile.extractionVendor)) +
+                ModelVendor.entries
+            return candidates.firstOrNull { factory.canCreate(it) }
+                ?: throw IllegalStateException(
+                    "${PipelineSession.label(vendor)} runs only on the desktop, and no API key is saved for a vendor the phone could use instead. Add one in Settings → API keys.",
+                )
+        }
     }
 
     private suspend fun ctx(): Ctx {
         val sub = graph.auth.requireUser().sub
         val profile = graph.profiles.current()
         val overrides = profile.roleOverrides(graph.modelOverrides)
-        val debugClient = if (graph.fakePaidApis()) {
+        val debugClient = graph.llmOverride ?: if (graph.fakePaidApis()) {
             { vendor: ModelVendor -> FakeLlmClient(vendor, graph.debugFixtures) }
         } else {
             null
@@ -116,7 +143,7 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
                 block()
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 _message.value = "$what failed: ${describe(e)}"
             }
         }
@@ -131,11 +158,12 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
                 block()
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                // Throwable, not Exception: a StackOverflowError or a missing class must end the step, not the app.
                 val msg = describe(e)
                 try {
                     onError(msg)
-                } catch (inner: Exception) {
+                } catch (inner: Throwable) {
                     _message.value = msg
                 }
             } finally {
@@ -145,7 +173,56 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
         return true
     }
 
-    private fun setLabel(key: String, label: String) = _running.update { if (key in it) it + (key to label) else it }
+    /** Updates the running label; a vendor step also records it in the session ([VendorWork.busy]). */
+    private suspend fun setLabel(key: String, label: String) {
+        _running.update { if (key in it) it + (key to label) else it }
+        if (!key.startsWith(VENDOR_PREFIX)) return
+        val vendor = key.removePrefix(VENDOR_PREFIX)
+        val s = store.current() ?: return
+        editVendor(s.sessionId, vendor) { w -> if (w.busy != null) w.copy(busy = label) else w }
+    }
+
+    /**
+     * A vendor step: [VendorWork.busy] is set while it runs, so a step cut short by the process
+     * dying shows up as interrupted ([markInterruptedSteps]) instead of silently stopping.
+     */
+    private fun launchVendorTask(vendor: String, label: String, block: suspend () -> Unit): Boolean =
+        launchTask(vendorKey(vendor), label, vendorError(vendor)) {
+            val id = requireSession().sessionId
+            editVendor(id, vendor) { it.copy(busy = label) }
+            try {
+                block()
+            } finally {
+                withContext(NonCancellable) { editVendor(id, vendor) { it.copy(busy = null) } }
+            }
+        }
+
+    /** At start nothing runs yet, so a vendor still marked busy was interrupted when the app last stopped. */
+    private suspend fun markInterruptedSteps() {
+        if (store.current()?.work?.values?.none { it.busy != null } != false) return
+        val why = runCatching { CrashLog.lastStopReason(graph.app) }.getOrNull()
+            ?.let { "the app was stopped ($it)" } ?: "the app closed"
+        store.update { s ->
+            if (s == null || s.work.values.none { it.busy != null }) {
+                s
+            } else {
+                s.copy(
+                    work = s.work.mapValues { (_, w) ->
+                        val step = w.busy
+                        if (step == null || vendorKey(w.vendor) in _running.value) {
+                            w
+                        } else {
+                            w.copy(busy = null, error = "Interrupted while \u201c$step\u201d: $why before this step finished. Try again.")
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    init {
+        scope.launch { markInterruptedSteps() }
+    }
 
     /** One cost phase; [attribute] receives the dollars spent so the session can show them. */
     private suspend fun <T> costPhase(sub: String, phase: String, attribute: suspend (Double) -> Unit, block: suspend () -> T): T {
@@ -401,7 +478,7 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
 
     // ---- vendor flow ----
 
-    private fun vendorKey(vendor: String) = "vendor:$vendor"
+    private fun vendorKey(vendor: String) = "$VENDOR_PREFIX$vendor"
 
     private fun vendorError(vendor: String): suspend (String) -> Unit = { msg ->
         val s = requireSession()
@@ -429,24 +506,24 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
     )
 
     /** Plan first when the session includes the plan step, otherwise straight to the draft. */
-    fun startVendor(vendor: String): Boolean = launchTask(vendorKey(vendor), "Starting", vendorError(vendor)) {
+    fun startVendor(vendor: String): Boolean = launchVendorTask(vendor, "Starting") {
         val s = requireSession()
-        editVendor(s.sessionId, vendor) { VendorWork(vendor) }
+        editVendor(s.sessionId, vendor) { VendorWork(vendor, busy = it.busy) }
         if (s.includePlanStep) runPlan(vendor) else runDraft(vendor, "")
     }
 
-    fun redoPlan(vendor: String): Boolean = launchTask(vendorKey(vendor), "Planning", vendorError(vendor)) { runPlan(vendor) }
+    fun redoPlan(vendor: String): Boolean = launchVendorTask(vendor, "Planning") { runPlan(vendor) }
 
-    fun approvePlan(vendor: String, plan: String): Boolean = launchTask(vendorKey(vendor), "Writing the draft", vendorError(vendor)) {
+    fun approvePlan(vendor: String, plan: String): Boolean = launchVendorTask(vendor, "Writing the draft") {
         runDraft(vendor, plan.trim())
     }
 
-    fun redoDraft(vendor: String): Boolean = launchTask(vendorKey(vendor), "Writing the draft", vendorError(vendor)) {
+    fun redoDraft(vendor: String): Boolean = launchVendorTask(vendor, "Writing the draft") {
         runDraft(vendor, requireSession().vendorWork(vendor).letterPlan)
     }
 
     /** Runs the draft-phase checks and review on the letter already written. Does not write a new draft. */
-    fun checkDraft(vendor: String): Boolean = launchTask(vendorKey(vendor), "Checking the draft", vendorError(vendor)) {
+    fun checkDraft(vendor: String): Boolean = launchVendorTask(vendor, "Checking the draft") {
         runFeedbackOnDraft(vendor, null)
     }
 
@@ -455,7 +532,7 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
      * [LetterGeneration.rewrite] returns the draft unchanged when nothing needs fixing.
      * An empty result is an error; the draft is not copied in its place.
      */
-    fun approveDraft(vendor: String, fancy: Boolean): Boolean = launchTask(vendorKey(vendor), "Rewriting", vendorError(vendor)) {
+    fun approveDraft(vendor: String, fancy: Boolean): Boolean = launchVendorTask(vendor, "Rewriting") {
         val w = requireSession().vendorWork(vendor)
         val draft = w.draftEdited?.takeIf { it.isNotBlank() } ?: w.draftLetter
         require(draft.isNotBlank()) { "Draft letter is missing" }
@@ -485,7 +562,7 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
         setLabel(key, "Writing the draft")
         val (letter, known) = costPhase(c.sub, "draft", vendorCost(id, vendor, "draft")) { generation.draft(inputs, plan, client) }
         editVendor(id, vendor) {
-            VendorWork(vendor, stage = VendorStage.DRAFT, letterPlan = plan, draftLetter = letter, knownWeaknesses = known, costs = it.costs)
+            VendorWork(vendor, stage = VendorStage.DRAFT, letterPlan = plan, draftLetter = letter, knownWeaknesses = known, costs = it.costs, busy = it.busy)
         }
 
         runFeedbackOnDraft(vendor, letter)
@@ -577,7 +654,7 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
     }
 
     /** `advance_to_refinement`: overrides merged over the feedback, normalized, rewrite, optional fancy pass. */
-    fun refine(vendor: String, fancy: Boolean): Boolean = launchTask(vendorKey(vendor), "Rewriting", vendorError(vendor)) {
+    fun refine(vendor: String, fancy: Boolean): Boolean = launchVendorTask(vendor, "Rewriting") {
         runRefine(vendor, fancy)
     }
 
@@ -796,12 +873,44 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
         if (i < 0 || j !in ps.indices) ps else ps.toMutableList().also { it.add(j, it.removeAt(i)) }
     }
 
-    /** Replaces the assembly with one vendor's letter, one paragraph per blank-line block. */
+    /** Replaces the assembly with one vendor's letter (as reviewed: redrafted paragraphs included). */
     fun useWholeLetter(vendor: String) = fire("Using the letter") {
         val s = requireSession()
-        val text = s.vendorWork(vendor).finalLetter
-        val paras = text.split(Regex("\\n\\s*\\n")).map { it.trim() }.filter { it.isNotEmpty() }
+        val paras = s.vendorWork(vendor).reviewParagraphs()
         edit(s.sessionId) { it.copy(paragraphs = paras.map { p -> FinalParagraph(vendor = vendor, originalText = p, text = p) }) }
+    }
+
+    /**
+     * Paragraph review: rewrite paragraph [index] of [vendor]'s letter now, through the API, with
+     * the user's [note], the comments they [picked] and the answers saved on those items. A
+     * paragraph the desktop wrote with Claude Code is redrafted through the Anthropic API (the same
+     * vendor in realtime).
+     * Cost phase `paragraph_regen`.
+     */
+    fun redraftParagraph(vendor: String, index: Int, note: String, picked: List<ReviewComment>): Boolean =
+        launchTask("paragraph:$vendor:$index", "Redrafting the paragraph", onError = { msg -> _message.value = "Redrafting the paragraph failed: $msg" }) {
+            val s = requireSession()
+            val c = ctx()
+            val w = s.vendorWork(vendor)
+            val paragraphs = w.reviewParagraphs()
+            require(index in paragraphs.indices) { "That paragraph no longer exists" }
+            // The items as saved now: an answer typed and saved since the screen drew them counts.
+            val current = picked.map { c -> w.items(c.category).firstOrNull { it["id"].pyStr() == c.id }?.let { c.copy(item = it) } ?: c }
+            val answers = current.filter { it.isQuestion }.mapNotNull { q ->
+                q.item["user_context"].pyStr().trim().takeIf { it.isNotEmpty() }?.let { "Answer to \u201c${q.item["user_instructions"].pyStr().ifBlank { q.item["observation"].pyStr() }}\u201d: $it" }
+            }
+            val notes = current.map { JsonObject(it.item + ("topic" to JsonPrimitive(it.category))) }
+            val feedback = LetterGeneration.regenerateFeedback(listOf(note.trim()).plus(answers).filter { it.isNotEmpty() }.joinToString("\n"), notes)
+            val text = costPhase(c.sub, "paragraph_regen", vendorCost(s.sessionId, vendor, "paragraph_regen")) {
+                generation.regenerateParagraph(paragraphs, index, feedback, inputs(s, c.profile), c.client(vendor))
+            }
+            require(text.isNotBlank()) { "The model returned an empty paragraph" }
+            editVendor(s.sessionId, vendor) { it.copy(paragraphEdits = it.paragraphEdits + (index to text)) }
+        }
+
+    /** Undoes the redrafts of one paragraph. */
+    fun restoreParagraph(vendor: String, index: Int) = fire("Restoring the paragraph") {
+        editVendor(requireSession().sessionId, vendor) { it.copy(paragraphEdits = it.paragraphEdits - index) }
     }
 
     // ---- translate ----
@@ -871,7 +980,8 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
      * and the feedback answers merged into the profile's extra_info / agent_feedback_context.
      */
     suspend fun saveLetter(): String {
-        if (graph.fakePaidApis()) {
+        // Demo mode saves into its in-memory examples; the harness on a real account must not.
+        if (graph.fakePaidApis() && !graph.demo) {
             throw IllegalStateException("Debug harness is on. This letter is fixture data and was not saved to your examples.")
         }
         val s = requireSession()
@@ -922,7 +1032,40 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
         graph.profiles.mergeFeedbackAgentContext(c.sub, agent)
         graph.profiles.load(c.sub)
         graph.costs.flush(savingUserId = c.sub)
+        s.opportunityId?.let { markOpportunityDone(c.sub, it, doc.id) }
         return doc.id
+    }
+
+    private suspend fun markOpportunityDone(sub: String, opportunityId: String, documentId: String) {
+        try {
+            graph.opportunities.transition(
+                sub,
+                opportunityId,
+                from = OpportunityStatus.entries.toSet() - OpportunityStatus.DRAFTING - OpportunityStatus.APPLIED,
+                to = OpportunityStatus.DONE,
+                fields = mapOf("document_id" to documentId),
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _message.value = "The letter is saved, but its job pipeline entry was not marked done: ${describe(e)}"
+        }
+    }
+
+    // ---- desktop pipeline ----
+
+    /**
+     * Replaces the letter in progress with the drafts the desktop pipeline stored for [opportunity]
+     * (`state/session`), so they open in the Letters and Final tabs.
+     */
+    suspend fun openOpportunity(opportunity: Opportunity): WorkSession {
+        val sub = graph.auth.requireUser().sub
+        val state = graph.opportunities.loadSession(sub, opportunity.id)
+            ?: throw IllegalStateException("The desktop has not stored drafts for this job yet.")
+        val session = PipelineSession.toWorkSession(opportunity, state)
+        if (session.vendors.isEmpty()) throw IllegalStateException("The desktop stored no drafts for this job.")
+        store.update { session }
+        return session
     }
 
     /**
@@ -940,7 +1083,18 @@ class VendorFlowEngine(private val graph: AppGraph, private val store: WorkSessi
         private const val TEST_QUOTE = "cutting incident volume by half"
         private const val TEST_OBSERVATION = "The letter claims incidents were cut by half, but the CV gives no figure for this."
 
-        fun describe(e: Throwable): String = e.message?.takeIf { it.isNotBlank() } ?: e::class.simpleName.orEmpty()
+        private const val VENDOR_PREFIX = "vendor:"
+
+        /** The message, prefixed with the class for errors (a bare "null" or "16" is useless in a report). */
+        fun describe(e: Throwable): String {
+            val msg = e.message?.takeIf { it.isNotBlank() }
+            val name = e::class.simpleName.orEmpty()
+            return when {
+                msg == null -> name
+                e is Error -> "$name: $msg"
+                else -> msg
+            }
+        }
 
         private fun Map<String, Double>.plusCost(phase: String, cost: Double): Map<String, Double> = this + (phase to ((this[phase] ?: 0.0) + cost))
 

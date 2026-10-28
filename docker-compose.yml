@@ -94,6 +94,10 @@ services:
     # ghcr.io/ollaya-dev/ollaya:cuda when the host has the NVIDIA Container Toolkit.
     entrypoint: ["/bin/bash", "/usr/local/bin/ollaya-serve.sh"]
     command: []
+    # Host access for the opportunity batch (python -m letter_writer.batch runs on the host);
+    # loopback only.
+    ports:
+      - "127.0.0.1:11435:11435"
     environment:
       - OLLAYA_HOST=0.0.0.0:11435
       - OLLAYA_DEVICE=${OLLAYA_DEVICE:-auto}

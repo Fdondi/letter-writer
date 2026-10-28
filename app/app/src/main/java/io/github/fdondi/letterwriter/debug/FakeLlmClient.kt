@@ -50,6 +50,7 @@ class FakeLlmClient(
                     ModelRole.FEEDBACK_CONTEXT -> "feedback_context.json"
                     ModelRole.TRANSLATION -> "translation.txt"
                     ModelRole.COMPANY_RESEARCH -> "company_report.txt"
+                    ModelRole.PARAGRAPH -> "paragraph_rewrite.txt"
                 }
                 is RoleRef.ModelId -> when {
                     search -> "web_search.txt"

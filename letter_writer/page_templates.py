@@ -25,7 +25,6 @@ import re
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
-import httpx
 from bs4 import BeautifulSoup, Tag
 
 logger = logging.getLogger(__name__)
@@ -50,11 +49,6 @@ _JOBS_CH_PROFILE_CTA_HINTS = (
     "view company profile",
     "see company profile",
 )
-_JOBS_CH_COMPANY_FETCH_TIMEOUT_S = 8.0
-_JOBS_CH_FETCH_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; LetterWriterJobCapture/1.0)",
-    "Accept": "text/html,application/xhtml+xml",
-}
 
 _LINKEDIN_REMOVE = (
     "nav",
@@ -527,60 +521,6 @@ def _employer_overview_from_soup(soup: BeautifulSoup) -> str:
             if isinstance(overview, str) and overview.strip():
                 return html_fragment_to_text(overview)
     return ""
-
-
-def _http_get_jobs_ch(url: str) -> str:
-    try:
-        with httpx.Client(
-            timeout=_JOBS_CH_COMPANY_FETCH_TIMEOUT_S,
-            follow_redirects=True,
-            headers=_JOBS_CH_FETCH_HEADERS,
-        ) as client:
-            response = client.get(url)
-    except Exception:
-        logger.exception("jobs.ch company profile fetch failed for %s", url)
-        return ""
-    if response.status_code != 200:
-        logger.warning("jobs.ch company profile HTTP %s for %s", response.status_code, url)
-        return ""
-    return response.text or ""
-
-
-def fetch_jobs_ch_company_about(
-    url: str,
-    *,
-    fetch_html: Optional[Callable[[str], str]] = None,
-) -> str:
-    abs_url = _absolute_jobs_ch_url(url)
-    if not abs_url or not _is_jobs_ch_company_profile_href(abs_url):
-        return ""
-    getter = fetch_html if fetch_html is not None else _http_get_jobs_ch
-    try:
-        html = getter(abs_url)
-    except Exception:
-        logger.exception("jobs.ch company profile fetch callback failed for %s", abs_url)
-        return ""
-    if not html:
-        return ""
-    return parse_jobs_ch_company_about(html)
-
-
-def attach_jobs_ch_company_about(
-    parsed: Dict[str, Any],
-    *,
-    fetch_html: Optional[Callable[[str], str]] = None,
-) -> Dict[str, Any]:
-    """Fill additional_company_info from the company-profile URL when missing.
-
-    Does not invent text: a failed fetch or unmatched markup leaves the field empty.
-    """
-    if not parsed:
-        return parsed
-    if _clean(parsed.get("additional_company_info")):
-        return parsed
-    url = _clean(parsed.get("company_profile_url"))
-    parsed["additional_company_info"] = fetch_jobs_ch_company_about(url, fetch_html=fetch_html)
-    return parsed
 
 
 def _jobs_ch_canonical_url(soup: BeautifulSoup, source_url: str) -> str:
