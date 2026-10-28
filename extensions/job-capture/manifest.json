@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Letter Writer Capture",
-  "version": "1.3.7",
+  "version": "1.3.9",
   "description": "Send the current job posting to Letter Writer, queued for the desktop batch like the phone app; captures approved jobs from the pipeline automatically when you open them.",
   "permissions": [
     "activeTab",

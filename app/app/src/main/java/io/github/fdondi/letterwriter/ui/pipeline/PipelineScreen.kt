@@ -60,10 +60,11 @@ private enum class PipelineTab(val title: String, val statuses: Set<OpportunityS
     REVIEW("To review", setOf(OpportunityStatus.PROPOSED)),
     NEEDS_TEXT("Needs text", setOf(OpportunityStatus.APPROVED)),
     QUEUED("Queued", setOf(OpportunityStatus.CAPTURED)),
+    RATED("Rated", setOf(OpportunityStatus.RATED)),
     RUNNING("Running", setOf(OpportunityStatus.DRAFTING)),
     READY("Ready", setOf(OpportunityStatus.READY)),
     FAILED("Failed", setOf(OpportunityStatus.FAILED)),
-    ARCHIVE("Done", setOf(OpportunityStatus.DONE, OpportunityStatus.APPLIED, OpportunityStatus.SKIPPED, OpportunityStatus.UNKNOWN)),
+    ARCHIVE("Done", setOf(OpportunityStatus.DONE, OpportunityStatus.APPLIED, OpportunityStatus.SKIPPED, OpportunityStatus.ARCHIVED, OpportunityStatus.UNKNOWN)),
 }
 
 private sealed interface Load {
@@ -79,6 +80,8 @@ private val SKIPPABLE = setOf(
     OpportunityStatus.PROPOSED,
     OpportunityStatus.APPROVED,
     OpportunityStatus.CAPTURED,
+    OpportunityStatus.RATED,
+    OpportunityStatus.ARCHIVED,
     OpportunityStatus.FAILED,
     OpportunityStatus.READY,
 )
@@ -147,7 +150,8 @@ fun PipelineScreen(graph: AppGraph, onOpenLetter: (Int) -> Unit, modifier: Modif
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
             "Jobs the desktop proposes from your job alerts, and postings you send it. " +
-                "The desktop drafts captured jobs on its scheduled run; their letters then appear under Ready.",
+                "On its scheduled run the desktop rates new postings and drafts the best ones; " +
+                "their letters then appear under Ready.",
             style = MaterialTheme.typography.bodySmall,
         )
         OutlinedButton(onClick = { adding = true }) { Text("Add a job") }
@@ -160,7 +164,7 @@ fun PipelineScreen(graph: AppGraph, onOpenLetter: (Int) -> Unit, modifier: Modif
             }
             is Load.Loaded -> {
                 val byTab = PipelineTab.entries.associateWith { t -> l.jobs.filter { it.status in t.statuses } }
-                val tab = picked ?: listOf(PipelineTab.READY, PipelineTab.RUNNING, PipelineTab.REVIEW, PipelineTab.NEEDS_TEXT, PipelineTab.QUEUED)
+                val tab = picked ?: listOf(PipelineTab.READY, PipelineTab.RUNNING, PipelineTab.RATED, PipelineTab.REVIEW, PipelineTab.NEEDS_TEXT, PipelineTab.QUEUED)
                     .firstOrNull { byTab.getValue(it).isNotEmpty() } ?: PipelineTab.READY
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     for (t in PipelineTab.entries) {
@@ -277,10 +281,11 @@ private fun emptyText(tab: PipelineTab): String = when (tab) {
     PipelineTab.REVIEW -> "No proposals. The desktop proposes jobs from your job-alert mail."
     PipelineTab.NEEDS_TEXT -> "No approved job is waiting for its posting text."
     PipelineTab.QUEUED -> "Nothing waits for the desktop."
+    PipelineTab.RATED -> "No rated jobs. The desktop rates new postings on its next run."
     PipelineTab.RUNNING -> "The desktop is not drafting anything right now."
     PipelineTab.READY -> "No drafts are ready yet."
     PipelineTab.FAILED -> "Nothing failed."
-    PipelineTab.ARCHIVE -> "No finished or skipped jobs."
+    PipelineTab.ARCHIVE -> "No finished, skipped or archived jobs."
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -315,11 +320,15 @@ private fun JobCard(
 
         when (job.status) {
             OpportunityStatus.READY, OpportunityStatus.DONE, OpportunityStatus.APPLIED -> ReadyDetails(job)
+            OpportunityStatus.RATED -> job.fitScoreEffective?.let {
+                Text("Fit: ${"★".repeat(it.toInt().coerceIn(1, 5))} ${String.format("%.1f", it)}", style = MaterialTheme.typography.bodyMedium)
+            }
             OpportunityStatus.FAILED -> WarningList(
                 job.vendorsFailed.map { (v, e) -> "${PipelineSession.label(v)}: $e" }
                     .ifEmpty { listOf("The desktop could not draft this job.") },
             )
             OpportunityStatus.SKIPPED -> if (job.skipReason.isNotEmpty()) Text("Reason: ${job.skipReason}", style = MaterialTheme.typography.bodySmall)
+            OpportunityStatus.ARCHIVED -> if (job.skipReason.isNotEmpty()) Text("Reason: ${job.skipReason}", style = MaterialTheme.typography.bodySmall)
             else -> Unit
         }
         if (job.vendorsRequested.isNotEmpty() && job.status in setOf(OpportunityStatus.CAPTURED, OpportunityStatus.DRAFTING)) {
@@ -339,7 +348,7 @@ private fun JobCard(
                     OutlinedButton(enabled = enabled, onClick = onPaste) { Text("Paste text") }
                     TextButton(enabled = enabled, onClick = onSkip) { Text("Skip") }
                 }
-                OpportunityStatus.CAPTURED -> {
+                OpportunityStatus.CAPTURED, OpportunityStatus.RATED -> {
                     TextButton(enabled = enabled, onClick = onPaste) { Text("Replace text") }
                     TextButton(enabled = enabled, onClick = onSkip) { Text("Skip") }
                 }
@@ -355,6 +364,8 @@ private fun JobCard(
                     if (job.status == OpportunityStatus.READY) TextButton(enabled = enabled, onClick = onSkip) { Text("Skip") }
                 }
                 OpportunityStatus.SKIPPED -> TextButton(enabled = enabled, onClick = onRestore) { Text("Restore") }
+                // Archived jobs are re-enabled from the web app (the phone's rules don't allow it).
+                OpportunityStatus.ARCHIVED -> TextButton(enabled = enabled, onClick = onSkip) { Text("Skip") }
                 OpportunityStatus.DRAFTING, OpportunityStatus.UNKNOWN -> Unit
             }
         }
@@ -387,12 +398,14 @@ private fun statusLine(job: Opportunity): String {
         OpportunityStatus.PROPOSED -> "Proposed from a job alert"
         OpportunityStatus.APPROVED -> "Approved, waiting for the posting text"
         OpportunityStatus.CAPTURED -> "Waiting for the desktop's next run"
+        OpportunityStatus.RATED -> "Rated by the desktop, waiting for a drafting slot"
         OpportunityStatus.DRAFTING -> listOf("Running on the desktop", job.progressLine).filter { it.isNotEmpty() }.joinToString(" · ")
         OpportunityStatus.READY -> "Drafts ready"
         OpportunityStatus.FAILED -> "Drafting failed"
         OpportunityStatus.DONE -> "Letter saved"
         OpportunityStatus.APPLIED -> "Applied"
         OpportunityStatus.SKIPPED -> "Skipped"
+        OpportunityStatus.ARCHIVED -> "Archived: not drafted within the archive window"
         OpportunityStatus.UNKNOWN -> "Status '${job.statusText}'"
     }
     if (job.status == OpportunityStatus.DRAFTING) {

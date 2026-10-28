@@ -16,11 +16,13 @@ enum class OpportunityStatus(val key: String) {
     SKIPPED("skipped"),
     APPROVED("approved"),
     CAPTURED("captured"),
+    RATED("rated"),
     DRAFTING("drafting"),
     READY("ready"),
     FAILED("failed"),
     DONE("done"),
     APPLIED("applied"),
+    ARCHIVED("archived"),
     UNKNOWN(""),
     ;
 
@@ -78,6 +80,15 @@ data class Opportunity(val id: String, val data: JsonObject) {
     val inputNeededCount: Int get() = data["input_needed_count"].asLongOrNull()?.toInt() ?: 0
     val fitMatched: List<String> get() = fitList("matched")
     val fitGaps: List<String> get() = fitList("gaps")
+
+    /** The desktop's computed fit (the weighted competence match), 1–5. */
+    val fitScore: Double? get() = data["fit_score"].asDoubleOrNull()
+
+    /** The user's per-job override; wins over [fitScore] when set. */
+    val fitScoreUser: Double? get() = data["fit_score_user"].asDoubleOrNull()
+
+    /** The rating the desktop sorts the rated queue by: the user's override, else the computed one. */
+    val fitScoreEffective: Double? get() = fitScoreUser ?: fitScore
     val costApiUsd: Double? get() = data["cost_api_usd"].asDoubleOrNull()
     val costSubscriptionUsd: Double? get() = data["cost_subscription_estimate_usd"].asDoubleOrNull()
 

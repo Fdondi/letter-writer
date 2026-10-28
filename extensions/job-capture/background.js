@@ -156,6 +156,16 @@ async function setBadge(text, title, tabId = undefined) {
   }
 }
 
+/** The ✓ tooltip names the job — its title and company, falling back to the page title — so
+ * hovering the badge shows what was uploaded. A pipeline note is appended only when the job is
+ * not a plain capture (e.g. the desktop is drafting it right now). */
+function successTitle(result, pageTitle) {
+  const who =
+    [result.title, result.company].filter(Boolean).join(" — ") || (pageTitle || "").trim() || "captured job";
+  const note = result.opportunity_status && result.opportunity_status !== "captured" ? ` (${result.message})` : "";
+  return `Letter Writer: ${who}${note}`;
+}
+
 async function ingestAndOpen(tab) {
   if (!tab || !tab.id) {
     await setBadge("!", "Letter Writer: no active tab");
@@ -197,8 +207,8 @@ async function ingestAndOpen(tab) {
     if (direct && direct.opportunity_id) {
       // Queued in Firestore (or an approved job's posting): the desktop drafts it on its next run.
       capturedOpportunities.add(direct.opportunity_id);
-      await setBadge("✓", `Letter Writer: ${direct.message || "posting sent to the job pipeline"}`, tab.id);
-      refreshPending();
+      await setBadge("✓", successTitle(direct, payload.title), tab.id);
+      refreshAll();
       return;
     }
     if (direct && direct.error) {
@@ -225,8 +235,8 @@ async function ingestAndOpen(tab) {
   if (ingest.opportunity_id) {
     // Queued (or an approved job's posting): the desktop drafts it on its next run; no intake tab.
     capturedOpportunities.add(ingest.opportunity_id);
-    await setBadge("✓", `Letter Writer: ${ingest.message || "posting sent to the job pipeline"}`, tab.id);
-    refreshPending();
+    await setBadge("✓", successTitle(ingest, payload.title), tab.id);
+    refreshAll();
     return;
   }
 
@@ -240,7 +250,8 @@ async function ingestAndOpen(tab) {
     return;
   }
 
-  await setBadge("", "Send job to Letter Writer");
+  // Clear the "…" badge and restore the global pipeline count underneath it.
+  await refreshStats();
   await api.tabs.create({ url: `${origin}/?capture=${encodeURIComponent(captureId)}` });
 }
 
@@ -253,6 +264,10 @@ api.action.onClicked.addListener((tab) => {
 let pendingHosts = [];
 let pendingLookup = null; // Firestore lookup by canonical key while signed in; null → server fallback
 const capturedOpportunities = new Set();
+
+// Pipeline counts (queued / running / ready) shown on the global badge and its tooltip.
+let stats = { queued: 0, running: 0, ready: 0 };
+let statsTitle = "Send job to Letter Writer";
 
 async function refreshPending() {
   try {
@@ -286,6 +301,40 @@ async function refreshPending() {
   } catch (e) {
     console.warn("Pending jobs refresh failed:", e);
   }
+}
+
+/** The global badge shows how many drafts are ready for attention; the global tooltip breaks the
+ * pipeline down (queued / running / ready). Per-tab badges overlay the count while set. */
+async function refreshStats() {
+  try {
+    const auth = firestoreAuth();
+    const userId = auth.available() && (await auth.getIdToken()) ? (await auth.status()).userId : null;
+    if (!userId) {
+      stats = { queued: 0, running: 0, ready: 0 };
+      statsTitle = "Send job to Letter Writer";
+      await setBadge("", statsTitle);
+      return;
+    }
+    const client = LW_FIRESTORE.createClient({ getIdToken: () => auth.getIdToken() });
+    // The rules allow listing only the caller's own jobs; the user_id filter satisfies that.
+    const opportunities = await client.query("opportunities", [["user_id", userId]], ["status"]);
+    stats = { queued: 0, running: 0, ready: 0 };
+    for (const o of opportunities) {
+      // Captured (not yet rated) and rated (waiting for a drafting slot) are both queued.
+      if (o.status === "captured" || o.status === "rated") stats.queued++;
+      else if (o.status === "drafting") stats.running++;
+      else if (o.status === "ready") stats.ready++;
+    }
+    statsTitle = `Letter Writer: ${stats.queued} queued · ${stats.running} running · ${stats.ready} ready`;
+    await setBadge(stats.ready > 0 ? String(stats.ready) : "", statsTitle);
+  } catch (e) {
+    console.warn("Pipeline stats refresh failed:", e);
+  }
+}
+
+async function refreshAll() {
+  await refreshPending();
+  await refreshStats();
 }
 
 async function loadPendingHosts() {
@@ -330,24 +379,29 @@ async function autoCapture(tab) {
   try {
     const direct = await queueDirectly(payload, { interactive: false });
     if (direct && direct.opportunity_id) {
-      await setBadge("✓", `Letter Writer: ${direct.message || "posting sent to the job pipeline"}`, tab.id);
+      await setBadge("✓", successTitle(direct, payload.title), tab.id);
     } else if (direct && direct.error) {
       console.warn("Auto-capture queueing failed:", direct.error);
     } else {
       // Not signed in (no interactive sign-in on a page load) or no sign-in API: server fallback.
       const ingest = await ingestAtOrigin(origin, payload);
       if (ingest.opportunity_id) {
-        await setBadge("✓", `Letter Writer: ${ingest.message || "posting sent to the job pipeline"}`, tab.id);
+        await setBadge("✓", successTitle(ingest, payload.title), tab.id);
       }
     }
   } catch (e) {
     capturedOpportunities.delete(match.id);
     console.warn("Auto-capture ingest failed:", e);
   }
-  refreshPending();
+  refreshAll();
 }
 
 api.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // A new page invalidates the badge: ✓ (or →) meant "this page was captured". The per-tab clear
+  // reveals the global pipeline count underneath.
+  if (changeInfo.status === "loading" || changeInfo.url) {
+    setBadge("", statsTitle, tabId);
+  }
   if (changeInfo.status === "complete" && tab && tab.url) {
     autoCapture({ ...tab, id: tabId }).catch((e) => console.warn("Auto-capture failed:", e));
   }
@@ -356,13 +410,13 @@ api.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 if (api.alarms) {
   api.alarms.create("lw-pending-refresh", { periodInMinutes: LW_PENDING.REFRESH_MINUTES });
   api.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === "lw-pending-refresh") refreshPending();
+    if (alarm.name === "lw-pending-refresh") refreshAll();
   });
 }
-api.runtime.onStartup.addListener(() => refreshPending());
+api.runtime.onStartup.addListener(() => refreshAll());
 
 api.runtime.onInstalled.addListener(() => {
-  refreshPending();
+  refreshAll();
   // Firefox for Android has no context menus.
   if (!api.contextMenus) return;
   const createMenu = () => {

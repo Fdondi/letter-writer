@@ -32,6 +32,31 @@ const JOBS = [
   },
   { id: "s1", status: "skipped", title: "Skipped Engineer", skip_reason: "Location" },
   {
+    id: "rt1",
+    status: "rated",
+    title: "Rated Engineer",
+    company: "Eta AG",
+    fit_score: 3.5,
+    fit_summary: { matched: ["C++"], gaps: ["Rust"] },
+  },
+  {
+    id: "rt2",
+    status: "rated",
+    title: "Overridden Engineer",
+    company: "Iota AG",
+    fit_score: 2.5,
+    fit_score_user: 4.5,
+  },
+  {
+    id: "ar1",
+    status: "archived",
+    title: "Archived Engineer",
+    company: "Theta AG",
+    fit_score: 2.5,
+    archive_reason: "Not drafted within 3 days.",
+    archived_at: "2026-10-20T10:00:00+00:00",
+  },
+  {
     id: "ap1",
     status: "applied",
     title: "Applied Engineer",
@@ -58,8 +83,10 @@ test("tabs count jobs by status and open on the first tab with work", async () =
   expect(screen.getByRole("tab", { name: "Needs text (1)" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "Drafting (2)" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "Ready (1)" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Rated (2)" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "Applied (1)" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "Skipped (1)" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Archived (1)" })).toBeInTheDocument();
   expect(screen.queryByText("Ready Engineer")).not.toBeInTheDocument();
 });
 
@@ -155,7 +182,70 @@ test("an empty or failing list renders instead of crashing", async () => {
 
 test("tabForStatus", () => {
   expect(tabForStatus("failed")).toBe("drafting");
+  expect(tabForStatus("rated")).toBe("rated");
+  expect(tabForStatus("archived")).toBe("archived");
   expect(tabForStatus("applied")).toBe("applied");
   expect(tabForStatus("skipped")).toBe("skipped");
   expect(tabForStatus("unknown")).toBe("proposed");
+});
+
+test("the rated tab shows the fit score and saves a user rating", async () => {
+  const user = userEvent.setup();
+  render(<OpportunitiesPage />);
+  await screen.findByText("Proposed Engineer");
+  await user.click(screen.getByRole("tab", { name: "Rated (2)" }));
+
+  const rated = screen.getByTestId("opportunity-rt1");
+  expect(within(rated).getByText("3.5")).toBeInTheDocument();
+  expect(within(rated).getByText("★★★★☆")).toBeInTheDocument();
+  expect(within(rated).getByText("C++")).toBeInTheDocument();
+  expect(within(rated).getByText("gap: Rust")).toBeInTheDocument();
+  expect(within(rated).getByRole("button", { name: "Skip" })).toBeInTheDocument();
+  expect(within(rated).queryByRole("button", { name: "Reset to auto" })).not.toBeInTheDocument();
+
+  await user.clear(within(rated).getByLabelText("Your fit rating"));
+  await user.type(within(rated).getByLabelText("Your fit rating"), "4.5");
+  await user.click(within(rated).getByRole("button", { name: "Save rating" }));
+  expect(fetchWithHeartbeat).toHaveBeenCalledWith("/api/opportunities/rt1/rate/", {
+    method: "POST",
+    body: JSON.stringify({ score: 4.5 }),
+  });
+});
+
+test("a user rating shows as the override and resets to the desktop's score", async () => {
+  const user = userEvent.setup();
+  render(<OpportunitiesPage />);
+  await screen.findByText("Proposed Engineer");
+  await user.click(screen.getByRole("tab", { name: "Rated (2)" }));
+
+  const overridden = screen.getByTestId("opportunity-rt2");
+  expect(within(overridden).getByText("(yours)")).toBeInTheDocument();
+  expect(within(overridden).getByLabelText("Your fit rating")).toHaveValue(4.5);
+  await user.click(within(overridden).getByRole("button", { name: "Reset to auto" }));
+  expect(fetchWithHeartbeat).toHaveBeenCalledWith("/api/opportunities/rt2/rate/", {
+    method: "POST",
+    body: JSON.stringify({ score: null }),
+  });
+});
+
+test("the archived tab re-enables a job, optionally with a new fit estimate", async () => {
+  const user = userEvent.setup();
+  render(<OpportunitiesPage />);
+  await screen.findByText("Proposed Engineer");
+  await user.click(screen.getByRole("tab", { name: "Archived (1)" }));
+
+  const archived = screen.getByTestId("opportunity-ar1");
+  expect(within(archived).getByText("Not drafted within 3 days.")).toBeInTheDocument();
+  await user.click(within(archived).getByRole("button", { name: "Re-enable" }));
+  expect(fetchWithHeartbeat).toHaveBeenCalledWith("/api/opportunities/ar1/reenable/", {
+    method: "POST",
+    body: JSON.stringify({ score: null }),
+  });
+
+  await user.type(within(archived).getByLabelText("New fit rating (optional)"), "4.5");
+  await user.click(within(archived).getByRole("button", { name: "Re-enable" }));
+  expect(fetchWithHeartbeat).toHaveBeenCalledWith("/api/opportunities/ar1/reenable/", {
+    method: "POST",
+    body: JSON.stringify({ score: 4.5 }),
+  });
 });

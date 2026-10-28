@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from letter_writer import fit_score as fit_scores
 from letter_writer import opportunity_store as ops
 from letter_writer.firestore_store import get_user_data
 from letter_writer.headless import latest_cv_text
@@ -55,6 +56,9 @@ class HarnessOpportunityStore:
         return None
 
     def set_status(self, *args, **kwargs):
+        raise ops.TransitionError("Harness: jobs are read-only")
+
+    def set_fit_score(self, *args, **kwargs):
         raise ops.TransitionError("Harness: jobs are read-only")
 
     def capture(self, *args, **kwargs):
@@ -139,6 +143,18 @@ class DoneRequest(BaseModel):
     document_id: Optional[str] = ""
 
 
+class RateRequest(BaseModel):
+    """The user's fit estimate for a job; null clears the override (the computed score shows)."""
+
+    score: Optional[float] = None
+
+
+class ReenableRequest(BaseModel):
+    """Re-enable an archived job; ``score`` optionally changes its fit estimate at once."""
+
+    score: Optional[float] = None
+
+
 @router.get("/")
 def list_opportunities(status: Optional[str] = None, session: Session = Depends(get_session), store: ops.OpportunityStore = Depends(get_store)):
     statuses = [s.strip() for s in (status or "").split(",") if s.strip()] or None
@@ -171,7 +187,7 @@ def skip(opp_id: str, data: SkipRequest, session: Session = Depends(get_session)
         opp_id,
         _user_id(session),
         ops.SKIPPED,
-        [ops.PROPOSED, ops.APPROVED, ops.CAPTURED, ops.FAILED, ops.READY],
+        [ops.PROPOSED, ops.APPROVED, ops.CAPTURED, ops.RATED, ops.ARCHIVED, ops.FAILED, ops.READY],
         {"skip_reason": reason or None},
     )
     return {"status": "ok", "opportunity": serialize(opp)}
@@ -186,6 +202,33 @@ def unskip(opp_id: str, session: Session = Depends(get_session), store: ops.Oppo
 @router.post("/{opp_id}/retry/")
 def retry(opp_id: str, session: Session = Depends(get_session), store: ops.OpportunityStore = Depends(get_store)):
     opp = _transition(store, opp_id, _user_id(session), ops.CAPTURED, [ops.FAILED, ops.READY], {"vendors_failed": {}})
+    return {"status": "ok", "opportunity": serialize(opp)}
+
+
+@router.post("/{opp_id}/rate/")
+def set_fit(opp_id: str, data: RateRequest, session: Session = Depends(get_session), store: ops.OpportunityStore = Depends(get_store)):
+    """The user's fit estimate for a job (shown next to the desktop's computed rating; it decides
+    which rated jobs are drafted first). Works on any open job, rated or not yet."""
+    try:
+        opp = store.set_fit_score(opp_id, fit_scores.normalize_score(data.score), user_id=_user_id(session))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+    except ops.OwnershipError:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+    except ops.TransitionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"status": "ok", "opportunity": serialize(opp)}
+
+
+@router.post("/{opp_id}/reenable/")
+def reenable(opp_id: str, data: ReenableRequest, session: Session = Depends(get_session), store: ops.OpportunityStore = Depends(get_store)):
+    """An archived job comes back to the rated queue with a fresh archive window; ``score``
+    optionally changes its fit estimate in the same call."""
+    fields: Dict[str, Any] = {"archived_at": None, "archive_reason": None, "fit_rated_at": datetime.now(timezone.utc)}
+    score = fit_scores.normalize_score(data.score)
+    if score is not None:
+        fields["fit_score_user"] = score
+    opp = _transition(store, opp_id, _user_id(session), ops.RATED, [ops.ARCHIVED], fields)
     return {"status": "ok", "opportunity": serialize(opp)}
 
 

@@ -281,11 +281,18 @@ const LW_PIPELINE = (() => {
     const key = url ? canonicalKey(url) : await textKey(text);
     const oppId = await documentId(userId, key);
     const path = `opportunities/${oppId}`;
+    // What the caller shows in the ✓ tooltip: the page title, upgraded to the stored job's
+    // title/company when the document already exists (auto-capture of an approved job).
+    const display = { title: (title || "").trim(), company: "" };
     for (let attempt = 0; attempt < 2; attempt++) {
       const existing = await client.getDocument(path);
+      if (existing) {
+        display.title = existing.title || display.title;
+        display.company = existing.company || "";
+      }
       const plan = await planCapture({ userId, key, oppId, url, title, text, html, via, existing, now: new Date() });
       if (plan.action === "skip") {
-        return { opportunity_id: oppId, opportunity_status: plan.status, message: plan.message };
+        return { opportunity_id: oppId, opportunity_status: plan.status, message: plan.message, ...display };
       }
       try {
         if (plan.action === "create") {
@@ -293,7 +300,7 @@ const LW_PIPELINE = (() => {
         } else {
           await client.update(path, plan.updateFields);
         }
-        return { opportunity_id: oppId, opportunity_status: plan.status, message: plan.message };
+        return { opportunity_id: oppId, opportunity_status: plan.status, message: plan.message, ...display };
       } catch (e) {
         if (plan.action === "update" && e && e.code === "PERMISSION_DENIED") {
           // The rules reject updates while the batch is drafting: the guard fired between read and write.
@@ -301,6 +308,7 @@ const LW_PIPELINE = (() => {
             opportunity_id: oppId,
             opportunity_status: DRAFTING,
             message: "The desktop is drafting this job right now.",
+            ...display,
           };
         }
         if (

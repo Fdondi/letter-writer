@@ -8,10 +8,12 @@ import { fetchWithHeartbeat } from "../utils/apiHelpers";
 export const TABS = [
   { key: "proposed", label: "Proposed", statuses: ["proposed"] },
   { key: "waiting", label: "Needs text", statuses: ["approved"] },
+  { key: "rated", label: "Rated", statuses: ["rated"] },
   { key: "drafting", label: "Drafting", statuses: ["captured", "drafting", "failed"] },
   { key: "ready", label: "Ready", statuses: ["ready"] },
   { key: "applied", label: "Applied", statuses: ["done", "applied"] },
   { key: "skipped", label: "Skipped", statuses: ["skipped"] },
+  { key: "archived", label: "Archived", statuses: ["archived"] },
 ];
 
 const STAGE_LABELS = {
@@ -49,13 +51,27 @@ const STATUS_LABELS = {
   proposed: "proposed",
   approved: "waiting for posting text",
   captured: "queued for the next desktop run",
+  rated: "rated by the desktop — waiting for a drafting slot",
   drafting: "drafting on the desktop",
   failed: "failed",
   ready: "ready",
   done: "letter saved",
   applied: "applied",
   skipped: "skipped",
+  archived: "archived — not drafted within the archive window",
 };
+
+/** The rating a job is sorted by: the user's override, else the desktop's computed score. */
+export function effectiveFit(opp) {
+  if (opp?.fit_score_user != null) return Number(opp.fit_score_user);
+  if (opp?.fit_score != null) return Number(opp.fit_score);
+  return null;
+}
+
+function fitStars(score) {
+  const full = Math.round(score);
+  return `${"★".repeat(full)}${"☆".repeat(5 - full)}`;
+}
 
 const VENDOR_LABELS = { claude_code: "Claude Code" };
 
@@ -100,6 +116,78 @@ function Chip({ children, tone = "neutral" }) {
     >
       {children}
     </span>
+  );
+}
+
+/** The rated queue's rating: the desktop's weighted competence match, editable per job. */
+function FitRating({ opp, busy, onAction }) {
+  const effective = effectiveFit(opp);
+  const overridden = opp.fit_score_user != null;
+  const [value, setValue] = useState(effective != null ? String(effective) : "");
+  const parsed = Number(value);
+  const valid = value !== "" && Number.isFinite(parsed) && parsed >= 1 && parsed <= 5;
+  return (
+    <div data-testid={`fit-rating-${opp.id}`} style={{ marginTop: 8, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      <span style={{ fontSize: 13 }} title={overridden ? "Your rating (overrides the desktop's)" : "The desktop's weighted competence match"}>
+        Fit:{" "}
+        {effective != null ? (
+          <span>
+            <span style={{ fontSize: 12 }}>{fitStars(effective)}</span> {effective.toFixed(1)}
+            {overridden && <span> (yours)</span>}
+          </span>
+        ) : (
+          "not rated yet"
+        )}
+      </span>
+      <input
+        aria-label="Your fit rating"
+        type="number"
+        min={1}
+        max={5}
+        step={0.5}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        style={{ width: 64, fontSize: 14, padding: 4 }}
+      />
+      <button type="button" disabled={busy || !valid} style={buttonStyle(true, busy || !valid)} onClick={() => onAction("rate", opp, { score: parsed })}>
+        Save rating
+      </button>
+      {overridden && (
+        <button type="button" disabled={busy} style={buttonStyle(false, busy)} onClick={() => onAction("rate", opp, { score: null })}>
+          Reset to auto
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** An archived job comes back to the rated queue, optionally with a new fit estimate. */
+function Reenable({ opp, busy, onAction }) {
+  const [value, setValue] = useState("");
+  const parsed = Number(value);
+  const valid = value === "" || (Number.isFinite(parsed) && parsed >= 1 && parsed <= 5);
+  return (
+    <div style={{ marginTop: 8, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      <input
+        aria-label="New fit rating (optional)"
+        type="number"
+        min={1}
+        max={5}
+        step={0.5}
+        placeholder="New fit (optional)"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        style={{ width: 150, fontSize: 14, padding: 4 }}
+      />
+      <button
+        type="button"
+        disabled={busy || !valid}
+        style={buttonStyle(true, busy || !valid)}
+        onClick={() => onAction("reenable", opp, { score: value === "" ? null : parsed })}
+      >
+        Re-enable
+      </button>
+    </div>
   );
 }
 
@@ -149,12 +237,12 @@ function OpportunityCard({ opp, highlighted, busy, onAction }) {
               Back to proposed
             </button>
           )}
-          {["proposed", "approved", "captured", "failed", "ready"].includes(status) && (
+          {["proposed", "approved", "captured", "rated", "archived", "failed", "ready"].includes(status) && (
             <button type="button" disabled={busy} style={buttonStyle(false, busy)} onClick={() => setSkipOpen((v) => !v)}>
               Skip
             </button>
           )}
-          {["proposed", "approved", "failed"].includes(status) && (
+          {["proposed", "approved", "rated", "archived", "failed"].includes(status) && (
             <button type="button" disabled={busy} style={buttonStyle(false, busy)} onClick={() => setPasteOpen((v) => !v)}>
               Paste text
             </button>
@@ -185,6 +273,13 @@ function OpportunityCard({ opp, highlighted, busy, onAction }) {
             </Chip>
           ))}
         </div>
+      )}
+      {status === "rated" && <FitRating opp={opp} busy={busy} onAction={onAction} />}
+      {status === "archived" && (
+        <>
+          {opp.archive_reason && <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>{opp.archive_reason}</div>}
+          <Reenable opp={opp} busy={busy} onAction={onAction} />
+        </>
       )}
       {(opp.vendors_done?.length > 0 || Object.keys(failed).length > 0 || opp.input_needed_count > 0) && (
         <div style={{ marginTop: 6, fontSize: 13 }}>
@@ -303,7 +398,7 @@ export default function OpportunitiesPage({ onOpened = null, highlightId = null 
     if (tab) return tab;
     const highlighted = highlightId && items.find((o) => o.id === highlightId);
     if (highlighted) return tabForStatus(highlighted.status);
-    return (TABS.find((t) => !["applied", "skipped"].includes(t.key) && counts[t.key] > 0) || TABS[0]).key;
+    return (TABS.find((t) => !["applied", "skipped", "archived"].includes(t.key) && counts[t.key] > 0) || TABS[0]).key;
   }, [tab, highlightId, items, counts]);
 
   const visible = items.filter((o) => (TABS.find((t) => t.key === activeTab)?.statuses || []).includes(o.status));
@@ -321,7 +416,16 @@ export default function OpportunitiesPage({ onOpened = null, highlightId = null 
         }
         return;
       }
-      const body = action === "skip" ? { reason: extra.reason } : action === "capture" ? { text: extra.text } : {};
+      const body =
+        action === "skip"
+          ? { reason: extra.reason }
+          : action === "capture"
+            ? { text: extra.text }
+            : action === "rate"
+              ? { score: extra.score }
+              : action === "reenable"
+                ? { score: extra.score }
+                : {};
       const result = await fetchWithHeartbeat(`/api/opportunities/${opp.id}/${action}/`, {
         method: "POST",
         body: JSON.stringify(body),

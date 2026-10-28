@@ -135,6 +135,56 @@ def test_retry_failed(env):
     assert client.post(f"/api/opportunities/{opp_id}/retry/").json()["opportunity"]["status"] == ops.CAPTURED
 
 
+def test_rate_sets_and_clears_the_user_fit_estimate(env):
+    client, _, store = env
+    opp_id, _, _ = store.capture(USER, url=JOB_URL, text="Posting", via="extension")
+    store.set_status(opp_id, ops.RATED, from_states=[ops.CAPTURED], user_id=USER, fields={"fit_score": 3.5})
+    res = client.post(f"/api/opportunities/{opp_id}/rate/", json={"score": 4.5})
+    assert res.status_code == 200
+    assert res.json()["opportunity"]["fit_score_user"] == 4.5
+    assert res.json()["opportunity"]["fit_score"] == 3.5
+    res = client.post(f"/api/opportunities/{opp_id}/rate/", json={"score": None})
+    assert res.json()["opportunity"]["fit_score_user"] is None
+    # Out of range is clamped to the 1-5 scale.
+    assert client.post(f"/api/opportunities/{opp_id}/rate/", json={"score": 9}).json()["opportunity"]["fit_score_user"] == 5.0
+    assert client.post("/api/opportunities/missing/rate/", json={"score": 3}).status_code == 404
+
+
+def test_rate_rejects_other_users_and_closed_jobs(env):
+    client, _, store = env
+    opp_id, _, _ = store.capture(USER, url=JOB_URL, text="Posting", via="extension")
+    other, _, _ = store.capture("other-user", url=JOB_URL, text="Posting", via="extension")
+    assert client.post(f"/api/opportunities/{other}/rate/", json={"score": 3}).status_code == 404
+    store.set_status(opp_id, ops.DONE, from_states=[ops.CAPTURED], user_id=USER)
+    assert client.post(f"/api/opportunities/{opp_id}/rate/", json={"score": 3}).status_code == 409
+
+
+def test_reenable_brings_an_archived_job_back_with_a_new_estimate(env):
+    client, _, store = env
+    opp_id, _, _ = store.capture(USER, url=JOB_URL, text="Posting", via="extension")
+    store.set_status(opp_id, ops.RATED, from_states=[ops.CAPTURED], user_id=USER, fields={"fit_score": 3.5, "fit_rated_at": "2020-01-01T00:00:00+00:00"})
+    store.set_status(opp_id, ops.ARCHIVED, from_states=[ops.RATED], user_id=USER, fields={"archived_at": "2020-01-04T00:00:00+00:00"})
+    res = client.post(f"/api/opportunities/{opp_id}/reenable/", json={"score": 4.9})
+    assert res.status_code == 200
+    opp = res.json()["opportunity"]
+    assert opp["status"] == ops.RATED and opp["fit_score_user"] == 4.9
+    assert opp["archived_at"] is None and opp["fit_rated_at"] > "2020"
+    # Only archived jobs can be re-enabled.
+    assert client.post(f"/api/opportunities/{opp_id}/reenable/", json={}).status_code == 409
+    assert client.post("/api/opportunities/missing/reenable/", json={}).status_code == 404
+
+
+def test_skip_works_from_rated_and_archived(env):
+    client, _, store = env
+    opp_id, _, _ = store.capture(USER, url=JOB_URL, text="Posting", via="extension")
+    store.set_status(opp_id, ops.RATED, from_states=[ops.CAPTURED], user_id=USER, fields={"fit_score": 3.5})
+    assert client.post(f"/api/opportunities/{opp_id}/skip/", json={"reason": "Too far"}).json()["opportunity"]["status"] == ops.SKIPPED
+    other, _, _ = store.capture("other-user", url=JOB_URL, text="Posting", via="extension")
+    store.set_status(other, ops.RATED, from_states=[ops.CAPTURED], user_id="other-user")
+    store.set_status(other, ops.ARCHIVED, from_states=[ops.RATED], user_id="other-user")
+    assert client.post(f"/api/opportunities/{other}/skip/", json={"reason": "x"}).status_code == 404
+
+
 # --- job capture --------------------------------------------------------------------------------
 
 

@@ -1,13 +1,35 @@
-# AMO submission texts — Letter Writer Capture 1.3.7 (unlisted)
+# AMO submission texts — Letter Writer Capture 1.3.9 (unlisted)
 
 Paste-ready texts for the addons.mozilla.org Developer Hub form when uploading
-`dist/letter-writer-capture-1.3.7.xpi` as an **unlisted** add-on. The two sections below map to
+`dist/letter-writer-capture-1.3.9.xpi` as an **unlisted** add-on. The two sections below map to
 the form's **Version notes** and **Notes to Reviewer** fields. Source: `github.com/Fdondi/letter-writer`
 (`extensions/job-capture/`); the packaged files are those sources verbatim (`package.sh` copies them).
 
 ## Version notes
 
-**1.3.7 — fix the queued-write user id: the Google sub, not the Firebase localId**
+**1.3.9 — the ✓ tooltip names the job; the badge shows how many drafts are ready**
+
+- The ✓ tooltip now names the job that was queued — its title and company (`Senior Engineer —
+  Acme`), falling back to the page title — instead of the Firestore document id, and no longer
+  appends the "Saved. The desktop drafts it on its next run." boilerplate. A note is still
+  appended when the job is not a plain capture, e.g. "(The desktop is drafting this job right
+  now.)".
+- The toolbar badge now shows your pipeline at a glance: the badge itself counts the drafts that
+  are **ready for your attention**, and hovering it reads `Letter Writer: N queued · N running ·
+  N ready`. The counts refresh on startup, every 15 minutes, and after each capture; they are
+  read from your own Firestore jobs, scoped to your account by the rules.
+- No other changes. See 1.3.8 … 1.3.0 below.
+
+### Previous version — 1.3.8: the badge clears when the page changes; the ✓ tooltip names the uploaded document
+
+- The toolbar badge's ✓ (or →) meant "this page was captured", but it stayed after the tab
+  navigated elsewhere. The badge now clears when the tab starts loading a new page (or its URL
+  changes) and the tooltip resets to the default.
+- The ✓ tooltip now names the Firestore document that was written — `opportunities/<id>` — so
+  hovering the badge shows exactly what was uploaded (the same id the desktop batch drafts).
+- No other changes. See 1.3.7 … 1.3.0 below.
+
+### Previous version — 1.3.7: fix the queued-write user id (the Google sub, not the Firebase localId)
 
 - The sign-in stored `federatedId || localId` as the user id; for an account created with
   email/password and Google linked later that is the Firebase `localId`, but the Firestore
@@ -113,7 +135,10 @@ New in 1.3.0:
 
 ## Notes to Reviewer
 
-Version 1.3.7 stores the Google account id (the Firebase token's
+Version 1.3.9 names the queued job (title — company, page title as fallback) in the ✓ tooltip —
+no Firestore internals — and shows the pipeline counts on the badge: the number of ready drafts
+on the badge itself, `N queued · N running · N ready` in its tooltip. Version 1.3.8 clears the
+toolbar badge when the tab navigates away. Version 1.3.7 stores the Google account id (the Firebase token's
 `identities['google.com'][0]` — the phone app's user id and the `personal_data` doc id) instead
 of the Firebase `localId`, so queue writes pass the rules (`Missing or insufficient permissions`
 before). Version 1.3.6 fixes the sign-in's Firebase exchange — the `requestUri` sent to
@@ -149,9 +174,10 @@ the user's own web app).
 2. Queueing **on** (the default), not signed in: clicking the button starts the Google sign-in flow;
    the Options page shows the account once signed in.
 3. Full flow: sign in with the test account below, open any page (a job posting on jobs.ch is
-   typical), click the toolbar button → badge ✓ "Saved. The desktop drafts it on its next run." The
-   write lands in Firestore project `gen-lang-client-0535858734`. The rules only accept known users:
-   any other account gets a clear rules-rejection message on the badge (also logged to the console).
+   typical), click the toolbar button → badge ✓ with the job's name in the tooltip (and the
+   `N queued · N running · N ready` counts on hover). The write lands in Firestore project
+   `gen-lang-client-0535858734`. The rules only accept known users: any other account gets a
+   clear rules-rejection message on the badge (also logged to the console).
 4. Auto-capture: approve a job in the app, open its page in the browser → the posting is attached
    automatically (badge ✓). On Firefox for Android, sending a page opens
    `letterwriter://capture?url=…&text=…` — the companion Android app queues the job; without the

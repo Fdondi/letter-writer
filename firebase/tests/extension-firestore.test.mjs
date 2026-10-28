@@ -115,6 +115,7 @@ beforeEach(async () => {
     title: "Approved job",
   });
   await seedDoc("opportunities/captured-mine", { user_id: ME, canonical_key: "linkedin:7", status: "captured" });
+  await seedDoc("opportunities/ready-mine", { user_id: ME, canonical_key: "linkedin:8", status: "ready" });
   await seedDoc(`opportunities/${draftingId}`, {
     user_id: ME,
     canonical_key: "jobs.ch:aaaaaaaa-1d7a-45bc-b9a7-a32dd1dfb5f7",
@@ -297,5 +298,14 @@ describe("the extension's pending-jobs queries", () => {
     if (rows.length !== 1) throw new Error(`rows ${rows.length}`);
     if (rows[0].id !== linkedinId) throw new Error(`id ${rows[0].id}`);
     if (rows[0].url !== LW_PIPELINE.cleanUrl(LINKEDIN_URL)) throw new Error(`url ${rows[0].url}`);
+  });
+
+  test("a user_id-only list query returns every status (the badge counts query)", async () => {
+    const client = clientFor(ME);
+    const rows = await client.query("opportunities", [["user_id", ME]], ["status"]);
+    const statuses = rows.map((r) => r.status).sort();
+    const expected = ["approved", "captured", "drafting", "ready"];
+    if (JSON.stringify(statuses) !== JSON.stringify(expected)) throw new Error(`statuses ${statuses}`);
+    if (rows.some((r) => r.id === "approved-theirs")) throw new Error("another user's job leaked into the counts");
   });
 });

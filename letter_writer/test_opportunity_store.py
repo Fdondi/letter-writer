@@ -10,11 +10,13 @@ from letter_writer import opportunity_store as ops
 from letter_writer.opportunity_store import (
     APPLIED,
     APPROVED,
+    ARCHIVED,
     CAPTURED,
     DONE,
     DRAFTING,
     FAILED,
     PROPOSED,
+    RATED,
     READY,
     SKIPPED,
     OwnershipError,
@@ -208,3 +210,63 @@ def test_list_for_user_filters_and_sorts(opportunity_store):
     listed = store.list_for_user(USER)
     assert [i["id"] for i in listed] == [a, b]
     assert [i["id"] for i in store.list_for_user(USER, [PROPOSED])] == [b]
+
+
+def test_rated_and_archived_lifecycle(opportunity_store):
+    store = opportunity_store
+    opp_id, _, _ = store.capture(USER, url=JOB_URL, text="text", via="extension")
+    # The desktop's rating pass: captured -> rated with the fit fields.
+    rated = store.set_status(opp_id, RATED, from_states=[CAPTURED], user_id=USER, fields={"fit_score": 4.2, "fit_rated_at": datetime.now(timezone.utc)})
+    assert rated["status"] == RATED and rated["fit_score"] == 4.2
+    # The daemon picks it: rated -> drafting under a lease, stamped processed_at.
+    claimed = store.claim_for_drafting(opp_id, "batch-a", user_id=USER)
+    assert claimed["status"] == DRAFTING and claimed["lease"]["owner"] == "batch-a"
+    assert ops.as_utc(claimed["processed_at"]) is not None
+    # Another run cannot take it while the lease holds.
+    assert store.claim_for_drafting(opp_id, "batch-b", user_id=USER) is None
+    store.finish_drafting(opp_id, "batch-a", READY)
+
+    # A rated job the desktop never drafts is archived, then re-enabled by the user.
+    opp2, _, _ = store.capture(USER, url="https://example.com/jobs/2", text="two", via="extension")
+    store.set_status(opp2, RATED, from_states=[CAPTURED], user_id=USER, fields={"fit_rated_at": datetime.now(timezone.utc) - timedelta(days=4)})
+    archived = store.set_status(opp2, ARCHIVED, from_states=[RATED], user_id=USER, fields={"archived_at": datetime.now(timezone.utc)})
+    assert archived["status"] == ARCHIVED
+    reenabled = store.set_status(opp2, RATED, from_states=[ARCHIVED], user_id=USER, fields={"fit_score_user": 5.0})
+    assert reenabled["status"] == RATED and reenabled["fit_score_user"] == 5.0
+    # New posting text re-queues a rated or archived job for the rating pass.
+    status, _ = store.attach_capture(opp2, USER, text="new text", via="share_text")
+    assert status == CAPTURED
+
+
+def test_rated_and_archived_transition_table():
+    for current, target in [(CAPTURED, RATED), (CAPTURED, FAILED), (RATED, DRAFTING), (RATED, ARCHIVED), (ARCHIVED, RATED), (ARCHIVED, CAPTURED)]:
+        ops.check_transition(current, target)
+    for current, target in [(RATED, READY), (ARCHIVED, DRAFTING), (PROPOSED, RATED), (APPLIED, ARCHIVED), (APPLIED, RATED)]:
+        with pytest.raises(TransitionError):
+            ops.check_transition(current, target)
+
+
+def test_set_fit_score_checks_owner_and_status(opportunity_store):
+    store = opportunity_store
+    opp_id, _, _ = store.capture(USER, url=JOB_URL, text="text", via="extension")
+    doc = store.set_fit_score(opp_id, 4.5, user_id=USER)
+    assert doc["fit_score_user"] == 4.5
+    doc = store.set_fit_score(opp_id, None, user_id=USER)
+    assert doc["fit_score_user"] is None
+    with pytest.raises(OwnershipError):
+        store.set_fit_score(opp_id, 3.0, user_id="intruder")
+    with pytest.raises(KeyError):
+        store.set_fit_score("missing", 3.0, user_id=USER)
+    store.claim_next_captured("b", user_id=USER)
+    with pytest.raises(TransitionError):
+        store.set_fit_score(opp_id, 3.0, user_id=USER)
+
+
+def test_claim_for_drafting_only_takes_waiting_jobs(opportunity_store):
+    store = opportunity_store
+    opp_id, _, _ = store.capture(USER, url=JOB_URL, text="text", via="extension")
+    assert store.claim_for_drafting(opp_id, "b", user_id=USER)["status"] == DRAFTING
+    # Already drafting with a live lease: not claimable; once finished, it stays untouched.
+    assert store.claim_for_drafting(opp_id, "b", user_id=USER) is None
+    store.finish_drafting(opp_id, "b", READY)
+    assert store.claim_for_drafting(opp_id, "b", user_id=USER) is None

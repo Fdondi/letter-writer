@@ -3,9 +3,16 @@
 Design and reasons: `OPPORTUNITY_PIPELINE_PLAN.md`. This page is how to set it up and use it.
 
 ```
-phone / extension / web ──send──▶ captured ──timer: run-captured──▶ drafting ──▶ ready ──open/save──▶ done
-        (bare link: approved, "needs text")                              └──▶ failed (retry)
+phone / extension / web ──send──▶ captured ──timer: daemon --once──▶ rated ──best under the 24h cap──▶ drafting ──▶ ready ──open/save──▶ done
+        (bare link: approved, "needs text")            │                        └──▶ failed (retry)
+                                                         └── older than 3 days ──▶ archived (re-enable from the web)
 ```
+
+Each wake of the daemon (`scripts/opportunities/run-routine.sh`, every `LW_WAKE_INTERVAL_HOURS`,
+default 3): archive expired rated jobs → extract and fit-rate every captured job (`fit_score`,
+the weighted competence match the intake shows; the user's `fit_score_user` override wins) →
+draft the best rated jobs up to the rolling 24h cap (`LW_DAILY_CAP`, default 5). `run-captured`
+is the manual override (drafts captured jobs now, ignoring the rating and the cap).
 
 ## Pieces
 
@@ -13,7 +20,7 @@ phone / extension / web ──send──▶ captured ──timer: run-captured�
 |---|---|
 | Store, keys (`canonical_key`, document ids) | `letter_writer/opportunity_store.py`; the Android app's `OpportunityKeys.kt` must agree (shared cases: `letter_writer/tests/fixtures/opportunity_keys.json`) |
 | Mail (experimental, unused) | `experimental/email/`: alert templates, reply classification, outcomes, Gmail routine, findings |
-| Batch CLI | `python -m letter_writer.batch run-captured / status / retry / seed / users` |
+| Batch CLI | `python -m letter_writer.batch daemon [--once] / run-captured / status / retry / seed / users` |
 | Headless sessions | `letter_writer/headless.py` (phased pipeline without a request, one thread per vendor) |
 | Claude Code vendor | `letter_writer/clients/claude_code.py` + `claude_code.json` (`claude -p`, no tools, subscription) |
 | Web API | `/api/opportunities/…`; `/api/job-capture/pending/`; ingest attaches captures to approved jobs and queues pages (`queue: true`) |
@@ -28,8 +35,15 @@ phone / extension / web ──send──▶ captured ──timer: run-captured�
 Every step (one-time setup, running the routine by hand or every 4 hours, day-to-day use, what
 happens when you already applied, troubleshooting) is in the README, section **Opportunity pipeline**.
 
-Batch commands: `run-captured [--max-jobs N] [--vendors a,b] [--rewrite-rounds 0|1|2] [--[no-]final-feedback] [--detach]
-[--dry-run]`, `status`, `retry <id>`, `seed --url … [--text-file …]`, `users`.
+Batch commands: `daemon [--once] [--interval-hours H] [--daily-cap N] [--archive-days D] [--vendors a,b] [--rewrite-rounds 0|1|2] [--[no-]final-feedback] [--dry-run]`
+(the scheduled path; the env vars `LW_WAKE_INTERVAL_HOURS` / `LW_DAILY_CAP` / `LW_ARCHIVE_DAYS` set
+the same defaults), `run-captured [--max-jobs N] [--vendors a,b] [--rewrite-rounds 0|1|2] [--[no-]final-feedback] [--detach] [--dry-run]` (manual override), `status`, `retry <id>`,
+`seed --url … [--text-file …]`, `users`.
+
+Web API additions: `POST /api/opportunities/{id}/rate/ {score|null}` sets or clears the user's fit
+estimate (shown and sorted by instead of the computed one); `POST /api/opportunities/{id}/reenable/ {score?}`
+moves an archived job back to `rated` with a fresh archive window. The web app shows the queues
+under **Jobs → Rated** (editable rating) and **Jobs → Archived** (re-enable).
 
 ## Costs
 

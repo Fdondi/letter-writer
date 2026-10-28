@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Sets up the opportunity routine on this Linux machine.
 #   install.sh skill   /letter-opportunities in Claude Code here (symlink in .claude/skills, gitignored)
-#   install.sh timer   systemd user timer: run-routine.sh every 15 minutes; installed, not started
+#   install.sh timer   systemd user timer: run-routine.sh every LW_WAKE_INTERVAL_HOURS (default 3);
+#                      installed, not started
 set -euo pipefail
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
+wake_hours="${LW_WAKE_INTERVAL_HOURS:-3}"
 
 install_skill() {
   mkdir -p "$repo/.claude/skills"
@@ -16,7 +18,7 @@ install_timer() {
   mkdir -p "$units"
   cat >"$units/letter-opportunities.service" <<UNIT
 [Unit]
-Description=Letter Writer: draft letters for captured jobs
+Description=Letter Writer: rate new jobs and draft the best letters
 
 [Service]
 Type=oneshot
@@ -29,12 +31,12 @@ TimeoutStartSec=2h
 UNIT
   cat >"$units/letter-opportunities.timer" <<UNIT
 [Unit]
-Description=Draft letters for captured jobs every 15 minutes
+Description=Rate new jobs and draft the best letters every ${wake_hours} hours
 
 [Timer]
-OnCalendar=*:0/15
+OnCalendar=*-*-* 00/${wake_hours}:00:00
 RandomizedDelaySec=1min
-# A run missed while the machine was off or asleep happens once on wake.
+# A wake missed while the machine was off or asleep happens once on wake.
 Persistent=true
 
 [Install]

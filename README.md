@@ -135,14 +135,27 @@ Reading job alerts and application replies from Gmail is experimental and not us
    (Options page: off opens the intake tab instead, for interactive extraction); in the web
    app, **Jobs → Add a job by hand**. The job is saved in Firestore as **captured** (a bare link waits
    as **needs text** until you add the posting text).
-2. **The desktop drafts it.** Every 15 minutes a timer on this computer runs
-   `letter_writer.batch run-captured`, which takes up to 3 captured jobs (oldest first): extraction
-   (company, title, competences, similar letters), one company research, then per vendor: plan →
-   draft → (comments → rewrite) as many times as the job asks → comments on the last version if
-   asked. Vendors are the job's own list; a job without one (extension, web) uses every vendor: the
-   desktop has no defaults. In the batch Anthropic is always Claude Code, never the API. The job becomes **ready**, or **failed** with each vendor's error. A run
-   with nothing captured only reads Firestore.
-3. **You finish it.** In the app (**Job pipeline → Ready → Open the drafts**) the **Final** tab shows
+2. **The desktop rates it, then drafts the best ones.** Every 3 hours a timer on this computer runs
+   `letter_writer.batch daemon --once`, one wake of the pipeline:
+   - every **captured** job is extracted (company, title, competences, similar letters) and moved
+     to **rated** with its fit score — the weighted competence match the intake page shows — and
+     the extraction is stored, so drafting pays for it once;
+   - only the best **rated** jobs are drafted, up to a rolling 24-hour cap (default 5 letters;
+     `LW_DAILY_CAP` changes it): extraction, one company research, then per vendor: plan →
+     draft → (comments → rewrite) as many times as the job asks → comments on the last version if
+     asked. Vendors are the job's own list; a job without one (extension, web) uses every vendor:
+     the desktop has no defaults. In the batch Anthropic is always Claude Code, never the API. A
+     drafted job becomes **ready**, or **failed** with each vendor's error;
+   - a **rated** job that was not drafted within 3 days (`LW_ARCHIVE_DAYS`) is **archived** and
+     left alone. A wake with nothing captured only reads Firestore.
+   The wake interval is `LW_WAKE_INTERVAL_HOURS` (default 3). `run-captured` remains as a manual
+   override: it drafts captured jobs right now, ignoring the rating and the cap.
+3. **You steer it.** In the app (**Jobs → Rated**) you see each job's fit score with its matched
+   competences and gaps, and can change the rating — your rating decides which jobs are drafted
+   first. **Jobs → Archived** shows the jobs that waited too long; **Re-enable** brings one back,
+   optionally with a new fit estimate. On the phone the same queues are the **Rated** and **Done**
+   (archived) tabs of the job pipeline. Skipping works from any of these states.
+4. **You finish it.** In the app (**Job pipeline → Ready → Open the drafts**) the **Final** tab shows
    each vendor's letter paragraph by paragraph, with its comments on the paragraph they quote
    (highlighted) or on the whole letter. Add a paragraph as it is, or **Redraft** it right away with
    the comments you keep ticked, your answers to questions and a note: that call goes straight from
@@ -190,14 +203,15 @@ The phone and the desktop never connect to each other; both only read and write 
    Android has no sign-in API (and no app server on the phone): there the extension hands the page
    to the **Android app** over a `letterwriter://capture?…` link — install the app and sign in there,
    and it queues the job itself (`docs/JOB_CAPTURE_EXTENSION.md` → *Firefox for Android*).
-7. **Extension:** reload it (version 1.3.7; from 1.3.0 it queues sent pages directly in Firestore
+7. **Extension:** reload it (version 1.3.9; from 1.3.0 it queues sent pages directly in Firestore
    by default — Options page to turn it off; 1.1.0 asked for the job sites' host permissions;
    1.3.1/1.3.2 fixed the Google sign-in call on Firefox and Chrome, 1.3.3 signs in with the
    Firebase-configured web client, 1.3.4 drops the unnecessary Firebase authorized-domains step,
    1.3.5 shows the OAuth client ID next to the redirect URI in the setup, 1.3.6 fixes the
    Firebase sign-in exchange (INVALID_REQUEST_URI) and documents that the redirect URI never
    changes — register it once, 1.3.7 stores the Google sub as the queued-write user id (not the
-   Firebase localId)).
+   Firebase localId), 1.3.8 clears the badge when the page changes, 1.3.9 names the job (title —
+   company) in the ✓ tooltip and shows the pipeline counts (queued · running · ready) on the badge).
 8. **The timer** (every 15 minutes; a run missed while the machine is off or asleep happens on wake):
    ```bash
    scripts/opportunities/install.sh timer

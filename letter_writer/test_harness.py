@@ -250,7 +250,7 @@ def test_jobs_page_has_one_synthetic_job_per_tab(harness_env):
     res = harness_env.get("/api/opportunities/")
     assert res.status_code == 200, res.text
     statuses = sorted(o["status"] for o in res.json()["opportunities"])
-    assert statuses == ["applied", "approved", "captured", "done", "failed", "proposed", "ready", "skipped"]
+    assert statuses == ["applied", "approved", "archived", "captured", "done", "failed", "proposed", "rated", "ready", "skipped"]
     assert all(o["title"].startswith("FAKE") for o in res.json()["opportunities"])
 
 

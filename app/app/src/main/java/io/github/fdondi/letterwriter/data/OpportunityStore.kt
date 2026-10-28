@@ -81,7 +81,9 @@ object OpportunityRules {
         OpportunityStatus.APPROVED,
         OpportunityStatus.SKIPPED,
         OpportunityStatus.CAPTURED,
+        OpportunityStatus.RATED,
         OpportunityStatus.FAILED,
+        OpportunityStatus.ARCHIVED,
         OpportunityStatus.UNKNOWN,
     )
 

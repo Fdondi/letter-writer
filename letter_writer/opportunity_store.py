@@ -31,32 +31,38 @@ PROPOSED = "proposed"
 SKIPPED = "skipped"
 APPROVED = "approved"
 CAPTURED = "captured"
+RATED = "rated"
 DRAFTING = "drafting"
 READY = "ready"
 FAILED = "failed"
 DONE = "done"
 APPLIED = "applied"
-STATUSES = (PROPOSED, SKIPPED, APPROVED, CAPTURED, DRAFTING, READY, FAILED, DONE, APPLIED)
+ARCHIVED = "archived"
+STATUSES = (PROPOSED, SKIPPED, APPROVED, CAPTURED, RATED, DRAFTING, READY, FAILED, DONE, APPLIED, ARCHIVED)
 
 # Every move any writer (batch, web API, phone) may make. The phone's rules in OpportunityStore.kt
-# are a subset of this table.
+# are a subset of this table. ``rated`` (extracted and fit-rated, waiting for a drafting slot) and
+# ``archived`` (rated but never drafted within the archive window) belong to the desktop batch; the
+# user moves jobs out of them through the web API (rating, re-enable) or by skipping.
 ALLOWED_TRANSITIONS: Dict[str, frozenset] = {
     PROPOSED: frozenset({APPROVED, SKIPPED, CAPTURED, DONE, APPLIED}),
     SKIPPED: frozenset({PROPOSED, APPROVED, CAPTURED, DONE, APPLIED}),
     APPROVED: frozenset({PROPOSED, SKIPPED, CAPTURED, DONE, APPLIED}),
-    CAPTURED: frozenset({APPROVED, SKIPPED, DRAFTING, DONE, APPLIED}),
+    CAPTURED: frozenset({APPROVED, SKIPPED, RATED, FAILED, DONE, APPLIED}),
+    RATED: frozenset({DRAFTING, APPROVED, SKIPPED, CAPTURED, ARCHIVED, DONE, APPLIED}),
     DRAFTING: frozenset({READY, FAILED, CAPTURED}),
     READY: frozenset({CAPTURED, SKIPPED, DONE, APPLIED}),
     FAILED: frozenset({CAPTURED, SKIPPED, DONE, APPLIED}),
     DONE: frozenset({APPLIED}),
     APPLIED: frozenset(),
+    ARCHIVED: frozenset({RATED, SKIPPED, CAPTURED, DONE, APPLIED}),
 }
 
 # States in which new posting text replaces the capture and queues the job for drafting.
-RECAPTURABLE = frozenset({PROPOSED, APPROVED, SKIPPED, CAPTURED, FAILED})
+RECAPTURABLE = frozenset({PROPOSED, APPROVED, SKIPPED, CAPTURED, RATED, FAILED, ARCHIVED})
 
 # Status order for "never downgrade" when a proposal is seen again.
-_STATUS_RANK = {s: i for i, s in enumerate((PROPOSED, SKIPPED, APPROVED, CAPTURED, DRAFTING, FAILED, READY, DONE, APPLIED))}
+_STATUS_RANK = {s: i for i, s in enumerate(STATUSES)}
 
 
 class TransitionError(Exception):
@@ -259,6 +265,12 @@ def _as_utc(value: Any) -> Optional[datetime]:
         except ValueError:
             return None
     return None
+
+
+def as_utc(value: Any) -> Optional[datetime]:
+    """Public :func:`_as_utc` for the batch's cap and archive math (``processed_at``,
+    ``fit_rated_at``, leases)."""
+    return _as_utc(value)
 
 
 def check_transition(current: str, target: str, from_states: Optional[Iterable[str]] = None) -> None:
@@ -558,7 +570,53 @@ class OpportunityStore:
                 return self.get(cand["id"])
         return None
 
-    def _try_claim(self, opp_id: str, owner: str, lease_s: float) -> bool:
+    def claim_for_drafting(
+        self,
+        opp_id: str,
+        owner: str,
+        lease_s: float = 3600.0,
+        *,
+        user_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Move one ``rated`` or ``captured`` job to ``drafting`` under ``owner``'s lease — the
+        daemon's pick, unlike :meth:`claim_next_captured` which takes the oldest capture. Stamps
+        ``processed_at`` so the rolling daily cap counts it. Returns the claimed job, or None when
+        another run took it first."""
+        if not self._try_claim(opp_id, owner, lease_s, statuses=(RATED, CAPTURED)):
+            return None
+        return self.get(opp_id, user_id)
+
+    def set_fit_score(
+        self,
+        opp_id: str,
+        score: Optional[float],
+        *,
+        user_id: Optional[str] = None,
+        from_states: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        """The user's fit estimate for a job (``fit_score_user``; None clears the override, so the
+        computed ``fit_score`` shows again). Allowed from every open status, in a transaction."""
+        allowed_from = list(from_states) if from_states is not None else [s for s in STATUSES if s not in (DRAFTING, DONE, APPLIED)]
+        ref = self._ref(opp_id)
+
+        @firestore.transactional
+        def run(tx) -> None:
+            snap = ref.get(transaction=tx)
+            if not snap.exists:
+                raise KeyError(f"Opportunity {opp_id} not found")
+            data = snap.to_dict() or {}
+            self._check_owner(data, user_id, opp_id)
+            if (data.get("status") or "") not in allowed_from:
+                raise TransitionError(f"Opportunity is '{data.get('status')}', expected one of {sorted(allowed_from)}")
+            tx.update(ref, {"fit_score_user": score, "updated_at": _now()})
+
+        run(self.db.transaction())
+        return self.get(opp_id) or {}
+
+    def _try_claim(self, opp_id: str, owner: str, lease_s: float, statuses: Iterable[str] = (CAPTURED,)) -> bool:
+        """Claim one job: from ``statuses``, or a ``drafting`` one whose lease expired. A job
+        leaving a waiting status is stamped ``processed_at`` (the rolling daily cap counts these)."""
+        waiting = set(statuses)
         ref = self._ref(opp_id)
 
         @firestore.transactional
@@ -570,8 +628,9 @@ class OpportunityStore:
             now = _now()
             status = data.get("status")
             lease_until = _as_utc((data.get("lease") or {}).get("until"))
-            if status == CAPTURED:
-                pass
+            update: Dict[str, Any] = {}
+            if status in waiting:
+                update["processed_at"] = now
             elif status == DRAFTING and (lease_until is None or lease_until <= now):
                 logger.info("Reclaiming %s: lease of %s expired", opp_id, (data.get("lease") or {}).get("owner"))
             else:
@@ -582,6 +641,7 @@ class OpportunityStore:
                     "status": DRAFTING,
                     "lease": {"owner": owner, "until": now + timedelta(seconds=lease_s)},
                     "updated_at": now,
+                    **update,
                 },
             )
             return True

@@ -1,5 +1,6 @@
 """The opportunity batch end to end: Firestore emulator, fixture LLM clients, no real services."""
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -493,3 +494,156 @@ def test_detach_does_not_start_a_second_batch(monkeypatch, tmp_path):
     (pid_dir / "batch.pid").write_text(str(os.getpid()))
     out = batch.detach_run_captured(["run-captured", "--detach"], popen=lambda *a, **k: pytest.fail("started twice"))
     assert out == {"already_running": os.getpid()}
+
+
+# --- daemon: rate, rolling cap, archive --------------------------------------------------------
+
+
+def _seed_many(store, n, start=0):
+    return [_seed(store, url=f"https://example.com/jobs/{start + i}", text=f"{JOB_TEXT} #{start + i}") for i in range(n)]
+
+
+def test_rate_captured_moves_jobs_to_rated_with_the_fit_score(opportunity_store, fakes):
+    store = opportunity_store
+    opp_id = _seed(store)
+    report = batch.rate_captured(store, USER, spending_check=None)
+    assert len(report) == 1 and report[0]["id"] == opp_id and report[0]["status"] == ops.RATED
+    assert report[0]["fit_score"] == pytest.approx(3.5, abs=0.1)
+
+    opp = store.get(opp_id)
+    assert opp["status"] == ops.RATED
+    assert opp["fit_score"] == pytest.approx(3.5, abs=0.1)
+    assert opp["fit_summary"]["matched"] == ["FixtureStack"]
+    assert ops.as_utc(opp["fit_rated_at"]) is not None
+    # Title, company and location are filled in from the extraction.
+    assert opp["company"] == "FAKE Fixture Works" and opp["title"] == "FAKE Fixture Engineer"
+    # The extraction is stored, so the later drafting pays for it once.
+    state = store.load_state(opp_id)
+    assert state["capture_fingerprint"] and state["vendors"] == {}
+    assert state["metadata"]["common"]["competences"]["FixtureStack"]["level"] == "Professional"
+
+
+def test_run_cycle_drafts_only_the_best_under_the_rolling_cap(opportunity_store, fakes):
+    store = opportunity_store
+    ids = _seed_many(store, 7)
+    report = batch.run_cycle(store, USER, daily_cap=5, cli_vendors=["openai"], spending_check=None)
+    assert len(report["rated"]) == 7
+    assert len(report["picked"]) == 5 and len(report["drafted"]) == 5
+    assert report["cap"] == {"daily_cap": 5, "processed_last_24h": 5}
+    statuses = [store.get(i)["status"] for i in ids]
+    assert statuses.count(ops.READY) == 5 and statuses.count(ops.RATED) == 2
+    assert all(ops.as_utc(store.get(i)["processed_at"]) is not None for i in ids if store.get(i)["status"] == ops.READY)
+
+    # The cap is rolling: with 5 drafted in the last 24 hours, the next cycle drafts nothing.
+    more = _seed_many(store, 2, start=7)
+    report = batch.run_cycle(store, USER, daily_cap=5, cli_vendors=["openai"], spending_check=None)
+    assert len(report["rated"]) == 2 and report["picked"] == [] and report["drafted"] == []
+    assert all(store.get(i)["status"] == ops.RATED for i in more)
+
+    # Once the window rolls past the first five, all four remaining rated jobs go.
+    for i in ids:
+        if store.get(i)["status"] == ops.READY:
+            store._ref(i).update({"processed_at": datetime.now(timezone.utc) - timedelta(hours=25)})
+    report = batch.run_cycle(store, USER, daily_cap=5, cli_vendors=["openai"], spending_check=None)
+    assert [r["status"] for r in report["drafted"]] == [ops.READY] * 4
+    assert all(store.get(i)["status"] == ops.READY for i in ids + more)
+
+
+def test_user_fit_override_decides_which_rated_job_is_drafted(opportunity_store, fakes):
+    store = opportunity_store
+    ids = _seed_many(store, 3)
+    batch.rate_captured(store, USER, spending_check=None)
+    store.set_fit_score(ids[0], 2.0, user_id=USER)
+    store.set_fit_score(ids[2], 5.0, user_id=USER)
+    report = batch.run_cycle(store, USER, daily_cap=1, cli_vendors=["openai"], spending_check=None)
+    assert report["picked"] == [ids[2]]
+    assert store.get(ids[2])["status"] == ops.READY
+    assert store.get(ids[0])["status"] == ops.RATED and store.get(ids[1])["status"] == ops.RATED
+
+
+def test_archive_sweep_and_reenable(opportunity_store, fakes):
+    store = opportunity_store
+    ids = _seed_many(store, 2)
+    batch.rate_captured(store, USER, spending_check=None)
+    for i in ids:
+        store._ref(i).update({"fit_rated_at": datetime.now(timezone.utc) - timedelta(days=4)})
+    archived = batch.archive_expired(store, USER, 3)
+    assert {a["id"] for a in archived} == set(ids)
+    assert all(store.get(i)["status"] == ops.ARCHIVED for i in ids)
+    assert ops.as_utc(store.get(ids[0])["archived_at"]) is not None
+
+    # Archived jobs are never selected nor drafted again.
+    assert batch.select_for_drafting(store, USER, 5) == []
+    report = batch.run_cycle(store, USER, daily_cap=5, cli_vendors=["openai"], spending_check=None)
+    assert report["drafted"] == [] and report["picked"] == []
+
+    # The user re-enables one, changing its fit estimate; the other stays archived.
+    doc = store.set_status(ids[0], ops.RATED, from_states=[ops.ARCHIVED], user_id=USER, fields={"fit_score_user": 4.9, "fit_rated_at": datetime.now(timezone.utc)})
+    assert doc["status"] == ops.RATED and doc["fit_score_user"] == 4.9
+    report = batch.run_cycle(store, USER, daily_cap=5, cli_vendors=["openai"], spending_check=None)
+    assert [r["id"] for r in report["drafted"]] == [ids[0]]
+    assert store.get(ids[1])["status"] == ops.ARCHIVED
+
+
+def test_run_cycle_dry_run_changes_nothing(opportunity_store, fakes):
+    store = opportunity_store
+    opp_id = _seed(store)
+    report = batch.run_cycle(store, USER, daily_cap=5, cli_vendors=["openai"], spending_check=None, dry_run=True)
+    assert report["rated"][0]["dry_run"] is True
+    assert report["picked"] == [] and report["drafted"] == []
+    assert store.get(opp_id)["status"] == ops.CAPTURED
+
+
+def test_rating_pass_defers_when_the_spending_limit_blocks(opportunity_store, fakes):
+    store = opportunity_store
+    opp_id = _seed(store)
+    report = batch.rate_captured(store, USER, spending_check=lambda user_id: "over the daily limit")
+    assert report == [{"id": opp_id, "status": ops.CAPTURED, "deferred": "over the daily limit"}]
+    assert store.get(opp_id)["status"] == ops.CAPTURED
+
+
+def test_rating_pass_fails_a_job_without_cv(opportunity_store, fakes):
+    fakes(profile={"cv_revisions": []})
+    store = opportunity_store
+    opp_id = _seed(store)
+    report = batch.rate_captured(store, USER, spending_check=None)
+    assert report[0]["status"] == ops.FAILED
+    assert "No CV" in store.get(opp_id)["vendors_failed"]["batch"]
+
+
+def test_drafting_reuses_the_extraction_the_rating_pass_paid_for(opportunity_store, fakes):
+    store = opportunity_store
+    opp_id = _seed(store)
+    batch.rate_captured(store, USER, spending_check=None)
+    extraction_calls = [c for c in FakeClient.calls if c["role"] == "extraction"]
+    assert extraction_calls and not fakes.research_calls
+    report = batch.run_cycle(store, USER, daily_cap=5, cli_vendors=["openai"], spending_check=None)
+    assert report["drafted"][0]["status"] == ops.READY
+    # No second extraction; the one company research happens at drafting, not at rating.
+    assert [c for c in FakeClient.calls if c["role"] == "extraction"] == extraction_calls
+    assert len(fakes.research_calls) == 1
+    state = store.load_state(opp_id)
+    assert state["vendors"]["openai"]["final_letter"].startswith("[openai]")
+
+
+def test_daemon_loops_with_a_sleep_between_cycles(opportunity_store, fakes):
+    store = opportunity_store
+    slept = []
+    reports = batch.run_daemon(
+        store, USER, interval_hours=3, cycles=2, sleep=slept.append,
+        daily_cap=5, cli_vendors=["openai"], spending_check=None,
+    )
+    assert len(reports) == 2
+    assert len(slept) == 1 and 3 * 3600 - 120 < slept[0] <= 3 * 3600
+
+
+def test_daemon_once_command(opportunity_store, fakes, capsys, monkeypatch):
+    # The CLI uses the default spending check; in tests cost analytics are unavailable (503),
+    # which would defer the rating, so let it pass.
+    monkeypatch.setattr("letter_writer_server.api.cost_utils.spending_limit_error", lambda user_id, session=None: None)
+    store = opportunity_store
+    _seed(store)
+    batch.main(["daemon", "--once", "--daily-cap", "1", "--vendors", "openai"], store=store)
+    out = json.loads(capsys.readouterr().out)
+    assert out["cap"]["daily_cap"] == 1 and len(out["drafted"]) == 1
+    assert out["drafted"][0]["status"] == ops.READY

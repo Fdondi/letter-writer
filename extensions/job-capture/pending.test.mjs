@@ -139,7 +139,8 @@ test("background: without a sign-in API (Firefox for Android) auto-capture stays
   assert.equal(env.fetched.length, 0, "no pending-list fetch and no ingest without a sign-in API");
   assert.equal(env.ingested.length, 0);
   assert.equal(env.created.length, 0);
-  assert.equal(env.badges.length, 0);
+  // refreshStats resets the global badge/title, but no per-tab badge is ever set.
+  assert.equal(env.badges.filter((b) => b.tabId !== undefined).length, 0);
   assert.deepEqual([...(env.store.pendingHosts || [])], [], "the pending list is cleared");
 });
 
@@ -211,7 +212,7 @@ test("background: with queueing off (signed out, desktop browser), the toolbar b
 
 // --- direct-to-Firestore queueing (signed in via the identity API) ---
 
-function fakeSignedInBrowser({ firestoreDocs = {}, commits = [], approved = [], byKey = [], ingestReply = { status: "ok", capture_id: "c1" } } = {}) {
+function fakeSignedInBrowser({ firestoreDocs = {}, commits = [], approved = [], byKey = [], allStatuses = [], ingestReply = { status: "ok", capture_id: "c1" } } = {}) {
   const listeners = {};
   const on = (name) => ({ addListener: (fn) => (listeners[name] = fn) });
   const badges = [];
@@ -285,7 +286,14 @@ function fakeSignedInBrowser({ firestoreDocs = {}, commits = [], approved = [], 
           f.fieldFilter.value.stringValue,
         ]);
         const key = filters.find(([f]) => f === "canonical_key");
-        const list = key ? byKey.filter((o) => o.canonical_key === key[1]) : approved;
+        const status = filters.find(([f]) => f === "status");
+        // queryApproved/queryByCanonicalKey carry a status filter; the stats query only filters
+        // on user_id and sees every pipeline status.
+        const list = key
+          ? byKey.filter((o) => o.canonical_key === key[1])
+          : status
+            ? approved.filter((o) => o.status === status[1])
+            : allStatuses;
         return { ok: true, json: async () => list.map(docRow) };
       }
       if (url.includes("/documents/opportunities/")) {
@@ -329,15 +337,46 @@ test("background: queueing writes the job to Firestore directly — no app serve
   assert.equal(write.update.fields.capture.mapValue.fields.text.stringValue, "Posting text");
   assert.equal(write.update.fields.capture.mapValue.fields.via.stringValue, "extension");
   assert.ok(env.badges.some((b) => b.tabId === 3 && b.text === "✓"));
-  assert.ok(env.titles.some((t) => t.tabId === 3 && /Saved\. The desktop drafts it/.test(t.title || "")));
+  assert.ok(
+    env.titles.some((t) => t.tabId === 3 && t.title === "Letter Writer: Job"),
+    "the ✓ tooltip names the job (page title fallback), not the success boilerplate",
+  );
+  assert.ok(
+    !env.titles.some((t) => t.tabId === 3 && /Saved\. The desktop drafts it/.test(t.title || "")),
+    "no success boilerplate on a plain capture",
+  );
+  assert.ok(
+    !env.titles.some((t) => (t.title || "").includes("opportunities/")),
+    "no Firestore internals in any tooltip",
+  );
   assert.equal(env.store.lwAuth.userId, "google-sub-1", "the sign-in profile is stored");
+});
+
+test("background: the badge clears when the tab navigates to another page", async () => {
+  const env = fakeSignedInBrowser();
+  env.store.lwAuth = { ...SIGNED_IN };
+  loadBackground(env);
+  env.listeners.action({ id: 3, url: JOB, title: "Job" });
+  await tick();
+  assert.ok(env.badges.some((b) => b.tabId === 3 && b.text === "✓"));
+  env.listeners.updated(3, { status: "loading" }, { id: 3, url: "https://example.com/other", title: "Other" });
+  await tick();
+  const last = env.badges.filter((b) => b.tabId === 3).pop();
+  assert.equal(last.text, "", "the ✓ disappears when the page changes");
+  const lastTitle = env.titles.filter((t) => t.tabId === 3).pop();
+  assert.ok(
+    /0 queued · 0 running · 0 ready/.test(lastTitle.title || ""),
+    "the per-tab tooltip resets to the pipeline counts summary",
+  );
 });
 
 test("background: auto-capture attaches an approved job's posting through Firestore", async () => {
   const expectedId = await PL.documentId("google-sub-1", JOB_KEY);
   const approvedJob = { id: "o1", url: JOB, canonical_key: JOB_KEY, status: "approved" };
   const env = fakeSignedInBrowser({
-    firestoreDocs: { [expectedId]: { status: "approved", url: JOB, user_id: "google-sub-1" } },
+    firestoreDocs: {
+      [expectedId]: { status: "approved", url: JOB, user_id: "google-sub-1", title: "Senior Engineer", company: "Acme" },
+    },
     approved: [approvedJob],
     byKey: [approvedJob],
   });
@@ -356,6 +395,10 @@ test("background: auto-capture attaches an approved job's posting through Firest
   assert.deepEqual(write.updateMask.fieldPaths.sort(), ["capture", "skip_reason", "status", "updated_at"]);
   assert.equal(write.currentDocument.exists, true, "update only when present");
   assert.ok(env.badges.some((b) => b.tabId === 7 && b.text === "✓"));
+  assert.ok(
+    env.titles.some((t) => t.tabId === 7 && t.title === "Letter Writer: Senior Engineer — Acme"),
+    "the ✓ tooltip uses the stored job title and company",
+  );
   // Reloading the page does not send it again.
   env.listeners.updated(7, { status: "complete" }, { id: 7, url: JOB, title: "Job" });
   await tick();
@@ -392,6 +435,34 @@ test("background: a job the desktop is drafting is reported, not rewritten", asy
   assert.equal(env.commits.length, 0, "no write");
   assert.ok(env.badges.some((b) => b.tabId === 3 && b.text === "✓"));
   assert.ok(env.titles.some((t) => t.tabId === 3 && /drafting this job right now/.test(t.title || "")));
+});
+
+test("background: the global badge shows the ready count and the tooltip breaks the pipeline down", async () => {
+  const env = fakeSignedInBrowser({
+    approved: [],
+    allStatuses: [
+      { id: "a", status: "captured" },
+      { id: "b", status: "captured" },
+      { id: "c", status: "captured" },
+      { id: "d", status: "drafting" },
+      { id: "e", status: "ready" },
+      { id: "f", status: "ready" },
+      { id: "g", status: "done" },
+    ],
+  });
+  env.store.lwAuth = { ...SIGNED_IN };
+  loadBackground(env);
+  env.listeners.installed();
+  await tick();
+  await tick();
+  assert.ok(
+    env.badges.some((b) => b.tabId === undefined && b.text === "2"),
+    "the global badge shows how many drafts are ready for attention",
+  );
+  assert.ok(
+    env.titles.some((t) => t.tabId === undefined && /3 queued · 1 running · 2 ready/.test(t.title || "")),
+    "the global tooltip breaks the pipeline down",
+  );
 });
 
 test("background: sign-in calls launchWebAuthFlow with {url, interactive} only — the redirect URI rides in the URL", async () => {

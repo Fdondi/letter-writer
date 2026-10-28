@@ -2,8 +2,18 @@
 
 Runs on the host (the ``claude`` CLI and its login live there), not in the backend container.
 
+    daemon [--once] [--interval-hours 3] [--daily-cap 5] [--archive-days 3] [--dry-run]
+                 [--vendors claude_code,openai] [--rewrite-rounds 0|1|2]
+                 [--final-feedback | --no-final-feedback]
+                                       the scheduled path: every wake archives rated jobs that
+                                       never made it, extracts and fit-rates every captured job
+                                       (-> rated), then drafts only the best rated ones up to a
+                                       rolling 24h cap (default 5). --once runs a single cycle
+                                       (the systemd timer calls it every LW_WAKE_INTERVAL_HOURS).
     run-captured [--max-jobs 3] [--vendors claude_code,openai] [--dry-run]
                  [--rewrite-rounds 0|1|2] [--final-feedback | --no-final-feedback]
+                                       manual override: draft captured jobs right now, ignoring
+                                       the rating and the cap
     status                             one line for the routine to report
     retry <opportunity_id>             failed (or ready) -> captured; the next run drafts only the
                                        vendors without a finished letter for the same posting
@@ -17,6 +27,11 @@ rewrite rounds and final comments come with each job (the phone sends them); the
 fill in for a job that has none, and a job with no vendors uses all of them. Anthropic always runs as
 Claude Code here; the Anthropic API is for realtime calls (the phone, the web app). On the host the batch uses ``gcloud-credentials.json`` from the repository and
 Ollaya on ``127.0.0.1:11435`` unless told otherwise (see :func:`apply_host_defaults`).
+
+The daemon's knobs (flags or env): ``--interval-hours`` / ``LW_WAKE_INTERVAL_HOURS`` (default 3),
+``--daily-cap`` / ``LW_DAILY_CAP`` (default 5: letters drafted per rolling 24 hours),
+``--archive-days`` / ``LW_ARCHIVE_DAYS`` (default 3: a rated job not drafted within this window is
+archived and left alone until the user re-enables it).
 """
 from __future__ import annotations
 
@@ -30,10 +45,12 @@ import os
 import socket
 import sys
 import threading
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, cast
 
+from . import fit_score as fit_scores
 from . import headless
 from . import opportunity_store as ops
 from .clients.base import ModelVendor
@@ -90,6 +107,13 @@ STRONG_LEVELS = ("Professional", "Senior professional")
 WEAK_LEVELS = ("Newbie", "Amateur")
 IMPORTANT_NEEDS = ("critical", "necessary", "expected")
 FEEDBACK_CATEGORIES = ("instruction", "accuracy", "precision", "company_fit", "goal_fit", "user_fit", "human")
+
+# The daemon's defaults: how often it wakes, how many letters it drafts per rolling 24 hours, and
+# how long a rated job waits for a drafting slot before it is archived (flags/env override them).
+DEFAULT_WAKE_INTERVAL_HOURS = 3.0
+DEFAULT_DAILY_CAP = 5
+DEFAULT_ARCHIVE_DAYS = 3.0
+ROLLING_CAP_WINDOW = timedelta(hours=24)
 
 
 class BatchError(Exception):
@@ -331,31 +355,32 @@ def process_opportunity(
     kept, fallback = reusable_drafts(previous, fingerprint, settings)
 
     session_key = f"opportunity-{opp_id}"
-    if (kept or fallback) and previous:
-        # A retry of the same posting: the last run's extraction, examples and research stay, so
-        # the new drafts match the kept ones and nothing is paid twice.
+    if previous and previous.get("capture_fingerprint") == fingerprint:
+        # The same posting text as the stored state (the rating pass, or a retry): the extraction
+        # and examples stay, so the new drafts match the kept ones and nothing is paid twice.
         for key in ("job_text", "metadata", "selected_top_docs", "search_result"):
             if key in previous:
                 data[key] = copy.deepcopy(previous[key])
-        data["company_report_shared"] = next(
-            (str(st.get("company_report")) for st in {**fallback, **kept}.values() if st.get("company_report")), ""
-        )
         common = data
         extraction = dict((data.get("metadata") or {}).get("common") or {})
+        common["company_report_shared"] = next(
+            (str(st.get("company_report")) for st in {**fallback, **kept}.values() if st.get("company_report")), ""
+        )
     else:
         report("reading", [])
         with headless.headless_session(data, session_key) as sess:
             # HeadlessSession has the dict interface and session_key the server Session provides.
             extract = run_capture_extract(cast(Any, sess), visible_text=text, html=html, source_url=str(opp.get("url") or ""))
             sess["selected_top_docs"] = list(extract.get("top_docs") or [])
-            report("research", [])
-            try:
-                sess["company_report_shared"] = _research_report(sess, user_data, research_vendor)
-            except Exception as exc:  # drafts are still useful without research
-                logger.warning("company research failed for %s: %s", opp_id, exc)
-                sess["company_report_shared"] = ""
             common = dict(sess)
         extraction = extract.get("extraction") or {}
+    if not str(common.get("company_report_shared") or "").strip():
+        report("research", [])
+        try:
+            common["company_report_shared"] = _research_report(common, user_data, research_vendor)
+        except Exception as exc:  # drafts are still useful without research
+            logger.warning("company research failed for %s: %s", opp_id, exc)
+            common["company_report_shared"] = ""
 
     errors: Dict[str, str] = {}
     runnable = [v for v in vendors if v not in kept]
@@ -444,6 +469,47 @@ def default_spending_check(user_id: str) -> Optional[str]:
     return blocked[1] if blocked else None
 
 
+def _draft_claimed(
+    store: ops.OpportunityStore,
+    opp: Dict[str, Any],
+    owner: str,
+    user_id: str,
+    *,
+    cli_vendors: Optional[Sequence[str]] = None,
+    settings: DraftSettings = DraftSettings(),
+    research_vendor: str = "openai",
+    spending_check: Optional[Callable[[str], Optional[str]]] = default_spending_check,
+) -> Dict[str, Any]:
+    """Draft one claimed (``drafting``, leased) job and end the lease: ``ready``, or ``failed``
+    with each vendor's error. Never raises for a single job's failure."""
+    vendors = requested_vendors(opp, cli_vendors)
+    started = datetime.now(timezone.utc)
+
+    def progress(step: str, done: Sequence[str], opp_id: str = opp["id"], total: int = len(vendors), started: datetime = started) -> None:
+        try:
+            store.report_progress(opp_id, owner, {"step": step, "vendors_done": list(done), "vendors_total": total, "started_at": started})
+        except Exception:  # the apps just see less detail
+            logger.warning("progress report for %s failed", opp_id, exc_info=True)
+
+    try:
+        fields = process_opportunity(
+            store,
+            opp,
+            user_id=user_id,
+            vendors=vendors,
+            settings=settings.for_job(opp),
+            research_vendor=research_vendor,
+            spending_check=spending_check,
+            on_progress=progress,
+        )
+    except Exception as exc:
+        logger.exception("drafting %s failed", opp["id"])
+        fields = {"status": ops.FAILED, "vendors_requested": vendors, "vendors_done": [], "vendors_failed": {"batch": f"{type(exc).__name__}: {exc}"[:1000]}}
+    status = fields.pop("status")
+    store.finish_drafting(opp["id"], owner, status, fields)
+    return {"id": opp["id"], "status": status, "vendors_done": fields.get("vendors_done", []), "vendors_failed": fields.get("vendors_failed", {})}
+
+
 def run_captured(
     store: ops.OpportunityStore,
     user_id: str,
@@ -456,7 +522,8 @@ def run_captured(
     spending_check: Optional[Callable[[str], Optional[str]]] = default_spending_check,
     owner: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Claim and draft up to ``max_jobs`` captured jobs, one after the other."""
+    """Manual override: claim and draft up to ``max_jobs`` captured jobs, one after the other,
+    ignoring the rating and the rolling cap (the daemon's :func:`run_cycle` is the scheduled path)."""
     if dry_run:
         waiting = store.list_by_status(ops.CAPTURED, user_id)
         return [{"id": o["id"], "title": o.get("title", ""), "vendors": requested_vendors(o, cli_vendors), "dry_run": True} for o in waiting[:max_jobs]]
@@ -466,33 +533,248 @@ def run_captured(
         opp = store.claim_next_captured(owner, LEASE_S, user_id=user_id)
         if opp is None:
             break
-        vendors = requested_vendors(opp, cli_vendors)
-        started = datetime.now(timezone.utc)
-
-        def progress(step: str, done: Sequence[str], opp_id: str = opp["id"], total: int = len(vendors), started: datetime = started) -> None:
-            try:
-                store.report_progress(opp_id, owner, {"step": step, "vendors_done": list(done), "vendors_total": total, "started_at": started})
-            except Exception:  # the apps just see less detail
-                logger.warning("progress report for %s failed", opp_id, exc_info=True)
-
-        try:
-            fields = process_opportunity(
-                store,
-                opp,
-                user_id=user_id,
-                vendors=vendors,
-                settings=settings.for_job(opp),
-                research_vendor=research_vendor,
-                spending_check=spending_check,
-                on_progress=progress,
+        report.append(
+            _draft_claimed(
+                store, opp, owner, user_id,
+                cli_vendors=cli_vendors, settings=settings,
+                research_vendor=research_vendor, spending_check=spending_check,
             )
-        except Exception as exc:
-            logger.exception("drafting %s failed", opp["id"])
-            fields = {"status": ops.FAILED, "vendors_requested": vendors, "vendors_done": [], "vendors_failed": {"batch": f"{type(exc).__name__}: {exc}"[:1000]}}
-        status = fields.pop("status")
-        store.finish_drafting(opp["id"], owner, status, fields)
-        report.append({"id": opp["id"], "status": status, "vendors_done": fields.get("vendors_done", []), "vendors_failed": fields.get("vendors_failed", {})})
+        )
     return report
+
+
+# --- daemon: archive, rate, draft the best under the rolling cap ------------------------------
+
+
+def _rate_failed(store: ops.OpportunityStore, opp: Dict[str, Any], user_id: str, reason: str) -> None:
+    """A captured job the rating pass cannot extract becomes ``failed`` with the reason (the user
+    retries it once the cause is fixed)."""
+    try:
+        store.set_status(opp["id"], ops.FAILED, from_states=[ops.CAPTURED], user_id=user_id, fields={"vendors_failed": {"batch": reason[:1000]}})
+    except (ops.TransitionError, KeyError):
+        pass  # another run moved the job on meanwhile
+
+
+def rate_captured(
+    store: ops.OpportunityStore,
+    user_id: str,
+    *,
+    spending_check: Optional[Callable[[str], Optional[str]]] = default_spending_check,
+    dry_run: bool = False,
+) -> List[Dict[str, Any]]:
+    """Extract and fit-rate every ``captured`` job (oldest capture first), moving it to ``rated``
+    with its ``fit_score`` (the weighted competence match the web intake shows) and ``fit_summary``.
+
+    The extraction (competences, metadata, similar letters) is stored as the job's state, so the
+    later drafting reuses it and pays for it once. A job that cannot be extracted (no CV, empty
+    capture) becomes ``failed`` with the reason. When the spending limit blocks extraction, the jobs
+    stay ``captured`` and are rated on a later wake.
+    """
+    from .firestore_store import get_user_data
+    from letter_writer_server.api.extract_pipeline import run_capture_extract
+
+    waiting = store.list_by_status(ops.CAPTURED, user_id)
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    waiting.sort(key=lambda o: (ops.as_utc((o.get("capture") or {}).get("captured_at")) or ops.as_utc(o.get("updated_at")) or epoch))
+    if spending_check is not None:
+        blocked = spending_check(user_id)
+        if blocked:
+            return [{"id": o["id"], "status": ops.CAPTURED, "deferred": blocked} for o in waiting]
+    report: List[Dict[str, Any]] = []
+    for opp in waiting:
+        opp_id = opp["id"]
+        capture = opp.get("capture") or {}
+        text, html = str(capture.get("text") or ""), str(capture.get("html") or "")
+        if not text.strip() and not html.strip():
+            _rate_failed(store, opp, user_id, "The job has no captured posting text.")
+            report.append({"id": opp_id, "status": ops.FAILED, "error": "The job has no captured posting text."})
+            continue
+        try:
+            user_data = get_user_data(user_id, use_cache=False) or {}
+            data = headless.initial_session(user_id, user_data)
+            if not str(data.get("cv_text") or "").strip():
+                raise BatchError("No CV in the profile (personal_data.cv_revisions is empty).")
+            fingerprint = capture_fingerprint(text, html)
+            session_key = f"opportunity-{opp_id}"
+            with headless.headless_session(data, session_key) as sess:
+                extract = run_capture_extract(cast(Any, sess), visible_text=text, html=html, source_url=str(opp.get("url") or ""))
+                sess["selected_top_docs"] = list(extract.get("top_docs") or [])
+                state = dict(sess)
+            extraction = extract.get("extraction") or {}
+            state["capture_fingerprint"] = fingerprint
+            state["vendors"] = {}
+            score = fit_scores.fit_score(extraction.get("competences"))
+            fields: Dict[str, Any] = {
+                "fit_score": score,
+                "fit_summary": fit_summary(extraction),
+                "fit_rated_at": datetime.now(timezone.utc),
+            }
+            for field, key in (("title", "job_title"), ("company", "company_name"), ("location", "location")):
+                if not str(opp.get(field) or "").strip() and extraction.get(key):
+                    fields[field] = str(extraction[key]).strip()
+            if dry_run:
+                report.append({"id": opp_id, "status": ops.RATED, "fit_score": score, "dry_run": True})
+                continue
+            store.save_state(opp_id, headless.persistable_state(state))
+            store.set_status(opp_id, ops.RATED, from_states=[ops.CAPTURED], user_id=user_id, fields=fields)
+            report.append({"id": opp_id, "status": ops.RATED, "fit_score": score})
+        except Exception as exc:
+            logger.exception("rating %s failed", opp_id)
+            _rate_failed(store, opp, user_id, f"{type(exc).__name__}: {exc}")
+            report.append({"id": opp_id, "status": ops.FAILED, "error": str(exc)[:200]})
+    return report
+
+
+def archive_expired(
+    store: ops.OpportunityStore,
+    user_id: str,
+    archive_days: float = DEFAULT_ARCHIVE_DAYS,
+    *,
+    now: Optional[datetime] = None,
+) -> List[Dict[str, Any]]:
+    """Rated jobs that were never drafted within ``archive_days`` go to ``archived`` — the desktop
+    leaves them alone from then on, unless the user re-enables them (possibly with a new fit
+    estimate)."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=archive_days)
+    out: List[Dict[str, Any]] = []
+    for opp in store.list_by_status(ops.RATED, user_id):
+        rated_at = ops.as_utc(opp.get("fit_rated_at")) or ops.as_utc(opp.get("updated_at")) or ops.as_utc(opp.get("created_at"))
+        if not rated_at or rated_at > cutoff:
+            continue
+        try:
+            store.set_status(
+                opp["id"],
+                ops.ARCHIVED,
+                from_states=[ops.RATED],
+                user_id=user_id,
+                fields={"archived_at": now, "archive_reason": f"Not drafted within {archive_days:g} days."},
+            )
+        except (ops.TransitionError, KeyError):
+            continue  # drafted or re-enabled between the list and the move
+        out.append({"id": opp["id"], "status": ops.ARCHIVED, "fit_score": opp.get("fit_score")})
+    return out
+
+
+def processed_in_window(
+    store: ops.OpportunityStore,
+    user_id: str,
+    *,
+    window: timedelta = ROLLING_CAP_WINDOW,
+    now: Optional[datetime] = None,
+) -> int:
+    """How many jobs the desktop sent to drafting within the rolling window (``processed_at`` is
+    stamped when a rated or captured job is claimed for drafting)."""
+    now = now or datetime.now(timezone.utc)
+    start = now - window
+    count = 0
+    for opp in store.list_for_user(user_id):
+        at = ops.as_utc(opp.get("processed_at"))
+        if at is not None and start <= at <= now:
+            count += 1
+    return count
+
+
+def select_for_drafting(
+    store: ops.OpportunityStore,
+    user_id: str,
+    daily_cap: int = DEFAULT_DAILY_CAP,
+    *,
+    now: Optional[datetime] = None,
+) -> List[Dict[str, Any]]:
+    """The best ``rated`` jobs under the rolling 24h cap: effective fit (the user's
+    ``fit_score_user`` override wins over the computed ``fit_score``) descending, oldest rating
+    first, jobs with no score last. Never more than ``daily_cap`` minus the jobs already drafted in
+    the last 24 hours."""
+    now = now or datetime.now(timezone.utc)
+    slots = max(0, int(daily_cap) - processed_in_window(store, user_id, now=now))
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    rated = store.list_by_status(ops.RATED, user_id)
+    rated.sort(
+        key=lambda o: (
+            fit_scores.effective_fit(o) is None,
+            -(fit_scores.effective_fit(o) or 0.0),
+            ops.as_utc(o.get("fit_rated_at")) or epoch,
+            o["id"],
+        )
+    )
+    return rated[:slots]
+
+
+def run_cycle(
+    store: ops.OpportunityStore,
+    user_id: str,
+    *,
+    daily_cap: int = DEFAULT_DAILY_CAP,
+    archive_days: float = DEFAULT_ARCHIVE_DAYS,
+    cli_vendors: Optional[Sequence[str]] = None,
+    settings: DraftSettings = DraftSettings(),
+    research_vendor: str = "openai",
+    spending_check: Optional[Callable[[str], Optional[str]]] = default_spending_check,
+    owner: Optional[str] = None,
+    dry_run: bool = False,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """One wake of the daemon: archive expired rated jobs, extract and fit-rate every captured
+    job, then draft the best rated ones under the rolling 24h cap. Returns what happened, for the
+    routine's log."""
+    now = now or datetime.now(timezone.utc)
+    archived = archive_expired(store, user_id, archive_days, now=now)
+    rated = rate_captured(store, user_id, spending_check=spending_check, dry_run=dry_run)
+    picked = select_for_drafting(store, user_id, daily_cap, now=now)
+    drafted: List[Dict[str, Any]] = []
+    if not dry_run:
+        owner = owner or f"batch-{socket.gethostname()}-{os.getpid()}"
+        for opp in picked:
+            claimed = store.claim_for_drafting(opp["id"], owner, LEASE_S, user_id=user_id)
+            if claimed is None:
+                continue  # another run took it between the pick and the claim
+            drafted.append(
+                _draft_claimed(
+                    store, claimed, owner, user_id,
+                    cli_vendors=cli_vendors, settings=settings,
+                    research_vendor=research_vendor, spending_check=spending_check,
+                )
+            )
+    return {
+        "archived": archived,
+        "rated": rated,
+        "picked": [o["id"] for o in picked],
+        "drafted": drafted,
+        # A fresh "now": the claims of this cycle happened after the cycle's own start.
+        "cap": {"daily_cap": int(daily_cap), "processed_last_24h": processed_in_window(store, user_id)},
+    }
+
+
+def run_daemon(
+    store: ops.OpportunityStore,
+    user_id: str,
+    *,
+    interval_hours: float = DEFAULT_WAKE_INTERVAL_HOURS,
+    cycles: Optional[int] = None,
+    sleep: Callable[[float], None] = time.sleep,
+    **cycle_kwargs: Any,
+) -> List[Dict[str, Any]]:
+    """Wake every ``interval_hours`` and run one cycle; ``cycles`` bounds the loop (None: until
+    interrupted). The first cycle runs at once, so a night missed while the machine was off
+    collapses into one catch-up."""
+    reports: List[Dict[str, Any]] = []
+    cycle = 0
+    while cycles is None or cycle < cycles:
+        started = datetime.now(timezone.utc)
+        try:
+            report = run_cycle(store, user_id, **cycle_kwargs)
+        except Exception:
+            logger.exception("daemon cycle failed")
+            report = {"error": "cycle failed"}
+        reports.append(report)
+        print(json.dumps(report), flush=True)
+        cycle += 1
+        if cycles is not None and cycle >= cycles:
+            break
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        sleep(max(60.0, interval_hours * 3600.0 - elapsed))
+    return reports
 
 
 # --- status / retry / seed -------------------------------------------------------------------
@@ -508,11 +790,18 @@ def status_line(store: ops.OpportunityStore, user_id: str) -> str:
         if status == ops.READY:
             questions += int(item.get("input_needed_count") or 0)
     parts = [f"proposed {counts[ops.PROPOSED]}", f"waiting for text {counts[ops.APPROVED]}", f"captured {counts[ops.CAPTURED]}"]
+    if counts[ops.RATED]:
+        parts.append(f"rated {counts[ops.RATED]}")
     if counts[ops.DRAFTING]:
         parts.append(f"drafting {counts[ops.DRAFTING]}")
     parts.append(f"ready {counts[ops.READY]}" + (f" ({questions} questions)" if questions else ""))
     if counts[ops.FAILED]:
         parts.append(f"failed {counts[ops.FAILED]}")
+    if counts[ops.ARCHIVED]:
+        parts.append(f"archived {counts[ops.ARCHIVED]}")
+    processed = processed_in_window(store, user_id)
+    if processed:
+        parts.append(f"drafted last 24h {processed}/{DEFAULT_DAILY_CAP}")
     return " · ".join(parts)
 
 
@@ -521,6 +810,14 @@ def retry(store: ops.OpportunityStore, user_id: str, opp_id: str) -> Dict[str, A
 
 
 # --- CLI ---------------------------------------------------------------------------------------
+
+
+def _env_number(name: str, default: float, cast: Callable[[Any], Any] = float) -> Any:
+    """A numeric env var, falling back to ``default`` when unset or malformed."""
+    try:
+        return cast(os.environ.get(name) or default)
+    except (TypeError, ValueError):
+        return default
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -546,6 +843,22 @@ def _parser() -> argparse.ArgumentParser:
         help="start the drafting as its own process and return at once (log in temp/opportunities/); "
         "the routine uses this because drafting can outlast an agent's command time limit",
     )
+    dn = sub.add_parser("daemon", help="the scheduled path: wake on an interval, rate new jobs, draft the best under the rolling cap")
+    dn.add_argument("--once", action="store_true", help="run a single cycle and exit (the systemd timer uses this)")
+    dn.add_argument("--interval-hours", type=float, default=_env_number("LW_WAKE_INTERVAL_HOURS", DEFAULT_WAKE_INTERVAL_HOURS), help="how often the daemon wakes (default 3)")
+    dn.add_argument("--daily-cap", type=int, default=_env_number("LW_DAILY_CAP", DEFAULT_DAILY_CAP, int), help="letters drafted per rolling 24 hours (default 5)")
+    dn.add_argument("--archive-days", type=float, default=_env_number("LW_ARCHIVE_DAYS", DEFAULT_ARCHIVE_DAYS), help="a rated job not drafted within this many days is archived (default 3)")
+    dn.add_argument("--vendors", help="comma-separated, e.g. claude_code,openai")
+    dn.add_argument(
+        "--rewrite-rounds", type=int, choices=range(0, MAX_REWRITE_ROUNDS + 1), default=1,
+        help="comments → rewrite rounds for jobs that don't say (default 1)",
+    )
+    dn.add_argument(
+        "--final-feedback", action=argparse.BooleanOptionalAction, default=True,
+        help="comment the last version for jobs that don't say (default on)",
+    )
+    dn.add_argument("--research-vendor", default=os.environ.get("LW_RESEARCH_VENDOR", "openai"))
+    dn.add_argument("--dry-run", action="store_true")
     sub.add_parser("status", help="one-line summary")
     sub.add_parser("users", help="list the profiles in Firestore (to find LW_USER_ID)")
     rt = sub.add_parser("retry", help="queue a failed or ready job again")
@@ -619,6 +932,20 @@ def main(argv: Optional[Sequence[str]] = None, store: Optional[ops.OpportunitySt
             research_vendor=args.research_vendor,
         )
         print(json.dumps(report))
+    elif args.command == "daemon":
+        vendors = [v for v in (args.vendors or "").split(",") if v.strip()] or None
+        cycle_kwargs = dict(
+            daily_cap=args.daily_cap,
+            archive_days=args.archive_days,
+            cli_vendors=vendors,
+            settings=DraftSettings(rewrite_rounds=args.rewrite_rounds, final_feedback=args.final_feedback),
+            research_vendor=args.research_vendor,
+            dry_run=args.dry_run,
+        )
+        if args.once:
+            print(json.dumps(run_cycle(store, user_id, **cycle_kwargs)))
+        else:
+            run_daemon(store, user_id, interval_hours=args.interval_hours, **cycle_kwargs)
     elif args.command == "status":
         print(status_line(store, user_id))
     elif args.command == "retry":
