@@ -30,7 +30,7 @@ import io.github.fdondi.letterwriter.ui.common.WarningList
 import io.github.fdondi.letterwriter.ui.common.formatDollars
 
 /** Sub-tabs of the Info page: every part of the job the letter is written for. */
-private val INFO_TABS = listOf("Job offer", "Company", "Goal", "Competences", "Examples", "Notes")
+private val INFO_TABS = listOf("Job offer", "Company", "Goal", "Competences", "Notes")
 
 /**
  * Info about the job the letter is written for: the original offer, the company search, the
@@ -52,7 +52,6 @@ fun InfoPage(s: WorkSession, modifier: Modifier = Modifier) {
                 1 -> CompanyInfo(s)
                 2 -> GoalInfo(s)
                 3 -> CompetencesInfo(s)
-                4 -> ExamplesInfo(s)
                 else -> NotesInfo(s)
             }
         }
@@ -126,18 +125,10 @@ private fun CompanyInfo(s: WorkSession) {
     }
 }
 
-/** The deduced goal: the problem this hire solves, and the requirements read from the offer. */
+/** The deduced goal: the problem this hire solves. The skills it needs are on the Competences tab. */
 @Composable
 private fun GoalInfo(s: WorkSession) {
-    val i = s.intake
-    InfoText("What problem this hire solves", i.hireProblem, "Not deduced yet — read the job offer on the Job tab.")
-    SectionCard("Requirements") {
-        if (i.requirements.isEmpty()) {
-            Text("No requirements extracted yet.", style = MaterialTheme.typography.bodySmall)
-        } else {
-            for (r in i.requirements) Text("• $r", style = MaterialTheme.typography.bodyMedium)
-        }
-    }
+    InfoText("What problem this hire solves", s.intake.hireProblem, "Not deduced yet — read the job offer on the Job tab.")
 }
 
 /** The key competences the offer asks for, with need and level. */
@@ -154,34 +145,6 @@ private fun CompetencesInfo(s: WorkSession) {
                     Text(skill, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                     Text("${o?.get("need").pyStr()} · ${o?.get("level").pyStr()}", style = MaterialTheme.typography.bodySmall)
                 }
-            }
-        }
-    }
-}
-
-/** The saved letters used as examples, with the ranker's scores. */
-@Composable
-private fun ExamplesInfo(s: WorkSession) {
-    val i = s.intake
-    if (i.decisionDetail.isNotBlank()) Text(i.decisionDetail, style = MaterialTheme.typography.bodySmall)
-    SectionCard("Similar letters used as examples") {
-        if (i.similarDocuments.isEmpty()) {
-            Text(
-                if (i.extracted) "No similar saved letters were found." else "Found when the job offer is read.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        } else {
-            for (doc in i.similarDocuments) {
-                val company = doc["company_name"].asStringOrNull().orEmpty()
-                val role = doc["role"].asStringOrNull().orEmpty()
-                val used = WorkSession.docKey(doc) in i.selectedDocIds
-                Text(
-                    "${if (used) "•" else "○"} ${listOf(company, role).filter { it.isNotBlank() }.joinToString(" — ")}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (used) FontWeight.Medium else FontWeight.Normal,
-                )
-                val score = doc["score"]?.pyStr()
-                if (score != null) Text("Similarity score $score", style = MaterialTheme.typography.bodySmall)
             }
         }
     }

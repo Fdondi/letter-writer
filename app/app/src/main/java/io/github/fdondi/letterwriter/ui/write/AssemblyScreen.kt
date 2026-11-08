@@ -114,11 +114,6 @@ private fun LettersPage(graph: AppGraph, s: WorkSession) {
     val pager = rememberPagerState { finished.size }
     val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize()) {
-        Text(
-            "Each paragraph shows its comments. Add a paragraph as it is, or redraft it now with the comments you keep ticked, your answers and a note.",
-            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            style = MaterialTheme.typography.bodySmall,
-        )
         PrimaryScrollableTabRow(selectedTabIndex = pager.currentPage.coerceIn(0, finished.size - 1), edgePadding = 8.dp) {
             finished.forEachIndexed { idx, w ->
                 Tab(
@@ -187,11 +182,9 @@ private fun YourLetterPage(graph: AppGraph, s: WorkSession) {
                 OutlinedButton(onClick = { share(text) }) { Text("Share") }
             }
             SectionCard("Save to Previous examples") {
-                Text(
-                    if (s.documentId == null) "Saves the letter, the vendor letters and your ratings, and the answers you chose to remember."
-                    else "Already saved; saving again updates the same example.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                if (s.documentId != null) {
+                    Text("Already saved; saving again updates the same example.", style = MaterialTheme.typography.bodySmall)
+                }
                 if (s.opportunityId != null) {
                     Text("Saving also marks this job done in the job pipeline.", style = MaterialTheme.typography.bodySmall)
                 }

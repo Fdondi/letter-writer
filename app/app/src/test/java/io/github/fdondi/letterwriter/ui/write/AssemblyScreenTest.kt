@@ -188,6 +188,8 @@ class AssemblyScreenTest {
             assertTrue(compose.onAllNodesWithText("Add to your letter").fetchSemanticsNodes().isNotEmpty())
             compose.onNodeWithText("Use whole letter").assertDoesNotExist()
             compose.onNodeWithText("Review paragraphs").assertDoesNotExist()
+            // No how-to banner above the letter tabs: the vendor tab row sits directly under the main one.
+            compose.onNodeWithText("Each paragraph shows its comments", substring = true).assertDoesNotExist()
 
             // Swiping laterally goes from one letter to the other.
             compose.onNodeWithText("3 paragraph(s) · no comments").performTouchInput { swipeLeft(durationMillis = 100) }
@@ -199,9 +201,10 @@ class AssemblyScreenTest {
             // The info tab has sub-tabs for the parts of the job.
             compose.onNodeWithText("Info").performClick()
             compose.waitForIdle()
-            for (tab in listOf("Job offer", "Company", "Goal", "Competences", "Examples", "Notes")) {
+            for (tab in listOf("Job offer", "Company", "Goal", "Competences", "Notes")) {
                 compose.onNodeWithText(tab).assertExists()
             }
+            compose.onNodeWithText("Examples").assertDoesNotExist()
             assertTabSelected("Info")
             compose.onNodeWithText("FAKE Fixture Works is hiring a FAKE Fixture Engineer in Zug. C++ and CUDA.").assertIsDisplayed()
 
@@ -215,6 +218,13 @@ class AssemblyScreenTest {
             compose.onNodeWithText("Goal").performClick()
             compose.waitForIdle()
             compose.onNodeWithText("They need a C++ engineer for the GPU team.").assertIsDisplayed()
+            // The requirements list is gone: it duplicated the competences (same skills, no ratings).
+            compose.onNodeWithText("Requirements").assertDoesNotExist()
+
+            // The competences tab keeps the skills with their need and level.
+            compose.onNodeWithText("Competences").performClick()
+            compose.waitForIdle()
+            compose.onNodeWithText("Key competences").assertIsDisplayed()
 
             // Swiping right brings up the final letter that is being built.
             compose.onNodeWithText("Info").performClick()
